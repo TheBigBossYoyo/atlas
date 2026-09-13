@@ -18,6 +18,13 @@
  * loads no stylesheet, so this cannot see how the dirty dot or a disabled
  * Save button actually *look*, only whether/what they are.
  *
+ * Note (P2.7 behavior change, wave1/viewer-quickfixes): the global Save
+ * button used to render disabled-but-visible for non-markdown formats;
+ * it is now omitted from the DOM entirely (Toolbar's `canSave` gate).
+ * `saveDisabled` is `null` at step 5 to reflect that — a real, intended
+ * behavior change for the non-markdown path, not a markdown regression.
+ * Steps 1-4 (all markdown) are unaffected and unchanged from baseline.
+ *
  * Non-markdown viewers are lazy-loaded via `ViewerRouter` + `formats/
  * registry` and pull in real, heavy dependencies (react-window, shiki,
  * SheetJS, ...) irrelevant to dirty-state tracking, so `formats/registry`
@@ -89,7 +96,9 @@ interface CapturedState {
    */
   readonly toolbarDirtyDot: boolean;
   readonly statusBarDirtyDot: boolean;
-  readonly saveDisabled: boolean;
+  /** `null` when the Save button isn't rendered at all (P2.7: `canSave`
+   * gates its presence, not just its `disabled` attribute). */
+  readonly saveDisabled: boolean | null;
   /** Which top-level content element is on screen right now: 'markdown'
    * (`.markdown-body`), a non-markdown FormatId (`ViewerRouter`'s
    * `data-viewer`), or null — including while viewMode='editor' shows only
@@ -98,7 +107,7 @@ interface CapturedState {
 }
 
 function captureState(step: string): CapturedState {
-  const saveButton = screen.getByTitle('Save (Ctrl+S)') as HTMLButtonElement;
+  const saveButton = screen.queryByTitle('Save (Ctrl+S)') as HTMLButtonElement | null;
   const filenameEl = document.querySelector('.toolbar__filename');
   const viewerEl = document.querySelector('[data-viewer]');
   const isMarkdownActive = document.querySelector('.markdown-body') !== null;
@@ -108,7 +117,7 @@ function captureState(step: string): CapturedState {
     fileName: filenameEl ? (filenameEl.childNodes[0]?.textContent ?? null) : null,
     toolbarDirtyDot: document.querySelector('.toolbar__dirty') !== null,
     statusBarDirtyDot: document.querySelector('.statusbar__dirty') !== null,
-    saveDisabled: saveButton.disabled,
+    saveDisabled: saveButton ? saveButton.disabled : null,
     activeFormat: viewerEl ? viewerEl.getAttribute('data-viewer') : isMarkdownActive ? 'markdown' : null,
   };
 }
@@ -243,7 +252,7 @@ describe('App dirty-state characterization', () => {
         {
           "activeFormat": "text",
           "fileName": "notes.txt",
-          "saveDisabled": true,
+          "saveDisabled": null,
           "statusBarDirtyDot": false,
           "step": "5. open a non-markdown file",
           "toolbarDirtyDot": false,
