@@ -1,0 +1,14 @@
+/* Unknown-format viewer container — mirrors the working .docx-viewer scroll
+   pattern (DAT-02 / UX-04): the shared `.content--viewer .preview-panel`
+   sets `overflow: hidden`, so the viewer root itself must own scrolling or
+   content past one screen is unreachable. */
+.unknown-viewer {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-primary);
+}

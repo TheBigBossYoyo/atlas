@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react'
 
 import type { ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
+import './__styles__/viewer-rtf.css'
 
 function RtfViewerBase({ file }: ViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)

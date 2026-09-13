@@ -5,6 +5,7 @@ import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
 import { getShikiThemeForAppTheme } from './shared/shikiTheme'
 import { useTheme } from '../hooks/useTheme'
 import { getLangForExt } from './extToLang'
+import './__styles__/viewer-code.css'
 
 function CodeViewerBase({ file }: ViewerProps) {
   const content = file.kind === 'text' ? file.content : ''

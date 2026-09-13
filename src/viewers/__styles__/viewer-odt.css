@@ -1,0 +1,21 @@
+/* ODT viewer container — mirrors the working .docx-viewer scroll pattern
+   (DAT-02 / UX-04): the shared `.content--viewer .preview-panel` sets
+   `overflow: hidden`, so the viewer root itself must own scrolling or
+   content past one screen is unreachable. */
+.odt-viewer {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  padding: 24px;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.odt-viewer--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--hl-keyword, #e5534b);
+  text-align: center;
+}

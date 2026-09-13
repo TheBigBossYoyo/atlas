@@ -1,0 +1,23 @@
+/* Code viewer container — mirrors the working .docx-viewer scroll pattern
+   (DAT-02 / UX-04): the shared `.content--viewer .preview-panel` sets
+   `overflow: hidden`, so the viewer root itself must own scrolling or
+   content past one screen is unreachable. */
+.code-viewer {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  padding: 16px 24px;
+  background-color: var(--bg-secondary);
+}
+
+.code-viewer__pre {
+  margin: 0;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.code-viewer__pre pre {
+  margin: 0;
+  background: transparent !important;
+}

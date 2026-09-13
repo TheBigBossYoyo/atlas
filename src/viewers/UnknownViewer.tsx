@@ -1,6 +1,7 @@
 import { memo } from 'react'
 
 import type { LoadedFile } from '../formats/types'
+import './__styles__/viewer-unknown.css'
 
 type UnknownViewerProps = {
   readonly file: LoadedFile
