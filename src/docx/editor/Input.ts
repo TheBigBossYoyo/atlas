@@ -447,18 +447,20 @@ export function handleKeyDown(
   const key = event.key
 
   try {
-    // Undo
+    // Undo — DXE-16: restore the selection the edit itself computed (e.g. an
+    // insert's inverse collapses to where the user started typing), not
+    // whatever the current selection happens to be.
     if (ctrl && key === 'z' && !shift) {
       const result = history.undo(document)
       if (!result) return null
-      return { document: result.document, range }
+      return { document: result.document, range: result.range ?? range }
     }
 
     // Redo
     if (ctrl && ((key === 'z' && shift) || key === 'Z' || key === 'y' || key === 'Y')) {
       const result = history.redo(document)
       if (!result) return null
-      return { document: result.document, range }
+      return { document: result.document, range: result.range ?? range }
     }
 
     // Select all

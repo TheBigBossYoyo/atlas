@@ -35,7 +35,7 @@ describe('History', () => {
     expect(history.redo(document)).toBeNull()
   })
 
-  it('undo applies the stored inverse and returns a redo command', () => {
+  it('undo applies the stored inverse and returns a redo command that replays it', () => {
     const history = new History()
     const original = createDocument('Atlas')
     const command = { kind: 'insert-text', at: position([0], 0, 5), text: '!' } as const
@@ -45,7 +45,14 @@ describe('History', () => {
     const undone = history.undo(applied.document)
 
     expect(undone?.document).toEqual(original)
-    expect(undone?.redoCommand).toEqual(command)
+
+    // DXE-02/DXE-04 — delete's own inverse is now the general replace-blocks
+    // primitive (needed so cross-paragraph/cross-run delete also inverts
+    // exactly), so the redo command is no longer byte-identical to the
+    // original insert-text — what matters is that replaying it reproduces the
+    // post-insert document.
+    const redone = applyCommand(undone!.document, undone!.redoCommand)
+    expect(redone.document).toEqual(applied.document)
   })
 
   it('redo reapplies the last undone command', () => {
@@ -59,7 +66,47 @@ describe('History', () => {
     const redone = history.redo(undone!.document)
 
     expect(redone?.document).toEqual(applied.document)
-    expect(redone?.undoCommand).toEqual(applied.inverse)
+
+    const undoneAgain = applyCommand(redone!.document, redone!.undoCommand)
+    expect(undoneAgain.document).toEqual(original)
+  })
+
+  it('undo restores the selection active before the edit it undoes (DXE-16)', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const command = { kind: 'insert-text', at: position([0], 0, 5), text: '!' } as const
+    const applied = applyCommand(original, command)
+
+    history.push(applied.inverse)
+    const undone = history.undo(applied.document)
+
+    // Undoing an insert collapses the cursor back to where the insertion
+    // started — exactly where the user was typing from.
+    expect(undone?.range).toEqual({
+      anchor: position([0], 0, 5),
+      focus: position([0], 0, 5),
+    })
+  })
+
+  it('redo restores the selection at the end of the redone edit', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const command = { kind: 'insert-text', at: position([0], 0, 5), text: '!' } as const
+    const applied = applyCommand(original, command)
+
+    history.push(applied.inverse)
+    const undone = history.undo(applied.document)
+    const redone = history.redo(undone!.document)
+
+    // The redo command is the (undone insert's) replace-blocks inverse,
+    // whose `cursor` re-selects exactly the span it is restoring — arguably
+    // better UX than a bare collapsed cursor (it mirrors how undoing a
+    // delete re-selects the just-restored text) and still satisfies "the
+    // cursor moves to where that edit was".
+    expect(redone?.range).toEqual({
+      anchor: position([0], 0, 5),
+      focus: position([0], 0, 6),
+    })
   })
 
   it('push clears the redo stack', () => {
@@ -105,11 +152,12 @@ describe('History', () => {
 
     const undone = history.undo(second.document)
     expect(undone?.document).toEqual(original)
-    expect(undone?.redoCommand).toEqual({
-      kind: 'insert-text',
-      at: position([0], 0, 0),
-      text: 'At',
-    })
+    // The coalesced undo entry is still the rewritten delete-range described
+    // above; only its own inverse (what redo replays) now comes back as a
+    // replace-blocks snapshot rather than a plain insert-text — replaying it
+    // must still reproduce "At".
+    const redone = applyCommand(undone!.document, undone!.redoCommand)
+    expect(runText(redone.document)).toBe('At')
   })
 
   it('does not coalesce non-text commands', () => {

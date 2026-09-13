@@ -1,6 +1,8 @@
 import type {
   Block,
   Document,
+  Hyperlink,
+  Indent,
   ParaProps,
   Paragraph,
   ParagraphChild,
@@ -12,6 +14,7 @@ import type {
   TableRow,
   TextNode,
 } from '../model'
+import { twip } from '../model'
 
 import type {
   ApplyParaFormatCommand,
@@ -27,8 +30,25 @@ type ResolvedParagraphPath = {
   readonly blockPath: ReadonlyArray<number>
 }
 
-type EditableRun = {
+/**
+ * DXE-03 — a run's "owner" is either the paragraph directly (a plain run) or
+ * a specific `Hyperlink` wrapper it lives inside. Carrying this alongside
+ * every run through the edit pipeline (split/format/delete/merge) lets those
+ * operations flatten hyperlink content into the same addressable run list a
+ * plain-run paragraph already used, while still reconstructing the original
+ * `Hyperlink` wrapper (verbatim, minus any interior non-run children) when
+ * writing the paragraph back out.
+ */
+type RunOwner = { readonly kind: 'direct' } | { readonly kind: 'hyperlink'; readonly wrapper: Hyperlink }
+
+const DIRECT_OWNER: RunOwner = Object.freeze({ kind: 'direct' })
+
+type RunEntry = {
   readonly run: Run
+  readonly owner: RunOwner
+}
+
+type EditableRun = RunEntry & {
   readonly text: string
 }
 
@@ -58,6 +78,7 @@ export function applyCommand(
 ): {
   document: Document
   inverse: Command
+  range?: Range
 } {
   switch (cmd.kind) {
     case 'insert-text':
@@ -72,26 +93,20 @@ export function applyCommand(
       return applyParaFormat(doc, cmd)
     case 'apply-style':
       return applyStyle(doc, cmd)
-    case 'insert-table': {
-      // TODO: replace the no-op inverse stub once InsertTable is implemented.
-      void createNoOpInsertText(cmd.at)
-      throw new Error('not yet implemented')
-    }
-    case 'insert-hyperlink': {
-      // TODO: replace the no-op inverse stub once InsertHyperlink is implemented.
-      void createNoOpInsertText(cmd.range.anchor)
-      throw new Error('not yet implemented')
-    }
-    case 'insert-list': {
-      // TODO: replace the no-op inverse stub once InsertList is implemented.
-      void createNoOpInsertText(createPosition(cmd.paragraphPaths[0] ?? [], 0, 0))
-      throw new Error('not yet implemented')
-    }
-    case 'change-list-level': {
-      // TODO: replace the no-op inverse stub once ChangeListLevel is implemented.
-      void createNoOpInsertText(createPosition(cmd.paragraphPath, 0, 0))
-      throw new Error('not yet implemented')
-    }
+    case 'insert-table':
+      return applyInsertTable(doc, cmd)
+    case 'insert-hyperlink':
+      return applyInsertHyperlink(doc, cmd)
+    case 'insert-inline':
+      return applyInsertInline(doc, cmd)
+    case 'composite':
+      return applyComposite(doc, cmd)
+    case 'replace-blocks':
+      return applyReplaceBlocks(doc, cmd)
+    case 'insert-list':
+      return applyInsertList(doc, cmd)
+    case 'change-list-level':
+      return applyChangeListLevel(doc, cmd)
     case 'accept-revision':
       return applyRevisionResolution(doc, cmd, 'accept')
     case 'reject-revision':
@@ -102,6 +117,376 @@ export function applyCommand(
       return applyAllRevisions(doc, 'reject')
   }
 }
+
+// ---------------------------------------------------------------------------
+// Composite / structural primitives (D13, D12 cross-paragraph support)
+// ---------------------------------------------------------------------------
+
+function applyComposite(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'composite' }>,
+): { document: Document; inverse: Command; range?: Range } {
+  let workingDocument = doc
+  const inverses: Command[] = []
+  let lastRange: Range | undefined
+
+  for (const sub of cmd.commands) {
+    const result = applyCommand(workingDocument, sub)
+    workingDocument = result.document
+    inverses.push(result.inverse)
+    if (result.range !== undefined) {
+      lastRange = result.range
+    }
+  }
+
+  inverses.reverse()
+
+  return {
+    document: workingDocument,
+    inverse: inverses.length === 1 ? inverses[0] : { kind: 'composite', commands: inverses },
+    ...(lastRange !== undefined ? { range: lastRange } : {}),
+  }
+}
+
+function applyReplaceBlocks(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'replace-blocks' }>,
+): { document: Document; inverse: Command; range?: Range } {
+  const resolvedPath = resolveParagraphPath(doc, cmd.at)
+  if (resolvedPath === null || resolvedPath.blockPath.length === 0) {
+    throw new Error('ReplaceBlocks target not found')
+  }
+
+  const section = doc.sections[resolvedPath.sectionIndex]
+  if (section === undefined) {
+    throw new Error('ReplaceBlocks target not found')
+  }
+
+  const prefix = resolvedPath.blockPath.slice(0, -1)
+  const startIndex = resolvedPath.blockPath[resolvedPath.blockPath.length - 1]
+  const siblingBlocks = getBlocksAtPrefix(section.blocks, prefix)
+
+  if (
+    siblingBlocks === null ||
+    startIndex < 0 ||
+    cmd.count < 0 ||
+    startIndex + cmd.count > siblingBlocks.length
+  ) {
+    throw new Error('ReplaceBlocks target is out of range')
+  }
+
+  const removed = siblingBlocks.slice(startIndex, startIndex + cmd.count)
+  const nextSiblingBlocks = freezeArray([
+    ...siblingBlocks.slice(0, startIndex),
+    ...cmd.blocks,
+    ...siblingBlocks.slice(startIndex + cmd.count),
+  ])
+  const nextDocument = setBlocksAtPrefix(doc, resolvedPath.sectionIndex, prefix, nextSiblingBlocks)
+
+  return {
+    document: nextDocument,
+    inverse: {
+      kind: 'replace-blocks',
+      at: clonePath(cmd.at),
+      count: cmd.blocks.length,
+      blocks: removed,
+    },
+    ...(cmd.cursor !== undefined ? { range: cmd.cursor } : {}),
+  }
+}
+
+function applyInsertInline(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'insert-inline' }>,
+): { document: Document; inverse: Command; range: Range } {
+  const paragraph = requireParagraph(doc, cmd.at.paragraphPath)
+  const editableRuns = requireEditableRuns(paragraph)
+  const split = splitEntriesAtPosition(editableRuns, cmd.at)
+
+  const inlineRun: Run = Object.freeze({ kind: 'run', children: freezeArray([cmd.child]) })
+  const inlineEntry: RunEntry = { run: inlineRun, owner: DIRECT_OWNER }
+
+  const nextEntries = [...split.beforeEntries, inlineEntry, ...split.afterEntries]
+  const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
+  const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
+
+  const resolvedPath = resolveParagraphPath(doc, cmd.at.paragraphPath)
+  if (resolvedPath === null) {
+    throw new Error('Paragraph not found')
+  }
+
+  const cursor = createPosition(cmd.at.paragraphPath, split.beforeEntries.length + 1, 0)
+
+  return {
+    document: nextDocument,
+    inverse: {
+      kind: 'replace-blocks',
+      at: freezeArray([resolvedPath.sectionIndex, ...resolvedPath.blockPath]),
+      count: 1,
+      blocks: [paragraph],
+      cursor: { anchor: cmd.at, focus: cmd.at },
+    },
+    range: { anchor: cursor, focus: cursor },
+  }
+}
+
+function applyInsertHyperlink(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'insert-hyperlink' }>,
+): { document: Document; inverse: Command; range: Range } {
+  const range = normalizeRange(doc, cmd.range)
+  if (!sameParagraphPath(doc, range.anchor.paragraphPath, range.focus.paragraphPath)) {
+    throw new Error('InsertHyperlink across multiple paragraphs is not yet implemented')
+  }
+
+  const paragraphPath = range.anchor.paragraphPath
+  const paragraph = requireParagraph(doc, paragraphPath)
+  const editableRuns = requireEditableRuns(paragraph)
+  const resolvedPath = resolveParagraphPath(doc, paragraphPath)
+  if (resolvedPath === null) {
+    throw new Error('Paragraph not found')
+  }
+
+  const wrapper: Hyperlink = Object.freeze({
+    kind: 'hyperlink',
+    relationshipId: cmd.relationshipId,
+    history: true,
+    children: freezeArray<Run>([]),
+  })
+
+  let nextEntries: ReadonlyArray<RunEntry>
+  let selectionEnd: Position
+
+  if (comparePositions(doc, range.anchor, range.focus) === 0) {
+    const target = resolveInsertTarget(editableRuns, range.anchor)
+    const targetPosition = createPosition(paragraphPath, target.runIndex, target.charOffset)
+    const split = splitEntriesAtPosition(editableRuns, targetPosition)
+    const linkRun: Run = Object.freeze({ kind: 'run', children: freezeArray([createTextNode(cmd.url)]) })
+
+    nextEntries = freezeArray([
+      ...split.beforeEntries,
+      { run: linkRun, owner: { kind: 'hyperlink', wrapper } },
+      ...split.afterEntries,
+    ])
+    selectionEnd = createPosition(paragraphPath, split.beforeEntries.length, cmd.url.length)
+  } else {
+    const offsets = getRangeOffsets(paragraph, range)
+    const sliced = sliceEntriesByOffsets(editableRuns, offsets)
+    if (sliced.within.length === 0) {
+      throw new Error('InsertHyperlink selection is empty')
+    }
+
+    const wrapped = sliced.within.map((entry): RunEntry => ({ run: entry.run, owner: { kind: 'hyperlink', wrapper } }))
+    nextEntries = freezeArray([...sliced.before, ...wrapped, ...sliced.after])
+    selectionEnd = createPosition(paragraphPath, sliced.before.length + wrapped.length, 0)
+  }
+
+  const nextChildren = buildParagraphChildren(nextEntries)
+  const nextParagraph = cloneParagraph(paragraph, nextChildren)
+  const nextDocument = replaceParagraphOrThrow(doc, paragraphPath, nextParagraph)
+
+  const inverseAt = freezeArray([resolvedPath.sectionIndex, ...resolvedPath.blockPath])
+
+  return {
+    document: nextDocument,
+    inverse: {
+      kind: 'replace-blocks',
+      at: inverseAt,
+      count: 1,
+      blocks: [paragraph],
+      cursor: { anchor: range.anchor, focus: range.focus },
+    },
+    range: { anchor: selectionEnd, focus: selectionEnd },
+  }
+}
+
+function applyInsertTable(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'insert-table' }>,
+): { document: Document; inverse: Command; range: Range } {
+  if (cmd.rows < 1 || cmd.cols < 1) {
+    throw new Error('InsertTable requires at least one row and one column')
+  }
+
+  const paragraph = requireParagraph(doc, cmd.at.paragraphPath)
+  const editableRuns = requireEditableRuns(paragraph)
+  const split = splitEntriesAtPosition(editableRuns, cmd.at)
+
+  const TOTAL_WIDTH_TWIPS = 9000
+  const columnWidth = twip(Math.max(1, Math.floor(TOTAL_WIDTH_TWIPS / cmd.cols)))
+  const tblGrid = freezeArray(Array.from({ length: cmd.cols }, () => columnWidth))
+
+  const makeCell = (): TableCell =>
+    Object.freeze({ kind: 'table-cell', blocks: freezeArray<Block>([emptyParagraph()]) })
+  const makeRow = (): TableRow =>
+    Object.freeze({ kind: 'table-row', cells: freezeArray(Array.from({ length: cmd.cols }, makeCell)) })
+  const table: Table = Object.freeze({
+    kind: 'table',
+    tblGrid,
+    rows: freezeArray(Array.from({ length: cmd.rows }, makeRow)),
+  })
+
+  const beforeParagraph = cloneParagraph(paragraph, buildParagraphChildren(split.beforeEntries))
+  const afterParagraph = cloneParagraph(paragraph, buildParagraphChildren(split.afterEntries))
+
+  const resolvedPath = resolveParagraphPath(doc, cmd.at.paragraphPath)
+  if (resolvedPath === null || resolvedPath.blockPath.length === 0) {
+    throw new Error('Paragraph not found')
+  }
+
+  const section = doc.sections[resolvedPath.sectionIndex]
+  if (section === undefined) {
+    throw new Error('Paragraph not found')
+  }
+
+  const prefix = resolvedPath.blockPath.slice(0, -1)
+  const index = resolvedPath.blockPath[resolvedPath.blockPath.length - 1]
+  const siblingBlocks = getBlocksAtPrefix(section.blocks, prefix)
+  if (siblingBlocks === null) {
+    throw new Error('Paragraph not found')
+  }
+
+  const nextSiblingBlocks = freezeArray([
+    ...siblingBlocks.slice(0, index),
+    beforeParagraph,
+    table,
+    afterParagraph,
+    ...siblingBlocks.slice(index + 1),
+  ])
+  const nextDocument = setBlocksAtPrefix(doc, resolvedPath.sectionIndex, prefix, nextSiblingBlocks)
+
+  const inverseAt = freezeArray([resolvedPath.sectionIndex, ...prefix, index])
+  const firstCellPath = freezeArray([resolvedPath.sectionIndex, ...prefix, index + 1, 0, 0, 0])
+  const cursor = createPosition(firstCellPath, 0, 0)
+
+  return {
+    document: nextDocument,
+    inverse: {
+      kind: 'replace-blocks',
+      at: inverseAt,
+      count: 3,
+      blocks: [paragraph],
+      cursor: { anchor: cmd.at, focus: cmd.at },
+    },
+    range: { anchor: cursor, focus: cursor },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lists / indent (D18)
+// ---------------------------------------------------------------------------
+
+const MAX_LIST_LEVEL = 8
+const INDENT_STEP_TWIPS = 720
+
+function applyInsertList(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'insert-list' }>,
+): { document: Document; inverse: Command } {
+  if (cmd.paragraphPaths.length === 0) {
+    return { document: doc, inverse: { kind: 'insert-list', paragraphPaths: [], numId: cmd.numId, level: cmd.level } }
+  }
+
+  const numIdStr = String(cmd.numId)
+  const allAlreadyListed = cmd.paragraphPaths.every((path) => {
+    const paragraph = findParagraph(doc, path)
+    return paragraph?.props?.numPr?.numId === numIdStr
+  })
+
+  const subCommands: Command[] = cmd.paragraphPaths.map((path) => ({
+    kind: 'apply-para-format',
+    paragraphPaths: [clonePath(path)],
+    format: allAlreadyListed
+      ? { numPr: undefined }
+      : { numPr: { numId: numIdStr, ilvl: cmd.level } },
+  }))
+
+  const result = applyComposite(doc, { kind: 'composite', commands: subCommands })
+  return { document: result.document, inverse: result.inverse }
+}
+
+function applyChangeListLevel(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'change-list-level' }>,
+): { document: Document; inverse: Command } {
+  const paragraph = requireParagraph(doc, cmd.paragraphPath)
+  const numPr = paragraph.props?.numPr
+
+  if (numPr?.numId !== undefined) {
+    const currentLevel = numPr.ilvl ?? 0
+    const nextLevel = Math.min(MAX_LIST_LEVEL, Math.max(0, currentLevel + cmd.delta))
+    if (nextLevel === currentLevel) {
+      return { document: doc, inverse: noOpParaFormat(cmd.paragraphPath) }
+    }
+
+    const nextParagraph = cloneParagraph(
+      paragraph,
+      paragraph.children,
+      applyPropsPatch(paragraph.props, { numPr: { ...numPr, ilvl: nextLevel } }),
+    )
+    const nextDocument = replaceParagraphOrThrow(doc, cmd.paragraphPath, nextParagraph)
+
+    return {
+      document: nextDocument,
+      inverse: {
+        kind: 'change-list-level',
+        paragraphPath: clonePath(cmd.paragraphPath),
+        delta: (cmd.delta * -1) as 1 | -1,
+      },
+    }
+  }
+
+  const currentIndent = paragraph.props?.ind?.left ?? 0
+  const nextIndent = Math.max(0, currentIndent + cmd.delta * INDENT_STEP_TWIPS)
+  if (nextIndent === currentIndent) {
+    return { document: doc, inverse: noOpParaFormat(cmd.paragraphPath) }
+  }
+
+  const nextParagraph = cloneParagraph(
+    paragraph,
+    paragraph.children,
+    applyPropsPatch(paragraph.props, { ind: withIndentLeft(paragraph.props?.ind, nextIndent) }),
+  )
+  const nextDocument = replaceParagraphOrThrow(doc, cmd.paragraphPath, nextParagraph)
+
+  return {
+    document: nextDocument,
+    inverse: {
+      kind: 'change-list-level',
+      paragraphPath: clonePath(cmd.paragraphPath),
+      delta: (cmd.delta * -1) as 1 | -1,
+    },
+  }
+}
+
+/**
+ * Sets `ind.left`, but drops the key entirely (returning `undefined`, or the
+ * surviving sibling `ind` fields if any) once it reaches zero, so outdenting
+ * all the way back to a paragraph's original state doesn't leave a stray
+ * `ind: { left: 0 }` behind — `applyPropsPatch` treats an `undefined` value as
+ * "delete this key", which is what makes ChangeListLevel's own inverse an
+ * exact round-trip back to a paragraph that never had an indent at all.
+ */
+function withIndentLeft(ind: Indent | undefined, leftTwips: number): Indent | undefined {
+  if (leftTwips <= 0) {
+    if (ind === undefined) {
+      return undefined
+    }
+
+    const rest = Object.fromEntries(Object.entries(ind).filter(([key]) => key !== 'left'))
+    return Object.keys(rest).length > 0 ? (rest as Indent) : undefined
+  }
+
+  return { ...ind, left: twip(leftTwips) }
+}
+
+function noOpParaFormat(paragraphPath: ReadonlyArray<number>): Command {
+  return { kind: 'apply-para-format', paragraphPaths: [clonePath(paragraphPath)], format: {} }
+}
+
+// ---------------------------------------------------------------------------
+// Revisions (unchanged)
+// ---------------------------------------------------------------------------
 
 function applyRevisionResolution(
   doc: Document,
@@ -326,6 +711,10 @@ function resolveAllRevisionsInChildren(
   return mutated ? freezeArray(next) : children
 }
 
+// ---------------------------------------------------------------------------
+// Paragraph lookup / path resolution
+// ---------------------------------------------------------------------------
+
 export function findParagraph(
   doc: Document,
   paragraphPath: ReadonlyArray<number>,
@@ -360,23 +749,29 @@ export function replaceParagraph(
   )
 }
 
+// ---------------------------------------------------------------------------
+// Text editing (D12 — cross-paragraph, cross-run, hyperlink-aware)
+// ---------------------------------------------------------------------------
+
 function applyInsertText(
   doc: Document,
   cmd: Extract<Command, { kind: 'insert-text' }>,
 ): {
   document: Document
   inverse: Command
+  range: Range
 } {
   if (cmd.text.length === 0) {
+    const collapsed = { anchor: cmd.at, focus: cmd.at }
     return {
       document: doc,
       inverse: createDeleteRangeCommand(cmd.at, cmd.at),
+      range: collapsed,
     }
   }
 
   const paragraph = requireParagraph(doc, cmd.at.paragraphPath)
   const editableRuns = requireEditableRuns(paragraph)
-  const originalRuns = editableRuns.map((entry) => entry.run)
 
   if (editableRuns.length === 0) {
     if (cmd.at.runIndex !== 0 || cmd.at.charOffset !== 0) {
@@ -392,20 +787,24 @@ function applyInsertText(
     return {
       document: nextDocument,
       inverse: createDeleteRangeCommand(start, end),
+      range: { anchor: end, focus: end },
     }
   }
 
   const target = resolveInsertTarget(editableRuns, cmd.at)
-  const nextRuns = originalRuns.slice()
   const current = editableRuns[target.runIndex]
   const nextText =
     current.text.slice(0, target.charOffset) +
     cmd.text +
     current.text.slice(target.charOffset)
 
-  nextRuns[target.runIndex] = createRunLike(current.run, nextText, current.run.props)
+  const nextEntries = editableRuns.map((entry, index): RunEntry =>
+    index === target.runIndex
+      ? { run: createRunLike(entry.run, nextText, entry.run.props), owner: entry.owner }
+      : { run: entry.run, owner: entry.owner },
+  )
 
-  const nextParagraph = cloneParagraph(paragraph, nextRuns)
+  const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
   const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
   const start = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset)
   const end = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset + cmd.text.length)
@@ -413,6 +812,7 @@ function applyInsertText(
   return {
     document: nextDocument,
     inverse: createDeleteRangeCommand(start, end),
+    range: { anchor: end, focus: end },
   }
 }
 
@@ -422,109 +822,125 @@ function applyDeleteRange(
 ): {
   document: Document
   inverse: Command
+  range: Range
 } {
   const range = normalizeRange(doc, cmd.range)
   if (comparePositions(doc, range.anchor, range.focus) === 0) {
     return {
       document: doc,
       inverse: createNoOpInsertText(range.anchor),
+      range: { anchor: range.anchor, focus: range.anchor },
     }
   }
 
-  if (sameParagraphPath(doc, range.anchor.paragraphPath, range.focus.paragraphPath)) {
-    return applyDeleteWithinParagraph(doc, range)
-  }
-
-  return applyDeleteParagraphBreak(doc, range)
+  return applyDeleteSpan(doc, range)
 }
 
-function applyDeleteWithinParagraph(
+/**
+ * Deletes `range`, whether it sits inside a single run (DXE-05: cross-run
+ * within one paragraph), a single paragraph, or spans several consecutive
+ * sibling paragraphs (DXE-04: cross-paragraph). All three are the same
+ * operation at different scales: keep the content of the first affected
+ * paragraph before `range.anchor`, keep the content of the last affected
+ * paragraph after `range.focus`, merge those two halves into one paragraph,
+ * and splice it in place of every paragraph the range touched.
+ */
+function applyDeleteSpan(
   doc: Document,
   range: Range,
 ): {
   document: Document
   inverse: Command
+  range: Range
 } {
-  const paragraph = requireParagraph(doc, range.anchor.paragraphPath)
-  const editableRuns = requireEditableRuns(paragraph)
-
-  if (range.anchor.runIndex !== range.focus.runIndex) {
-    throw new Error('DeleteRange across multiple runs is not yet implemented')
+  const startResolved = resolveParagraphPath(doc, range.anchor.paragraphPath)
+  const endResolved = resolveParagraphPath(doc, range.focus.paragraphPath)
+  if (startResolved === null || endResolved === null) {
+    throw new Error('DeleteRange target not found')
   }
 
-  const run = editableRuns[range.anchor.runIndex]
-  if (run === undefined) {
-    throw new Error('DeleteRange position is outside the paragraph')
+  if (startResolved.sectionIndex !== endResolved.sectionIndex) {
+    throw new Error('DeleteRange across sections is not yet implemented')
   }
 
+  const startBlockPath = startResolved.blockPath
+  const endBlockPath = endResolved.blockPath
   if (
-    range.anchor.charOffset < 0 ||
-    range.focus.charOffset < range.anchor.charOffset ||
-    range.focus.charOffset > run.text.length
+    startBlockPath.length === 0 ||
+    startBlockPath.length !== endBlockPath.length
   ) {
-    throw new Error('DeleteRange position is outside the run')
+    throw new Error('DeleteRange across mismatched block depths is not yet implemented')
   }
 
-  const deletedText = run.text.slice(range.anchor.charOffset, range.focus.charOffset)
-  const nextText =
-    run.text.slice(0, range.anchor.charOffset) + run.text.slice(range.focus.charOffset)
-
-  const nextRuns = editableRuns.map((entry) => entry.run).slice()
-  nextRuns[range.anchor.runIndex] = createRunLike(run.run, nextText, run.run.props)
-
-  const nextParagraph = cloneParagraph(paragraph, nextRuns)
-  const nextDocument = replaceParagraphOrThrow(doc, range.anchor.paragraphPath, nextParagraph)
-
-  return {
-    document: nextDocument,
-    inverse: {
-      kind: 'insert-text',
-      at: createPosition(
-        range.anchor.paragraphPath,
-        range.anchor.runIndex,
-        range.anchor.charOffset,
-      ),
-      text: deletedText,
-    },
-  }
-}
-
-function applyDeleteParagraphBreak(
-  doc: Document,
-  range: Range,
-): {
-  document: Document
-  inverse: Command
-} {
-  const startPath = resolveParagraphPath(doc, range.anchor.paragraphPath)
-  const endPath = resolveParagraphPath(doc, range.focus.paragraphPath)
-  if (startPath === null || endPath === null || !isNextSiblingPath(startPath, endPath)) {
-    throw new Error('DeleteRange across multiple paragraphs is not yet implemented')
+  const parentPrefix = startBlockPath.slice(0, -1)
+  for (let index = 0; index < parentPrefix.length; index += 1) {
+    if (parentPrefix[index] !== endBlockPath[index]) {
+      throw new Error('DeleteRange across different table cells is not yet implemented')
+    }
   }
 
-  const firstParagraph = requireParagraph(doc, range.anchor.paragraphPath)
-  const secondParagraph = requireParagraph(doc, range.focus.paragraphPath)
+  const startIndex = startBlockPath[startBlockPath.length - 1]
+  const endIndex = endBlockPath[endBlockPath.length - 1]
+  if (endIndex < startIndex) {
+    throw new Error('DeleteRange has an invalid (reversed) span')
+  }
+
+  const section = doc.sections[startResolved.sectionIndex]
+  if (section === undefined) {
+    throw new Error('DeleteRange target not found')
+  }
+
+  const siblingBlocks = getBlocksAtPrefix(section.blocks, parentPrefix)
+  if (siblingBlocks === null) {
+    throw new Error('DeleteRange target not found')
+  }
+
+  const spanBlocks = siblingBlocks.slice(startIndex, endIndex + 1)
+  if (spanBlocks.some((block) => block.kind !== 'paragraph')) {
+    throw new Error('DeleteRange across a table is not yet implemented')
+  }
+
+  const paragraphs = spanBlocks as ReadonlyArray<Paragraph>
+  const firstParagraph = paragraphs[0]
+  const lastParagraph = paragraphs[paragraphs.length - 1]
+
   const firstRuns = requireEditableRuns(firstParagraph)
-  const secondRuns = requireEditableRuns(secondParagraph)
+  const lastRuns = requireEditableRuns(lastParagraph)
 
-  if (!isParagraphEndPosition(firstRuns, range.anchor) || !isParagraphStartPosition(range.focus)) {
-    throw new Error('DeleteRange only supports deleting a paragraph break at paragraph boundaries')
-  }
+  const beforeEntries = splitEntriesAtPosition(firstRuns, range.anchor).beforeEntries
+  const afterEntries = splitEntriesAtPosition(lastRuns, range.focus).afterEntries
 
-  const mergedRuns = mergeAdjacentRuns([
-    ...firstRuns.map((entry) => entry.run),
-    ...secondRuns.map((entry) => entry.run),
+  const mergedEntries = mergeAdjacentEntries([...beforeEntries, ...afterEntries])
+  // Deleting every run's text still leaves the paragraph holding one
+  // (now-empty) run rather than none, matching the representation the rest of
+  // the pipeline (e.g. InsertText's own empty-paragraph branch) already
+  // treats as "an empty paragraph" the model was loaded/created with.
+  const mergedChildren =
+    mergedEntries.length > 0
+      ? buildParagraphChildren(mergedEntries)
+      : freezeArray<ParagraphChild>([createRunWithText(firstRuns[0]?.run.props, '')])
+  const mergedParagraph = cloneParagraph(firstParagraph, mergedChildren)
+
+  const nextSiblingBlocks = freezeArray([
+    ...siblingBlocks.slice(0, startIndex),
+    mergedParagraph,
+    ...siblingBlocks.slice(endIndex + 1),
   ])
-  const mergedParagraph = cloneParagraph(firstParagraph, mergedRuns)
-  const nextDocument = mergeParagraphWithNext(doc, range.anchor.paragraphPath, mergedParagraph)
-  const inverseAt = createParagraphEndPosition(range.anchor.paragraphPath, firstRuns)
+  const nextDocument = setBlocksAtPrefix(doc, startResolved.sectionIndex, parentPrefix, nextSiblingBlocks)
+
+  const inverseAt = freezeArray([startResolved.sectionIndex, ...parentPrefix, startIndex])
+  const collapsedAt = range.anchor
 
   return {
     document: nextDocument,
     inverse: {
-      kind: 'insert-paragraph-break',
+      kind: 'replace-blocks',
       at: inverseAt,
+      count: 1,
+      blocks: paragraphs,
+      cursor: { anchor: range.anchor, focus: range.focus },
     },
+    range: { anchor: collapsedAt, focus: collapsedAt },
   }
 }
 
@@ -534,22 +950,25 @@ function applyInsertParagraphBreak(
 ): {
   document: Document
   inverse: Command
+  range: Range
 } {
   const paragraph = requireParagraph(doc, cmd.at.paragraphPath)
   const editableRuns = requireEditableRuns(paragraph)
-  const split = splitRunsAtPosition(editableRuns, cmd.at)
+  const split = splitEntriesAtPosition(editableRuns, cmd.at)
 
-  const firstParagraph = cloneParagraph(paragraph, split.beforeRuns)
-  const secondParagraph = cloneParagraph(paragraph, split.afterRuns)
+  const firstParagraph = cloneParagraph(paragraph, buildParagraphChildren(split.beforeEntries))
+  const secondParagraph = cloneParagraph(paragraph, buildParagraphChildren(split.afterEntries))
   const nextDocument = insertParagraphAfter(doc, cmd.at.paragraphPath, firstParagraph, secondParagraph)
   const nextPath = incrementParagraphPath(cmd.at.paragraphPath)
+  const nextPosition = createPosition(nextPath, 0, 0)
 
   return {
     document: nextDocument,
     inverse: createDeleteRangeCommand(
-      createParagraphEndPosition(cmd.at.paragraphPath, getEditableRunsOrEmpty(firstParagraph)),
-      createPosition(nextPath, 0, 0),
+      createParagraphEndPosition(cmd.at.paragraphPath, toEditableRunList(split.beforeEntries)),
+      nextPosition,
     ),
+    range: { anchor: nextPosition, focus: nextPosition },
   }
 }
 
@@ -559,26 +978,40 @@ function applyRunFormat(
 ): {
   document: Document
   inverse: Command
+  range?: Range
 } {
   const range = normalizeRange(doc, cmd.range)
   if (comparePositions(doc, range.anchor, range.focus) === 0 || Object.keys(cmd.format).length === 0) {
     return {
       document: doc,
       inverse: createNoOpRunFormat(range),
+      range,
     }
   }
 
-  if (!sameParagraphPath(doc, range.anchor.paragraphPath, range.focus.paragraphPath)) {
-    throw new Error('ApplyRunFormat across multiple paragraphs is not yet implemented')
+  if (sameParagraphPath(doc, range.anchor.paragraphPath, range.focus.paragraphPath)) {
+    return applyRunFormatSingleParagraph(doc, range, cmd.format)
   }
 
+  return applyRunFormatAcrossParagraphs(doc, range, cmd.format)
+}
+
+function applyRunFormatSingleParagraph(
+  doc: Document,
+  range: Range,
+  format: Partial<RunProps>,
+): {
+  document: Document
+  inverse: Command
+  range: Range
+} {
   const paragraph = requireParagraph(doc, range.anchor.paragraphPath)
   const editableRuns = requireEditableRuns(paragraph)
   const offsets = getRangeOffsets(paragraph, range)
-  const inverseFormat = collectInverseRunFormat(editableRuns, offsets, cmd.format)
-  const formattedRuns = buildFormattedRuns(editableRuns, offsets, cmd.format)
-  const mergedRuns = mergeAdjacentRuns(formattedRuns)
-  const nextParagraph = cloneParagraph(paragraph, mergedRuns)
+  const inverseFormat = collectInverseRunFormat(editableRuns, offsets, format)
+  const formattedEntries = buildFormattedEntries(editableRuns, offsets, format)
+  const mergedEntries = mergeAdjacentEntries(formattedEntries)
+  const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(mergedEntries))
   const nextDocument = replaceParagraphOrThrow(doc, range.anchor.paragraphPath, nextParagraph)
   const nextEditableRuns = requireEditableRuns(nextParagraph)
   const nextRange = createRange(
@@ -593,7 +1026,79 @@ function applyRunFormat(
       range: nextRange,
       format: inverseFormat,
     },
+    range: nextRange,
   }
+}
+
+/**
+ * DXE-04 — formats a selection spanning multiple paragraphs by translating it
+ * into one `apply-run-format` per affected paragraph (full paragraph text for
+ * every paragraph strictly between the endpoints, the anchor-to-end slice of
+ * the first, the start-to-focus slice of the last) and applying them as one
+ * composite command. Each sub-command computes its own homogeneous inverse
+ * independently, so paragraphs that started with different formatting still
+ * invert correctly — composing them is what keeps the whole multi-paragraph
+ * edit a single atomic History step.
+ */
+function applyRunFormatAcrossParagraphs(
+  doc: Document,
+  range: Range,
+  format: Partial<RunProps>,
+): {
+  document: Document
+  inverse: Command
+  range?: Range
+} {
+  const startResolved = resolveParagraphPath(doc, range.anchor.paragraphPath)
+  const endResolved = resolveParagraphPath(doc, range.focus.paragraphPath)
+  if (startResolved === null || endResolved === null) {
+    throw new Error('ApplyRunFormat target not found')
+  }
+  if (startResolved.sectionIndex !== endResolved.sectionIndex) {
+    throw new Error('ApplyRunFormat across sections is not yet implemented')
+  }
+
+  const startBlockPath = startResolved.blockPath
+  const endBlockPath = endResolved.blockPath
+  if (startBlockPath.length === 0 || startBlockPath.length !== endBlockPath.length) {
+    throw new Error('ApplyRunFormat across mismatched block depths is not yet implemented')
+  }
+
+  const parentPrefix = startBlockPath.slice(0, -1)
+  for (let index = 0; index < parentPrefix.length; index += 1) {
+    if (parentPrefix[index] !== endBlockPath[index]) {
+      throw new Error('ApplyRunFormat across different table cells is not yet implemented')
+    }
+  }
+
+  const startIndex = startBlockPath[startBlockPath.length - 1]
+  const endIndex = endBlockPath[endBlockPath.length - 1]
+  if (endIndex < startIndex) {
+    throw new Error('ApplyRunFormat has an invalid (reversed) span')
+  }
+
+  const subCommands: Command[] = []
+  for (let blockIndex = startIndex; blockIndex <= endIndex; blockIndex += 1) {
+    const paragraphPath = freezeArray([startResolved.sectionIndex, ...parentPrefix, blockIndex])
+    const paragraph = requireParagraph(doc, paragraphPath)
+    const paragraphRuns = requireEditableRuns(paragraph)
+    const paragraphEnd = createParagraphEndPosition(paragraphPath, paragraphRuns)
+
+    const anchor = blockIndex === startIndex ? range.anchor : createPosition(paragraphPath, 0, 0)
+    const focus = blockIndex === endIndex ? range.focus : paragraphEnd
+
+    if (comparePositions(doc, anchor, focus) === 0) {
+      continue
+    }
+
+    subCommands.push({ kind: 'apply-run-format', range: { anchor, focus }, format })
+  }
+
+  if (subCommands.length === 0) {
+    return { document: doc, inverse: createNoOpRunFormat(range), range }
+  }
+
+  return applyComposite(doc, { kind: 'composite', commands: subCommands })
 }
 
 function applyParaFormat(
@@ -644,6 +1149,7 @@ function applyStyle(
 ): {
   document: Document
   inverse: Command
+  range: Range
 } {
   const paragraph = requireParagraph(doc, cmd.paragraphPath)
   const nextParagraph = cloneParagraph(
@@ -652,6 +1158,7 @@ function applyStyle(
     applyPropsPatch(paragraph.props, { pStyle: cmd.styleId }),
   )
   const nextDocument = replaceParagraphOrThrow(doc, cmd.paragraphPath, nextParagraph)
+  const cursor = createPosition(cmd.paragraphPath, 0, 0)
 
   return {
     document: nextDocument,
@@ -660,6 +1167,7 @@ function applyStyle(
       paragraphPaths: [clonePath(cmd.paragraphPath)],
       format: { pStyle: paragraph.props?.pStyle },
     },
+    range: { anchor: cursor, focus: cursor },
   }
 }
 
@@ -710,38 +1218,6 @@ function insertParagraphAfter(
       currentParagraph,
       nextParagraph,
       ...blocks.slice(blockIndex + 1),
-    ])
-  })
-
-  if (nextDocument === null) {
-    throw new Error('Paragraph not found')
-  }
-
-  return nextDocument
-}
-
-function mergeParagraphWithNext(
-  doc: Document,
-  paragraphPath: ReadonlyArray<number>,
-  mergedParagraph: Paragraph,
-): Document {
-  const nextDocument = updateDocumentAtParagraphPath(doc, paragraphPath, (blocks, blockIndex) => {
-    const firstBlock = blocks[blockIndex]
-    const secondBlock = blocks[blockIndex + 1]
-
-    if (
-      firstBlock === undefined ||
-      firstBlock.kind !== 'paragraph' ||
-      secondBlock === undefined ||
-      secondBlock.kind !== 'paragraph'
-    ) {
-      return null
-    }
-
-    return freezeArray([
-      ...blocks.slice(0, blockIndex),
-      mergedParagraph,
-      ...blocks.slice(blockIndex + 2),
     ])
   })
 
@@ -870,6 +1346,100 @@ function updateBlocksAtPath(
   return replaceArrayItem(blocks, blockIndex, nextTable)
 }
 
+/**
+ * Reads the sibling-blocks array addressed by `prefix` (a blockPath with its
+ * final "which block" segment already stripped) without mutating anything —
+ * the read counterpart to `setBlocksAtPrefix`, both used by the range-based
+ * structural operations (cross-paragraph delete, table/hyperlink insertion)
+ * that need to replace several consecutive sibling blocks at once rather than
+ * the single-block-at-a-time shape `updateBlocksAtPath` provides.
+ */
+function getBlocksAtPrefix(
+  blocks: ReadonlyArray<Block>,
+  prefix: ReadonlyArray<number>,
+): ReadonlyArray<Block> | null {
+  if (prefix.length === 0) {
+    return blocks
+  }
+
+  const [blockIndex, ...rest] = prefix
+  const block = blocks[blockIndex]
+  if (block === undefined || block.kind !== 'table' || rest.length < 2) {
+    return null
+  }
+
+  const [rowIndex, cellIndex, ...childPrefix] = rest
+  const row = block.rows[rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    return null
+  }
+
+  const cell = row.cells[cellIndex]
+  if (cell === undefined || cell.kind !== 'table-cell') {
+    return null
+  }
+
+  return getBlocksAtPrefix(cell.blocks, childPrefix)
+}
+
+function setBlocksAtPrefix(
+  doc: Document,
+  sectionIndex: number,
+  prefix: ReadonlyArray<number>,
+  newBlocks: ReadonlyArray<Block>,
+): Document {
+  const section = doc.sections[sectionIndex]
+  if (section === undefined) {
+    throw new Error('Section not found')
+  }
+
+  const updatedBlocks = setBlocksAtPrefixRec(section.blocks, prefix, newBlocks)
+  if (updatedBlocks === null) {
+    throw new Error('Block path not found')
+  }
+
+  const nextSection = cloneSection(section, updatedBlocks)
+  return cloneDocument(doc, replaceArrayItem(doc.sections, sectionIndex, nextSection))
+}
+
+function setBlocksAtPrefixRec(
+  blocks: ReadonlyArray<Block>,
+  prefix: ReadonlyArray<number>,
+  newBlocks: ReadonlyArray<Block>,
+): ReadonlyArray<Block> | null {
+  if (prefix.length === 0) {
+    return newBlocks
+  }
+
+  const [blockIndex, ...rest] = prefix
+  const block = blocks[blockIndex]
+  if (block === undefined || block.kind !== 'table' || rest.length < 2) {
+    return null
+  }
+
+  const [rowIndex, cellIndex, ...childPrefix] = rest
+  const row = block.rows[rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    return null
+  }
+
+  const cell = row.cells[cellIndex]
+  if (cell === undefined || cell.kind !== 'table-cell') {
+    return null
+  }
+
+  const nextCellBlocks = setBlocksAtPrefixRec(cell.blocks, childPrefix, newBlocks)
+  if (nextCellBlocks === null) {
+    return null
+  }
+
+  const nextCell = cloneTableCell(cell, nextCellBlocks)
+  const nextRow = cloneTableRow(row, replaceArrayItem(row.cells, cellIndex, nextCell))
+  const nextTable = cloneTable(block, replaceArrayItem(block.rows, rowIndex, nextRow))
+
+  return replaceArrayItem(blocks, blockIndex, nextTable)
+}
+
 function resolveParagraphPath(
   doc: Document,
   paragraphPath: ReadonlyArray<number>,
@@ -899,36 +1469,61 @@ function resolveParagraphPath(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Owner-aware run collection (DXE-03 — hyperlink flattening)
+// ---------------------------------------------------------------------------
+
 function requireEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> {
   const editableRuns = getEditableRuns(paragraph)
   if (editableRuns === null) {
-    throw new Error('This command currently supports paragraphs with direct text runs only')
+    throw new Error('This command currently supports paragraphs with direct text runs (optionally inside a hyperlink) only')
   }
 
   return editableRuns
-}
-
-function getEditableRunsOrEmpty(paragraph: Paragraph): ReadonlyArray<EditableRun> {
-  return getEditableRuns(paragraph) ?? []
 }
 
 function getEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> | null {
   const editableRuns: EditableRun[] = []
 
   for (const child of paragraph.children) {
-    if (child.kind !== 'run') {
-      return null
+    if (child.kind === 'run') {
+      const text = getRunText(child)
+      if (text === null) {
+        return null
+      }
+
+      editableRuns.push({ run: child, text, owner: DIRECT_OWNER })
+      continue
     }
 
-    const text = getRunText(child)
-    if (text === null) {
-      return null
+    if (child.kind === 'hyperlink') {
+      const owner: RunOwner = { kind: 'hyperlink', wrapper: child }
+      for (const grandchild of child.children) {
+        if (grandchild.kind !== 'run') {
+          return null
+        }
+
+        const text = getRunText(grandchild)
+        if (text === null) {
+          return null
+        }
+
+        editableRuns.push({ run: grandchild, text, owner })
+      }
+      continue
     }
 
-    editableRuns.push({ run: child, text })
+    return null
   }
 
   return editableRuns
+}
+
+function toEditableRunList(entries: ReadonlyArray<RunEntry>): ReadonlyArray<EditableRun> {
+  return entries.map((entry) => {
+    const text = getRunText(entry.run)
+    return { ...entry, text: text ?? '' }
+  })
 }
 
 function getRunText(run: Run): string | null {
@@ -943,6 +1538,45 @@ function getRunText(run: Run): string | null {
   }
 
   return text
+}
+
+function sameOwner(a: RunOwner, b: RunOwner): boolean {
+  if (a.kind === 'direct' && b.kind === 'direct') {
+    return true
+  }
+
+  return a.kind === 'hyperlink' && b.kind === 'hyperlink' && a.wrapper === b.wrapper
+}
+
+/**
+ * Rebuilds a paragraph's `children` from a flat, owner-tagged run list:
+ * consecutive runs that share a `direct` owner become bare `Run` children in
+ * order; consecutive runs that share the *same* hyperlink owner are grouped
+ * back into one `Hyperlink` wrapper (reusing that wrapper's original
+ * relationship/anchor/tooltip attributes, dropping only its interior
+ * non-run children, which `getEditableRuns` already refused to flatten).
+ */
+function buildParagraphChildren(entries: ReadonlyArray<RunEntry>): ReadonlyArray<ParagraphChild> {
+  const children: ParagraphChild[] = []
+  let index = 0
+
+  while (index < entries.length) {
+    const owner = entries[index].owner
+    const group: Run[] = []
+
+    while (index < entries.length && sameOwner(entries[index].owner, owner)) {
+      group.push(entries[index].run)
+      index += 1
+    }
+
+    if (owner.kind === 'direct') {
+      children.push(...group)
+    } else {
+      children.push(Object.freeze({ ...owner.wrapper, children: freezeArray(group) }))
+    }
+  }
+
+  return freezeArray(children)
 }
 
 function resolveInsertTarget(
@@ -979,71 +1613,111 @@ function resolveInsertTarget(
   }
 }
 
-function splitRunsAtPosition(
+function splitEntriesAtPosition(
   editableRuns: ReadonlyArray<EditableRun>,
   at: Position,
 ): {
-  readonly beforeRuns: ReadonlyArray<Run>
-  readonly afterRuns: ReadonlyArray<Run>
+  readonly beforeEntries: ReadonlyArray<RunEntry>
+  readonly afterEntries: ReadonlyArray<RunEntry>
 } {
-  const runs = editableRuns.map((entry) => entry.run)
+  const entries: ReadonlyArray<RunEntry> = editableRuns.map((entry) => ({ run: entry.run, owner: entry.owner }))
 
   if (editableRuns.length === 0) {
     if (at.runIndex !== 0 || at.charOffset !== 0) {
-      throw new Error('InsertParagraphBreak position is outside the paragraph')
+      throw new Error('Position is outside the paragraph')
     }
 
-    return {
-      beforeRuns: freezeArray<Run>([]),
-      afterRuns: freezeArray<Run>([]),
-    }
+    return { beforeEntries: freezeArray<RunEntry>([]), afterEntries: freezeArray<RunEntry>([]) }
   }
 
   if (at.runIndex === editableRuns.length) {
     if (at.charOffset !== 0) {
-      throw new Error('InsertParagraphBreak position is outside the paragraph')
+      throw new Error('Position is outside the paragraph')
     }
 
-    return {
-      beforeRuns: freezeArray(runs.slice()),
-      afterRuns: freezeArray<Run>([]),
-    }
+    return { beforeEntries: freezeArray(entries.slice()), afterEntries: freezeArray<RunEntry>([]) }
   }
 
-  const targetRun = editableRuns[at.runIndex]
-  if (targetRun === undefined || at.charOffset < 0 || at.charOffset > targetRun.text.length) {
-    throw new Error('InsertParagraphBreak position is outside the paragraph')
+  const target = editableRuns[at.runIndex]
+  if (target === undefined || at.charOffset < 0 || at.charOffset > target.text.length) {
+    throw new Error('Position is outside the paragraph')
   }
 
   if (at.charOffset === 0) {
     return {
-      beforeRuns: freezeArray(runs.slice(0, at.runIndex)),
-      afterRuns: freezeArray(runs.slice(at.runIndex)),
+      beforeEntries: freezeArray(entries.slice(0, at.runIndex)),
+      afterEntries: freezeArray(entries.slice(at.runIndex)),
     }
   }
 
-  if (at.charOffset === targetRun.text.length) {
+  if (at.charOffset === target.text.length) {
     return {
-      beforeRuns: freezeArray(runs.slice(0, at.runIndex + 1)),
-      afterRuns: freezeArray(runs.slice(at.runIndex + 1)),
+      beforeEntries: freezeArray(entries.slice(0, at.runIndex + 1)),
+      afterEntries: freezeArray(entries.slice(at.runIndex + 1)),
     }
   }
 
-  const leftRun = createRunLike(
-    targetRun.run,
-    targetRun.text.slice(0, at.charOffset),
-    targetRun.run.props,
-  )
-  const rightRun = createRunLike(
-    targetRun.run,
-    targetRun.text.slice(at.charOffset),
-    targetRun.run.props,
-  )
+  const leftRun = createRunLike(target.run, target.text.slice(0, at.charOffset), target.run.props)
+  const rightRun = createRunLike(target.run, target.text.slice(at.charOffset), target.run.props)
 
   return {
-    beforeRuns: freezeArray([...runs.slice(0, at.runIndex), leftRun]),
-    afterRuns: freezeArray([rightRun, ...runs.slice(at.runIndex + 1)]),
+    beforeEntries: freezeArray([...entries.slice(0, at.runIndex), { run: leftRun, owner: target.owner }]),
+    afterEntries: freezeArray([{ run: rightRun, owner: target.owner }, ...entries.slice(at.runIndex + 1)]),
   }
+}
+
+/**
+ * Slices a flat run list by absolute character offsets into three owner-aware
+ * groups (`before`/`within`/`after`), splitting any run that straddles a
+ * boundary. Shared by run-formatting (the `within` slice gets the format
+ * patch) and hyperlink-wrapping (the `within` slice gets re-owned).
+ */
+function sliceEntriesByOffsets(
+  editableRuns: ReadonlyArray<EditableRun>,
+  offsets: RunRange,
+): {
+  readonly before: ReadonlyArray<RunEntry>
+  readonly within: ReadonlyArray<RunEntry>
+  readonly after: ReadonlyArray<RunEntry>
+} {
+  const before: RunEntry[] = []
+  const within: RunEntry[] = []
+  const after: RunEntry[] = []
+  let currentOffset = 0
+
+  for (const entry of editableRuns) {
+    const runStart = currentOffset
+    const runEnd = currentOffset + entry.text.length
+    currentOffset = runEnd
+
+    if (runEnd <= offsets.startOffset) {
+      before.push({ run: entry.run, owner: entry.owner })
+      continue
+    }
+
+    if (runStart >= offsets.endOffset) {
+      after.push({ run: entry.run, owner: entry.owner })
+      continue
+    }
+
+    const localStart = Math.max(0, offsets.startOffset - runStart)
+    const localEnd = Math.min(entry.text.length, offsets.endOffset - runStart)
+
+    if (localStart > 0) {
+      before.push({ run: createRunLike(entry.run, entry.text.slice(0, localStart), entry.run.props), owner: entry.owner })
+    }
+    if (localEnd > localStart) {
+      within.push({
+        run: createRunLike(entry.run, entry.text.slice(localStart, localEnd), entry.run.props),
+        owner: entry.owner,
+      })
+    }
+    if (localEnd < entry.text.length) {
+      after.push({ run: createRunLike(entry.run, entry.text.slice(localEnd), entry.run.props), owner: entry.owner })
+    }
+  }
+
+  return { before: freezeArray(before), within: freezeArray(within), after: freezeArray(after) }
 }
 
 function normalizeRange(doc: Document, range: Range): Range {
@@ -1197,47 +1871,18 @@ function offsetToPosition(
   return createPosition(paragraphPath, lastIndex, editableRuns[lastIndex].text.length)
 }
 
-function buildFormattedRuns(
+function buildFormattedEntries(
   editableRuns: ReadonlyArray<EditableRun>,
   offsets: RunRange,
   format: Partial<RunProps>,
-): ReadonlyArray<Run> {
-  const nextRuns: Run[] = []
-  let currentOffset = 0
+): ReadonlyArray<RunEntry> {
+  const sliced = sliceEntriesByOffsets(editableRuns, offsets)
+  const formattedWithin = sliced.within.map((entry): RunEntry => {
+    const text = getRunText(entry.run) ?? ''
+    return { run: createRunLike(entry.run, text, applyPropsPatch(entry.run.props, format)), owner: entry.owner }
+  })
 
-  for (const entry of editableRuns) {
-    const runStart = currentOffset
-    const runEnd = currentOffset + entry.text.length
-
-    if (runEnd <= offsets.startOffset || runStart >= offsets.endOffset) {
-      nextRuns.push(entry.run)
-      currentOffset = runEnd
-      continue
-    }
-
-    const localStart = Math.max(0, offsets.startOffset - runStart)
-    const localEnd = Math.min(entry.text.length, offsets.endOffset - runStart)
-
-    if (localStart > 0) {
-      nextRuns.push(createRunLike(entry.run, entry.text.slice(0, localStart), entry.run.props))
-    }
-
-    nextRuns.push(
-      createRunLike(
-        entry.run,
-        entry.text.slice(localStart, localEnd),
-        applyPropsPatch(entry.run.props, format),
-      ),
-    )
-
-    if (localEnd < entry.text.length) {
-      nextRuns.push(createRunLike(entry.run, entry.text.slice(localEnd), entry.run.props))
-    }
-
-    currentOffset = runEnd
-  }
-
-  return freezeArray(nextRuns)
+  return freezeArray([...sliced.before, ...formattedWithin, ...sliced.after])
 }
 
 function collectInverseRunFormat(
@@ -1337,27 +1982,34 @@ function applyPropsPatch<T extends object>(
   return Object.freeze(result) as T
 }
 
-function mergeAdjacentRuns(runs: ReadonlyArray<Run>): ReadonlyArray<Run> {
-  const merged: Run[] = []
+function mergeAdjacentEntries(entries: ReadonlyArray<RunEntry>): ReadonlyArray<RunEntry> {
+  const merged: RunEntry[] = []
 
-  for (const run of runs) {
-    const text = getRunText(run)
+  for (const entry of entries) {
+    const text = getRunText(entry.run)
     if (text === null) {
       throw new Error('This command currently supports text-only runs')
     }
 
     const previous = merged[merged.length - 1]
-    if (previous === undefined || !sameRunProps(previous.props, run.props)) {
-      merged.push(run)
+    if (
+      previous === undefined ||
+      !sameOwner(previous.owner, entry.owner) ||
+      !sameRunProps(previous.run.props, entry.run.props)
+    ) {
+      merged.push(entry)
       continue
     }
 
-    const previousText = getRunText(previous)
+    const previousText = getRunText(previous.run)
     if (previousText === null) {
       throw new Error('This command currently supports text-only runs')
     }
 
-    merged[merged.length - 1] = createRunLike(previous, previousText + text, previous.props)
+    merged[merged.length - 1] = {
+      run: createRunLike(previous.run, previousText + text, previous.run.props),
+      owner: previous.owner,
+    }
   }
 
   return freezeArray(merged)
@@ -1373,46 +2025,6 @@ function isDeepEqual(left: unknown, right: unknown): boolean {
   }
 
   return JSON.stringify(left) === JSON.stringify(right)
-}
-
-function isParagraphEndPosition(
-  editableRuns: ReadonlyArray<EditableRun>,
-  position: Position,
-): boolean {
-  if (editableRuns.length === 0) {
-    return position.runIndex === 0 && position.charOffset === 0
-  }
-
-  const lastIndex = editableRuns.length - 1
-  return (
-    (position.runIndex === editableRuns.length && position.charOffset === 0) ||
-    (position.runIndex === lastIndex && position.charOffset === editableRuns[lastIndex].text.length)
-  )
-}
-
-function isParagraphStartPosition(position: Position): boolean {
-  return position.runIndex === 0 && position.charOffset === 0
-}
-
-function isNextSiblingPath(
-  left: ResolvedParagraphPath,
-  right: ResolvedParagraphPath,
-): boolean {
-  if (left.sectionIndex !== right.sectionIndex || left.blockPath.length !== right.blockPath.length) {
-    return false
-  }
-
-  if (left.blockPath.length === 0) {
-    return false
-  }
-
-  for (let index = 0; index < left.blockPath.length - 1; index += 1) {
-    if (left.blockPath[index] !== right.blockPath[index]) {
-      return false
-    }
-  }
-
-  return right.blockPath[left.blockPath.length - 1] === left.blockPath[left.blockPath.length - 1] + 1
 }
 
 function createParagraphEndPosition(
@@ -1483,6 +2095,10 @@ function clonePath(path: ReadonlyArray<number>): ReadonlyArray<number> {
   return freezeArray(path.slice())
 }
 
+function emptyParagraph(): Paragraph {
+  return Object.freeze({ kind: 'paragraph', children: freezeArray<ParagraphChild>([]) })
+}
+
 function cloneParagraph(
   paragraph: Paragraph,
   children: ReadonlyArray<Run> | ReadonlyArray<ParagraphChild>,
@@ -1509,6 +2125,7 @@ function cloneTable(table: Table, rows: ReadonlyArray<Table['rows'][number]>): T
   return Object.freeze({
     kind: 'table',
     ...(table.props !== undefined ? { props: table.props } : {}),
+    ...(table.tblGrid !== undefined ? { tblGrid: table.tblGrid } : {}),
     rows,
   })
 }
