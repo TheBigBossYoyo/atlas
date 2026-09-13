@@ -1,6 +1,14 @@
-const { app, BrowserWindow, ipcMain, dialog, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
+
+const { createPathAllowlist } = require('./lib/pathAllowlist.cjs');
+const { atomicWriteFile, FileLockedError } = require('./lib/atomicWrite.cjs');
+const { decodeTextBuffer } = require('./lib/textDecoding.cjs');
+const { buildContentSecurityPolicy } = require('./lib/csp.cjs');
+const { logToFile } = require('./lib/crashLog.cjs');
+const { FileTooLargeError, assertFileSizeAllowed } = require('./lib/fileSizeGuard.cjs');
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -27,6 +35,47 @@ const OVERLAY_COLORS = {
 let currentOverlayColors = OVERLAY_COLORS.light;
 
 const isDev = !app.isPackaged;
+
+// ---- Path allowlist (P1.2 / ELEC-02, ELEC-03, ELEC-25) ---- //
+//
+// The only paths any read/write IPC handler will act on are ones the main
+// process itself vouches for: open-dialog results, argv/second-instance/
+// open-file paths, drag-drop paths resolved via webUtils (registered
+// through `path:register-dropped`), save-as dialog results, and recent
+// files re-validated through `recent:request-open`.
+const pathAllowlist = createPathAllowlist();
+
+const NOT_ALLOWLISTED_MESSAGE =
+  'This file cannot be opened because it was not selected through Atlas. Try File > Open instead.';
+const SENDER_FRAME_ERROR_MESSAGE = 'This request could not be verified and was blocked.';
+
+/**
+ * @param {Electron.IpcMainInvokeEvent} event
+ * @returns {boolean}
+ */
+function isFromMainFrame(event) {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  try {
+    return event.senderFrame === mainWindow.webContents.mainFrame;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} level
+ * @param {string} message
+ * @param {unknown} [error]
+ */
+function logMainEvent(level, message, error) {
+  let logDir;
+  try {
+    logDir = app.getPath('logs');
+  } catch {
+    logDir = os.tmpdir();
+  }
+  logToFile(logDir, level, message, error);
+}
 
 // ---- File path helpers ---- //
 
@@ -60,12 +109,23 @@ function extractFilePath(argv) {
   return null;
 }
 
+/**
+ * Reads and decodes a text-class file. Returns `null` on any ordinary I/O
+ * failure (matching the previous behavior of every caller); propagates
+ * `FileTooLargeError` so the interactive open flows can surface a friendly
+ * message instead of a silent no-op.
+ */
 function readMarkdownFile(filePath) {
   try {
-    const content = fs.readFileSync(filePath, 'utf-8');
+    assertFileSizeAllowed(filePath);
+    const buffer = fs.readFileSync(filePath);
+    const content = decodeTextBuffer(buffer);
     const name = path.basename(filePath);
     return { content, name, path: filePath };
-  } catch {
+  } catch (err) {
+    if (err instanceof FileTooLargeError) {
+      throw err;
+    }
     return null;
   }
 }
@@ -79,13 +139,162 @@ function sendFileToWindow(win, filePath) {
   const dot = filePath.lastIndexOf('.');
   const ext = dot >= 0 ? filePath.slice(dot + 1).toLowerCase() : '';
   if (ext === 'md' || ext === 'markdown') {
-    const fileData = readMarkdownFile(filePath);
+    let fileData = null;
+    try {
+      fileData = readMarkdownFile(filePath);
+    } catch (err) {
+      logMainEvent('ERROR', 'legacy file-opened read failed', err);
+    }
     if (fileData) {
       win.webContents.send('file-opened', fileData);
     }
   }
   win.focus();
 }
+
+/**
+ * Registers `filePath` into the allowlist after re-validating it still
+ * exists on disk. Shared by the drag-drop path-registration IPC and the
+ * "request open recent" IPC (P1.2/P1.4).
+ * @param {Electron.IpcMainInvokeEvent} event
+ * @param {unknown} filePath
+ */
+function registerExistingPath(event, filePath) {
+  if (!isFromMainFrame(event)) return { ok: false };
+  if (typeof filePath !== 'string' || filePath.length === 0) return { ok: false };
+  if (!fs.existsSync(filePath)) return { ok: false };
+  pathAllowlist.add(filePath);
+  return { ok: true };
+}
+
+// ---- Content-Security-Policy (P1.2 / ELEC-04) ---- //
+
+function applyContentSecurityPolicy(win) {
+  win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    if (details.resourceType !== 'mainFrame') {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [buildContentSecurityPolicy(isDev)],
+      },
+    });
+  });
+}
+
+// ---- Navigation guards (P1.2 / ELEC-04) ---- //
+
+/**
+ * @param {string} urlString
+ * @returns {boolean}
+ */
+function isAllowedExternalScheme(urlString) {
+  try {
+    const { protocol } = new URL(urlString);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function applyNavigationGuards(win) {
+  win.webContents.on('will-navigate', (event, url) => {
+    event.preventDefault();
+    if (isAllowedExternalScheme(url)) {
+      void shell.openExternal(url);
+    }
+  });
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalScheme(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+}
+
+// ---- Production application menu (P1.2 / ELEC-12) ---- //
+
+function buildProductionMenu() {
+  /** @type {Electron.MenuItemConstructorOptions[]} */
+  const template = [
+    {
+      label: 'File',
+      submenu: [{ role: 'quit' }],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [{ role: 'minimize' }, { role: 'close' }],
+    },
+  ];
+  return Menu.buildFromTemplate(template);
+}
+
+// ---- Crash / error handling (P1.15 / ELEC-13) ---- //
+
+/**
+ * @param {BrowserWindow} win
+ */
+function showRecoveryDialog(win) {
+  if (!win || win.isDestroyed()) return;
+  const choice = dialog.showMessageBoxSync(win, {
+    type: 'error',
+    buttons: ['Reload', 'Quit'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Atlas has stopped responding',
+    message: 'The document view has crashed or stopped responding.',
+    detail: 'You can reload the window to continue, or quit the app.',
+  });
+  if (choice === 0) {
+    win.reload();
+  } else {
+    app.quit();
+  }
+}
+
+function applyCrashHandlers(win) {
+  win.webContents.on('render-process-gone', (_event, details) => {
+    logMainEvent('ERROR', `renderer process gone (${details.reason})`, details);
+    showRecoveryDialog(win);
+  });
+  win.webContents.on('unresponsive', () => {
+    logMainEvent('WARN', 'renderer unresponsive');
+    showRecoveryDialog(win);
+  });
+}
+
+process.on('uncaughtException', (error) => {
+  logMainEvent('ERROR', 'uncaughtException', error);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logMainEvent('ERROR', 'unhandledRejection', reason);
+});
 
 // ---- Window creation ---- //
 
@@ -107,10 +316,18 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       spellcheck: true,
     },
   });
+
+  applyContentSecurityPolicy(mainWindow);
+  applyNavigationGuards(mainWindow);
+  applyCrashHandlers(mainWindow);
+
+  if (!isDev) {
+    Menu.setApplicationMenu(buildProductionMenu());
+  }
 
   // Configure spellchecker languages — default to system locale + en-US fallback.
   try {
@@ -197,7 +414,11 @@ ipcMain.handle('get-initial-file', () => {
   return null;
 });
 
-ipcMain.handle('dialog:openFileBinary', async () => {
+ipcMain.handle('dialog:openFileBinary', async (event) => {
+  if (!isFromMainFrame(event)) {
+    return { canceled: true, path: '', buffer: new ArrayBuffer(0) };
+  }
+
   const win = mainWindow;
   const result = await dialog.showOpenDialog(win || undefined, {
     properties: ['openFile'],
@@ -225,21 +446,38 @@ ipcMain.handle('dialog:openFileBinary', async () => {
   }
 
   const filePath = result.filePaths[0];
+
+  try {
+    assertFileSizeAllowed(filePath);
+  } catch (err) {
+    dialog.showErrorBox('File too large', err instanceof Error ? err.message : String(err));
+    return { canceled: true, path: '', buffer: new ArrayBuffer(0) };
+  }
+
+  pathAllowlist.add(filePath);
   const buf = await fs.promises.readFile(filePath);
   const buffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   return { canceled: false, path: filePath, buffer };
 });
 
-ipcMain.handle('file:readBinaryByPath', async (_event, filePath) => {
-  if (typeof filePath !== 'string' || !fs.existsSync(filePath)) {
+ipcMain.handle('file:readBinaryByPath', async (event, filePath) => {
+  if (!isFromMainFrame(event)) {
+    throw new Error(SENDER_FRAME_ERROR_MESSAGE);
+  }
+  if (typeof filePath !== 'string' || !pathAllowlist.has(filePath)) {
+    throw new Error(NOT_ALLOWLISTED_MESSAGE);
+  }
+  if (!fs.existsSync(filePath)) {
     throw new Error('Invalid path');
   }
+  assertFileSizeAllowed(filePath);
   const buf = await fs.promises.readFile(filePath);
   const buffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   return { path: filePath, buffer };
 });
 
-ipcMain.handle('open-file-dialog', async () => {
+ipcMain.handle('open-file-dialog', async (event) => {
+  if (!isFromMainFrame(event)) return null;
   if (!mainWindow) return null;
 
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -252,20 +490,38 @@ ipcMain.handle('open-file-dialog', async () => {
 
   if (result.canceled || result.filePaths.length === 0) return null;
 
+  pathAllowlist.add(result.filePaths[0]);
   return readMarkdownFile(result.filePaths[0]);
 });
 
-ipcMain.handle('open-file-by-path', (_event, filePath) => {
+ipcMain.handle('open-file-by-path', (event, filePath) => {
+  if (!isFromMainFrame(event)) {
+    throw new Error(SENDER_FRAME_ERROR_MESSAGE);
+  }
   if (typeof filePath !== 'string') return null;
+  if (!pathAllowlist.has(filePath)) {
+    throw new Error(NOT_ALLOWLISTED_MESSAGE);
+  }
   if (!fs.existsSync(filePath)) return null;
   return readMarkdownFile(filePath);
 });
 
-ipcMain.handle('save-file', async (_event, req) => {
+ipcMain.handle('path:register-dropped', (event, filePath) => registerExistingPath(event, filePath));
+
+ipcMain.handle('recent:request-open', (event, filePath) => registerExistingPath(event, filePath));
+
+ipcMain.handle('save-file', async (event, req) => {
+  if (!isFromMainFrame(event)) return { saved: false, error: SENDER_FRAME_ERROR_MESSAGE };
   if (!mainWindow) return { saved: false };
   if (!req || typeof req.content !== 'string') return { saved: false };
 
-  let targetPath = req.existingPath;
+  // Only silently overwrite a path this window is already vouched for
+  // (ELEC-03) — anything else falls back to the save dialog instead of
+  // failing outright.
+  let targetPath =
+    typeof req.existingPath === 'string' && pathAllowlist.has(req.existingPath)
+      ? req.existingPath
+      : undefined;
 
   if (!targetPath) {
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -280,19 +536,24 @@ ipcMain.handle('save-file', async (_event, req) => {
   }
 
   try {
-    fs.writeFileSync(targetPath, req.content, 'utf-8');
+    atomicWriteFile(targetPath, req.content);
+    pathAllowlist.add(targetPath);
     return { saved: true, path: targetPath, name: path.basename(targetPath) };
   } catch (err) {
-    console.error('save-file failed', err);
-    return { saved: false };
+    logMainEvent('ERROR', 'save-file failed', err);
+    return { saved: false, error: err instanceof FileLockedError ? err.message : undefined };
   }
 });
 
-ipcMain.handle('save-binary-file', async (_event, req) => {
+ipcMain.handle('save-binary-file', async (event, req) => {
+  if (!isFromMainFrame(event)) return { saved: false, error: SENDER_FRAME_ERROR_MESSAGE };
   if (!mainWindow) return { saved: false };
   if (!(req && req.content instanceof Uint8Array)) return { saved: false };
 
-  let targetPath = req.existingPath;
+  let targetPath =
+    typeof req.existingPath === 'string' && pathAllowlist.has(req.existingPath)
+      ? req.existingPath
+      : undefined;
 
   if (!targetPath) {
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -307,11 +568,12 @@ ipcMain.handle('save-binary-file', async (_event, req) => {
   }
 
   try {
-    fs.writeFileSync(targetPath, Buffer.from(req.content));
+    atomicWriteFile(targetPath, Buffer.from(req.content));
+    pathAllowlist.add(targetPath);
     return { saved: true, path: targetPath, name: path.basename(targetPath) };
   } catch (err) {
-    console.error('save-binary-file failed', err);
-    return { saved: false };
+    logMainEvent('ERROR', 'save-binary-file failed', err);
+    return { saved: false, error: err instanceof FileLockedError ? err.message : undefined };
   }
 });
 
@@ -370,7 +632,8 @@ ipcMain.handle('spellcheck:set-languages', (_event, languages) => {
   }
 });
 
-ipcMain.handle('image:pick', async () => {
+ipcMain.handle('image:pick', async (event) => {
+  if (!isFromMainFrame(event)) return { cancelled: true };
   if (!mainWindow || mainWindow.isDestroyed()) return { cancelled: true };
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -384,8 +647,6 @@ ipcMain.handle('image:pick', async () => {
       return { cancelled: true };
     }
     const filePath = result.filePaths[0];
-    const fs = require('fs');
-    const path = require('path');
     const buffer = fs.readFileSync(filePath);
     const ext = path.extname(filePath).slice(1).toLowerCase();
     const mime =
@@ -418,14 +679,25 @@ ipcMain.on('set-theme', (_event, theme) => {  currentOverlayColors = OVERLAY_COL
 
 // Grab file from argv before app is ready
 pendingFilePath = extractFilePath(process.argv);
+if (pendingFilePath) {
+  pathAllowlist.add(pendingFilePath);
+}
 
 app.on('second-instance', (_event, argv) => {
   const filePath = extractFilePath(argv);
+  if (filePath) {
+    pathAllowlist.add(filePath);
+  }
   if (filePath && mainWindow) {
     sendFileToWindow(mainWindow, filePath);
   } else if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
+  } else if (filePath) {
+    // Window not created yet (a rapid second launch during startup) — queue
+    // it so it opens once ready-to-show fires instead of being dropped
+    // (ELEC-07).
+    pendingFilePath = filePath;
   }
 });
 
@@ -447,6 +719,7 @@ app.on('window-all-closed', () => {
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
   if (typeof filePath !== 'string' || filePath.length === 0) return;
+  pathAllowlist.add(filePath);
   if (mainWindow) {
     sendFileToWindow(mainWindow, filePath);
   } else {
