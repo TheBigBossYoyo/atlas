@@ -36,6 +36,7 @@ function renderToolbar(overrides: ToolbarOverrides = {}) {
       canSave={false}
       canSearch={false}
       canChangeFontSize={false}
+      canClose={false}
       isMarkdown={false}
       isElectron={false}
       exportFormat="text"
@@ -45,6 +46,7 @@ function renderToolbar(overrides: ToolbarOverrides = {}) {
       onToggleSidebar={noop}
       onOpenFile={noop}
       onSave={vi.fn()}
+      onCloseFile={noop}
       onExport={noop}
       onOpenSearch={noop}
       onShowShortcuts={noop}
@@ -78,5 +80,20 @@ describe('Toolbar format-gated chrome (SHELL-14 / SHELL-15 / UX-07)', () => {
     const saveButton = screen.getByTitle('Save (Ctrl+S)')
     expect(saveButton).toBeInTheDocument()
     expect(saveButton).not.toBeDisabled()
+  })
+})
+
+describe('Toolbar close-file action (P2.8/SHELL-16)', () => {
+  it('hides the close-file button when canClose is false', () => {
+    renderToolbar({ canClose: false })
+    expect(screen.queryByRole('button', { name: 'Close file' })).not.toBeInTheDocument()
+  })
+
+  it('shows the close-file button and invokes onCloseFile when canClose is true', () => {
+    const onCloseFile = vi.fn()
+    renderToolbar({ canClose: true, onCloseFile })
+    const closeButton = screen.getByRole('button', { name: 'Close file' })
+    closeButton.click()
+    expect(onCloseFile).toHaveBeenCalledTimes(1)
   })
 })
