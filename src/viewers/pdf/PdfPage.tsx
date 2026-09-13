@@ -243,6 +243,13 @@ function PdfPageBase({
             onInternalNavigate: onInternalLinkNavigate,
           })
         }
+
+        // Releases this page's rendering-side caches (fonts, operator
+        // lists) now that the canvas/text/annotation layers are painted —
+        // part of keeping memory bounded on long documents (PDF-01). Safe
+        // once render() has resolved; re-entering the active window later
+        // just re-fetches via getPage() as usual.
+        page.cleanup()
       } catch (err) {
         if (err instanceof Error && err.name !== 'RenderingCancelledException' && !cancelled) {
           console.error(`Error rendering PDF page ${pageNumber}`, err)
