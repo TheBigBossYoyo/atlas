@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import { halfPoint, twip } from '../../model'
 import { parseStyles } from '../styles'
+import { DocxParseError } from '../unzip'
 
 const BASE_STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles
@@ -256,5 +257,11 @@ describe('parseStyles', () => {
 
     expect(part.styles.get('Heading1')?.name).toBe('Heading 1')
     expect(part.styles.get('Heading1')?.run?.bold).toBe(true)
+  })
+
+  describe('malformed XML handling (D28 / DXP-16)', () => {
+    it('wraps a fast-xml-parser failure in DocxParseError instead of letting it propagate raw', () => {
+      expect(() => parseStyles('<<< not xml <<<')).toThrow(DocxParseError)
+    })
   })
 })

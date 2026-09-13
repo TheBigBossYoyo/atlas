@@ -8,6 +8,7 @@
 
 import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 
+import { DocxParseError } from './unzip'
 import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import {
   eighthPoint,
@@ -109,7 +110,13 @@ const xmlBuilder = new XMLBuilder({
 
 export function parseDocument(xml: string): DocxDocument {
   assertXmlPartSizeWithinLimit(xml, 'word/document.xml')
-  const raw = xmlParser.parse(xml) as OrderedXmlNode[]
+  let raw: OrderedXmlNode[]
+  try {
+    raw = xmlParser.parse(xml) as OrderedXmlNode[]
+  } catch (cause) {
+    const msg = cause instanceof Error ? cause.message : String(cause)
+    throw new DocxParseError(`Failed to parse document XML: ${msg}`)
+  }
 
   const documentElement = findElement(raw, 'w:document')
   const bodyElement = child(documentElement, 'w:body')

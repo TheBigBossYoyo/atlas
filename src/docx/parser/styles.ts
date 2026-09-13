@@ -7,6 +7,7 @@
 
 import { XMLParser } from 'fast-xml-parser'
 
+import { DocxParseError } from './unzip'
 import {
   eighthPoint,
   halfPoint,
@@ -85,7 +86,13 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
 
 export function parseStyles(xml: string): StylesPart {
   assertXmlPartSizeWithinLimit(xml, 'word/styles.xml')
-  const raw = xmlParser.parse(xml) as RawStylesDocument
+  let raw: RawStylesDocument
+  try {
+    raw = xmlParser.parse(xml) as RawStylesDocument
+  } catch (cause) {
+    const msg = cause instanceof Error ? cause.message : String(cause)
+    throw new DocxParseError(`Failed to parse styles XML: ${msg}`)
+  }
   const stylesRoot = asXmlNode(raw['w:styles'])
 
   const docDefaultsNode = getNode(stylesRoot, 'w:docDefaults')

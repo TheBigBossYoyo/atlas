@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import { halfPoint, twip } from '../../model'
 import { parseNumbering } from '../numbering'
+import { DocxParseError } from '../unzip'
 
 const NUMBERING_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -174,6 +175,12 @@ describe('parseNumbering', () => {
 
     expect(level?.run).toEqual({
       sz: halfPoint(20),
+    })
+  })
+
+  describe('malformed XML handling (D28 / DXP-16)', () => {
+    it('wraps a fast-xml-parser failure in DocxParseError instead of letting it propagate raw', () => {
+      expect(() => parseNumbering('<<< not xml <<<')).toThrow(DocxParseError)
     })
   })
 })

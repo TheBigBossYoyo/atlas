@@ -758,4 +758,20 @@ describe('parseDocument', () => {
       expect(() => parseDocument(oversized)).toThrow(DocxParseError)
     })
   })
+
+  describe('malformed XML handling (D28 / DXP-16)', () => {
+    it('wraps a fast-xml-parser failure in DocxParseError instead of letting it propagate raw', () => {
+      expect(() => parseDocument('<<< not xml <<<')).toThrow(DocxParseError)
+    })
+
+    it('includes the underlying parser message in the DocxParseError', () => {
+      try {
+        parseDocument('<<< not xml <<<')
+        expect.unreachable('parseDocument should have thrown')
+      } catch (error) {
+        expect(error).toBeInstanceOf(DocxParseError)
+        expect((error as Error).message).toContain('Failed to parse document XML')
+      }
+    })
+  })
 })

@@ -8,6 +8,7 @@ import { XMLParser } from 'fast-xml-parser'
 
 import type { JustifyContent, LvlDef, LvlOverride, NumberingSuffix } from '../model'
 import { parseParaPropsNode, parseRunPropsNode } from './styles'
+import { DocxParseError } from './unzip'
 import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 
 type XmlScalar = string | number | boolean
@@ -43,7 +44,13 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
 
 export function parseNumbering(xml: string): NumberingPart {
   assertXmlPartSizeWithinLimit(xml, 'word/numbering.xml')
-  const raw = xmlParser.parse(xml) as RawNumberingDocument
+  let raw: RawNumberingDocument
+  try {
+    raw = xmlParser.parse(xml) as RawNumberingDocument
+  } catch (cause) {
+    const msg = cause instanceof Error ? cause.message : String(cause)
+    throw new DocxParseError(`Failed to parse numbering XML: ${msg}`)
+  }
   const numberingRoot = asXmlNode(raw['w:numbering'])
 
   const abstractNums = new Map<string, AbstractNum>()
