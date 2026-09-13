@@ -331,6 +331,63 @@ describe('DocxViewer editor', () => {
     })
   })
 
+  it('P1.1: an edit made while a save is still in flight is still reported dirty once that save resolves', async () => {
+    // Hold saveDocx open so we can land a second edit *during* the save,
+    // simulating a fast typist outrunning a slow save() round-trip. Kept on
+    // an object (rather than a bare `let`) so TS doesn't narrow the
+    // not-yet-assigned property to a bare `null` at the read site below.
+    const pending: { resolveSave: ((bytes: Uint8Array) => void) | null } = { resolveSave: null }
+    saveDocxMock.mockImplementation(() => {
+      return new Promise<Uint8Array>((resolve) => {
+        pending.resolveSave = resolve
+      })
+    })
+
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <ViewerDirtyProbe />
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello', 'Howdy')
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(saveDocxMock).toHaveBeenCalledTimes(1))
+
+    // A second edit lands while the first save's saveDocx()/saveBinaryFile()
+    // round-trip is still pending — this content is NOT part of what's about
+    // to be written to disk.
+    replaceFirstMatch('Howdy', 'Howdy again')
+
+    // Now let the in-flight save resolve with the (now-stale) bytes it
+    // captured before the second edit.
+    pending.resolveSave?.(new Uint8Array([1, 2, 3]))
+
+    // Before the fix, handleSave unconditionally called setDirty(false) using
+    // the documentModel it captured when the save *started*, permanently
+    // clearing the dirty flag even though the second edit above was never
+    // written to disk — silently telling the user there was nothing left to
+    // save when there was.
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+  })
+
   it('P1.1/DXE-07/RUN-03: the shared context save() reaches this viewer\'s own save implementation', async () => {
     render(
       <ViewerProvider filePath="C:/docs/sample.docx">

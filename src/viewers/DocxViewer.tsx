@@ -547,7 +547,15 @@ function DocxEditor({
   // whenever documentModel diverges (by reference — every edit replaces it
   // immutably) from the last-saved-or-loaded snapshot, and register our own
   // save() so App.tsx's global Ctrl+S/Save can reach it when DOCX is active.
-  const lastSavedDocumentRef = useRef(bundle.document)
+  //
+  // `lastSavedDocument` is state, not a ref: dirty is derived from it and the
+  // *current* `documentModel` together in one effect below, so that if the
+  // user keeps typing while an async save() is still in flight, the edits
+  // made after the save started are correctly still reported dirty once the
+  // save resolves — the effect re-reads `documentModel` fresh on every
+  // render rather than trusting whatever value save()'s own closure captured
+  // when it started.
+  const [lastSavedDocument, setLastSavedDocument] = useState(bundle.document)
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
 
@@ -1140,14 +1148,20 @@ function DocxEditor({
         return false
       }
 
-      lastSavedDocumentRef.current = documentModel
-      setDirty(false)
+      // Record *what was actually written* (this closure's own `documentModel`
+      // snapshot, taken when the save started) as the new saved baseline. We
+      // deliberately do NOT also call `setDirty(false)` here: if the user kept
+      // editing while the `await`s above were in flight, `documentModel` may
+      // already have moved on since this snapshot, and the effect below
+      // recomputes dirty from whatever the *current* render's `documentModel`
+      // is once this state update lands — never from this stale closure.
+      setLastSavedDocument(documentModel)
       return true
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
       return false
     }
-  }, [bundle, documentModel, savePath, setDirty])
+  }, [bundle, documentModel, savePath])
 
   useEffect(() => {
     handleSaveRef.current = handleSave
@@ -1157,10 +1171,14 @@ function DocxEditor({
   // implementation to the shared document-session contract. Every commitState
   // call replaces documentModel with a new object, so a plain reference
   // compare against the last-saved-or-loaded snapshot is exactly "has this
-  // document changed since load/save".
+  // document changed since load/save". Deriving this from both pieces of
+  // state together (rather than reaching into a ref from inside handleSave)
+  // is what makes it correct even when an edit lands while a save is still
+  // in flight: this effect always compares against the render's *current*
+  // documentModel, never a snapshot captured before the save resolved.
   useEffect(() => {
-    setDirty(documentModel !== lastSavedDocumentRef.current)
-  }, [documentModel, setDirty])
+    setDirty(documentModel !== lastSavedDocument)
+  }, [documentModel, lastSavedDocument, setDirty])
 
   useEffect(() => {
     registerSave(handleSave)

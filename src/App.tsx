@@ -117,6 +117,16 @@ function App() {
       return Promise.resolve(true);
     }
 
+    // A confirmation is already showing (e.g. a second open request — the OS
+    // "file-opened-path" event can fire independently of anything the guard's
+    // own modal is blocking) — refuse the new request rather than silently
+    // overwriting `pendingConfirmResolveRef` and orphaning the first caller's
+    // Promise forever (it would otherwise never resolve, since only one
+    // resolver can be stored at a time).
+    if (pendingConfirmResolveRef.current) {
+      return Promise.resolve(false);
+    }
+
     return new Promise<boolean>((resolve) => {
       pendingConfirmResolveRef.current = resolve;
       setUnsavedDialogError(null);

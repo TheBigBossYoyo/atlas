@@ -13,7 +13,7 @@
  * so they never touch the markdown render path at all.
  */
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
 
@@ -182,6 +182,48 @@ describe('App — unsaved-changes guard (P1.1/SHELL-03/04/LOAD-01/RUN-01)', () =
       expect(within(dialog).getByRole('alert')).toHaveTextContent(/save failed/i);
     });
     expect(window.electronAPI!.openFileByPath).not.toHaveBeenCalledWith('/abs/b.md');
+  });
+
+  it('a second confirmation request that arrives while one is already pending is refused instead of orphaning the first', async () => {
+    let fileOpenedCallback: ((path: string) => void) | null = null;
+    window.electronAPI!.onFileOpenedPath = vi.fn().mockImplementation((cb: (path: string) => void) => {
+      fileOpenedCallback = cb;
+      return () => {};
+    });
+    window.electronAPI!.openFileByPath = vi.fn().mockImplementation((path: string) =>
+      Promise.resolve({ content: `# ${path}`, name: path.split('/').pop(), path }),
+    );
+
+    render(<App />);
+    await loadFirstFileAndMakeItDirty();
+
+    // First OS "Open with" event while dirty — shows the confirm dialog and
+    // leaves its Promise pending on the user's answer.
+    await act(async () => {
+      fileOpenedCallback?.('/abs/c.md');
+    });
+    const dialog = await screen.findByRole('alertdialog');
+
+    // A second "Open with" event arrives before the user answers the first
+    // dialog (e.g. double-clicking two different files in Explorer in quick
+    // succession). Before the fix, this silently overwrote the first
+    // request's pending resolver, hanging its loadFromPath call forever.
+    await act(async () => {
+      fileOpenedCallback?.('/abs/d.md');
+    });
+
+    // Still showing the confirmation for the *first* request.
+    expect(screen.getByRole('alertdialog')).toBe(dialog);
+    expect(window.electronAPI!.openFileByPath).not.toHaveBeenCalledWith('/abs/d.md');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+
+    // The first request's own Promise must still resolve — it was not the
+    // one orphaned — so its open actually completes.
+    await waitFor(() => {
+      expect(toolbarFilenameText()).toBe('c.md');
+    });
+    expect(window.electronAPI!.openFileByPath).not.toHaveBeenCalledWith('/abs/d.md');
   });
 });
 
