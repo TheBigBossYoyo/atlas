@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
  * changes (the `data-theme` attribute on `<html>`).
  */
 
-type CustomGridTheme = {
+export type CustomGridTheme = {
   bgCell: string
   bgCellMedium: string
   textDark: string
