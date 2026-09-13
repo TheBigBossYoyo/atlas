@@ -2,42 +2,65 @@ import { halfPoint, hexColor, twip, type Document, type HighlightColor, type Jus
 
 import { findParagraph } from './commands'
 import type { Command, Range } from './commandTypes'
+import { normalizeRange } from './Selection'
 import type { ToolbarCommand } from './toolbar/toolbarTypes'
 
 function getSelectionRange(selection: Range | null): Range | null {
   return selection
 }
 
-function getFocusRange(_selection: Range | null): Range | null {
-  return _selection
-}
-void getFocusRange
-
 function getPrimaryParagraphPath(selection: Range | null): ReadonlyArray<number> | null {
   return selection?.focus.paragraphPath ?? selection?.anchor.paragraphPath ?? null
 }
 
-function getParagraphPaths(selection: Range | null): ReadonlyArray<ReadonlyArray<number>> {
-  const anchorPath = selection?.anchor.paragraphPath
-  const focusPath = selection?.focus.paragraphPath
+function pathsEqual(a: ReadonlyArray<number>, b: ReadonlyArray<number>): boolean {
+  return a.length === b.length && a.every((segment, index) => segment === b[index])
+}
 
-  if (anchorPath === undefined && focusPath === undefined) {
+function collectTopLevelParagraphPaths(document: Document): ReadonlyArray<ReadonlyArray<number>> {
+  const paths: Array<ReadonlyArray<number>> = []
+
+  document.sections.forEach((section, sectionIndex) => {
+    section.blocks.forEach((block, blockIndex) => {
+      if (block.kind === 'paragraph') {
+        paths.push(Object.freeze([sectionIndex, blockIndex]))
+      }
+    })
+  })
+
+  return paths
+}
+
+/**
+ * Every paragraph a selection touches, not just its two endpoints — a
+ * multi-paragraph bullet/numbered-list toggle or alignment change must apply
+ * to every paragraph in between, not skip them. Falls back to the raw
+ * anchor/focus paragraph paths (deduplicated) when either endpoint isn't
+ * among the document's top-level paragraphs (e.g. one sits inside a table
+ * cell), since that's a case this simple contiguous-range enumeration
+ * doesn't cover.
+ */
+function getParagraphPaths(
+  selection: Range | null,
+  document: Document,
+): ReadonlyArray<ReadonlyArray<number>> {
+  if (selection === null) {
     return []
   }
 
-  if (anchorPath === undefined) {
-    return [focusPath!]
+  const normalized = normalizeRange(selection)
+  const allPaths = collectTopLevelParagraphPaths(document)
+  const startIndex = allPaths.findIndex((path) => pathsEqual(path, normalized.start.paragraphPath))
+  const endIndex = allPaths.findIndex((path) => pathsEqual(path, normalized.end.paragraphPath))
+
+  if (startIndex === -1 || endIndex === -1) {
+    return pathsEqual(normalized.start.paragraphPath, normalized.end.paragraphPath)
+      ? [normalized.start.paragraphPath]
+      : [normalized.start.paragraphPath, normalized.end.paragraphPath]
   }
 
-  if (focusPath === undefined) {
-    return [anchorPath]
-  }
-
-  const samePath =
-    anchorPath.length === focusPath.length &&
-    anchorPath.every((segment, index) => segment === focusPath[index])
-
-  return samePath ? [anchorPath] : [anchorPath, focusPath]
+  const [lo, hi] = startIndex <= endIndex ? [startIndex, endIndex] : [endIndex, startIndex]
+  return allPaths.slice(lo, hi + 1)
 }
 
 function toAlignment(align: 'left' | 'center' | 'right' | 'justify'): JustifyContent {
@@ -219,7 +242,7 @@ export function toolbarToCommand(
         : { kind: 'apply-run-format', range, format: { highlight } }
     }
     case 'set-alignment': {
-      const paragraphPaths = getParagraphPaths(selection)
+      const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
         : {
@@ -229,7 +252,7 @@ export function toolbarToCommand(
           }
     }
     case 'set-line-spacing': {
-      const paragraphPaths = getParagraphPaths(selection)
+      const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
         : {
@@ -244,13 +267,13 @@ export function toolbarToCommand(
           }
     }
     case 'toggle-bullet-list': {
-      const paragraphPaths = getParagraphPaths(selection)
+      const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
         : { kind: 'insert-list', paragraphPaths, numId: 1, level: 0 }
     }
     case 'toggle-numbered-list': {
-      const paragraphPaths = getParagraphPaths(selection)
+      const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
         : { kind: 'insert-list', paragraphPaths, numId: 2, level: 0 }

@@ -132,4 +132,40 @@ describe('toolbarToCommand', () => {
     ])
     expect(toolbarToCommand({ kind: 'insert-hyperlink' }, collapsed(pos([0], 0, 0)), document)).toBeNull()
   })
+
+  // ---------------------------------------------------------------------------
+  // D18 — a multi-paragraph selection includes every paragraph in between,
+  // not just its two endpoints
+  // ---------------------------------------------------------------------------
+
+  it('toggle-bullet-list targets every paragraph a multi-paragraph selection spans', () => {
+    const document = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('One')]) }) as Paragraph,
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('Two')]) }) as Paragraph,
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('Three')]) }) as Paragraph,
+    ])
+    const range: Range = { anchor: pos([0, 0], 0, 0), focus: pos([0, 2], 0, 2) }
+
+    const command = toolbarToCommand({ kind: 'toggle-bullet-list' }, range, document)
+
+    expect(command).toEqual({
+      kind: 'insert-list',
+      paragraphPaths: [[0, 0], [0, 1], [0, 2]],
+      numId: 1,
+      level: 0,
+    })
+  })
+
+  it('set-alignment targets every paragraph regardless of anchor/focus order', () => {
+    const document = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('One')]) }) as Paragraph,
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('Two')]) }) as Paragraph,
+    ])
+    // Focus before anchor (user selected upward).
+    const range: Range = { anchor: pos([0, 1], 0, 3), focus: pos([0, 0], 0, 0) }
+
+    const command = toolbarToCommand({ kind: 'set-alignment', align: 'center' }, range, document)
+
+    expect(command).toMatchObject({ kind: 'apply-para-format', paragraphPaths: [[0, 0], [0, 1]] })
+  })
 })
