@@ -129,7 +129,10 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         kind: 'text' as const,
         data: cellValue,
         displayData: String(cellValue),
-        allowOverlay: true,
+        // Spreadsheet editing is out of scope (DAT-06) — allowOverlay:true
+        // opened an edit box whose typed input was silently discarded, since
+        // no onCellEdited was ever wired up. Keep the grid read-only and honest.
+        allowOverlay: false,
         themeOverride: { bgCell },
       } as GridCell
     },
@@ -225,6 +228,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
             {activeSheet && (
               <LazyDataEditor
                 getCellContent={getCellContent}
+                getCellsForSelection={true}
                 columns={columns}
                 rows={filteredRows.length}
                 theme={theme}
