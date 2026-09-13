@@ -89,14 +89,22 @@ describe('DocxViewer file-change effect', () => {
       openFileDialog: vi.fn(),
       openFileByPath: vi.fn(),
       saveFile: vi.fn(),
+      saveBinaryFile: vi.fn(),
       onFileOpened: vi.fn(),
       setTheme: vi.fn(),
       openFileBinary: vi.fn(),
       readBinaryByPath: vi.fn(),
       onFileOpenedPath: vi.fn(),
-      onSpellCheckMenu: vi.fn(() => () => {}),
-      replaceMisspelling: vi.fn(),
-      addWordToDictionary: vi.fn(),
+      getPathForFile: vi.fn(),
+      registerDroppedPath: vi.fn(),
+      requestOpenRecent: vi.fn(),
+      spellcheck: {
+        onContextMenu: vi.fn(() => () => {}),
+        replaceMisspelling: vi.fn(),
+        addWord: vi.fn(),
+        getLanguages: vi.fn(),
+        setLanguages: vi.fn(),
+      },
     }
   })
 
