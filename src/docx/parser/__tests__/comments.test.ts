@@ -40,6 +40,25 @@ const EMPTY_COMMENTS = `<?xml version="1.0" encoding="UTF-8"?>
 <w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 </w:comments>`
 
+// A comment body shaped exactly like real (compact, non-pretty-printed) Word
+// output: a run, then a hyperlink, then another run, with significant
+// leading/trailing spaces on the `xml:space="preserve"` runs bordering the
+// hyperlink. Word writes `word/comments.xml` on a single line with no
+// insignificant whitespace between elements, so this fixture intentionally
+// has none either — it targets a specific parser fidelity bug (see below)
+// rather than the "pretty printed with indentation" style used elsewhere in
+// this file for readability.
+const HYPERLINK_SANDWICHED_COMMENT = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="5" w:author="Erin"><w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink r:id="rId1"><w:r><w:t>the guide</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> for details.</w:t></w:r></w:p></w:comment></w:comments>`
+
+const SELF_CLOSING_EMPTY_COMMENT = `<?xml version="1.0" encoding="UTF-8"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:comment w:id="6" w:author="Frank"/>
+  <w:comment w:id="7" w:author="Grace">
+    <w:p><w:r><w:t>After the self-closed one.</w:t></w:r></w:p>
+  </w:comment>
+</w:comments>`
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -105,5 +124,45 @@ describe('parseComments', () => {
 
   it('throws DocxParseError on malformed XML', () => {
     expect(() => parseComments('<<< invalid')).toThrow(DocxParseError)
+  })
+
+  it('preserves sibling order and significant whitespace around a hyperlink sandwiched between runs', () => {
+    // Regression test: comment bodies used to be re-parsed from the lossy,
+    // non-order-preserving `xmlParser` output (default trimValues: true,
+    // object-keyed rather than preserveOrder). Re-serializing that output
+    // reordered same-tag siblings ahead of interleaved different-tag
+    // siblings (run, hyperlink, run -> run, run, hyperlink) and trimmed the
+    // significant leading/trailing spaces off the `xml:space="preserve"`
+    // runs bordering the hyperlink. Comment bodies are now sliced directly
+    // out of the original XML text instead, which avoids both problems.
+    const map = parseComments(HYPERLINK_SANDWICHED_COMMENT)
+    const paragraph = map.get('5')?.body[0]
+    expect(paragraph?.kind).toBe('paragraph')
+    if (paragraph?.kind !== 'paragraph') {
+      throw new Error('expected a paragraph')
+    }
+
+    expect(paragraph.children.map((child) => child.kind)).toEqual(['run', 'hyperlink', 'run'])
+
+    const [firstRun, hyperlink, lastRun] = paragraph.children
+    if (firstRun?.kind !== 'run' || hyperlink?.kind !== 'hyperlink' || lastRun?.kind !== 'run') {
+      throw new Error('expected run, hyperlink, run')
+    }
+
+    expect(firstRun.children).toEqual([{ kind: 'text', value: 'See ', preserveSpace: true }])
+    expect(lastRun.children).toEqual([{ kind: 'text', value: ' for details.', preserveSpace: true }])
+
+    const hyperlinkRun = hyperlink.children[0]
+    expect(hyperlinkRun?.kind).toBe('run')
+    if (hyperlinkRun?.kind === 'run') {
+      expect(hyperlinkRun.children).toEqual([{ kind: 'text', value: 'the guide' }])
+    }
+  })
+
+  it('handles a self-closing empty <w:comment/> without corrupting the next comment', () => {
+    const map = parseComments(SELF_CLOSING_EMPTY_COMMENT)
+    expect(map.get('6')?.body).toEqual([])
+    expect(map.get('7')?.body).toHaveLength(1)
+    expect(map.get('7')?.body[0]?.kind).toBe('paragraph')
   })
 })

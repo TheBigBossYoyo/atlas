@@ -1,4 +1,4 @@
-import { XMLBuilder, XMLParser } from 'fast-xml-parser'
+import { XMLParser } from 'fast-xml-parser'
 
 import { parseDocument } from './document'
 import { DocxParseError } from './unzip'
@@ -6,19 +6,25 @@ import type { Comment, Paragraph } from '../model/document'
 
 // ---------------------------------------------------------------------------
 // Parser instance — same config as Wave A.1
+//
+// NOTE: this parser is deliberately NOT `preserveOrder`/`trimValues: false`
+// like the main document parser (see parser/document.ts). It is only used
+// here to read scalar `w:comment` attributes (id/author/date/…), which are
+// unaffected by node ordering or whitespace trimming. Comment BODIES are
+// re-parsed from the original XML text (see `extractCommentBodyXmlById`
+// below) specifically to avoid round-tripping paragraph content through
+// this lossy, non-order-preserving representation — doing so previously
+// silently reordered interleaved run/hyperlink siblings and trimmed
+// significant leading/trailing whitespace out of `w:t` runs.
 // ---------------------------------------------------------------------------
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
-const xmlBuilder = new XMLBuilder({
-  ignoreAttributes: false,
-  attributeNamePrefix: '@_',
-  format: false,
-  processEntities: true,
-  suppressEmptyNode: true,
-})
 
 const WORD_NAMESPACE = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 const WORD_2012_NAMESPACE = 'http://schemas.microsoft.com/office/word/2012/wordml'
+const COMMENT_OPEN_TAG_RE = /<w:comment\b([^>]*?)(\/?)>/g
+const COMMENT_CLOSE_TAG = '</w:comment>'
+const COMMENT_ID_ATTR_RE = /w:id\s*=\s*"([^"]*)"|w:id\s*=\s*'([^']*)'/
 
 // ---------------------------------------------------------------------------
 // Internal XML shapes
@@ -31,7 +37,6 @@ interface RawComment {
   '@_w:initials'?: string
   '@_w:parentId'?: string | number
   '@_w15:parentId'?: string | number
-  'w:p'?: unknown | unknown[]
   [key: string]: unknown
 }
 
@@ -67,6 +72,7 @@ export function parseComments(xml: string): ReadonlyMap<string, Comment> {
   }
 
   const items: RawComment[] = Array.isArray(rawComments) ? rawComments : [rawComments]
+  const bodyXmlById = extractCommentBodyXmlById(xml)
   const result = new Map<string, Comment>()
 
   for (const item of items) {
@@ -83,7 +89,7 @@ export function parseComments(xml: string): ReadonlyMap<string, Comment> {
     const initials = item['@_w:initials'] !== undefined ? String(item['@_w:initials']) : undefined
     const parentIdValue = item['@_w15:parentId'] ?? item['@_w:parentId']
     const parentId = parentIdValue !== undefined ? String(parentIdValue) : undefined
-    const body = parseCommentBody(item)
+    const body = parseCommentBody(bodyXmlById.get(id))
 
     const comment: Comment = {
       kind: 'comment',
@@ -100,28 +106,67 @@ export function parseComments(xml: string): ReadonlyMap<string, Comment> {
   return result
 }
 
-function parseCommentBody(comment: RawComment): ReadonlyArray<Paragraph> {
-  const rawParagraphs = comment['w:p']
-  if (rawParagraphs === undefined) {
+/**
+ * Scan the ORIGINAL comments.xml text for each `<w:comment>` element and
+ * return a map of comment id → the raw inner XML between its opening and
+ * closing tags (verbatim, not re-serialized).
+ *
+ * This runs against the source text rather than the `xmlParser` output
+ * because that parser is not `preserveOrder`/`trimValues: false`: reading
+ * paragraph content back out of its parsed object form and rebuilding XML
+ * from it (the previous approach) silently reordered interleaved
+ * same-tag/different-tag siblings (e.g. run, hyperlink, run → run, run,
+ * hyperlink) and trimmed significant leading/trailing whitespace out of
+ * `w:t` runs adjacent to another element. Slicing the untouched source text
+ * avoids both problems.
+ */
+function extractCommentBodyXmlById(xml: string): ReadonlyMap<string, string> {
+  const bodies = new Map<string, string>()
+  COMMENT_OPEN_TAG_RE.lastIndex = 0
+  let openTag: RegExpExecArray | null
+
+  while ((openTag = COMMENT_OPEN_TAG_RE.exec(xml)) !== null) {
+    const attrs = openTag[1]
+    const isSelfClosing = openTag[2] === '/'
+    const idMatch = COMMENT_ID_ATTR_RE.exec(attrs)
+    const id = idMatch !== null ? (idMatch[1] ?? idMatch[2]) : undefined
+
+    if (isSelfClosing) {
+      if (id !== undefined) {
+        bodies.set(id, '')
+      }
+      continue
+    }
+
+    const searchStart = COMMENT_OPEN_TAG_RE.lastIndex
+    const closeIndex = xml.indexOf(COMMENT_CLOSE_TAG, searchStart)
+    if (closeIndex === -1) {
+      // Malformed/truncated XML — the outer `xmlParser.parse` above will
+      // already have thrown for this before we get here in practice.
+      break
+    }
+
+    if (id !== undefined) {
+      bodies.set(id, xml.slice(searchStart, closeIndex))
+    }
+
+    COMMENT_OPEN_TAG_RE.lastIndex = closeIndex + COMMENT_CLOSE_TAG.length
+  }
+
+  return bodies
+}
+
+function parseCommentBody(innerXml: string | undefined): ReadonlyArray<Paragraph> {
+  if (innerXml === undefined || innerXml.trim().length === 0) {
     return []
   }
 
-  const paragraphNodes = Array.isArray(rawParagraphs) ? rawParagraphs : [rawParagraphs]
-  if (paragraphNodes.length === 0) {
-    return []
-  }
+  const syntheticXml =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    `<w:document xmlns:w="${WORD_NAMESPACE}" xmlns:w15="${WORD_2012_NAMESPACE}">` +
+    `<w:body>${innerXml}</w:body></w:document>`
 
-  const syntheticXml = xmlBuilder.build({
-    'w:document': {
-      '@_xmlns:w': WORD_NAMESPACE,
-      '@_xmlns:w15': WORD_2012_NAMESPACE,
-      'w:body': {
-        'w:p': paragraphNodes,
-      },
-    },
-  })
-
-  const document = parseDocument(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${syntheticXml}`)
+  const document = parseDocument(syntheticXml)
   const paragraphs: Paragraph[] = []
 
   for (const section of document.sections) {
