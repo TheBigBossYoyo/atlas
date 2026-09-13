@@ -6,6 +6,9 @@ import { PageStack } from '../PageStack';
 import { paginate } from '../../layout/paginate';
 import type { Document, NumberingDef, Section, ParaProps } from '../../model';
 import { twip } from '../../model';
+import type { Relationship } from '../../parser/relationships';
+import { loadDocx } from '../../index';
+import { readCorpusFixture } from '../../__tests__/corpusRoundtripHelpers';
 
 function createDocument(sections: Section[], numbering: ReadonlyMap<string, NumberingDef> = new Map()): Document {
   return {
@@ -161,6 +164,103 @@ describe('PageView', () => {
     expect(marker?.textContent).toBe('1.');
   });
 
+  it('renders an external hyperlink as a clickable, target=_blank <a> resolved via relationships (D6/DXL-12)', async () => {
+    const relationships: Relationship[] = [
+      { id: 'rId1', type: 'hyperlink', target: 'https://example.com/atlas', targetMode: 'External' },
+    ];
+    const doc = createDocument([
+      createSection([
+        {
+          kind: 'paragraph' as const,
+          props: {},
+          children: [
+            {
+              kind: 'hyperlink' as const,
+              relationshipId: 'rId1',
+              children: [{ kind: 'run' as const, children: [{ kind: 'text' as const, value: 'a link' }] }],
+            },
+          ],
+        },
+      ]),
+    ]);
+    const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+
+    const { container } = render(
+      <PageView page={pages[0]} zoom={1} document={doc} relationships={relationships} />,
+    );
+    const links = Array.from(container.querySelectorAll('a.docx-hyperlink'));
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link.getAttribute('href')).toBe('https://example.com/atlas');
+      expect(link.getAttribute('target')).toBe('_blank');
+      expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    }
+    // Every item of the hyperlink's text (including the space between
+    // words) is individually wrapped, so the whole span is clickable with
+    // no gap — see PageView's wrapHyperlink.
+    expect(links.map((link) => link.textContent).join('')).toBe('a link');
+  });
+
+  it('renders an internal hyperlink as a same-document anchor without target=_blank (D6/DXL-12)', async () => {
+    const doc = createDocument([
+      createSection([
+        {
+          kind: 'paragraph' as const,
+          props: {},
+          children: [
+            {
+              kind: 'hyperlink' as const,
+              anchor: 'targetBookmark',
+              children: [{ kind: 'run' as const, children: [{ kind: 'text' as const, value: 'jump' }] }],
+            },
+          ],
+        },
+        {
+          kind: 'paragraph' as const,
+          props: {},
+          children: [
+            { kind: 'bookmark' as const, id: '1', boundary: 'start' as const, name: 'targetBookmark' },
+            { kind: 'run' as const, children: [{ kind: 'text' as const, value: 'Target Section' }] },
+          ],
+        },
+      ]),
+    ]);
+    const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+
+    const { container } = render(<PageView page={pages[0]} zoom={1} document={doc} />);
+    const link = container.querySelector('a.docx-hyperlink');
+    expect(link?.getAttribute('href')).toBe('#docx-bookmark-targetBookmark');
+    expect(link?.hasAttribute('target')).toBe(false);
+    expect(container.querySelector('#docx-bookmark-targetBookmark')).not.toBeNull();
+  });
+
+  it('does not render a hyperlink for a relationship id that is not External', async () => {
+    const relationships: Relationship[] = [
+      { id: 'rId1', type: 'hyperlink', target: 'word/document.xml', targetMode: 'Internal' },
+    ];
+    const doc = createDocument([
+      createSection([
+        {
+          kind: 'paragraph' as const,
+          props: {},
+          children: [
+            {
+              kind: 'hyperlink' as const,
+              relationshipId: 'rId1',
+              children: [{ kind: 'run' as const, children: [{ kind: 'text' as const, value: 'suspicious' }] }],
+            },
+          ],
+        },
+      ]),
+    ]);
+    const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+
+    const { container } = render(
+      <PageView page={pages[0]} zoom={1} document={doc} relationships={relationships} />,
+    );
+    expect(container.querySelector('a.docx-hyperlink')).toBeNull();
+  });
+
   it('stretches a justified line flush to the column width (D5/DXL-11)', async () => {
     const doc = createDocument([
       createSection([createParagraph(4, { jc: 'both' })], { pageWidthPt: 100 }),
@@ -235,5 +335,37 @@ describe('PageStack', () => {
     const { container } = render(<PageStack pages={pages} zoom={1} document={doc} />);
     const renderedPages = container.querySelectorAll('.docx-page');
     expect(renderedPages.length).toBe(pages.length);
+  });
+});
+
+describe('PageView against the real hyperlinks-bookmarks corpus fixture (D6/DXL-12)', () => {
+  it('renders a working external hyperlink and a same-document internal anchor', async () => {
+    const buffer = await readCorpusFixture('hyperlinks-bookmarks');
+    const bundle = await loadDocx(buffer);
+    const pages = await paginate({ document: bundle.document, fontResolver: mockFontResolver });
+
+    const { container } = render(
+      <PageStack
+        pages={pages}
+        zoom={1}
+        document={bundle.document}
+        relationships={bundle.relationships}
+      />,
+    );
+
+    const links = Array.from(container.querySelectorAll('a.docx-hyperlink'));
+    expect(links.length).toBeGreaterThan(0);
+
+    // Per scripts/generate-docx-corpus.mjs's fixtureHyperlinksBookmarks:
+    // one external link to https://example.com/atlas, one internal link to
+    // the "targetBookmark" bookmark rendered later in the same document.
+    const externalLink = links.find((link) => link.getAttribute('href') === 'https://example.com/atlas');
+    expect(externalLink?.getAttribute('target')).toBe('_blank');
+    expect(externalLink?.getAttribute('rel')).toBe('noopener noreferrer');
+
+    const internalLink = links.find((link) => link.getAttribute('href') === '#docx-bookmark-targetBookmark');
+    expect(internalLink).not.toBeUndefined();
+    expect(internalLink?.hasAttribute('target')).toBe(false);
+    expect(container.querySelector('#docx-bookmark-targetBookmark')).not.toBeNull();
   });
 });

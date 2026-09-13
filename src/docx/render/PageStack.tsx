@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Document } from '../model/document';
 import type { Page } from '../layout/pageTypes';
+import type { Relationship } from '../parser/relationships';
 import type { Theme } from '../parser/theme';
 import { PageView } from './PageView';
 import './__styles__/page-view.css';
@@ -10,9 +11,10 @@ export type PageStackProps = {
   zoom: number;
   document: Document;
   theme?: Theme;
+  relationships?: ReadonlyArray<Relationship>;
 };
 
-export const PageStack: React.FC<PageStackProps> = ({ pages, zoom, document, theme }) => {
+export const PageStack: React.FC<PageStackProps> = ({ pages, zoom, document, theme, relationships }) => {
   return (
     <div className="docx-page-stack">
       {pages.map((page, idx) => (
@@ -22,6 +24,7 @@ export const PageStack: React.FC<PageStackProps> = ({ pages, zoom, document, the
           zoom={zoom}
           document={document}
           theme={theme}
+          relationships={relationships}
         />
       ))}
     </div>

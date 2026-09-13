@@ -1312,7 +1312,13 @@ function DocxEditor({
         >
           {pages !== null ? (
             <MediaContext.Provider value={mediaResolver}>
-              <PageStack pages={pages} zoom={1} document={documentModel} theme={bundle.theme} />
+              <PageStack
+                pages={pages}
+                zoom={1}
+                document={documentModel}
+                theme={bundle.theme}
+                relationships={bundle.relationships}
+              />
             </MediaContext.Provider>
           ) : paginationError !== null ? (
             <div className="docx-viewer__loading docx-viewer__loading--error" role="alert">
