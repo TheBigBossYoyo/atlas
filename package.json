@@ -20,7 +20,7 @@
   "dependencies": {
     "@glideapps/glide-data-grid": "^6.0.3",
     "docx": "^9.6.1",
-    "dompurify": "^3.4.3",
+    "dompurify": "^3.4.15",
     "fast-xml-parser": "^5.8.0",
     "highlight.js": "^11.11.1",
     "html-to-image": "^1.11.13",
@@ -30,7 +30,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^1.8.0",
     "marked": "^18.0.3",
-    "mermaid": "^11.15.0",
+    "mermaid": "^11.17.2",
     "odf-kit": "^0.13.4",
     "papaparse": "^5.5.3",
     "pdfjs-dist": "^6.3.289",
