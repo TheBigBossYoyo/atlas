@@ -1,0 +1,212 @@
+.docx-toolbar {
+  --toolbar-bg: var(--bg-primary, #ffffff);
+  --toolbar-border: var(--border-primary, #e1e4e8);
+  --toolbar-text: var(--text-primary, #24292f);
+  --toolbar-text-muted: var(--text-secondary, #57606a);
+  --toolbar-hover-bg: var(--bg-secondary, #f6f8fa);
+  --toolbar-active-bg: var(--bg-tertiary, #eaeef2);
+  --toolbar-accent: var(--accent, #0969da);
+  --toolbar-accent-hover: var(--accent-hover, #0349b4);
+
+  display: flex;
+  flex-direction: column;
+  background-color: var(--toolbar-bg);
+  border-bottom: 1px solid var(--toolbar-border);
+  color: var(--toolbar-text);
+  font-family: system-ui, -apple-system, sans-serif;
+  user-select: none;
+}
+
+.docx-toolbar__tabs {
+  display: flex;
+  flex-direction: row;
+  border-bottom: 1px solid var(--toolbar-border);
+  padding: 0 8px;
+}
+
+.docx-toolbar__tab {
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--toolbar-text-muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.docx-toolbar__tab:hover {
+  color: var(--toolbar-text);
+  background-color: var(--toolbar-hover-bg);
+}
+
+.docx-toolbar__tab--active {
+  color: var(--toolbar-accent);
+  border-bottom-color: var(--toolbar-accent);
+}
+
+.docx-toolbar__panel {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  padding: 4px 8px;
+  height: 36px;
+  overflow-x: auto;
+}
+
+.docx-toolbar__group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+}
+
+.docx-toolbar__group-divider {
+  width: 1px;
+  height: 24px;
+  background-color: var(--toolbar-border);
+  margin: 0 6px;
+}
+
+.docx-toolbar__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  background: none;
+  border: none;
+  color: var(--toolbar-text);
+  cursor: pointer;
+  position: relative;
+}
+
+.docx-toolbar__button:hover {
+  background-color: var(--toolbar-hover-bg);
+}
+
+.docx-toolbar__button--active {
+  background-color: var(--toolbar-active-bg);
+  color: var(--toolbar-accent);
+}
+
+.docx-toolbar__button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.docx-toolbar__popover-container {
+  position: relative;
+  display: inline-flex;
+}
+
+.docx-toolbar__popover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  background-color: var(--toolbar-bg);
+  border: 1px solid var(--toolbar-border);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.docx-toolbar__color-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.docx-toolbar__color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 2px;
+  border: 1px solid var(--toolbar-border);
+  cursor: pointer;
+}
+
+.docx-toolbar__color-swatch:hover {
+  transform: scale(1.1);
+}
+
+.docx-toolbar__color-input-row {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.docx-toolbar__color-input-row input[type="text"] {
+  width: 60px;
+  font-size: 12px;
+  border: 1px solid var(--toolbar-border);
+  border-radius: 2px;
+  padding: 2px 4px;
+}
+
+.docx-toolbar__color-input-row button {
+  font-size: 12px;
+  border: 1px solid var(--toolbar-border);
+  background: var(--toolbar-hover-bg);
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.docx-toolbar__font-select,
+.docx-toolbar__size-select {
+  height: 24px;
+  border: 1px solid transparent;
+  background: none;
+  font-size: 12px;
+  color: var(--toolbar-text);
+  border-radius: 4px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.docx-toolbar__font-select:hover,
+.docx-toolbar__size-select:hover {
+  border-color: var(--toolbar-border);
+  background-color: var(--toolbar-hover-bg);
+}
+
+.docx-toolbar__font-select {
+  width: 120px;
+}
+
+.docx-toolbar__size-select {
+  width: 50px;
+}
+
+.docx-toolbar__table-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+  padding: 4px;
+}
+
+.docx-toolbar__table-cell {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--toolbar-border);
+  background-color: var(--toolbar-bg);
+  cursor: pointer;
+}
+
+.docx-toolbar__table-cell--hover {
+  background-color: var(--toolbar-accent-hover);
+  border-color: var(--toolbar-accent);
+}
+
+.docx-toolbar__table-label {
+  font-size: 12px;
+  text-align: center;
+  margin-top: 4px;
+  color: var(--toolbar-text-muted);
+}

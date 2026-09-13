@@ -1,0 +1,48 @@
+export const extToLang: Readonly<Record<string, string>> = {
+  '.ts': 'typescript',
+  '.tsx': 'tsx',
+  '.js': 'javascript',
+  '.jsx': 'jsx',
+  '.py': 'python',
+  '.rs': 'rust',
+  '.go': 'go',
+  '.java': 'java',
+  '.c': 'c',
+  '.cpp': 'cpp',
+  '.h': 'c',
+  '.hpp': 'cpp',
+  '.cs': 'csharp',
+  '.rb': 'ruby',
+  '.php': 'php',
+  '.sh': 'bash',
+  '.ps1': 'powershell',
+  '.sql': 'sql',
+  '.html': 'html',
+  '.css': 'css',
+  '.scss': 'scss',
+  '.json': 'json',
+  '.yaml': 'yaml',
+  '.yml': 'yaml',
+  '.toml': 'toml',
+  '.ini': 'ini',
+  '.xml': 'xml',
+  '.vue': 'vue',
+  '.svelte': 'svelte',
+  '.swift': 'swift',
+  '.kt': 'kotlin',
+  '.scala': 'scala',
+  '.clj': 'clojure',
+  '.ex': 'elixir',
+  '.erl': 'erlang',
+  '.lua': 'lua',
+  '.pl': 'perl',
+  '.r': 'r',
+  '.dart': 'dart',
+  '.nim': 'nim',
+  '.md': 'markdown'
+}
+
+export function getLangForExt(ext: string): string | undefined {
+  const normalized = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`
+  return extToLang[normalized]
+}

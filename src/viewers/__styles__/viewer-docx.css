@@ -1,0 +1,210 @@
+.docx-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+}
+
+.docx-viewer--error {
+  padding: 16px;
+  color: var(--text-primary);
+}
+
+.docx-viewer__editor-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+}
+
+.docx-viewer__topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.docx-viewer__save-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.docx-viewer__save-button:hover {
+  background: var(--bg-secondary, #f6f8fa);
+}
+
+.docx-viewer__meta {
+  color: var(--text-secondary, #57606a);
+  font-size: 12px;
+}
+
+.docx-viewer__surface {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 480px;
+  outline: none;
+  border: 1px solid var(--border-primary, #d0d7de);
+  border-radius: 12px;
+  background: var(--bg-secondary, #f6f8fa);
+  padding: 16px;
+  overflow: auto;
+}
+
+.docx-viewer__workspace {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 0;
+}
+
+.docx-viewer__surface:focus {
+  border-color: var(--accent, #0969da);
+  box-shadow: 0 0 0 1px var(--accent, #0969da);
+}
+
+.docx-viewer__surface .docx-page-stack {
+  align-items: center;
+}
+
+.docx-viewer__error {
+  color: var(--danger-fg, #d1242f);
+  font-size: 13px;
+}
+
+.docx-viewer__print-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.docx-viewer__print-button:hover {
+  background: var(--bg-secondary, #f6f8fa);
+}
+
+/* ------------------------------------------------------------------ */
+/* Wave F.1 — Print preview / native print                             */
+/* ------------------------------------------------------------------ */
+@media print {
+  /* Hide app chrome — only the document pages should print. */
+  .docx-viewer__topbar,
+  .docx-viewer__meta,
+  .docx-viewer__error,
+  .docx-viewer__save-button,
+  .docx-viewer__print-button,
+  .comments-pane,
+  .docx-find-replace,
+  .spellcheck-menu {
+    display: none !important;
+  }
+
+  body,
+  .docx-viewer,
+  .docx-viewer__editor-shell,
+  .docx-viewer__workspace,
+  .docx-viewer__surface {
+    background: #fff !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    min-height: 0 !important;
+  }
+
+  /* Each .docx-page is already sized to the section's page geometry by
+     PageView. Force a page break after every page so the printer never
+     splits a sheet across two physical pages. */
+  .docx-page {
+    box-shadow: none !important;
+    margin: 0 auto !important;
+    page-break-after: always;
+    break-after: page;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .docx-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  /* Avoid breaking individual paragraphs across pages where possible. */
+  .docx-page p,
+  .docx-page table,
+  .docx-page figure {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  @page {
+    margin: 0;
+  }
+}
+
+.docx-viewer__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 24px;
+  min-height: 240px;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.docx-viewer__loading--error {
+  color: var(--text-primary);
+}
+
+.docx-viewer__loading-spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid var(--border-subtle, rgba(127, 127, 127, 0.25));
+  border-top-color: var(--accent, #4a90e2);
+  animation: docx-viewer-spin 0.9s linear infinite;
+}
+
+@keyframes docx-viewer-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.docx-viewer__loading-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.docx-viewer__loading-detail {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.docx-viewer__loading-bar {
+  width: min(320px, 80%);
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border-subtle, rgba(127, 127, 127, 0.2));
+  overflow: hidden;
+}
+
+.docx-viewer__loading-bar-fill {
+  height: 100%;
+  background: var(--accent, #4a90e2);
+  transition: width 120ms linear;
+}

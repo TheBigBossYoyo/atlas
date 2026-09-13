@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Atlas brand mark: Lucide globe (ISC) on indigo #4F46E5 rounded-square tile -->
+  <rect width="1024" height="1024" rx="180" ry="180" fill="#4F46E5"/>
+  <g transform="translate(512 512) scale(24) translate(-12 -12)" fill="none" stroke="#FFFFFF" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="10"/>
+    <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
+    <path d="M2 12h20"/>
+  </g>
+</svg>

@@ -1,0 +1,107 @@
+.docx-page-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  padding: 24px;
+  background: var(--surface-2, #e5e5e5);
+}
+
+.docx-page {
+  background: var(--surface-0, #ffffff);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+  /* Wave F.2 — performance: skip rendering off-screen pages.  The browser
+     reserves the page's intrinsic size (set inline via PageView), so scroll
+     position and selection ranges remain stable, but glyph layout for
+     pages outside the viewport is deferred until they are scrolled into
+     view.  This is a no-op on browsers that don't support
+     content-visibility (Safari < 18). */
+  content-visibility: auto;
+  contain: layout paint style;
+}
+
+.docx-page__column {
+  position: absolute;
+}
+
+.docx-page__line {
+  position: absolute;
+  white-space: nowrap;
+  /* Intentionally NOT overflow:hidden. With locked-width word spans (PageView)
+     plus pre-warmed fonts (DocxViewer.preloadDocxFonts), measured and rendered
+     widths now match. If a future regression introduces drift, we'd rather see
+     it than silently clip glyphs (which produced the "INTRODUCTION"->"INTROD"
+     bug in 3.0.0/3.0.1). */
+}
+
+.docx-page__header,
+.docx-page__footer {
+  position: absolute;
+}
+
+/* Embedded pictures (InlineDrawing). Geometry is inline; these rules only
+   cover presentation. */
+.docx-drawing__image {
+  display: block;
+  object-fit: fill;
+  user-select: none;
+}
+
+/* Shown when a picture cannot be resolved or decoded (missing part, EMF/WMF,
+   external link) so lost content is visible instead of blank space. */
+.docx-drawing__placeholder {
+  display: block;
+  box-sizing: border-box;
+  border: 1px dashed var(--docx-drawing-placeholder-border, #9ca3af);
+  background: var(--docx-drawing-placeholder-bg, rgba(156, 163, 175, 0.12));
+}
+
+.docx-drawing.docx-revision--del .docx-drawing__image {
+  opacity: 0.5;
+  outline: 2px solid var(--docx-revision-del, #c62828);
+}
+
+.docx-drawing.docx-revision--ins .docx-drawing__image {
+  outline: 2px solid var(--docx-revision-ins, #2e7d32);
+}
+
+.docx-revision--ins {
+  color: var(--docx-revision-ins, #2e7d32);
+  text-decoration: underline;
+  text-decoration-color: var(--docx-revision-ins, #2e7d32);
+}
+
+.docx-revision--del {
+  color: var(--docx-revision-del, #c62828);
+  text-decoration: line-through;
+  text-decoration-color: var(--docx-revision-del, #c62828);
+}
+
+/* Table fragment wrapper — page-absolute, sized to the table slice's
+   geometry by the paginator. Keep `position: absolute` so it can overlap
+   the column stack without disturbing line flow. */
+.docx-page__table-wrapper {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+/* The real <table> element. `border-collapse: collapse` lets adjacent
+   cells share borders (matches Word's default rendering). `table-layout:
+   fixed` honors the column widths from the paginator's grid resolution
+   instead of letting the browser re-balance them. */
+.docx-page__table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  box-sizing: border-box;
+}
+
+/* Cell inner wrapper — `position: relative` establishes a containing
+   block for the `position: absolute` line boxes emitted by `renderLine`
+   so their `top`/`left` coordinates resolve against the cell instead of
+   the page. */
+.docx-page__table-cell-content {
+  position: relative;
+}

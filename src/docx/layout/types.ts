@@ -1,0 +1,104 @@
+import type { FontMetrics } from '../fonts'
+import type { Drawing, Paragraph, ParaProps, Run, RunProps } from '../model'
+import type { Theme } from '../parser/theme'
+
+export type EffectiveRunProps = Readonly<RunProps> & { readonly _revision?: 'ins' | 'del' }
+export type EffectiveParaProps = Readonly<ParaProps>
+
+export type LineItem =
+  | {
+      kind: 'word'
+      text: string
+      width: number
+      runIndex: number
+      charStart: number
+      charEnd: number
+      runProps: EffectiveRunProps
+    }
+  | {
+      kind: 'space'
+      width: number
+      stretchable: boolean
+      runIndex: number
+      charOffset: number
+    }
+  | {
+      kind: 'tab'
+      width: number
+      runIndex: number
+      charOffset: number
+    }
+  | {
+      kind: 'break'
+      breakKind: 'line' | 'page' | 'column'
+      runIndex: number
+    }
+  | {
+      kind: 'hyphen-opportunity'
+      text: ''
+      penaltyWidth: number
+      runIndex: number
+      charOffset: number
+    }
+  | {
+      kind: 'glyph-cluster'
+      text: string
+      width: number
+      runIndex: number
+      charStart: number
+      charEnd: number
+      runProps: EffectiveRunProps
+    }
+  | {
+      // An embedded picture. Occupies one character offset in its run (the
+      // editor's position model) and sits on the text baseline.
+      kind: 'drawing'
+      drawing: Drawing
+      width: number
+      height: number
+      runIndex: number
+      charStart: number
+      charEnd: number
+      runProps: EffectiveRunProps
+    }
+
+export type LineBox = {
+  items: ReadonlyArray<LineItem>
+  width: number
+  ascent: number
+  descent: number
+  lineHeight: number
+  isJustified: boolean
+  justificationStretch: number
+  /**
+   * Extra space reserved above the text strut so drawings taller than the
+   * text ascent fit inside the line. Already included in `lineHeight`; the
+   * text strut occupies the remaining `lineHeight - drawingClearancePt`.
+   * Omitted when no drawing on the line needs it.
+   */
+  drawingClearancePt?: number
+}
+
+export type FontResolver = (
+  family: string,
+  variant: 'regular' | 'bold' | 'italic' | 'boldItalic',
+) => Promise<FontMetrics>
+
+export type TabStop = {
+  positionPt: number
+  alignment: 'left' | 'center' | 'right' | 'decimal'
+  leader: 'none' | 'dot' | 'hyphen' | 'underscore'
+}
+
+export type LineBreakInput = {
+  paragraph: Paragraph
+  paraProps: EffectiveParaProps
+  runs: ReadonlyArray<{
+    run: Run
+    runProps: EffectiveRunProps
+  }>
+  availableWidth: number
+  fontResolver: FontResolver
+  tabStops: ReadonlyArray<TabStop>
+  theme?: Theme
+}

@@ -1,0 +1,129 @@
+/* Atlas — Find & Replace dialog styles (Wave C.6) */
+/* BEM: .docx-find */
+
+.docx-find {
+  position: fixed;
+  top: 56px;
+  right: 16px;
+  z-index: 1000;
+  min-width: 360px;
+  max-width: 480px;
+  background: var(--surface-1, #ffffff);
+  color: var(--text, #1a1a1a);
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  padding: 12px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.docx-find--closed {
+  display: none;
+}
+
+/* ---- rows ---- */
+
+.docx-find__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- inputs ---- */
+
+.docx-find__input {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--surface-1, #ffffff);
+  color: var(--text, #1a1a1a);
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.docx-find__input:focus {
+  border-color: var(--accent, #0066cc);
+  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.2);
+}
+
+/* ---- checkboxes ---- */
+
+.docx-find__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text, #1a1a1a);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.docx-find__checkbox input[type='checkbox'] {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent, #0066cc);
+  cursor: pointer;
+}
+
+/* ---- buttons ---- */
+
+.docx-find__buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.docx-find__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--text, #1a1a1a);
+  border: 1px solid var(--border, #d0d0d0);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+
+.docx-find__button:hover {
+  background: var(--accent, #0066cc);
+  color: #ffffff;
+  border-color: var(--accent, #0066cc);
+}
+
+.docx-find__button:active {
+  opacity: 0.85;
+}
+
+.docx-find__button--close {
+  margin-left: auto;
+  padding: 0 8px;
+  border-color: transparent;
+}
+
+.docx-find__button--close:hover {
+  background: rgba(200, 0, 0, 0.1);
+  color: var(--text, #1a1a1a);
+  border-color: transparent;
+}
+
+/* ---- status ---- */
+
+.docx-find__status {
+  font-size: 11px;
+  color: var(--text, #1a1a1a);
+  opacity: 0.6;
+  padding-left: 2px;
+}

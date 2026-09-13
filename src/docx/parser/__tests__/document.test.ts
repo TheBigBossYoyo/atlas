@@ -1,0 +1,624 @@
+import { describe, expect, it } from 'vitest'
+
+import {
+  type Block,
+  type Hyperlink,
+  type Paragraph,
+  type Run,
+  type Table,
+} from '../../model'
+import { parseDocument } from '..'
+
+const DOCX_NAMESPACES = [
+  'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"',
+  'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"',
+  'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"',
+  'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"',
+  'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"',
+].join(' ')
+
+function documentXml(body: string): string {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document ${DOCX_NAMESPACES}>
+  <w:body>
+    ${body}
+  </w:body>
+</w:document>`
+}
+
+function parseBody(body: string) {
+  return parseDocument(documentXml(body))
+}
+
+function expectParagraph(block: Block): Paragraph {
+  expect(block.kind).toBe('paragraph')
+  if (block.kind !== 'paragraph') {
+    throw new Error('Expected paragraph block')
+  }
+  return block
+}
+
+function expectTable(block: Block): Table {
+  expect(block.kind).toBe('table')
+  if (block.kind !== 'table') {
+    throw new Error('Expected table block')
+  }
+  return block
+}
+
+function expectRun(child: Paragraph['children'][number] | Hyperlink['children'][number]): Run {
+  expect(child.kind).toBe('run')
+  if (child.kind !== 'run') {
+    throw new Error('Expected run child')
+  }
+  return child
+}
+
+describe('parseDocument', () => {
+  it('parses a single paragraph with text', () => {
+    const document = parseBody('<w:p><w:r><w:t>Hello Atlas</w:t></w:r></w:p>')
+
+    expect(document.sections).toHaveLength(1)
+    expect(document.sections[0].blocks).toHaveLength(1)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+
+    expect(run.children).toEqual([{ kind: 'text', value: 'Hello Atlas' }])
+  })
+
+  it('parses bold, italic, and underline run props', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:r>
+          <w:rPr>
+            <w:b/>
+            <w:i/>
+            <w:u w:val="single" w:color="FF0000"/>
+          </w:rPr>
+          <w:t>Styled</w:t>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+
+    expect(run.props).toMatchObject({
+      bold: true,
+      italic: true,
+      underline: {
+        style: 'single',
+        color: 'FF0000',
+      },
+    })
+  })
+
+  it('parses tabs and break variants', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:r>
+          <w:tab/>
+          <w:br/>
+          <w:br w:type="page"/>
+          <w:br w:type="column"/>
+          <w:br w:type="textWrapping" w:clear="all"/>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+
+    expect(run.children).toEqual([
+      { kind: 'tab' },
+      { kind: 'break', breakType: 'line' },
+      { kind: 'break', breakType: 'page' },
+      { kind: 'break', breakType: 'column' },
+      { kind: 'break', breakType: 'textWrapping', clear: 'all' },
+    ])
+  })
+
+  it('parses table, row, cell props, and nested 2x2 tables', () => {
+    const document = parseBody(`
+      <w:tbl>
+        <w:tblPr>
+          <w:tblStyle w:val="GridTable5Dark"/>
+          <w:tblW w:type="dxa" w:w="5000"/>
+          <w:tblInd w:type="dxa" w:w="720"/>
+          <w:tblLayout w:type="fixed"/>
+          <w:jc w:val="center"/>
+        </w:tblPr>
+        <w:tr>
+          <w:trPr>
+            <w:trHeight w:val="360" w:hRule="exact"/>
+            <w:cantSplit/>
+            <w:tblHeader/>
+          </w:trPr>
+          <w:tc>
+            <w:tcPr>
+              <w:tcW w:type="dxa" w:w="2400"/>
+              <w:gridSpan w:val="1"/>
+              <w:vAlign w:val="center"/>
+            </w:tcPr>
+            <w:p><w:r><w:t>A1</w:t></w:r></w:p>
+          </w:tc>
+          <w:tc>
+            <w:p><w:r><w:t>A2</w:t></w:r></w:p>
+          </w:tc>
+        </w:tr>
+        <w:tr>
+          <w:tc>
+            <w:p><w:r><w:t>B1</w:t></w:r></w:p>
+          </w:tc>
+          <w:tc>
+            <w:tcPr>
+              <w:vMerge w:val="restart"/>
+              <w:noWrap/>
+              <w:hideMark/>
+            </w:tcPr>
+            <w:tbl>
+              <w:tr>
+                <w:tc><w:p><w:r><w:t>I1</w:t></w:r></w:p></w:tc>
+                <w:tc><w:p><w:r><w:t>I2</w:t></w:r></w:p></w:tc>
+              </w:tr>
+              <w:tr>
+                <w:tc><w:p><w:r><w:t>I3</w:t></w:r></w:p></w:tc>
+                <w:tc><w:p><w:r><w:t>I4</w:t></w:r></w:p></w:tc>
+              </w:tr>
+            </w:tbl>
+          </w:tc>
+        </w:tr>
+      </w:tbl>
+    `)
+
+    const table = expectTable(document.sections[0].blocks[0])
+
+    expect(table.props).toMatchObject({
+      tblStyle: 'GridTable5Dark',
+      tblW: { type: 'dxa', value: 5000 },
+      tblInd: { type: 'dxa', value: 720 },
+      tblLayout: 'fixed',
+      jc: 'center',
+    })
+    expect(table.rows).toHaveLength(2)
+
+    const firstRow = table.rows[0]
+    expect(firstRow.kind).toBe('table-row')
+    if (firstRow.kind !== 'table-row') {
+      throw new Error('Expected table row')
+    }
+    expect(firstRow.props).toMatchObject({
+      trHeight: { val: 360, hRule: 'exact' },
+      cantSplit: true,
+      tblHeader: true,
+    })
+    expect(firstRow.cells).toHaveLength(2)
+
+    const firstCell = firstRow.cells[0]
+    expect(firstCell.kind).toBe('table-cell')
+    if (firstCell.kind !== 'table-cell') {
+      throw new Error('Expected table cell')
+    }
+    expect(firstCell.props).toMatchObject({
+      tcW: { type: 'dxa', value: 2400 },
+      gridSpan: 1,
+      vAlign: 'center',
+    })
+
+    const secondRow = table.rows[1]
+    expect(secondRow.kind).toBe('table-row')
+    if (secondRow.kind !== 'table-row') {
+      throw new Error('Expected table row')
+    }
+
+    const nestedHostCell = secondRow.cells[1]
+    expect(nestedHostCell.kind).toBe('table-cell')
+    if (nestedHostCell.kind !== 'table-cell') {
+      throw new Error('Expected nested host cell')
+    }
+
+    expect(nestedHostCell.props).toMatchObject({
+      vMerge: 'restart',
+      noWrap: true,
+      hideMark: true,
+    })
+
+    const nestedTable = expectTable(nestedHostCell.blocks[0])
+    expect(nestedTable.rows).toHaveLength(2)
+    expect(nestedTable.rows[0].kind).toBe('table-row')
+  })
+
+  it('parses hyperlink attributes and children', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:hyperlink r:id="rId7" w:anchor="target" w:tooltip="Go" w:tgtFrame="_blank" w:history="1">
+          <w:r><w:t>Example</w:t></w:r>
+        </w:hyperlink>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    expect(paragraph.children[0]).toMatchObject({
+      kind: 'hyperlink',
+      relationshipId: 'rId7',
+      anchor: 'target',
+      tooltip: 'Go',
+      targetFrame: '_blank',
+      history: true,
+    })
+  })
+
+  it('parses bookmark boundaries', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:bookmarkStart w:id="9" w:name="anchor" w:colFirst="0" w:colLast="2"/>
+        <w:r><w:t>Marked</w:t></w:r>
+        <w:bookmarkEnd w:id="9"/>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+
+    expect(paragraph.children[0]).toMatchObject({
+      kind: 'bookmark',
+      id: '9',
+      boundary: 'start',
+      name: 'anchor',
+      colFirst: 0,
+      colLast: 2,
+    })
+    expect(paragraph.children[2]).toMatchObject({
+      kind: 'bookmark',
+      id: '9',
+      boundary: 'end',
+    })
+  })
+
+  it('parses numbering props from pPr', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:pPr>
+          <w:numPr>
+            <w:ilvl w:val="2"/>
+            <w:numId w:val="17"/>
+          </w:numPr>
+        </w:pPr>
+        <w:r><w:t>Item</w:t></w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    expect(paragraph.props).toMatchObject({
+      numPr: {
+        ilvl: 2,
+        numId: '17',
+      },
+    })
+  })
+
+  it('parses section props and partitions paragraph/body section breaks', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:pPr>
+          <w:sectPr>
+            <w:type w:val="continuous"/>
+            <w:pgSz w:w="12240" w:h="15840" w:orient="portrait"/>
+            <w:pgMar w:top="1440" w:right="720" w:bottom="1440" w:left="720" w:header="360" w:footer="360" w:gutter="0"/>
+            <w:cols w:num="2" w:space="720" w:sep="1" w:equalWidth="1">
+              <w:col w:w="4680" w:space="720"/>
+              <w:col w:w="4680" w:space="720"/>
+            </w:cols>
+            <w:pgNumType w:start="3" w:fmt="decimal"/>
+            <w:titlePg/>
+            <w:headerReference w:type="default" r:id="rIdHeader"/>
+            <w:footerReference w:type="even" r:id="rIdFooter"/>
+          </w:sectPr>
+        </w:pPr>
+        <w:r><w:t>Section A</w:t></w:r>
+      </w:p>
+      <w:p><w:r><w:t>Section B</w:t></w:r></w:p>
+      <w:sectPr>
+        <w:type w:val="nextPage"/>
+      </w:sectPr>
+    `)
+
+    expect(document.sections).toHaveLength(2)
+    expect(document.sections[0].props).toMatchObject({
+      type: 'continuous',
+      pgSz: { w: 12240, h: 15840, orient: 'portrait' },
+      pgMar: {
+        top: 1440,
+        right: 720,
+        bottom: 1440,
+        left: 720,
+        header: 360,
+        footer: 360,
+        gutter: 0,
+      },
+      cols: {
+        num: 2,
+        space: 720,
+        sep: true,
+        equalWidth: true,
+        col: [
+          { w: 4680, space: 720 },
+          { w: 4680, space: 720 },
+        ],
+      },
+      pgNumType: { start: 3, fmt: 'decimal' },
+      titlePg: true,
+      headerReference: [{ id: 'rIdHeader', type: 'default' }],
+      footerReference: [{ id: 'rIdFooter', type: 'even' }],
+    })
+    expect(document.sections[1].props).toMatchObject({ type: 'nextPage' })
+    expect(document.sections[1].blocks).toHaveLength(1)
+  })
+
+  it('parses shading on paragraph and run props', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:pPr>
+          <w:shd w:val="clear" w:fill="EEE8AA" w:color="auto"/>
+        </w:pPr>
+        <w:r>
+          <w:rPr>
+            <w:shd w:val="solid" w:fill="111111" w:color="FFFFFF"/>
+          </w:rPr>
+          <w:t>Shade</w:t>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+
+    expect(paragraph.props?.shd).toMatchObject({
+      pattern: 'clear',
+      fill: 'EEE8AA',
+      color: 'auto',
+    })
+    expect(run.props?.shd).toMatchObject({
+      pattern: 'solid',
+      fill: '111111',
+      color: 'FFFFFF',
+    })
+  })
+
+  it('parses paragraph and table cell borders', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:pPr>
+          <w:pBdr>
+            <w:top w:val="single" w:sz="8" w:space="0" w:color="000000"/>
+            <w:bottom w:val="double" w:sz="12" w:space="4" w:color="FF00FF"/>
+          </w:pBdr>
+        </w:pPr>
+      </w:p>
+      <w:tbl>
+        <w:tr>
+          <w:tc>
+            <w:tcPr>
+              <w:tcBorders>
+                <w:left w:val="single" w:sz="8" w:color="00FF00"/>
+                <w:right w:val="single" w:sz="8" w:color="00FF00"/>
+              </w:tcBorders>
+            </w:tcPr>
+            <w:p/>
+          </w:tc>
+        </w:tr>
+      </w:tbl>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    expect(paragraph.props?.pBdr).toMatchObject({
+      top: { style: 'single', size: 8, color: '000000', space: 0 },
+      bottom: { style: 'double', size: 12, color: 'FF00FF', space: 4 },
+    })
+
+    const table = expectTable(document.sections[0].blocks[1])
+    const row = table.rows[0]
+    expect(row.kind).toBe('table-row')
+    if (row.kind !== 'table-row') {
+      throw new Error('Expected table row')
+    }
+
+    const cell = row.cells[0]
+    expect(cell.kind).toBe('table-cell')
+    if (cell.kind !== 'table-cell') {
+      throw new Error('Expected table cell')
+    }
+
+    expect(cell.props?.tcBorders).toMatchObject({
+      left: { style: 'single', size: 8, color: '00FF00' },
+      right: { style: 'single', size: 8, color: '00FF00' },
+    })
+  })
+
+  it('keeps style references alongside direct run and paragraph formatting', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:pPr>
+          <w:pStyle w:val="Heading1"/>
+          <w:spacing w:before="240" w:after="120" w:line="480" w:lineRule="auto"/>
+        </w:pPr>
+        <w:r>
+          <w:rPr>
+            <w:rStyle w:val="Strong"/>
+            <w:b/>
+            <w:color w:val="336699"/>
+          </w:rPr>
+          <w:t>Heading</w:t>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+
+    expect(paragraph.props).toMatchObject({
+      pStyle: 'Heading1',
+      spacing: {
+        before: 240,
+        after: 120,
+        line: 480,
+        lineRule: 'auto',
+      },
+    })
+    expect(run.props).toMatchObject({
+      rStyle: 'Strong',
+      bold: true,
+      color: '336699',
+    })
+  })
+
+  it('preserves unsupported block XML as UnknownNode', () => {
+    const document = parseBody(
+      '<w:customBlock w:foo="bar"><w:customChild w:val="1"/></w:customBlock>',
+    )
+
+    expect(document.sections[0].blocks[0]).toEqual({
+      kind: 'unknown',
+      xml: '<w:customBlock w:foo="bar"><w:customChild w:val="1"/></w:customBlock>',
+    })
+  })
+
+  it('preserves xml:space="preserve" on text nodes', () => {
+    const document = parseBody(
+      '<w:p><w:r><w:t xml:space="preserve">  spaced  </w:t></w:r></w:p>',
+    )
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+
+    expect(run.children[0]).toEqual({
+      kind: 'text',
+      value: '  spaced  ',
+      preserveSpace: true,
+    })
+  })
+
+  it('parses an empty paragraph', () => {
+    const document = parseBody('<w:p/>')
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    expect(paragraph.children).toEqual([])
+  })
+
+  it('partitions multiple sections across paragraph and document-level sectPr', () => {
+    const document = parseBody(`
+      <w:p><w:r><w:t>A</w:t></w:r></w:p>
+      <w:p>
+        <w:pPr><w:sectPr><w:type w:val="continuous"/></w:sectPr></w:pPr>
+        <w:r><w:t>B</w:t></w:r>
+      </w:p>
+      <w:p>
+        <w:pPr><w:sectPr><w:type w:val="evenPage"/></w:sectPr></w:pPr>
+        <w:r><w:t>C</w:t></w:r>
+      </w:p>
+      <w:p><w:r><w:t>D</w:t></w:r></w:p>
+      <w:sectPr><w:type w:val="oddPage"/></w:sectPr>
+    `)
+
+    expect(document.sections).toHaveLength(3)
+    expect(document.sections[0].props.type).toBe('continuous')
+    expect(document.sections[0].blocks).toHaveLength(2)
+    expect(document.sections[1].props.type).toBe('evenPage')
+    expect(document.sections[1].blocks).toHaveLength(1)
+    expect(document.sections[2].props.type).toBe('oddPage')
+    expect(document.sections[2].blocks).toHaveLength(1)
+  })
+
+  it('parses simple drawing metadata', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:inline>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:docPr id="1" name="Picture 1" title="Chart" descr="Quarterly chart"/>
+              <a:graphic>
+                <a:graphicData>
+                  <pic:pic>
+                    <pic:blipFill>
+                      <a:blip r:embed="rIdImage1"/>
+                    </pic:blipFill>
+                  </pic:pic>
+                </a:graphicData>
+              </a:graphic>
+            </wp:inline>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+
+    expect(run.children[0]).toMatchObject({
+      kind: 'drawing',
+      layout: 'inline',
+      relationshipId: 'rIdImage1',
+      title: 'Chart',
+      description: 'Quarterly chart',
+      name: 'Picture 1',
+      extent: {
+        cx: 914400,
+        cy: 457200,
+      },
+    })
+  })
+
+  it('parses comment range boundaries and comment references', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:commentRangeStart w:id="5"/>
+        <w:r><w:t>Commented</w:t></w:r>
+        <w:commentRangeEnd w:id="5"/>
+        <w:r><w:commentReference w:id="5"/></w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const commentRun = expectRun(paragraph.children[3])
+
+    expect(paragraph.children[0]).toMatchObject({
+      kind: 'comment-range',
+      id: '5',
+      boundary: 'start',
+    })
+    expect(paragraph.children[2]).toMatchObject({
+      kind: 'comment-range',
+      id: '5',
+      boundary: 'end',
+    })
+    expect(commentRun.children[0]).toMatchObject({
+      kind: 'comment-reference',
+      id: '5',
+    })
+  })
+
+  it('parses footnote and endnote references', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:r><w:footnoteReference w:id="2" w:customMarkFollows="1"/></w:r>
+        <w:r><w:endnoteReference w:id="3" w:customMarkFollows="0"/></w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const footnoteRun = expectRun(paragraph.children[0])
+    const endnoteRun = expectRun(paragraph.children[1])
+
+    expect(footnoteRun.children[0]).toMatchObject({
+      kind: 'footnote-reference',
+      id: '2',
+      customMarkFollows: true,
+    })
+    expect(endnoteRun.children[0]).toMatchObject({
+      kind: 'endnote-reference',
+      id: '3',
+      customMarkFollows: false,
+    })
+  })
+})

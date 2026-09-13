@@ -1,0 +1,20 @@
+{
+  "capturedAt": "2026-05-13",
+  "node": "24.14.0",
+  "npm": "11.12.1",
+  "packageVersion": "1.0.1",
+  "commands": {
+    "npm ci": { "exitCode": 0 },
+    "npm run lint": { "exitCode": 0 },
+    "npx tsc --noEmit -p tsconfig.app.json": { "exitCode": 0 },
+    "npm run build": { "exitCode": 0 }
+  },
+  "lintWarnings": 0,
+  "lintErrors": 0,
+  "tscErrors": 0,
+  "distSizeKB": 6074.01,
+  "mainChunkKB": 1699.21,
+  "mainChunkGzipKB": 520.90,
+  "mainChunkFile": "dist/assets/index-CrStbZHZ.js",
+  "notes": "Phase 0 baseline (MD Reader 1.0.1) prior to Atlas universal viewer rewrite. Used by W5.1 to verify <25% main-chunk regression. Build succeeded; vite warning about >500kB chunk is pre-existing (Mermaid + KaTeX). 6 npm vulns (3 moderate / 3 high) accepted as non-blocker per Phase 0 decisions."
+}

@@ -1,0 +1,216 @@
+appId: com.mdreader.app
+productName: Atlas
+copyright: Copyright (c) 2026 Atlas
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  signAndEditExecutable: false
+  fileAssociations:
+    - ext: md
+      name: Markdown Document
+      description: Markdown Document
+      role: Editor
+    - ext: markdown
+      name: Markdown Document
+      description: Markdown Document
+      role: Editor
+    - ext: mdown
+      name: Markdown Document
+      description: Markdown Document
+      role: Editor
+    - ext: mkd
+      name: Markdown Document
+      description: Markdown Document
+      role: Editor
+    - ext: docx
+      name: Word Document
+      description: Word Document
+      role: Editor
+    - ext: rtf
+      name: Rich Text Document
+      description: Rich Text Document
+      role: Editor
+    - ext: odt
+      name: OpenDocument Text
+      description: OpenDocument Text Document
+      role: Editor
+    - ext: xlsx
+      name: Excel Spreadsheet
+      description: Excel Spreadsheet
+      role: Editor
+    - ext: xlsm
+      name: Excel Macro-Enabled Spreadsheet
+      description: Excel Macro-Enabled Spreadsheet
+      role: Editor
+    - ext: ods
+      name: OpenDocument Spreadsheet
+      description: OpenDocument Spreadsheet
+      role: Editor
+    - ext: csv
+      name: Comma-Separated Values
+      description: Comma-Separated Values File
+      role: Editor
+    - ext: tsv
+      name: Tab-Separated Values
+      description: Tab-Separated Values File
+      role: Editor
+    - ext: pptx
+      name: PowerPoint Presentation
+      description: PowerPoint Presentation
+      role: Editor
+    - ext: odp
+      name: OpenDocument Presentation
+      description: OpenDocument Presentation
+      role: Editor
+    - ext: pdf
+      name: PDF Document
+      description: PDF Document
+      role: Editor
+    - ext: txt
+      name: Plain Text
+      description: Plain Text
+      role: Editor
+    - ext: log
+      name: Plain Text
+      description: Plain Text Log
+      role: Editor
+    - ext: json
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: yaml
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: yml
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: toml
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: ini
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: js
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: ts
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: tsx
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: jsx
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: py
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: rs
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: go
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: java
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: c
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: cpp
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: h
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: hpp
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: cs
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: rb
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: php
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: sh
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: ps1
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: sql
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: html
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: css
+      name: Source Code
+      description: Source Code
+      role: Editor
+    - ext: scss
+      name: Source Code
+      description: Source Code
+      role: Editor
+
+nsis:
+  oneClick: false
+  perMachine: true
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  deleteAppDataOnUninstall: false
+  shortcutName: Atlas
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  menuCategory: false
+  runAfterFinish: true
+  artifactName: Atlas-Setup-${version}.${ext}
+  uninstallDisplayName: ${productName} ${version}
+  # Force update of an existing install (overwrite same install location)
+  differentialPackage: false
+  # build/installer.nsh defines a !macro preInit that clears the legacy
+  # MD Reader InstallLocation registry value and forces $INSTDIR to
+  # $PROGRAMFILES64\Atlas so upgrades land in C:\Program Files\Atlas\
+  # instead of the inherited C:\Program Files\MD Reader\Atlas\ path.
+  include: build/installer.nsh
+
+asar: true

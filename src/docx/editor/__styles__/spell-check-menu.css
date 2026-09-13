@@ -1,0 +1,83 @@
+.spellcheck-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  max-width: 260px;
+  padding: 6px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.spellcheck-menu__header {
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  color: var(--text-secondary, #57606a);
+  border-bottom: 1px solid var(--border-primary, #d0d7de);
+}
+
+.spellcheck-menu__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.spellcheck-menu__entry {
+  display: block;
+}
+
+.spellcheck-menu__item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 13px;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.spellcheck-menu__item:hover {
+  background: var(--bg-secondary, #f6f8fa);
+}
+
+.spellcheck-menu__item:focus-visible {
+  outline: 2px solid var(--accent, #0969da);
+  outline-offset: -2px;
+}
+
+.spellcheck-menu__item--word {
+  cursor: default;
+  font-style: italic;
+  font-weight: 600;
+  color: var(--danger-fg, #d1242f);
+}
+
+.spellcheck-menu__item--word:hover {
+  background: transparent;
+}
+
+.spellcheck-menu__item--empty {
+  padding: 6px 8px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-secondary, #57606a);
+  cursor: default;
+}
+
+.spellcheck-menu__item--empty:hover {
+  background: transparent;
+}
+
+.spellcheck-menu__footer {
+  border-top: 1px solid var(--border-primary, #d0d7de);
+  padding-top: 4px;
+}

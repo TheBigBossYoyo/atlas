@@ -1,0 +1,139 @@
+/* Atlas — DOCX CommentsPane styles */
+
+.comments-pane {
+  display: flex;
+  flex: 0 0 320px;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 280px;
+  max-width: 360px;
+  max-height: 100%;
+  padding: 14px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  border-radius: 12px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  overflow: auto;
+}
+
+.comments-pane__header,
+.comments-pane__meta,
+.comments-pane__actions,
+.comments-pane__title {
+  display: flex;
+  align-items: center;
+}
+
+.comments-pane__header,
+.comments-pane__meta,
+.comments-pane__actions {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.comments-pane__title {
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.comments-pane__add-button,
+.comments-pane__anchor,
+.comments-pane__card,
+.comments-pane__action {
+  border: 1px solid var(--border-primary, #d0d7de);
+  background: var(--bg-secondary, #f6f8fa);
+  color: inherit;
+}
+
+.comments-pane__add-button,
+.comments-pane__action {
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.comments-pane__add-button {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.comments-pane__count,
+.comments-pane__anchor,
+.comments-pane__date,
+.comments-pane__empty {
+  color: var(--text-secondary, #57606a);
+}
+
+.comments-pane__count,
+.comments-pane__anchor,
+.comments-pane__empty {
+  font-size: 12px;
+}
+
+.comments-pane__groups,
+.comments-pane__group,
+.comments-pane__thread-list,
+.comments-pane__item,
+.comments-pane__replies {
+  display: flex;
+  flex-direction: column;
+}
+
+.comments-pane__groups,
+.comments-pane__thread-list,
+.comments-pane__item,
+.comments-pane__replies {
+  gap: 10px;
+}
+
+.comments-pane__group {
+  gap: 8px;
+}
+
+.comments-pane__anchor {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.comments-pane__card {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.comments-pane__author {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.comments-pane__date {
+  font-size: 11px;
+}
+
+.comments-pane__body {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.comments-pane__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.comments-pane__action--danger {
+  color: var(--danger-fg, #d1242f);
+}
+
+.comments-pane__replies {
+  margin-left: 18px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-primary, #d0d7de);
+}
