@@ -165,6 +165,21 @@ describe('extractCommentText', () => {
     expect((comment?.body[0] as Paragraph).children[0]?.kind).toBe('hyperlink')
     expect(extractCommentText(comment as CommentNode)).toBe('See the style guide')
   })
+
+  it('extracts correctly ordered, correctly spaced text from a real comment with a hyperlink sandwiched between runs', () => {
+    // Companion to the parser-level regression test in
+    // src/docx/parser/__tests__/comments.test.ts: this exercises the same
+    // "run, hyperlink, run" shape end-to-end through extractCommentText to
+    // confirm the fix produces the right *displayed* text, not just the
+    // right AST shape.
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="12" w:author="Erin"><w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink r:id="rId1"><w:r><w:t>the guide</w:t></w:r></w:hyperlink><w:r><w:t xml:space="preserve"> for details.</w:t></w:r></w:p></w:comment></w:comments>`
+
+    const parsed = parseComments(xml)
+    const comment = parsed.get('12')
+    expect(comment).toBeDefined()
+    expect(extractCommentText(comment as CommentNode)).toBe('See the guide for details.')
+  })
 })
 
 // ---------------------------------------------------------------------------
