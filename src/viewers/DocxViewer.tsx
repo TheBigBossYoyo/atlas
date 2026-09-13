@@ -11,7 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 
-import { Printer, Save } from 'lucide-react'
+import { Printer, Save, X } from 'lucide-react'
 
 import type { NavItem, ViewerProps } from '../formats/types'
 import { loadDocx, saveDocx, type DocxBundle } from '../docx'
@@ -31,19 +31,22 @@ import {
   applyCommand,
   buildReplaceAllCommands,
   buildReplaceCommands,
+  buildSpellCheckReplacement,
+  decodeImageNaturalSizePt,
+  ensureListNumbering,
   findAll,
   findNext,
   findParagraph,
   findPrev,
   handleBeforeInput,
   handleKeyDown,
+  insertHyperlinkIntoBundle,
   insertImageIntoBundle,
   buildPasteCommands,
   htmlToParagraphs,
   textToParagraphs,
   toolbarToCommand,
   useComposition,
-  useEditor,
   useSpellCheck,
   type Command,
   type FindOptions,
@@ -51,7 +54,7 @@ import {
   type Range,
 } from '../docx/editor'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
-import { comparePositions, normalizeRange } from '../docx/editor/Selection'
+import { comparePositions } from '../docx/editor/Selection'
 import { domPointToPosition, positionToDomRange } from '../docx/editor/Cursor'
 import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
@@ -72,6 +75,10 @@ const DEFAULT_FIND_OPTIONS: FindOptions = {
 }
 
 const DOCX_SAVE_FILTERS = [{ name: 'Word Documents', extensions: ['docx'] }]
+
+/** D12/DXE-03 — keys whose native contentEditable behavior always mutates
+ * content; see handleKeyDownEvent's preventDefault-safety comment. */
+const MUTATING_KEYS: ReadonlySet<string> = new Set(['Backspace', 'Delete', 'Enter', 'Tab'])
 
 const DEFAULT_FONT_METRICS: FontMetrics = Object.freeze({
   unitsPerEm: 1000,
@@ -244,39 +251,6 @@ function extractParagraphText(children: ReadonlyArray<ParagraphChild>): string {
     .join('')
 }
 
-function collectParagraphPaths(document: DocxDocument): ReadonlyArray<ReadonlyArray<number>> {
-  const paths: Array<ReadonlyArray<number>> = []
-
-  document.sections.forEach((section, sectionIndex) => {
-    section.blocks.forEach((block, blockIndex) => {
-      if (block.kind === 'paragraph') {
-        paths.push(Object.freeze([sectionIndex, blockIndex]))
-      }
-    })
-  })
-
-  return paths
-}
-
-function getParagraphPathsForRange(
-  document: DocxDocument,
-  range: Range | null,
-): ReadonlyArray<ReadonlyArray<number>> {
-  if (range === null) {
-    return []
-  }
-
-  const normalized = normalizeRange(range)
-  const allPaths = collectParagraphPaths(document)
-
-  return allPaths.filter(path => {
-    const atStart = comparePositions({ ...normalized.start, runIndex: 0, charOffset: 0 }, { ...normalized.start, paragraphPath: path })
-    const atEnd = comparePositions({ ...normalized.end, paragraphPath: path }, { ...normalized.end, runIndex: Number.MAX_SAFE_INTEGER, charOffset: Number.MAX_SAFE_INTEGER })
-    return atStart <= 0 && atEnd <= 0
-  })
-}
-void getParagraphPathsForRange
-
 function getEditableRuns(paragraph: Paragraph): ReadonlyArray<Run> {
   return paragraph.children.flatMap(child => {
     if (child.kind === 'run') {
@@ -291,7 +265,11 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<Run> {
   })
 }
 
-function createToolbarState(document: DocxDocument, range: Range | null): ToolbarState {
+function createToolbarState(
+  document: DocxDocument,
+  range: Range | null,
+  liveState: { readonly spellCheck: boolean; readonly trackChanges: boolean },
+): ToolbarState {
   const paragraph = range ? findParagraph(document, range.focus.paragraphPath) : null
   const activeFormats = new Set<'bold' | 'italic' | 'underline' | 'strike' | 'subscript' | 'superscript'>()
 
@@ -331,8 +309,8 @@ function createToolbarState(document: DocxDocument, range: Range | null): Toolba
       fontFamily: props?.rFonts?.ascii ?? props?.rFonts?.hAnsi ?? null,
       fontSizePt: typeof props?.sz === 'number' ? props.sz / 2 : null,
       styleId: paragraph.props?.pStyle ?? null,
-      spellCheck: true,
-      trackChanges: false,
+      spellCheck: liveState.spellCheck,
+      trackChanges: liveState.trackChanges,
     }
   }
 
@@ -342,8 +320,8 @@ function createToolbarState(document: DocxDocument, range: Range | null): Toolba
     fontFamily: null,
     fontSizePt: null,
     styleId: null,
-    spellCheck: true,
-    trackChanges: false,
+    spellCheck: liveState.spellCheck,
+    trackChanges: liveState.trackChanges,
   }
 }
 
@@ -521,8 +499,14 @@ function DocxEditor({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [commentsPaneOpen, setCommentsPaneOpen] = useState(bundle.document.comments.size > 0)
   const [resolvedCommentIds, setResolvedCommentIds] = useState<ReadonlySet<string>>(new Set())
+  // DXE-11/D17 — a local, in-session toggle: the document model has no
+  // parsed/persisted `w:trackChanges` setting to read from (that would need
+  // settings.xml support in the parser/serializer, out of scope for this
+  // wave), so this reflects only what the user has flipped since opening the
+  // file, not a value round-tripped from the saved document.
+  const [trackChangesEnabled, setTrackChangesEnabled] = useState(false)
+  const [spellCheckEnabled, setSpellCheckEnabled] = useState(true)
   const composition = useComposition()
-  const shadowEditor = useEditor(bundle.document)
   const spellCheck = useSpellCheck()
 
   // P1.1/SHELL-03/DXE-09 — document-session capability contract: report dirty
@@ -551,7 +535,10 @@ function DocxEditor({
 
   const currentMatchIndex = useMemo(() => getCurrentMatchIndex(matches, range), [matches, range])
 
-  const toolbarState = useMemo(() => createToolbarState(documentModel, range), [documentModel, range])
+  const toolbarState = useMemo(
+    () => createToolbarState(documentModel, range, { spellCheck: spellCheckEnabled, trackChanges: trackChangesEnabled }),
+    [documentModel, range, spellCheckEnabled, trackChangesEnabled],
+  )
 
   const availableStyles = useMemo(() => {
     return Array.from(documentModel.styles.values())
@@ -559,10 +546,14 @@ function DocxEditor({
       .map(style => ({ id: style.id, name: style.name ?? style.id }))
   }, [documentModel.styles])
 
+  // DXE-25 — save-failure feedback used to be cleared by commitState, which
+  // runs on every single edit, so the banner vanished the instant the user
+  // typed the next character rather than staying up until the user dismissed
+  // it or a save actually succeeded. commitState no longer touches saveError
+  // at all; handleSave (below) is the only place that sets or clears it.
   const commitState = useCallback((nextDocument: DocxDocument, nextRange: Range | null) => {
     setDocumentModel(nextDocument)
     setRange(nextRange)
-    setSaveError(null)
   }, [])
 
   useEffect(() => {
@@ -587,26 +578,7 @@ function DocxEditor({
       try {
         const result = applyCommand(documentModel, command)
         historyRef.current.push(result.inverse)
-
-        let nextRange = range
-        if (command.kind === 'insert-text') {
-          const nextPos = {
-            paragraphPath: command.at.paragraphPath,
-            runIndex: command.at.runIndex,
-            charOffset: command.at.charOffset + command.text.length,
-          }
-          nextRange = { anchor: nextPos, focus: nextPos }
-        } else if (command.kind === 'delete-range') {
-          const normalized = normalizeRange(command.range)
-          nextRange = { anchor: normalized.start, focus: normalized.start }
-        } else if (command.kind === 'insert-paragraph-break') {
-          const nextPath = [...command.at.paragraphPath]
-          nextPath[nextPath.length - 1] = (nextPath[nextPath.length - 1] ?? 0) + 1
-          const nextPos = { paragraphPath: Object.freeze(nextPath), runIndex: 0, charOffset: 0 }
-          nextRange = { anchor: nextPos, focus: nextPos }
-        }
-
-        commitState(result.document, nextRange)
+        commitState(result.document, result.range ?? range)
         return true
       } catch {
         return false
@@ -615,18 +587,30 @@ function DocxEditor({
     [commitState, documentModel, range],
   )
 
+  // DXE-02/DXE-17 — a whole command batch (paste, Replace All) is wrapped in
+  // one `composite` command instead of applied+pushed one at a time: if any
+  // sub-command throws, `applyCommand`'s own composite handling means NOTHING
+  // in this batch was applied and nothing was pushed to history (previously,
+  // commands that succeeded before a later failure had already been pushed
+  // onto the undo stack even though commitState — and so the visible document
+  // — never picked up the change, corrupting the undo stack). A successful
+  // batch pushes exactly one inverse, so Ctrl+Z undoes the whole batch in one
+  // step.
   const applyEditorCommands = useCallback(
     (commands: ReadonlyArray<Command>, nextRange: Range | null): boolean => {
-      let workingDocument = documentModel
+      if (commands.length === 0) {
+        return false
+      }
 
       try {
-        for (const command of commands) {
-          const result = applyCommand(workingDocument, command)
-          workingDocument = result.document
-          historyRef.current.push(result.inverse)
-        }
-
-        commitState(workingDocument, nextRange)
+        const batch: Command = commands.length === 1 ? commands[0] : { kind: 'composite', commands }
+        const result = applyCommand(documentModel, batch)
+        historyRef.current.push(result.inverse)
+        // Prefer the caller's own cursor computation (e.g. buildPasteCommands'
+        // finalCursor) over the composite's own `range` (the LAST
+        // sub-command's natural result, e.g. an apply-run-format's selection)
+        // — callers here already know the semantically-correct end position.
+        commitState(result.document, nextRange ?? result.range ?? null)
         return true
       } catch {
         return false
@@ -655,7 +639,7 @@ function DocxEditor({
       return
     }
 
-    const focus = range?.focus ?? shadowEditor.range?.focus ?? null
+    const focus = range?.focus ?? null
     if (focus === null) {
       setSaveError('Place the cursor in the document before inserting an image.')
       return
@@ -669,10 +653,10 @@ function DocxEditor({
 
       const bytes = result.bytes instanceof Uint8Array ? result.bytes : new Uint8Array(result.bytes)
       const mime: ImageMimeType = result.mime
-      // Default sizing: 200pt wide, preserve a 4:3 ratio fallback until image
-      // intrinsic dimensions are decoded (handled by future enhancement).
-      const widthPt = 200
-      const heightPt = 150
+      // DXE-18 — decode the image's own pixel dimensions (falls back to the
+      // old fixed 200x150pt box when unavailable) instead of always forcing
+      // a hardcoded size, so a portrait photo isn't squashed into a 4:3 box.
+      const { widthPt, heightPt } = await decodeImageNaturalSizePt(bytes, mime)
 
       // P1.6/DXE-01 — operate on the *live* documentModel, not the stale
       // `bundle` prop (which still holds whatever was loaded from disk):
@@ -686,12 +670,66 @@ function DocxEditor({
         heightPt,
       })
 
+      // DXE-18 — route through History like every other edit so Ctrl+Z
+      // removes the inserted image again.
+      historyRef.current.push(insertResult.inverse)
       onBundleChange(insertResult.bundle)
       commitState(insertResult.document, insertResult.range)
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
     }
-  }, [bundle, commitState, documentModel, onBundleChange, range, shadowEditor.range])
+  }, [bundle, commitState, documentModel, onBundleChange, range])
+
+  const handleInsertHyperlink = useCallback(() => {
+    const selection = range
+    if (selection === null) {
+      setSaveError('Select text or place the cursor before inserting a hyperlink.')
+      return
+    }
+
+    const url = window.prompt('Enter a URL', 'https://')
+    if (url === null) {
+      return
+    }
+    const trimmedUrl = url.trim()
+    if (trimmedUrl.length === 0) {
+      return
+    }
+
+    try {
+      const insertResult = insertHyperlinkIntoBundle({ ...bundle, document: documentModel }, selection, trimmedUrl)
+      historyRef.current.push(insertResult.inverse)
+      onBundleChange(insertResult.bundle)
+      commitState(insertResult.document, insertResult.range)
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error))
+    }
+  }, [bundle, commitState, documentModel, onBundleChange, range])
+
+  const handleToggleList = useCallback(
+    (kind: 'bullet' | 'number') => {
+      const command = toolbarToCommand(
+        { kind: kind === 'bullet' ? 'toggle-bullet-list' : 'toggle-numbered-list' },
+        range,
+        documentModel,
+      )
+      if (command === null || command.kind !== 'insert-list') {
+        setSaveError('Select a paragraph before toggling a list.')
+        return
+      }
+
+      try {
+        const nextBundle = ensureListNumbering({ ...bundle, document: documentModel }, command.numId, kind)
+        const result = applyCommand(nextBundle.document, command)
+        historyRef.current.push(result.inverse)
+        onBundleChange({ ...nextBundle, document: result.document })
+        commitState(result.document, result.range ?? range)
+      } catch (error) {
+        setSaveError(error instanceof Error ? error.message : String(error))
+      }
+    },
+    [bundle, commitState, documentModel, onBundleChange, range],
+  )
 
   const handlePaste = useCallback(
     (event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -700,7 +738,7 @@ function DocxEditor({
         return
       }
 
-      const focus = range?.focus ?? shadowEditor.range?.focus ?? null
+      const focus = range?.focus ?? null
       if (focus === null) {
         return
       }
@@ -721,27 +759,40 @@ function DocxEditor({
       const finalRange: Range = { anchor: finalCursor, focus: finalCursor }
       applyEditorCommands(commands, finalRange)
     },
-    [applyEditorCommands, range, shadowEditor.range],
+    [applyEditorCommands, range],
   )
 
   const handleBeforeInputEvent = useCallback(
     (event: FormEvent<HTMLDivElement>) => {
       const nativeEvent = event.nativeEvent as InputEvent
+
+      // D12/DXE-03 — this contentEditable's DOM is entirely React-rendered
+      // from `documentModel`, so a native mutation must never be allowed to
+      // touch it directly: previously preventDefault() only ran when our own
+      // command *succeeded*, so an edge case our model doesn't support yet
+      // (typing inside a hyperlink used to be one) would fail silently while
+      // the browser's native contentEditable behavior still mutated the DOM
+      // out from under the model. Always prevent the native mutation first,
+      // then apply our own model-level command if we have one.
+      event.preventDefault()
+
       if (composition.shouldSwallow(nativeEvent)) {
-        event.preventDefault()
         return
       }
 
-      if (
-        applyResult(
-          handleBeforeInput(nativeEvent, {
-            document: documentModel,
-            range,
-            history: historyRef.current,
-          }),
-        )
-      ) {
-        event.preventDefault()
+      const applied = applyResult(
+        handleBeforeInput(nativeEvent, {
+          document: documentModel,
+          range,
+          history: historyRef.current,
+        }),
+      )
+
+      // DXE-20 — record that this text already landed in the model so a
+      // trailing compositionend (some browsers fire beforeinput(insertText)
+      // with the final composed text just before it) doesn't insert it again.
+      if (applied && nativeEvent.inputType === 'insertText' && composition.state.active && typeof nativeEvent.data === 'string') {
+        composition.markApplied(nativeEvent.data)
       }
     },
     [applyResult, composition, documentModel, range],
@@ -833,15 +884,24 @@ function DocxEditor({
         return
       }
 
-      if (
-        applyResult(
-          handleKeyDown(event.nativeEvent, {
-            document: documentModel,
-            range,
-            history: historyRef.current,
-          }),
-        )
-      ) {
+      const applied = applyResult(
+        handleKeyDown(event.nativeEvent, {
+          document: documentModel,
+          range,
+          history: historyRef.current,
+        }),
+      )
+
+      // D12/DXE-03 — Backspace/Delete/Enter/Tab always mutate content when
+      // the browser handles them natively. Input.ts's handleKeyDown already
+      // routes all four through the same try/catch'd command pipeline as
+      // beforeinput, so a failure here (e.g. an edit our model doesn't
+      // support yet) must still block the native keydown default — otherwise
+      // the browser performs its own contentEditable edit on a DOM the model
+      // never sees, leaving the two silently out of sync. Every other key
+      // (navigation, undo/redo, format toggles) keeps the old behavior of
+      // only preventing default when we actually handled it.
+      if (applied || MUTATING_KEYS.has(event.key)) {
         event.preventDefault()
       }
     },
@@ -948,15 +1008,30 @@ function DocxEditor({
     target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [])
 
+  // DXE-08 — accepting a suggestion used to only call Electron's native
+  // replaceMisspelling bridge, which mutates the contentEditable DOM
+  // directly without touching documentModel at all, so the fix rendered
+  // correctly until the next re-render and was silently lost on save. This
+  // now builds a real delete+insert command pair and applies it through the
+  // normal pipeline (undoable, and part of what gets saved), using the
+  // current selection as a hint for which occurrence to fix when the word
+  // appears more than once.
   const handleSpellReplace = useCallback(
     (misspelled: string, replacement: string) => {
       if (misspelled.length === 0 || replacement === misspelled) {
         return
       }
 
-      void spellCheck.replaceMisspelling(replacement)
+      const hint = range?.focus ?? null
+      const replacementCommands = buildSpellCheckReplacement(documentModel, misspelled, replacement, hint)
+      if (replacementCommands === null) {
+        return
+      }
+
+      applyEditorCommands(replacementCommands.commands, replacementCommands.range)
+      spellCheck.dismiss()
     },
-    [spellCheck],
+    [applyEditorCommands, documentModel, range, spellCheck],
   )
 
   const handleAddToDictionary = useCallback(
@@ -967,7 +1042,7 @@ function DocxEditor({
   )
 
   const handleAddComment = useCallback(() => {
-    const selection = range ?? shadowEditor.range
+    const selection = range
     if (selection === null) {
       setSaveError('Select text before adding a comment.')
       return
@@ -990,7 +1065,7 @@ function DocxEditor({
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
     }
-  }, [commitState, documentModel, range, shadowEditor.range])
+  }, [commitState, documentModel, range])
 
   const handleReplyToComment = useCallback(
     (commentId: string) => {
@@ -1075,7 +1150,18 @@ function DocxEditor({
         return
       }
 
+      // DXE-12 — spell check and track changes are real, local toggles now
+      // (rather than always-on / never-wired): both flip a piece of
+      // component state the render below reads (contentEditable's own
+      // spellCheck attribute; the ToolbarState.trackChanges shown in the
+      // Review tab).
       if (toolbarCommand.kind === 'toggle-spell-check') {
+        setSpellCheckEnabled((enabled) => !enabled)
+        return
+      }
+
+      if (toolbarCommand.kind === 'toggle-track-changes') {
+        setTrackChangesEnabled((enabled) => !enabled)
         return
       }
 
@@ -1094,55 +1180,97 @@ function DocxEditor({
         return
       }
 
-      const selection = range ?? shadowEditor.range
-      const command = toolbarToCommand(toolbarCommand, selection)
+      if (toolbarCommand.kind === 'insert-hyperlink') {
+        handleInsertHyperlink()
+        return
+      }
+
+      if (toolbarCommand.kind === 'toggle-bullet-list') {
+        handleToggleList('bullet')
+        return
+      }
+
+      if (toolbarCommand.kind === 'toggle-numbered-list') {
+        handleToggleList('number')
+        return
+      }
+
+      const command = toolbarToCommand(toolbarCommand, range, documentModel)
       if (command !== null) {
         applyEditorCommand(command)
       }
     },
-    [applyEditorCommand, applyResult, documentModel, handleAddComment, handleInsertImage, range, shadowEditor.range],
+    [
+      applyEditorCommand,
+      applyResult,
+      documentModel,
+      handleAddComment,
+      handleInsertHyperlink,
+      handleInsertImage,
+      handleToggleList,
+      range,
+    ],
   )
 
   // P1.1 — returns whether the save actually succeeded, so both the shared
   // document-session `save()` contract (App.tsx's global Ctrl+S/Save and the
   // unsaved-changes confirmation dialog) and the Save button here can tell.
-  const handleSave = useCallback(async (): Promise<boolean> => {
-    try {
-      const nextBytes = await saveDocx({
-        ...bundle,
-        document: documentModel,
-      })
+  // DXE-25 — a save failure sets saveError, which now only ever gets cleared
+  // by a later save attempt (right here, at the start) or a successful save
+  // — never by commitState on the next keystroke (see commitState above), so
+  // the banner stays visible until the user either fixes the problem and
+  // saves again or the save actually succeeds.
+  const handleSaveInternal = useCallback(
+    async (options?: { readonly forceDialog?: boolean }): Promise<boolean> => {
+      setSaveError(null)
 
-      const result = await window.electronAPI?.saveBinaryFile?.({
-        content: nextBytes,
-        suggestedName: getSuggestedFileName(savePath),
-        existingPath: savePath,
-        filters: DOCX_SAVE_FILTERS,
-      })
+      try {
+        const nextBytes = await saveDocx({
+          ...bundle,
+          document: documentModel,
+        })
 
-      if (result?.saved && result.path) {
-        setSavePath(result.path)
-      }
+        const result = await window.electronAPI?.saveBinaryFile?.({
+          content: nextBytes,
+          suggestedName: getSuggestedFileName(savePath),
+          // DXE-24 — omitting `existingPath` makes the main process show the
+          // save dialog instead of silently overwriting `savePath`, which is
+          // exactly "Save As".
+          ...(options?.forceDialog ? {} : { existingPath: savePath }),
+          filters: DOCX_SAVE_FILTERS,
+        })
 
-      if (!result?.saved) {
-        setSaveError(result?.error ?? 'Save was cancelled or unavailable.')
+        if (result?.saved && result.path) {
+          setSavePath(result.path)
+        }
+
+        if (!result?.saved) {
+          setSaveError(result?.error ?? 'Save was cancelled or unavailable.')
+          return false
+        }
+
+        // Record *what was actually written* (this closure's own `documentModel`
+        // snapshot, taken when the save started) as the new saved baseline. We
+        // deliberately do NOT also call `setDirty(false)` here: if the user kept
+        // editing while the `await`s above were in flight, `documentModel` may
+        // already have moved on since this snapshot, and the effect below
+        // recomputes dirty from whatever the *current* render's `documentModel`
+        // is once this state update lands — never from this stale closure.
+        setLastSavedDocument(documentModel)
+        return true
+      } catch (error) {
+        setSaveError(error instanceof Error ? error.message : String(error))
         return false
       }
+    },
+    [bundle, documentModel, savePath],
+  )
 
-      // Record *what was actually written* (this closure's own `documentModel`
-      // snapshot, taken when the save started) as the new saved baseline. We
-      // deliberately do NOT also call `setDirty(false)` here: if the user kept
-      // editing while the `await`s above were in flight, `documentModel` may
-      // already have moved on since this snapshot, and the effect below
-      // recomputes dirty from whatever the *current* render's `documentModel`
-      // is once this state update lands — never from this stale closure.
-      setLastSavedDocument(documentModel)
-      return true
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error))
-      return false
-    }
-  }, [bundle, documentModel, savePath])
+  const handleSave = useCallback((): Promise<boolean> => handleSaveInternal(), [handleSaveInternal])
+  const handleSaveAs = useCallback(
+    (): Promise<boolean> => handleSaveInternal({ forceDialog: true }),
+    [handleSaveInternal],
+  )
 
   useEffect(() => {
     handleSaveRef.current = handleSave
@@ -1190,10 +1318,6 @@ function DocxEditor({
   }, [handleToolbarCommand])
 
   useEffect(() => {
-    shadowEditor.setRange(range)
-  }, [range, shadowEditor])
-
-  useEffect(() => {
     let cancelled = false
 
     setPaginationError(null)
@@ -1225,9 +1349,6 @@ function DocxEditor({
         })
 
         if (!cancelled) {
-          console.info(
-            `[Atlas/DocxViewer] paginate returned ${nextPages.length} page(s) for document with ${documentModel.sections.length} section(s)`,
-          )
           setPages(nextPages)
           setPaginationProgress(null)
         }
@@ -1236,7 +1357,8 @@ function DocxEditor({
           return
         }
         if (!cancelled) {
-          console.error('[Atlas/DocxViewer] pagination failed', error)
+          // DXE-27 — the failure is already surfaced to the user via
+          // paginationError (rendered below); no need to also log it.
           setPaginationError(error instanceof Error ? error.message : String(error))
           setPaginationProgress(null)
         }
@@ -1269,6 +1391,14 @@ function DocxEditor({
           <span>Save</span>
         </button>
         <button
+          className="docx-viewer__save-as-button"
+          type="button"
+          onClick={() => void handleSaveAs()}
+          aria-label="Save As"
+        >
+          <span>Save As…</span>
+        </button>
+        <button
           className="docx-viewer__print-button"
           type="button"
           onClick={handlePrint}
@@ -1299,7 +1429,7 @@ function DocxEditor({
           aria-label="Document editor"
           contentEditable
           suppressContentEditableWarning
-          spellCheck={true}
+          spellCheck={spellCheckEnabled}
           onBeforeInput={handleBeforeInputEvent}
           onKeyDown={handleKeyDownEvent}
           onMouseUp={() => syncRangeFromDom()}
@@ -1363,7 +1493,19 @@ function DocxEditor({
           />
         ) : null}
       </div>
-      {saveError !== null ? <div className="docx-viewer__error">{saveError}</div> : null}
+      {saveError !== null ? (
+        <div className="docx-viewer__error" role="alert">
+          <span>{saveError}</span>
+          <button
+            type="button"
+            className="docx-viewer__error-dismiss"
+            onClick={() => setSaveError(null)}
+            aria-label="Dismiss error"
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
       {spellCheck.state !== null ? (
         <SpellCheckMenu
           word={spellCheck.state.word}

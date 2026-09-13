@@ -40,6 +40,22 @@
   background: var(--bg-secondary, #f6f8fa);
 }
 
+.docx-viewer__save-as-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.docx-viewer__save-as-button:hover {
+  background: var(--bg-secondary, #f6f8fa);
+}
+
 .docx-viewer__meta {
   color: var(--text-secondary, #57606a);
   font-size: 12px;
@@ -74,8 +90,33 @@
 }
 
 .docx-viewer__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   color: var(--danger-fg, #d1242f);
+  background: var(--danger-bg, #fff1f0);
+  border: 1px solid var(--danger-fg, #d1242f);
+  border-radius: 8px;
+  padding: 8px 12px;
   font-size: 13px;
+}
+
+.docx-viewer__error-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.docx-viewer__error-dismiss:hover {
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .docx-viewer__print-button {
@@ -103,6 +144,7 @@
   .docx-viewer__meta,
   .docx-viewer__error,
   .docx-viewer__save-button,
+  .docx-viewer__save-as-button,
   .docx-viewer__print-button,
   .comments-pane,
   .docx-find-replace,
