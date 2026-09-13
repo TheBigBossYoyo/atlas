@@ -1,0 +1,28 @@
+/* Code viewer container — mirrors the working .docx-viewer scroll pattern
+   (DAT-02 / UX-04): the shared `.content--viewer .preview-panel` sets
+   `overflow: hidden`, so the viewer root itself must own scrolling or
+   content past one screen is unreachable. */
+.code-viewer {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  padding: 16px 24px;
+  background-color: var(--bg-secondary);
+}
+
+.code-viewer__pre {
+  margin: 0;
+  /* --font-mono is not defined anywhere in the app (there is no such custom
+     property) — reference the same monospace stack every other code
+     surface uses (.editor-panel__textarea etc.) so the highlighted/fallback
+     text actually renders in JetBrains Mono instead of silently falling
+     through to a generic system monospace font. */
+  font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.code-viewer__pre pre {
+  margin: 0;
+  background: transparent !important;
+}

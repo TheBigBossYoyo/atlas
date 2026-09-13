@@ -302,6 +302,7 @@ function App() {
         hasContent={hasContent}
         canSave={canSave}
         canSearch={isMarkdownDocument}
+        canChangeFontSize={isMarkdownDocument}
         isMarkdown={isMarkdownDocument}
         isElectron={isElectron}
         exportFormat={currentFormat}
