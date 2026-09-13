@@ -1,4 +1,5 @@
 import type {
+  Document,
   FooterReference,
   HeaderReference,
   HyperlinkChild,
@@ -12,6 +13,7 @@ import type {
   Table,
   Tab,
 } from '../model'
+import { resolveParaProps, resolveRunProps } from '../parser/cascade'
 
 import { breakLines } from './breakLines'
 import { layoutTable } from './layoutTable'
@@ -168,6 +170,7 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
    * to convert placed synthetic table lines into `PageTableRef`s.
    */
   const tableMetaByPath = new Map<string, LaidOutTable>()
+  const styleCache = createStyleResolutionCache()
 
   for (const [sectionIndex, section] of input.document.sections.entries()) {
     const sectionLayout = resolveSectionLayout(section)
@@ -178,6 +181,7 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
       sectionLayout.columnWidthPt,
       totalBlocks,
       progressState,
+      styleCache,
     )
 
     for (const unit of units) {
@@ -674,6 +678,7 @@ async function buildSectionUnits(
   columnWidthPt: number,
   totalBlocks: number,
   progressState: { completedBlocks: number; tick: number },
+  styleCache: StyleResolutionCache,
 ): Promise<ReadonlyArray<LayoutUnit>> {
   const units: LayoutUnit[] = []
 
@@ -686,8 +691,7 @@ async function buildSectionUnits(
           sectionIndex,
           blockIndex,
           columnWidthPt,
-          input.document.defaults?.paragraph,
-          input.document.defaults?.run,
+          styleCache,
         ),
       )
     } else if (block.kind === 'table') {
@@ -715,16 +719,16 @@ async function buildParagraphUnit(
   sectionIndex: number,
   blockIndex: number,
   columnWidthPt: number,
-  defaultParaProps: ParaProps | undefined,
-  defaultRunProps: RunProps | undefined,
+  styleCache: StyleResolutionCache,
 ): Promise<ParagraphUnit> {
   void sectionIndex
 
-  const paraProps = mergeParaProps(defaultParaProps, paragraph.props)
+  const document = input.document
+  const paraProps = resolveEffectiveParaProps(paragraph.props, document, styleCache)
   const lines = await breakLines({
     paragraph,
     paraProps,
-    runs: collectParagraphRuns(paragraph.children, defaultRunProps),
+    runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, document, styleCache),
     availableWidth: columnWidthPt,
     fontResolver: input.fontResolver,
     tabStops: resolveTabStops(paraProps.tabs?.items ?? EMPTY_TABS),
@@ -814,7 +818,9 @@ function createSyntheticLineBox(lineHeight: number): LineBox {
 
 function collectParagraphRuns(
   children: ReadonlyArray<ParagraphChild>,
-  defaultRunProps: RunProps | undefined,
+  paraStyleId: string | undefined,
+  document: Document,
+  styleCache: StyleResolutionCache,
 ): ReadonlyArray<{
   run: Run
   runProps: EffectiveRunProps
@@ -828,23 +834,23 @@ function collectParagraphRuns(
     if (child.kind === 'run') {
       runs.push({
         run: child,
-        runProps: mergeRunProps(defaultRunProps, child.props),
+        runProps: resolveEffectiveRunProps(child.props, paraStyleId, document, styleCache),
       })
       continue
     }
 
     if (child.kind === 'hyperlink') {
-      runs.push(...collectHyperlinkRuns(child.children, defaultRunProps))
+      runs.push(...collectHyperlinkRuns(child.children, paraStyleId, document, styleCache))
       continue
     }
 
     if (child.kind === 'ins-revision' || child.kind === 'del-revision') {
       const tag: 'ins' | 'del' = child.kind === 'ins-revision' ? 'ins' : 'del'
       for (const run of child.children) {
-        const merged = mergeRunProps(defaultRunProps, run.props)
+        const resolved = resolveEffectiveRunProps(run.props, paraStyleId, document, styleCache)
         runs.push({
           run,
-          runProps: { ...merged, _revision: tag },
+          runProps: { ...resolved, _revision: tag },
         })
       }
     }
@@ -855,7 +861,9 @@ function collectParagraphRuns(
 
 function collectHyperlinkRuns(
   children: ReadonlyArray<HyperlinkChild>,
-  defaultRunProps: RunProps | undefined,
+  paraStyleId: string | undefined,
+  document: Document,
+  styleCache: StyleResolutionCache,
 ): ReadonlyArray<{
   run: Run
   runProps: EffectiveRunProps
@@ -869,7 +877,7 @@ function collectHyperlinkRuns(
     if (child.kind === 'run') {
       runs.push({
         run: child,
-        runProps: mergeRunProps(defaultRunProps, child.props),
+        runProps: resolveEffectiveRunProps(child.props, paraStyleId, document, styleCache),
       })
     }
   }
@@ -909,78 +917,76 @@ function normalizeTabLeader(leader: Tab['leader']): TabStop['leader'] {
   return 'none'
 }
 
-function mergeParaProps(
-  base: ParaProps | undefined,
-  override: ParaProps | undefined,
-): EffectiveParaProps {
-  return {
-    ...(base ?? {}),
-    ...(override ?? {}),
-    ...(base?.spacing || override?.spacing
-      ? {
-          spacing: {
-            ...(base?.spacing ?? {}),
-            ...(override?.spacing ?? {}),
-          },
-        }
-      : {}),
-    ...(base?.ind || override?.ind
-      ? {
-          ind: {
-            ...(base?.ind ?? {}),
-            ...(override?.ind ?? {}),
-          },
-        }
-      : {}),
-    ...(base?.tabs || override?.tabs
-      ? {
-          tabs: {
-            ...(base?.tabs ?? {}),
-            ...(override?.tabs ?? {}),
-            items: override?.tabs?.items ?? base?.tabs?.items ?? EMPTY_TABS,
-          },
-        }
-      : {}),
-    ...(base?.numPr || override?.numPr
-      ? {
-          numPr: {
-            ...(base?.numPr ?? {}),
-            ...(override?.numPr ?? {}),
-          },
-        }
-      : {}),
-    ...(base?.framePr || override?.framePr
-      ? {
-          framePr: {
-            ...(base?.framePr ?? {}),
-            ...(override?.framePr ?? {}),
-          },
-        }
-      : {}),
-  }
+/**
+ * Resolving a paragraph's or run's effective properties means walking the
+ * full `basedOn` style chain (cascade.ts's `resolveParaProps`/
+ * `resolveRunProps`) every time it's called. A large document re-lays-out on
+ * every keystroke (D23), and most paragraphs/runs in a document share a
+ * small handful of distinct styleId + direct-props combinations — so cache
+ * the resolved result per `paginate()` call, keyed by styleId plus a stable
+ * hash of the direct-formatting object, to avoid re-walking the chain for
+ * every occurrence.
+ */
+type StyleResolutionCache = {
+  readonly paragraphs: Map<string, EffectiveParaProps>
+  readonly runs: Map<string, EffectiveRunProps>
 }
 
-function mergeRunProps(base: RunProps | undefined, override: RunProps | undefined): EffectiveRunProps {
-  return {
-    ...(base ?? {}),
-    ...(override ?? {}),
-    ...(base?.rFonts || override?.rFonts
-      ? {
-          rFonts: {
-            ...(base?.rFonts ?? {}),
-            ...(override?.rFonts ?? {}),
-          },
-        }
-      : {}),
-    ...(base?.lang || override?.lang
-      ? {
-          lang: {
-            ...(base?.lang ?? {}),
-            ...(override?.lang ?? {}),
-          },
-        }
-      : {}),
+function createStyleResolutionCache(): StyleResolutionCache {
+  return { paragraphs: new Map(), runs: new Map() }
+}
+
+function buildStyleCacheKey(styleId: string | undefined, direct: unknown): string {
+  return `${styleId ?? ''} ${JSON.stringify(direct ?? null)}`
+}
+
+function resolveEffectiveParaProps(
+  direct: ParaProps | undefined,
+  document: Document,
+  cache: StyleResolutionCache,
+): EffectiveParaProps {
+  const styleId = direct?.pStyle
+  const key = buildStyleCacheKey(styleId, direct)
+  const cached = cache.paragraphs.get(key)
+  if (cached !== undefined) {
+    return cached
   }
+
+  const resolved = resolveParaProps(direct, styleId, document.styles, {
+    pPr: document.defaults?.paragraph,
+  })
+  cache.paragraphs.set(key, resolved)
+  return resolved
+}
+
+/**
+ * A run's effective properties resolve against the run's own `rStyle`
+ * (character style) when it has one; otherwise they fall back to the
+ * enclosing paragraph's `pStyle` so plain runs in, e.g., a "Heading 1"
+ * paragraph pick up that style's run-level formatting (bold/size/color) —
+ * `cascade.ts`'s `resolveRunProps` already follows a paragraph-type style's
+ * `linked` character style in that case. This is the DXP-02 fix: previously
+ * the (dead) legacy renderer resolved every run against the paragraph's
+ * style id even when the run carried its own `rStyle`.
+ */
+function resolveEffectiveRunProps(
+  direct: RunProps | undefined,
+  paraStyleId: string | undefined,
+  document: Document,
+  cache: StyleResolutionCache,
+): EffectiveRunProps {
+  const styleId = direct?.rStyle ?? paraStyleId
+  const key = buildStyleCacheKey(styleId, direct)
+  const cached = cache.runs.get(key)
+  if (cached !== undefined) {
+    return cached
+  }
+
+  const resolved = resolveRunProps(direct, styleId, document.styles, {
+    rPr: document.defaults?.run,
+  })
+  cache.runs.set(key, resolved)
+  return resolved
 }
 
 function resolveSectionLayout(section: Section): ResolvedSectionLayout {

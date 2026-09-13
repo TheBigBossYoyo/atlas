@@ -6,15 +6,17 @@ import type {
   FooterReference,
   HeaderReference,
   ParaProps,
+  Paragraph,
   Section,
   SectionProps,
+  Style,
   Table,
 } from '../../model'
-import { twip } from '../../model'
+import { halfPoint, hexColor, twip } from '../../model'
 
 import { paginate } from '../paginate'
 import type { Page } from '../pageTypes'
-import type { FontResolver, LineBox } from '../types'
+import type { FontResolver, LineBox, LineItem } from '../types'
 
 describe('paginate', () => {
   it('returns one page for a short one-paragraph document', async () => {
@@ -311,6 +313,80 @@ describe('paginate', () => {
     expect(paragraphLineCounts(pages, 0)).toEqual([3, 2])
   })
 
+  it('resolves a run inheriting a paragraph style chain, including its linked character style (D1/DXP-01/DXL-01)', async () => {
+    const styles = makeStyles([
+      {
+        id: 'Normal',
+        type: 'paragraph',
+        isDefault: true,
+      },
+      {
+        id: 'Heading1',
+        type: 'paragraph',
+        basedOn: 'Normal',
+        linked: 'Heading1Char',
+        run: { bold: true, sz: halfPoint(48) },
+      },
+      {
+        id: 'Heading1Char',
+        type: 'character',
+        linked: 'Heading1',
+        run: { color: hexColor('FF0000') },
+      },
+    ])
+
+    const headingParagraph: Paragraph = {
+      kind: 'paragraph',
+      props: { pStyle: 'Heading1' },
+      children: [{ kind: 'run', children: [{ kind: 'text', value: 'Title text' }] }],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([headingParagraph])], styles),
+      fontResolver: createFontResolver(),
+    })
+
+    const item = firstWordItem(pages)
+    expect(item?.runProps.bold).toBe(true)
+    expect(item?.runProps.sz).toBe(halfPoint(48))
+    expect(item?.runProps.color).toBe('FF0000')
+  })
+
+  it("resolves a run's own rStyle instead of the enclosing paragraph's pStyle (D1/DXP-02 fix)", async () => {
+    const styles = makeStyles([
+      {
+        id: 'Heading1',
+        type: 'paragraph',
+        run: { bold: true },
+      },
+      {
+        id: 'Emphasis',
+        type: 'character',
+        run: { italic: true },
+      },
+    ])
+
+    const paragraph: Paragraph = {
+      kind: 'paragraph',
+      // Deliberately give the paragraph a DIFFERENT style than the run's own
+      // character style, so a bug that resolves against pStyle instead of
+      // the run's rStyle would pick up `bold` from Heading1 and miss
+      // `italic` from Emphasis entirely.
+      props: { pStyle: 'Heading1' },
+      children: [
+        { kind: 'run', props: { rStyle: 'Emphasis' }, children: [{ kind: 'text', value: 'emphasized' }] },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph])], styles),
+      fontResolver: createFontResolver(),
+    })
+
+    const item = firstWordItem(pages)
+    expect(item?.runProps.italic).toBe(true)
+  })
+
   it('uses the injected tableLayout callback for table height', async () => {
     const tableLayout = vi.fn(async () => [40])
     const pages = await paginate({
@@ -348,11 +424,36 @@ function createFontResolver(): FontResolver {
   return async () => metrics
 }
 
-function createDocument(sections: ReadonlyArray<Section>): Document {
+function makeStyles(styles: ReadonlyArray<Style>): ReadonlyMap<string, Style> {
+  const map = new Map<string, Style>()
+  for (const style of styles) {
+    map.set(style.id, style)
+  }
+  return map
+}
+
+function firstWordItem(pages: ReadonlyArray<Page>): Extract<LineItem, { kind: 'word' }> | undefined {
+  for (const page of pages) {
+    for (const column of page.columns) {
+      for (const lineRef of column.lines) {
+        const word = lineRef.line.items.find((item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word')
+        if (word !== undefined) {
+          return word
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+function createDocument(
+  sections: ReadonlyArray<Section>,
+  styles: ReadonlyMap<string, Style> = new Map(),
+): Document {
   return {
     kind: 'document',
     sections,
-    styles: new Map(),
+    styles,
     numbering: new Map(),
     defaults: {
       paragraph: {
