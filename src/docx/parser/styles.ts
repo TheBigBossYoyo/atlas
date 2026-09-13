@@ -56,6 +56,7 @@ import type {
   Width,
   WidthType,
 } from '../model'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 
 type XmlScalar = string | number | boolean
 type XmlValue = XmlScalar | XmlNode | XmlValue[]
@@ -83,6 +84,7 @@ export interface StylesPart {
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
 
 export function parseStyles(xml: string): StylesPart {
+  assertXmlPartSizeWithinLimit(xml, 'word/styles.xml')
   const raw = xmlParser.parse(xml) as RawStylesDocument
   const stylesRoot = asXmlNode(raw['w:styles'])
 

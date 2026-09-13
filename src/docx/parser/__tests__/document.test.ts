@@ -7,7 +7,8 @@ import {
   type Run,
   type Table,
 } from '../../model'
-import { parseDocument } from '..'
+import { DocxParseError, parseDocument } from '..'
+import { MAX_XML_PART_LENGTH } from '../xmlSizeGuard'
 
 const DOCX_NAMESPACES = [
   'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"',
@@ -747,6 +748,14 @@ describe('parseDocument', () => {
       kind: 'endnote-reference',
       id: '3',
       customMarkFollows: false,
+    })
+  })
+
+  describe('size guard (D21 / DXP-20)', () => {
+    it('refuses a document.xml part over the size limit before parsing it', () => {
+      const oversized = documentXml(`<w:p><w:r><w:t>${'x'.repeat(MAX_XML_PART_LENGTH)}</w:t></w:r></w:p>`)
+
+      expect(() => parseDocument(oversized)).toThrow(DocxParseError)
     })
   })
 })

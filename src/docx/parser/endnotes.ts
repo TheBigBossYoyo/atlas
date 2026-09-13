@@ -16,6 +16,7 @@ import { XMLParser } from 'fast-xml-parser'
 
 import { parseParagraphsFromRawNodes } from './partBody'
 import { DocxParseError } from './unzip'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import type { Endnote, NoteType } from '../model/document'
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,7 @@ function toNoteType(raw: string | undefined): NoteType | undefined {
  * @throws    DocxParseError on malformed XML or an endnote missing w:id.
  */
 export function parseEndnotes(xml: string): ReadonlyMap<string, Endnote> {
+  assertXmlPartSizeWithinLimit(xml, 'word/endnotes.xml')
   let parsed: RawEndnotesDoc
   try {
     parsed = xmlParser.parse(xml) as RawEndnotesDoc

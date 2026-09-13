@@ -8,6 +8,7 @@
 
 import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import {
   eighthPoint,
   halfPoint,
@@ -107,6 +108,7 @@ const xmlBuilder = new XMLBuilder({
 })
 
 export function parseDocument(xml: string): DocxDocument {
+  assertXmlPartSizeWithinLimit(xml, 'word/document.xml')
   const raw = xmlParser.parse(xml) as OrderedXmlNode[]
 
   const documentElement = findElement(raw, 'w:document')

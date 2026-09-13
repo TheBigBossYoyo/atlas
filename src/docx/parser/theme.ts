@@ -16,6 +16,7 @@
 import { XMLParser } from 'fast-xml-parser'
 
 import { DocxParseError } from './unzip'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import { hexColor } from '../model/styles'
 import type { HexColor } from '../model/styles'
 
@@ -150,6 +151,7 @@ function resolveColorSlot(slot: RawColorSlot): HexColor | undefined {
  * @throws    DocxParseError on malformed XML or missing `<a:theme>` root.
  */
 export function parseTheme(xml: string): Theme {
+  assertXmlPartSizeWithinLimit(xml, 'word/theme/theme1.xml')
   let parsed: RawTheme
   try {
     parsed = xmlParser.parse(xml) as RawTheme

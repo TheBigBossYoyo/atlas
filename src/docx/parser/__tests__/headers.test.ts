@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseHeader } from '../headers'
 import { DocxParseError } from '../unzip'
+import { MAX_XML_PART_LENGTH } from '../xmlSizeGuard'
 import { writeHeaderXml } from '../../serializer/headerWriter'
 
 // ---------------------------------------------------------------------------
@@ -90,5 +91,14 @@ describe('parseHeader', () => {
     const header = parseHeader(SIMPLE_HEADER, 'rId3')
     const xml = writeHeaderXml(header)
     expect(xml).toContain('Page Header')
+  })
+
+  it('refuses a header part over the size limit before parsing it (D21 / DXP-20)', () => {
+    const oversized = `<?xml version="1.0" encoding="UTF-8"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p><w:r><w:t>${'x'.repeat(MAX_XML_PART_LENGTH)}</w:t></w:r></w:p>
+</w:hdr>`
+
+    expect(() => parseHeader(oversized, 'rId1')).toThrow(DocxParseError)
   })
 })

@@ -8,6 +8,8 @@
 
 import { XMLParser } from 'fast-xml-parser'
 
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -56,6 +58,7 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
  * @returns     An immutable array of `Relationship` objects.
  */
 export function parseRelationships(xml: string): ReadonlyArray<Relationship> {
+  assertXmlPartSizeWithinLimit(xml, '*.rels')
   const raw = xmlParser.parse(xml) as RawRelationships
 
   const rawRels = raw?.Relationships?.Relationship

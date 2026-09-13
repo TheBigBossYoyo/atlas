@@ -15,6 +15,7 @@ import { XMLParser } from 'fast-xml-parser'
 
 import { parseParagraphsFromRawNodes } from './partBody'
 import { DocxParseError } from './unzip'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import type { Header } from '../model/document'
 
 // ---------------------------------------------------------------------------
@@ -46,6 +47,7 @@ interface RawHeaderDoc {
  *              Defaults to `''`; callers should always supply the real id.
  */
 export function parseHeader(xml: string, id: string = ''): Header {
+  assertXmlPartSizeWithinLimit(xml, id === '' ? 'word/header*.xml' : `word/header*.xml (${id})`)
   let parsed: RawHeaderDoc
   try {
     parsed = xmlParser.parse(xml) as RawHeaderDoc

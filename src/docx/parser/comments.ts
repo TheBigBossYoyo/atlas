@@ -2,6 +2,7 @@ import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 
 import { parseDocument } from './document'
 import { DocxParseError } from './unzip'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import type { Comment, Paragraph } from '../model/document'
 
 // ---------------------------------------------------------------------------
@@ -53,6 +54,7 @@ interface RawCommentsDoc {
  * @throws    DocxParseError on malformed XML.
  */
 export function parseComments(xml: string): ReadonlyMap<string, Comment> {
+  assertXmlPartSizeWithinLimit(xml, 'word/comments.xml')
   let parsed: RawCommentsDoc
   try {
     parsed = xmlParser.parse(xml) as RawCommentsDoc

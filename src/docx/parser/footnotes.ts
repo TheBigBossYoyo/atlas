@@ -18,6 +18,7 @@ import { XMLParser } from 'fast-xml-parser'
 
 import { parseParagraphsFromRawNodes } from './partBody'
 import { DocxParseError } from './unzip'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import type { Footnote, NoteType } from '../model/document'
 
 // ---------------------------------------------------------------------------
@@ -67,6 +68,7 @@ function toNoteType(raw: string | undefined): NoteType | undefined {
  * @throws    DocxParseError on malformed XML or a footnote missing w:id.
  */
 export function parseFootnotes(xml: string): ReadonlyMap<string, Footnote> {
+  assertXmlPartSizeWithinLimit(xml, 'word/footnotes.xml')
   let parsed: RawFootnotesDoc
   try {
     parsed = xmlParser.parse(xml) as RawFootnotesDoc

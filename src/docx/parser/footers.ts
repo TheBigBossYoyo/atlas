@@ -15,6 +15,7 @@ import { XMLParser } from 'fast-xml-parser'
 
 import { parseParagraphsFromRawNodes } from './partBody'
 import { DocxParseError } from './unzip'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import type { Footer } from '../model/document'
 
 // ---------------------------------------------------------------------------
@@ -46,6 +47,7 @@ interface RawFooterDoc {
  *              Defaults to `''`; callers should always supply the real id.
  */
 export function parseFooter(xml: string, id: string = ''): Footer {
+  assertXmlPartSizeWithinLimit(xml, id === '' ? 'word/footer*.xml' : `word/footer*.xml (${id})`)
   let parsed: RawFooterDoc
   try {
     parsed = xmlParser.parse(xml) as RawFooterDoc

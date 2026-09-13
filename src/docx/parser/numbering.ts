@@ -8,6 +8,7 @@ import { XMLParser } from 'fast-xml-parser'
 
 import type { JustifyContent, LvlDef, LvlOverride, NumberingSuffix } from '../model'
 import { parseParaPropsNode, parseRunPropsNode } from './styles'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 
 type XmlScalar = string | number | boolean
 type XmlValue = XmlScalar | XmlNode | XmlValue[]
@@ -41,6 +42,7 @@ export interface NumberingPart {
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
 
 export function parseNumbering(xml: string): NumberingPart {
+  assertXmlPartSizeWithinLimit(xml, 'word/numbering.xml')
   const raw = xmlParser.parse(xml) as RawNumberingDocument
   const numberingRoot = asXmlNode(raw['w:numbering'])
 
