@@ -221,7 +221,20 @@ function parseParagraph(element: OrderedXmlNode): Block {
     kind: 'paragraph',
     ...(props !== undefined ? { props } : {}),
     children,
+    ...withAttrValue('paraId', attr(element, 'w14:paraId')),
+    ...withAttrValue('textId', attr(element, 'w14:textId')),
+    ...withAttrValue('rsidR', attr(element, 'w:rsidR')),
+    ...withAttrValue('rsidRDefault', attr(element, 'w:rsidRDefault')),
+    ...withAttrValue('rsidP', attr(element, 'w:rsidP')),
+    ...withAttrValue('rsidRPr', attr(element, 'w:rsidRPr')),
   }
+}
+
+function withAttrValue<K extends string>(
+  key: K,
+  value: string | undefined,
+): { [P in K]?: string } {
+  return value !== undefined ? ({ [key]: value } as { [P in K]?: string }) : {}
 }
 
 function parseParagraphChild(element: OrderedXmlNode): ParagraphChild | null {
@@ -301,6 +314,9 @@ function parseRun(element: OrderedXmlNode): Run {
     kind: 'run',
     ...(props !== undefined ? { props } : {}),
     children,
+    ...withAttrValue('rsidR', attr(element, 'w:rsidR')),
+    ...withAttrValue('rsidRPr', attr(element, 'w:rsidRPr')),
+    ...withAttrValue('rsidDel', attr(element, 'w:rsidDel')),
   }
 }
 

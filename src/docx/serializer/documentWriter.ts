@@ -222,7 +222,27 @@ function buildParagraphWithState(paragraph: Paragraph, state: SerializeState): O
     children.push(buildParagraphChildNode(child, state))
   }
 
-  return createElement('w:p', children)
+  return createElement('w:p', children, buildParagraphAttributes(paragraph))
+}
+
+/**
+ * DXS-10: re-emit `w14:paraId`/`w14:textId`/`w:rsid*` verbatim when the
+ * source paragraph carried them, instead of silently dropping them on every
+ * save. Atlas never generates these for a paragraph that never had them —
+ * only Word itself assigns fresh values, and `paraId` in particular is the
+ * join key `commentsExtended.xml` uses to correlate a comment's
+ * resolved/done state (D16), so inventing one here could point a comment at
+ * the wrong paragraph.
+ */
+function buildParagraphAttributes(paragraph: Paragraph): XmlAttributes | undefined {
+  const attributes = createAttributes()
+  appendAttribute(attributes, '@_w14:paraId', paragraph.paraId)
+  appendAttribute(attributes, '@_w14:textId', paragraph.textId)
+  appendAttribute(attributes, '@_w:rsidR', paragraph.rsidR)
+  appendAttribute(attributes, '@_w:rsidRDefault', paragraph.rsidRDefault)
+  appendAttribute(attributes, '@_w:rsidP', paragraph.rsidP)
+  appendAttribute(attributes, '@_w:rsidRPr', paragraph.rsidRPr)
+  return hasAttributes(attributes) ? attributes : undefined
 }
 
 function buildParagraphChildNode(child: ParagraphChild, state: SerializeState): OrderedXmlNode {
@@ -264,7 +284,16 @@ function buildRunWithState(run: Run, state: SerializeState, asDel = false): Orde
     children.push(buildRunChildNode(child, state, asDel))
   }
 
-  return createElement('w:r', children)
+  return createElement('w:r', children, buildRunAttributes(run))
+}
+
+/** DXS-10: re-emit a run's `w:rsid*` bookkeeping attributes verbatim. */
+function buildRunAttributes(run: Run): XmlAttributes | undefined {
+  const attributes = createAttributes()
+  appendAttribute(attributes, '@_w:rsidR', run.rsidR)
+  appendAttribute(attributes, '@_w:rsidRPr', run.rsidRPr)
+  appendAttribute(attributes, '@_w:rsidDel', run.rsidDel)
+  return hasAttributes(attributes) ? attributes : undefined
 }
 
 function buildRunChildNode(child: RunChild, state: SerializeState, asDel = false): OrderedXmlNode {

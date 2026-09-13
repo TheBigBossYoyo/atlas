@@ -759,6 +759,50 @@ describe('parseDocument', () => {
     })
   })
 
+  describe('paraId/textId/rsid passthrough (D19 / DXS-10)', () => {
+    it('captures w14:paraId/w14:textId and w:rsid* attributes on a paragraph', () => {
+      const document = parseBody(`
+        <w:p w14:paraId="12AB34CD" w14:textId="56EF78AB" w:rsidR="00112233"
+             w:rsidRDefault="00112233" w:rsidP="00445566" w:rsidRPr="00778899">
+          <w:r><w:t>Hello</w:t></w:r>
+        </w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      expect(paragraph.paraId).toBe('12AB34CD')
+      expect(paragraph.textId).toBe('56EF78AB')
+      expect(paragraph.rsidR).toBe('00112233')
+      expect(paragraph.rsidRDefault).toBe('00112233')
+      expect(paragraph.rsidP).toBe('00445566')
+      expect(paragraph.rsidRPr).toBe('00778899')
+    })
+
+    it('captures w:rsid* attributes on a run', () => {
+      const document = parseBody(`
+        <w:p>
+          <w:r w:rsidR="00AA0011" w:rsidRPr="00AA0022" w:rsidDel="00AA0033">
+            <w:t>Hello</w:t>
+          </w:r>
+        </w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const run = expectRun(paragraph.children[0])
+      expect(run.rsidR).toBe('00AA0011')
+      expect(run.rsidRPr).toBe('00AA0022')
+      expect(run.rsidDel).toBe('00AA0033')
+    })
+
+    it('leaves paraId/textId/rsid undefined when the source paragraph never had them', () => {
+      const document = parseBody(`<w:p><w:r><w:t>Hello</w:t></w:r></w:p>`)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      expect(paragraph.paraId).toBeUndefined()
+      expect(paragraph.textId).toBeUndefined()
+      expect(paragraph.rsidR).toBeUndefined()
+    })
+  })
+
   describe('malformed XML handling (D28 / DXP-16)', () => {
     it('wraps a fast-xml-parser failure in DocxParseError instead of letting it propagate raw', () => {
       expect(() => parseDocument('<<< not xml <<<')).toThrow(DocxParseError)

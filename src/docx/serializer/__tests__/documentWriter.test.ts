@@ -491,7 +491,45 @@ describe('writeDocumentXml', () => {
     ['formatting fixture with sections', documentXml('<w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:i/><w:sz w:val="24"/></w:rPr><w:t>Fixture</w:t></w:r></w:p><w:p><w:pPr><w:sectPr><w:type w:val="evenPage"/></w:sectPr></w:pPr><w:r><w:t>Break</w:t></w:r></w:p>')],
     ['ins revision', documentXml('<w:p><w:ins w:id="1" w:author="Alice" w:date="2024-01-02T03:04:05Z"><w:r><w:t>added</w:t></w:r></w:ins></w:p><w:sectPr/>')],
     ['del revision', documentXml('<w:p><w:del w:id="2" w:author="Bob" w:date="2024-02-03T04:05:06Z"><w:r><w:delText>removed</w:delText></w:r></w:del></w:p><w:sectPr/>')],
+    [
+      'paraId/textId/rsid bookkeeping attributes (D19 / DXS-10)',
+      documentXml(
+        '<w:p w14:paraId="12AB34CD" w14:textId="56EF78AB" w:rsidR="00112233" w:rsidRDefault="00112233" w:rsidP="00445566" w:rsidRPr="00778899">'
+          + '<w:r w:rsidR="00AA0011" w:rsidRPr="00AA0022" w:rsidDel="00AA0033"><w:t>Hello</w:t></w:r>'
+          + '</w:p><w:sectPr/>',
+      ),
+    ],
   ])('round-trips parsed ASTs for %s', (_label, xml) => {
     expectRoundTrip(xml)
+  })
+
+  it('re-emits w14:paraId/w14:textId and w:rsid* attributes on save (D19 / DXS-10)', () => {
+    const xml = documentXml(
+      '<w:p w14:paraId="12AB34CD" w14:textId="56EF78AB" w:rsidR="00112233" w:rsidRDefault="00112233" w:rsidP="00445566" w:rsidRPr="00778899">'
+        + '<w:r w:rsidR="00AA0011" w:rsidRPr="00AA0022" w:rsidDel="00AA0033"><w:t>Hello</w:t></w:r>'
+        + '</w:p><w:sectPr/>',
+    )
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('w14:paraId="12AB34CD"')
+    expect(written).toContain('w14:textId="56EF78AB"')
+    expect(written).toContain('w:rsidR="00112233"')
+    expect(written).toContain('w:rsidRDefault="00112233"')
+    expect(written).toContain('w:rsidP="00445566"')
+    expect(written).toContain('w:rsidRPr="00778899"')
+    expect(written).toContain('w:rsidR="00AA0011"')
+    expect(written).toContain('w:rsidRPr="00AA0022"')
+    expect(written).toContain('w:rsidDel="00AA0033"')
+  })
+
+  it('does not invent w14:paraId/w:rsid attributes for a paragraph that never had them', () => {
+    const document = createDocument([
+      { kind: 'section', props: {}, blocks: [createParagraph('Fresh paragraph')] },
+    ])
+
+    const xml = writeDocumentXml(document)
+
+    expect(xml).not.toContain('w14:paraId')
+    expect(xml).not.toContain('w:rsid')
   })
 })
