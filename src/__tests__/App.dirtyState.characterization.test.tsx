@@ -159,14 +159,22 @@ afterEach(() => {
 
 describe('App dirty-state characterization', () => {
   it('records isDirty / Save-button / active-file at each step of load sample -> edit -> save -> open another .md -> open a non-.md file', async () => {
+    // P4.10/LOAD-13 — the Toolbar's "Open" button now decodes the buffer
+    // openFileBinary() itself reads (openFileByPath is no longer called for
+    // a dialog-based open), so the real content lives in these buffers now.
     const openFileBinaryMock = vi
       .fn()
-      .mockResolvedValueOnce({ canceled: false, path: '/abs/other.md', buffer: makeTextBuffer('') })
-      .mockResolvedValueOnce({ canceled: false, path: '/abs/notes.txt', buffer: makeTextBuffer('') });
-    const openFileByPathMock = vi
-      .fn()
-      .mockResolvedValueOnce({ content: '# Other File\n\nDifferent content.', name: 'other.md', path: '/abs/other.md' })
-      .mockResolvedValueOnce({ content: 'Plain text notes, not markdown.', name: 'notes.txt', path: '/abs/notes.txt' });
+      .mockResolvedValueOnce({
+        canceled: false,
+        path: '/abs/other.md',
+        buffer: makeTextBuffer('# Other File\n\nDifferent content.'),
+      })
+      .mockResolvedValueOnce({
+        canceled: false,
+        path: '/abs/notes.txt',
+        buffer: makeTextBuffer('Plain text notes, not markdown.'),
+      });
+    const openFileByPathMock = vi.fn();
 
     window.electronAPI = buildElectronAPI({
       openFileBinary: openFileBinaryMock,
@@ -213,7 +221,12 @@ describe('App dirty-state characterization', () => {
     transitions.push(captureState('5. open a non-markdown file'));
 
     expect(openFileBinaryMock).toHaveBeenCalledTimes(2);
-    expect(openFileByPathMock).toHaveBeenCalledTimes(2);
+    // P4.10/LOAD-13 — a dialog-based open (Toolbar's "Open" button, used in
+    // steps 4-5 here) now decodes the buffer openFileBinary() already read
+    // instead of re-reading the same file via openFileByPath; the
+    // transitions snapshot below is the actual behavioral guardrail (file
+    // name/content/dirty-state), and it is unchanged.
+    expect(openFileByPathMock).not.toHaveBeenCalled();
 
     expect(transitions).toMatchInlineSnapshot(`
       [
