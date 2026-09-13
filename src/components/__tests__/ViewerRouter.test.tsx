@@ -1,5 +1,5 @@
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ViewerRouter } from '../ViewerRouter'
 import type { LoadedFile } from '../../formats/types'
@@ -113,5 +113,63 @@ describe('ViewerRouter', () => {
     })
 
     expect(callCount).toBe(2)
+  })
+
+  it('5. a crash on one file does not brick the viewer for a subsequently opened valid file (LOAD-08/RUN-09)', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const CrashingViewer = (): React.ReactElement => {
+      throw new Error('boom from crashing file')
+    }
+    const FakeViewerB = () => <div>VIEWER_B_OK</div>
+
+    setRegistryMock('markdown', () => Promise.resolve(CrashingViewer))
+
+    const { rerender } = render(<ViewerRouter file={mdFile} />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+    })
+
+    // A different, valid file is opened next — the crash screen must clear.
+    setRegistryMock('markdown', () => Promise.resolve(FakeViewerB))
+    rerender(<ViewerRouter file={mdFile2} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('VIEWER_B_OK')).toBeInTheDocument()
+    })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    consoleSpy.mockRestore()
+  })
+
+  it('6. "Try again" recovers from a transient chunk-load failure (LOAD-09/DAT-21)', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    let attempts = 0
+    const RecoveredViewer = () => <div>RECOVERED</div>
+
+    setRegistryMock('markdown', () => {
+      attempts += 1
+      if (attempts === 1) {
+        return Promise.reject(new Error('Failed to fetch dynamically imported module'))
+      }
+      return Promise.resolve(RecoveredViewer)
+    })
+
+    render(<ViewerRouter file={mdFile} />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('RECOVERED')).toBeInTheDocument()
+    })
+
+    expect(attempts).toBe(2)
+    consoleSpy.mockRestore()
   })
 })
