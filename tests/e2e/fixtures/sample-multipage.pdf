@@ -1,0 +1,120 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Outlines 4 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R 11 0 R 13 0 R] /Count 5 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Outlines /First 15 0 R /Last 19 0 R /Count 5 >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 500] /Contents 6 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+6 0 obj
+<< /Length 63 >>
+stream
+BT
+/F1 18 Tf
+36 440 Td
+(Atlas multipage fixture page one) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 8 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+8 0 obj
+<< /Length 73 >>
+stream
+BT
+/F1 18 Tf
+36 240 Td
+(Atlas multipage fixture page two landscape) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 500] /Contents 10 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+10 0 obj
+<< /Length 60 >>
+stream
+BT
+/F1 18 Tf
+36 440 Td
+(Findable needle on page three) Tj
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 500 300] /Contents 12 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+12 0 obj
+<< /Length 74 >>
+stream
+BT
+/F1 18 Tf
+36 240 Td
+(Atlas multipage fixture page four landscape) Tj
+ET
+endstream
+endobj
+13 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 500] /Contents 14 0 R /Resources << /Font << /F1 3 0 R >> >> >>
+endobj
+14 0 obj
+<< /Length 64 >>
+stream
+BT
+/F1 18 Tf
+36 440 Td
+(Atlas multipage fixture page five) Tj
+ET
+endstream
+endobj
+15 0 obj
+<< /Title (Bookmark 1) /Parent 4 0 R /Dest [5 0 R /Fit] /Next 16 0 R >>
+endobj
+16 0 obj
+<< /Title (Bookmark 2) /Parent 4 0 R /Dest [7 0 R /Fit] /Prev 15 0 R /Next 17 0 R >>
+endobj
+17 0 obj
+<< /Title (Bookmark 3) /Parent 4 0 R /Dest [9 0 R /Fit] /Prev 16 0 R /Next 18 0 R >>
+endobj
+18 0 obj
+<< /Title (Bookmark 4) /Parent 4 0 R /Dest [11 0 R /Fit] /Prev 17 0 R /Next 19 0 R >>
+endobj
+19 0 obj
+<< /Title (Bookmark 5) /Parent 4 0 R /Dest [13 0 R /Fit] /Prev 18 0 R >>
+endobj
+xref
+0 20
+0000000000 65535 f 
+0000000009 00000 n 
+0000000074 00000 n 
+0000000157 00000 n 
+0000000227 00000 n 
+0000000300 00000 n 
+0000000426 00000 n 
+0000000539 00000 n 
+0000000665 00000 n 
+0000000788 00000 n 
+0000000915 00000 n 
+0000001026 00000 n 
+0000001154 00000 n 
+0000001279 00000 n 
+0000001407 00000 n 
+0000001522 00000 n 
+0000001610 00000 n 
+0000001711 00000 n 
+0000001812 00000 n 
+0000001914 00000 n 
+trailer
+<< /Root 1 0 R /Size 20 >>
+startxref
+2003
+%%EOF

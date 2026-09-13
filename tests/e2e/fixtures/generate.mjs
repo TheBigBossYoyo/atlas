@@ -9,15 +9,55 @@ import * as XLSX from 'xlsx'
 const projectRoot = process.cwd()
 const outputDir = path.join(projectRoot, 'tests', 'e2e', 'fixtures')
 
-function makePdfBuffer() {
-  const contentStream = 'BT\n/F1 18 Tf\n72 96 Td\n(Atlas PDF fixture) Tj\nET'
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-    `<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-  ]
+/**
+ * Hand-rolls a minimal, valid single-section PDF (no external dependency
+ * pulls in a real PDF writer just for fixtures) with one page per entry in
+ * `pages`, each with its own MediaBox size and a Tj-drawn text string.
+ * `withOutline` additionally emits a flat bookmark per page — the P12/PDF-16
+ * e2e coverage wants a document that exercises pdf.js's real outline path
+ * (PdfViewer's `buildOutlineNavItems`), not only the no-outline fallback the
+ * single-page `sample.pdf` fixture below exercises.
+ */
+function buildPdfDocument(pages, { withOutline = false } = {}) {
+  const objects = []
+  const catalogNum = 1
+  const pagesNum = 2
+  const fontNum = 3
+  const outlinesNum = 4
+  const firstContentObjNum = 5
+  const pageObjNum = (index) => firstContentObjNum + index * 2
+  const contentObjNum = (index) => firstContentObjNum + index * 2 + 1
+  const outlineItemObjNum = (index) => firstContentObjNum + pages.length * 2 + index
+
+  objects[catalogNum - 1] = withOutline
+    ? `<< /Type /Catalog /Pages ${pagesNum} 0 R /Outlines ${outlinesNum} 0 R >>`
+    : `<< /Type /Catalog /Pages ${pagesNum} 0 R >>`
+  objects[pagesNum - 1] =
+    `<< /Type /Pages /Kids [${pages.map((_, i) => `${pageObjNum(i)} 0 R`).join(' ')}] /Count ${pages.length} >>`
+  objects[fontNum - 1] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'
+  objects[outlinesNum - 1] = withOutline
+    ? `<< /Type /Outlines /First ${outlineItemObjNum(0)} 0 R /Last ${outlineItemObjNum(pages.length - 1)} 0 R /Count ${pages.length} >>`
+    : '<< /Type /Outlines /Count 0 >>'
+
+  pages.forEach((page, index) => {
+    const contentStream = `BT\n/F1 18 Tf\n36 ${Math.max(36, page.height - 60)} Td\n(${page.text}) Tj\nET`
+    objects[pageObjNum(index) - 1] =
+      `<< /Type /Page /Parent ${pagesNum} 0 R /MediaBox [0 0 ${page.width} ${page.height}] ` +
+      `/Contents ${contentObjNum(index)} 0 R /Resources << /Font << /F1 ${fontNum} 0 R >> >> >>`
+    objects[contentObjNum(index) - 1] =
+      `<< /Length ${contentStream.length} >>\nstream\n${contentStream}\nendstream`
+  })
+
+  if (withOutline) {
+    pages.forEach((page, index) => {
+      const prev = index > 0 ? `/Prev ${outlineItemObjNum(index - 1)} 0 R ` : ''
+      const next = index < pages.length - 1 ? `/Next ${outlineItemObjNum(index + 1)} 0 R ` : ''
+      objects[outlineItemObjNum(index) - 1] =
+        `<< /Title (Bookmark ${index + 1}) /Parent ${outlinesNum} 0 R ` +
+        `/Dest [${pageObjNum(index)} 0 R /Fit] ${prev}${next}>>`
+    })
+  }
+
   let pdf = '%PDF-1.4\n'
   const offsets = [0]
 
@@ -36,6 +76,24 @@ function makePdfBuffer() {
 
   pdf += `trailer\n<< /Root 1 0 R /Size ${objects.length + 1} >>\nstartxref\n${xrefOffset}\n%%EOF\n`
   return Buffer.from(pdf, 'utf8')
+}
+
+function makePdfBuffer() {
+  return buildPdfDocument([{ width: 300, height: 144, text: 'Atlas PDF fixture' }])
+}
+
+/** A 5-page document mixing portrait and landscape page sizes (PDF-09/P8),
+ * each page's own findable text (PDF-06/P6), and a real outline so pdf.js's
+ * outline-based nav path (not just the flat fallback) gets exercised. */
+function makeMultiPagePdfBuffer() {
+  const pages = [
+    { width: 300, height: 500, text: 'Atlas multipage fixture page one' },
+    { width: 500, height: 300, text: 'Atlas multipage fixture page two landscape' },
+    { width: 300, height: 500, text: 'Findable needle on page three' },
+    { width: 500, height: 300, text: 'Atlas multipage fixture page four landscape' },
+    { width: 300, height: 500, text: 'Atlas multipage fixture page five' },
+  ]
+  return buildPdfDocument(pages, { withOutline: true })
 }
 
 function makeWorkbookBuffer(bookType) {
@@ -186,6 +244,7 @@ export async function generateFixtures() {
   const odpBuffer = await makeOdpBuffer()
   const odtBuffer = await makeOdtBuffer()
   const pdfBuffer = makePdfBuffer()
+  const multiPagePdfBuffer = makeMultiPagePdfBuffer()
 
   const writes = [
     writeFixture(
@@ -203,6 +262,7 @@ export async function generateFixtures() {
     writeFixture('sample.rtf', '{\\rtf1\\ansi Atlas RTF fixture\\par Smoke test document.\\par}'),
     writeFixture('sample.odt', odtBuffer),
     writeFixture('sample.pdf', pdfBuffer),
+    writeFixture('sample-multipage.pdf', multiPagePdfBuffer),
     writeFixture('sample.pptx', pptxBuffer),
     writeFixture('sample.odp', odpBuffer),
   ]
