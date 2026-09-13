@@ -1,9 +1,11 @@
 /**
- * Atlas — DOCX footer parser (Wave A.5)
+ * Atlas — DOCX footer parser (Wave A.5, hardened in P1.3)
  *
- * OPTION B: stores body content as a single UnknownNode containing the raw
- * inner XML of <w:ftr>.  Wave A.6/B.x will consolidate via a shared body
- * parser once document.ts (A.3) ships the paragraph/run/table logic.
+ * Parses the body content of a `word/footer*.xml` part into real
+ * `Paragraph[]` blocks by porting `comments.ts`'s synthetic-wrapper
+ * technique (see `partBody.ts`), replacing the earlier "Option B" stub that
+ * stored the whole part as a single opaque `UnknownNode` and made the
+ * serializer throw on every save that included a footer (DXP-04/DXS-01).
  *
  * The `id` parameter is the relationship-derived file identifier (e.g. "rId2")
  * that the orchestrator must supply; the footer XML itself carries no self-id.
@@ -11,14 +13,27 @@
 
 import { XMLParser } from 'fast-xml-parser'
 
+import { parseParagraphsFromRawNodes } from './partBody'
 import { DocxParseError } from './unzip'
-import type { Footer, UnknownNode, Block } from '../model/document'
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
+import type { Footer } from '../model/document'
 
 // ---------------------------------------------------------------------------
 // Parser instance — same config as Wave A.1
 // ---------------------------------------------------------------------------
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
+
+// ---------------------------------------------------------------------------
+// Internal XML shapes
+// ---------------------------------------------------------------------------
+
+interface RawFooterDoc {
+  'w:ftr'?: {
+    'w:p'?: unknown
+    [key: string]: unknown
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -32,15 +47,16 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
  *              Defaults to `''`; callers should always supply the real id.
  */
 export function parseFooter(xml: string, id: string = ''): Footer {
+  assertXmlPartSizeWithinLimit(xml, id === '' ? 'word/footer*.xml' : `word/footer*.xml (${id})`)
+  let parsed: RawFooterDoc
   try {
-    xmlParser.parse(xml)
+    parsed = xmlParser.parse(xml) as RawFooterDoc
   } catch (cause) {
     const msg = cause instanceof Error ? cause.message : String(cause)
     throw new DocxParseError(`Failed to parse footer XML: ${msg}`, id)
   }
 
-  const inner: UnknownNode = { kind: 'unknown', xml }
-  const blocks: ReadonlyArray<Block> = [inner]
+  const blocks = parseParagraphsFromRawNodes(parsed?.['w:ftr']?.['w:p'])
 
   return { kind: 'footer', id, blocks }
 }

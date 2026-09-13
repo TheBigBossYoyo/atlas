@@ -7,7 +7,8 @@ import {
   type Run,
   type Table,
 } from '../../model'
-import { parseDocument } from '..'
+import { DocxParseError, parseDocument } from '..'
+import { MAX_XML_PART_LENGTH } from '../xmlSizeGuard'
 
 const DOCX_NAMESPACES = [
   'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"',
@@ -227,6 +228,38 @@ describe('parseDocument', () => {
     const nestedTable = expectTable(nestedHostCell.blocks[0])
     expect(nestedTable.rows).toHaveLength(2)
     expect(nestedTable.rows[0].kind).toBe('table-row')
+  })
+
+  it('parses w:tblGrid into Table.tblGrid (P1.5 / DXP-19)', () => {
+    const document = parseBody(`
+      <w:tbl>
+        <w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>
+        <w:tblGrid>
+          <w:gridCol w:w="2400"/>
+          <w:gridCol w:w="3600"/>
+        </w:tblGrid>
+        <w:tr>
+          <w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc>
+        </w:tr>
+      </w:tbl>
+    `)
+
+    const table = expectTable(document.sections[0].blocks[0])
+    expect(table.tblGrid).toEqual([2400, 3600])
+  })
+
+  it('omits Table.tblGrid when no w:tblGrid element is present', () => {
+    const document = parseBody(`
+      <w:tbl>
+        <w:tr>
+          <w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>
+        </w:tr>
+      </w:tbl>
+    `)
+
+    const table = expectTable(document.sections[0].blocks[0])
+    expect(table.tblGrid).toBeUndefined()
   })
 
   it('parses hyperlink attributes and children', () => {
@@ -569,6 +602,102 @@ describe('parseDocument', () => {
     })
   })
 
+  it('captures wp:anchor position/wrap children so a save stays schema-valid (P1.7 / DXS-03)', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:anchor>
+              <wp:simplePos x="0" y="0"/>
+              <wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>
+              <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:effectExtent l="0" t="0" r="0" b="0"/>
+              <wp:wrapSquare wrapText="bothSides"/>
+              <wp:docPr id="1" name="Picture 1"/>
+              <wp:cNvGraphicFramePr/>
+              <a:graphic>
+                <a:graphicData>
+                  <pic:pic>
+                    <pic:blipFill>
+                      <a:blip r:embed="rIdImage2"/>
+                    </pic:blipFill>
+                  </pic:pic>
+                </a:graphicData>
+              </a:graphic>
+            </wp:anchor>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+    const drawing = run.children[0]
+
+    expect(drawing).toMatchObject({ kind: 'drawing', layout: 'anchor', relationshipId: 'rIdImage2' })
+    if (drawing.kind !== 'drawing') {
+      throw new Error('Expected drawing child')
+    }
+
+    const slots = (drawing.anchorChildren ?? []).map((entry) =>
+      entry.kind === 'anchor-slot' ? entry.slot : 'unknown',
+    )
+    // Original order preserved: simplePos, positionH, positionV, extent,
+    // effectExtent, wrapSquare, docPr, cNvGraphicFramePr, graphic.
+    expect(slots).toEqual([
+      'unknown',
+      'unknown',
+      'unknown',
+      'extent',
+      'unknown',
+      'unknown',
+      'docPr',
+      'unknown',
+      'graphic',
+    ])
+
+    const unknownXml = (drawing.anchorChildren ?? [])
+      .filter((entry): entry is Extract<typeof entry, { kind: 'unknown' }> => entry.kind === 'unknown')
+      .map((entry) => entry.xml)
+      .join('')
+    expect(unknownXml).toContain('wp:simplePos')
+    expect(unknownXml).toContain('wp:positionH')
+    expect(unknownXml).toContain('wp:positionV')
+    expect(unknownXml).toContain('wp:wrapSquare')
+    expect(unknownXml).toContain('wp:cNvGraphicFramePr')
+  })
+
+  it('preserves a non-picture graphicFrame (chart/SmartArt) as an unknown node instead of a lossy Drawing (P1.7 / DXS-04)', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:inline>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:docPr id="2" name="Chart 1"/>
+              <a:graphic>
+                <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                  <c:chart r:id="rIdChart1"/>
+                </a:graphicData>
+              </a:graphic>
+            </wp:inline>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+    const child = run.children[0]
+
+    expect(child.kind).toBe('unknown')
+    if (child.kind === 'unknown') {
+      expect(child.xml).toContain('rIdChart1')
+      expect(child.xml).toContain('c:chart')
+    }
+  })
+
   it('parses comment range boundaries and comment references', () => {
     const document = parseBody(`
       <w:p>
@@ -619,6 +748,14 @@ describe('parseDocument', () => {
       kind: 'endnote-reference',
       id: '3',
       customMarkFollows: false,
+    })
+  })
+
+  describe('size guard (D21 / DXP-20)', () => {
+    it('refuses a document.xml part over the size limit before parsing it', () => {
+      const oversized = documentXml(`<w:p><w:r><w:t>${'x'.repeat(MAX_XML_PART_LENGTH)}</w:t></w:r></w:p>`)
+
+      expect(() => parseDocument(oversized)).toThrow(DocxParseError)
     })
   })
 })

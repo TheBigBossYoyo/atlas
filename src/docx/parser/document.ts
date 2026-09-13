@@ -8,6 +8,7 @@
 
 import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import {
   eighthPoint,
   halfPoint,
@@ -28,6 +29,7 @@ import {
   type DelRevision,
   type Document as DocxDocument,
   type Drawing,
+  type DrawingAnchorChild,
   type Endnote,
   type EndnoteReference,
   type Footer,
@@ -106,6 +108,7 @@ const xmlBuilder = new XMLBuilder({
 })
 
 export function parseDocument(xml: string): DocxDocument {
+  assertXmlPartSizeWithinLimit(xml, 'word/document.xml')
   const raw = xmlParser.parse(xml) as OrderedXmlNode[]
 
   const documentElement = findElement(raw, 'w:document')
@@ -435,6 +438,17 @@ function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
 
   const docPr = findDescendant(layoutElement, 'wp:docPr')
   const blip = findDescendant(layoutElement, 'a:blip')
+
+  if (blip === undefined) {
+    // Charts, SmartArt, and other non-picture graphicFrame content have no
+    // a:blip. Atlas doesn't model any of that yet, so preserve the whole
+    // w:drawing verbatim rather than building a lossy, schema-invalid
+    // partial Drawing with extent/docPr but no graphic content at all
+    // (DXS-04) — the same fallback already used when there's no
+    // wp:inline/wp:anchor at all.
+    return parseUnknownNode(element)
+  }
+
   const extentElement = findDescendant(layoutElement, 'wp:extent')
   const relationshipId =
     attr(blip, 'r:embed') ?? attr(blip, 'r:link')
@@ -445,6 +459,7 @@ function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
     extentElement !== undefined
       ? parseDrawingExtent(extentElement)
       : undefined
+  const anchorChildren = anchor !== undefined ? parseAnchorChildren(anchor) : undefined
 
   return {
     kind: 'drawing',
@@ -454,7 +469,44 @@ function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
     ...(description !== undefined ? { description } : {}),
     ...(name !== undefined ? { name } : {}),
     ...(extent !== undefined ? { extent } : {}),
+    ...(anchorChildren !== undefined ? { anchorChildren } : {}),
   }
+}
+
+/**
+ * Captures `wp:anchor`'s direct children in original order: the three Atlas
+ * models (`wp:extent`/`wp:docPr`/`a:graphic`) become slot markers the
+ * serializer rebuilds from live model state, and everything else — position
+ * (`wp:simplePos`, `wp:positionH`/`wp:positionV`), the required wrap choice,
+ * `wp:effectExtent`, `wp:cNvGraphicFramePr` — is preserved as raw
+ * `UnknownNode` XML so a save emits schema-valid `wp:anchor` output (DXS-03)
+ * instead of silently dropping whichever of those Atlas doesn't model.
+ */
+function parseAnchorChildren(anchorElement: OrderedXmlNode): ReadonlyArray<DrawingAnchorChild> {
+  const result: DrawingAnchorChild[] = []
+
+  for (const entry of nodeChildren(anchorElement)) {
+    if (isIgnorableText(entry)) {
+      continue
+    }
+
+    switch (nodeName(entry)) {
+      case 'wp:extent':
+        result.push({ kind: 'anchor-slot', slot: 'extent' })
+        break
+      case 'wp:docPr':
+        result.push({ kind: 'anchor-slot', slot: 'docPr' })
+        break
+      case 'a:graphic':
+        result.push({ kind: 'anchor-slot', slot: 'graphic' })
+        break
+      default:
+        result.push(parseUnknownNode(entry))
+        break
+    }
+  }
+
+  return result
 }
 
 function parseDrawingExtent(element: OrderedXmlNode): {
@@ -529,6 +581,7 @@ function parseEndnoteReference(element: OrderedXmlNode): EndnoteReference {
 
 function parseTable(element: OrderedXmlNode): Table {
   const props = parseTableProps(child(element, 'w:tblPr'))
+  const tblGrid = parseTableGrid(child(element, 'w:tblGrid'))
   const rows: Array<TableRow | UnknownNode> = []
 
   for (const entry of nodeChildren(element)) {
@@ -553,8 +606,23 @@ function parseTable(element: OrderedXmlNode): Table {
   return {
     kind: 'table',
     ...(props !== undefined ? { props } : {}),
+    ...(tblGrid !== undefined ? { tblGrid } : {}),
     rows,
   }
+}
+
+function parseTableGrid(
+  element: OrderedXmlNode | undefined,
+): ReadonlyArray<ReturnType<typeof twip>> | undefined {
+  if (element === undefined) {
+    return undefined
+  }
+
+  const columns = children(element, 'w:gridCol').map(
+    (column) => parseTwip(attr(column, 'w:w')) ?? twip(0),
+  )
+
+  return columns.length > 0 ? columns : undefined
 }
 
 function parseTableRow(element: OrderedXmlNode): TableRow {

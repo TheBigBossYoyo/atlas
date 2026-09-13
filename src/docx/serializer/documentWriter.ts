@@ -11,6 +11,8 @@ import {
   type CommentReference,
   type Document,
   type Drawing,
+  type DrawingAnchorChild,
+  type DrawingExtent,
   type EndnoteReference,
   type FooterReference,
   type FontSet,
@@ -274,7 +276,7 @@ function buildRunChildNode(child: RunChild, state: SerializeState, asDel = false
     case 'break':
       return buildBreakNode(child)
     case 'drawing':
-      return buildDrawingNode(child)
+      return buildDrawingNode(child, state)
     case 'comment-reference':
       return buildCommentReferenceNode(child)
     case 'footnote-reference':
@@ -408,25 +410,81 @@ function buildBreakNode(breakNode: BreakNode): OrderedXmlNode {
   return createElement('w:br', [], hasAttributes(attributes) ? attributes : undefined)
 }
 
-function buildDrawingNode(drawing: Drawing): OrderedXmlNode {
+function buildDrawingNode(drawing: Drawing, state: SerializeState): OrderedXmlNode {
   const layoutName = drawing.layout === 'anchor' ? 'wp:anchor' : 'wp:inline'
   const layoutAttributes = drawing.layout === 'anchor' ? buildAnchorAttributes() : undefined
-  const layoutChildren: OrderedXmlNode[] = []
-
-  if (drawing.extent !== undefined) {
-    layoutChildren.push(createElement('wp:extent', [], {
-      '@_cx': String(drawing.extent.cx),
-      '@_cy': String(drawing.extent.cy),
-    }))
-  }
-
-  layoutChildren.push(buildDocPrNode(drawing))
-
-  if (drawing.relationshipId !== undefined) {
-    layoutChildren.push(buildGraphicNode(drawing.relationshipId))
-  }
+  const layoutChildren =
+    drawing.layout === 'anchor' && drawing.anchorChildren !== undefined
+      ? buildAnchorChildrenNodes(drawing, drawing.anchorChildren, state)
+      : buildInlineDrawingChildren(drawing)
 
   return createElement('w:drawing', [createElement(layoutName, layoutChildren, layoutAttributes)])
+}
+
+function buildInlineDrawingChildren(drawing: Drawing): OrderedXmlNode[] {
+  const children: OrderedXmlNode[] = []
+
+  if (drawing.extent !== undefined) {
+    children.push(buildExtentNode(drawing.extent))
+  }
+
+  children.push(buildDocPrNode(drawing))
+
+  if (drawing.relationshipId !== undefined) {
+    children.push(buildGraphicNode(drawing.relationshipId))
+  }
+
+  return children
+}
+
+/**
+ * Rebuilds `wp:anchor`'s children from the original captured order (DXS-03):
+ * the extent/docPr/graphic slots come from current model state (so an
+ * in-app edit to e.g. alt text is reflected), while every other captured
+ * child — position, wrap choice, effectExtent, cNvGraphicFramePr — is
+ * unmodeled and replayed verbatim via the same raw-XML placeholder
+ * mechanism `buildUnknownPlaceholder` uses elsewhere.
+ */
+function buildAnchorChildrenNodes(
+  drawing: Drawing,
+  anchorChildren: ReadonlyArray<DrawingAnchorChild>,
+  state: SerializeState,
+): OrderedXmlNode[] {
+  const children: OrderedXmlNode[] = []
+
+  for (const entry of anchorChildren) {
+    if (entry.kind === 'unknown') {
+      children.push(buildUnknownPlaceholder(entry, state))
+      continue
+    }
+
+    switch (entry.slot) {
+      case 'extent':
+        if (drawing.extent !== undefined) {
+          children.push(buildExtentNode(drawing.extent))
+        }
+        break
+      case 'docPr':
+        children.push(buildDocPrNode(drawing))
+        break
+      case 'graphic':
+        if (drawing.relationshipId !== undefined) {
+          children.push(buildGraphicNode(drawing.relationshipId))
+        }
+        break
+      default:
+        assertNever(entry.slot)
+    }
+  }
+
+  return children
+}
+
+function buildExtentNode(extent: DrawingExtent): OrderedXmlNode {
+  return createElement('wp:extent', [], {
+    '@_cx': String(extent.cx),
+    '@_cy': String(extent.cy),
+  })
 }
 
 function buildDocPrNode(drawing: Drawing): OrderedXmlNode {
@@ -529,11 +587,22 @@ function buildTableWithState(table: Table, state: SerializeState): OrderedXmlNod
     children.push(props)
   }
 
+  pushIfDefined(children, buildTableGridNode(table.tblGrid))
+
   for (const row of table.rows) {
     children.push(buildTableChildNode(row, state))
   }
 
   return createElement('w:tbl', children)
+}
+
+function buildTableGridNode(tblGrid: Table['tblGrid']): OrderedXmlNode | undefined {
+  if (tblGrid === undefined || tblGrid.length === 0) {
+    return undefined
+  }
+
+  const columns = tblGrid.map((width) => createElement('w:gridCol', [], { '@_w:w': String(width) }))
+  return createElement('w:tblGrid', columns)
 }
 
 function buildTableChildNode(child: TableChild, state: SerializeState): OrderedXmlNode {

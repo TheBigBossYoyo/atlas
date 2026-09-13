@@ -22,6 +22,8 @@
 import type { DocxBundle } from '../index'
 import type { Document, Drawing, Paragraph, ParagraphChild, Run, Section } from '../model/document'
 import type { Relationship } from '../parser/relationships'
+import type { ContentTypesPart } from '../serializer/contentTypesWriter'
+import { ensureMediaContentType } from '../serializer/contentTypesWriter'
 
 import type { Position, Range } from './commandTypes'
 
@@ -83,6 +85,7 @@ export function insertImageIntoBundle(
 
   const relationshipId = allocateRelationshipId(relationships)
   const mediaPath = allocateMediaPath(rawArchive, image)
+  const extension = MIME_EXTENSION[image.mime]
 
   const nextRelationships: ReadonlyArray<Relationship> = [
     ...relationships,
@@ -95,6 +98,13 @@ export function insertImageIntoBundle(
 
   const nextRawArchive = new Map(rawArchive)
   nextRawArchive.set(mediaPath, image.bytes)
+
+  // DXS-07: an image-free document has no `Default` content-type entry for
+  // this extension, so without this the saved package references media Word
+  // cannot resolve a MIME type for. Registering it here (once, on the first
+  // image of a given extension) keeps every subsequent insert a no-op.
+  const contentTypesBase: ContentTypesPart = bundle.contentTypes ?? { defaults: [], overrides: [] }
+  const nextContentTypes = ensureMediaContentType(contentTypesBase, extension)
 
   const drawing: Drawing = {
     kind: 'drawing',
@@ -132,6 +142,7 @@ export function insertImageIntoBundle(
       document: nextDocument,
       relationships: nextRelationships,
       rawArchive: nextRawArchive,
+      contentTypes: nextContentTypes,
     },
     document: nextDocument,
     range: { anchor: cursor, focus: cursor },

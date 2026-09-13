@@ -25,12 +25,21 @@ import {
   writeRelationshipsXml,
   writeContentTypesXml,
   packDocx,
+  addRelationship,
+  addOverride,
+  validateDocxPackage,
 } from './serializer';
 import type { DocxPart } from './serializer';
 
 import type { Document } from './model/document';
 import type { Theme } from './parser';
 import type { Relationship, ContentTypes, NumberingPart, StylesPart } from './parser';
+
+const COMMENTS_PART_PATH = 'word/comments.xml';
+const COMMENTS_RELATIONSHIP_TYPE =
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments';
+const COMMENTS_CONTENT_TYPE =
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml';
 
 export type DocxBundle = {
   document: Document;
@@ -192,12 +201,21 @@ export async function saveDocx(bundle: DocxBundle): Promise<Uint8Array> {
     parts.set('word/numbering.xml', writeNumberingXml(bundle.numberingPart));
   }
 
+  // Tracked locally (rather than read straight off `bundle`) so a newly
+  // written comments part gets its relationship + content-type registered
+  // even when the loaded document never had one (DXS-06).
+  let relationships = bundle.relationships;
+  let contentTypes = bundle.contentTypes;
+
   // 5. Comments.
   if (bundle.document.comments.size > 0) {
     parts.set(
-      'word/comments.xml',
+      COMMENTS_PART_PATH,
       writeCommentsXml(Array.from(bundle.document.comments.values())),
     );
+    const registered = ensureCommentsRegistered(relationships, contentTypes);
+    relationships = registered.relationships;
+    contentTypes = registered.contentTypes;
   }
 
   // 6. Footnotes / endnotes.
@@ -215,8 +233,8 @@ export async function saveDocx(bundle: DocxBundle): Promise<Uint8Array> {
   }
 
   // 7. Headers / footers — resolve part path from relationships by id.
-  if (bundle.relationships) {
-    for (const rel of bundle.relationships) {
+  if (relationships) {
+    for (const rel of relationships) {
       const path = `word/${rel.target.replace(/^\//, '')}`;
       if (rel.type.endsWith('/header')) {
         const header = bundle.document.headers.get(rel.id);
@@ -228,7 +246,7 @@ export async function saveDocx(bundle: DocxBundle): Promise<Uint8Array> {
     }
     parts.set(
       'word/_rels/document.xml.rels',
-      writeRelationshipsXml(bundle.relationships),
+      writeRelationshipsXml(relationships),
     );
   }
 
@@ -238,16 +256,51 @@ export async function saveDocx(bundle: DocxBundle): Promise<Uint8Array> {
   }
 
   // 9. [Content_Types].xml.
-  if (bundle.contentTypes) {
-    parts.set('[Content_Types].xml', writeContentTypesXml(bundle.contentTypes));
+  if (contentTypes) {
+    parts.set('[Content_Types].xml', writeContentTypesXml(contentTypes));
   }
 
-  // 10. Pack.
+  // 10. Post-serialization validation (D20 / DXS-19) — catch a broken
+  // package here, with a clear, specific error, rather than silently
+  // writing a file Word will refuse or complain about.
+  validateDocxPackage(parts);
+
+  // 11. Pack.
   const docxParts: DocxPart[] = [];
   for (const [path, content] of parts.entries()) {
     docxParts.push({ path, content });
   }
   return packDocx(docxParts);
+}
+
+/**
+ * DXS-06: registers `word/comments.xml`'s relationship + content-type entry
+ * the first time a document goes from zero comments to one or more —
+ * without this, `saveDocx` still writes the part (see step 5 above) but the
+ * resulting package is OPC-invalid: nothing declares its content type, and
+ * `document.xml` has no relationship Word can use to resolve it.
+ *
+ * Idempotent: a document whose comments part was already registered (either
+ * from the original load, or from an earlier call in the same save) is
+ * returned unchanged.
+ */
+function ensureCommentsRegistered(
+  relationships: ReadonlyArray<Relationship> | undefined,
+  contentTypes: ContentTypes | undefined,
+): { relationships: ReadonlyArray<Relationship>; contentTypes: ContentTypes } {
+  const rels = relationships ?? [];
+  const types = contentTypes ?? { defaults: [], overrides: [] };
+
+  const nextRelationships = rels.some((rel) => rel.type === COMMENTS_RELATIONSHIP_TYPE)
+    ? rels
+    : addRelationship(rels, COMMENTS_RELATIONSHIP_TYPE, 'comments.xml').rels;
+
+  const partName = `/${COMMENTS_PART_PATH}`;
+  const nextContentTypes = types.overrides.some((override) => override.partName === partName)
+    ? types
+    : addOverride(types, partName, COMMENTS_CONTENT_TYPE);
+
+  return { relationships: nextRelationships, contentTypes: nextContentTypes };
 }
 
 export { DocxRenderer } from './render';

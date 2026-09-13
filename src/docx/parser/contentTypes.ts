@@ -8,6 +8,8 @@
 
 import { XMLParser } from 'fast-xml-parser'
 
+import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -65,6 +67,7 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
  * @returns     An immutable `ContentTypes` object.
  */
 export function parseContentTypes(xml: string): ContentTypes {
+  assertXmlPartSizeWithinLimit(xml, '[Content_Types].xml')
   const raw = xmlParser.parse(xml) as RawTypes
 
   const rawTypes = raw?.Types
