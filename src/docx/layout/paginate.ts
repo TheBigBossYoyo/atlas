@@ -15,7 +15,7 @@ import type {
 } from '../model'
 import { resolveParaProps, resolveRunProps } from '../parser/cascade'
 
-import { breakLines } from './breakLines'
+import { breakLines, resolveLeftIndentPt, resolveLineIndentExtraPt } from './breakLines'
 import { layoutTable } from './layoutTable'
 import type {
   ColumnBox,
@@ -116,6 +116,20 @@ type ParagraphUnit = {
   keepLines: boolean
   widowControl: boolean
   pageBreakBefore: boolean
+  /** Resolved alignment/indent/spacing, consumed by `computeLineLeftOffsetPt`. */
+  paraProps: EffectiveParaProps
+  /** The column width `breakLines` measured this paragraph's lines against. */
+  columnWidthPt: number
+  /**
+   * Blank space reserved above this paragraph's first line: the larger of
+   * this paragraph's `spacing.before` and the previous paragraph's
+   * `spacing.after` (0 across a table, or when `contextualSpacing` applies
+   * to two consecutive paragraphs sharing a style). Applied at placement
+   * time, and only when the paragraph doesn't happen to start at the very
+   * top of a page/column (see `placeLine`) — matching Word's suppression
+   * of spacing at a page/column top.
+   */
+  leadingGapPt: number
 }
 
 type TableUnit = {
@@ -572,8 +586,46 @@ function placeLineSlice(
   currentPage: ActivePage,
 ): void {
   for (let index = 0; index < count; index += 1) {
-    placeLine(currentPage, unit.paragraphPath, startLineIndex + index, unit.lines[startLineIndex + index])
+    const lineIndex = startLineIndex + index
+    const line = unit.lines[lineIndex]
+    const leftOffsetPt = unit.kind === 'paragraph' ? computeLineLeftOffsetPt(unit, lineIndex, line) : 0
+    const leadingGapPt =
+      unit.kind === 'paragraph' && lineIndex === 0 ? unit.leadingGapPt : 0
+    placeLine(currentPage, unit.paragraphPath, lineIndex, line, leftOffsetPt, leadingGapPt)
   }
+}
+
+/**
+ * Horizontal offset from the column's left edge for one line of a
+ * paragraph: base left indent, plus the first-line/hanging adjustment for
+ * that specific line (see `resolveLineIndentExtraPt`), plus an alignment
+ * offset for center/right-aligned text (0 for left/both/distribute, whose
+ * flush-right edge for "both" comes from justification stretch instead —
+ * see D5).
+ */
+function computeLineLeftOffsetPt(unit: ParagraphUnit, lineIndex: number, line: LineBox): number {
+  const leftIndentPt = resolveLeftIndentPt(unit.paraProps.ind)
+  const lineIndentExtraPt = resolveLineIndentExtraPt(unit.paraProps.ind, lineIndex)
+  const lineLimitPt = Math.max(0, unit.columnWidthPt - leftIndentPt - lineIndentExtraPt)
+  const alignmentOffsetPt = resolveAlignmentOffsetPt(unit.paraProps.jc, lineLimitPt, line.width)
+
+  return leftIndentPt + lineIndentExtraPt + alignmentOffsetPt
+}
+
+function resolveAlignmentOffsetPt(
+  alignment: EffectiveParaProps['jc'],
+  lineLimitPt: number,
+  lineWidthPt: number,
+): number {
+  if (alignment === 'end') {
+    return Math.max(0, lineLimitPt - lineWidthPt)
+  }
+
+  if (alignment === 'center') {
+    return Math.max(0, (lineLimitPt - lineWidthPt) / 2)
+  }
+
+  return 0
 }
 
 function placeLine(
@@ -581,6 +633,8 @@ function placeLine(
   paragraphPath: ReadonlyArray<number>,
   lineIndex: number,
   line: LineBox,
+  leftOffsetPt: number = 0,
+  leadingGapPt: number = 0,
 ): void {
   let column = currentPage.columns[currentPage.currentColumnIndex]
 
@@ -593,14 +647,19 @@ function placeLine(
     column = currentPage.columns[currentPage.currentColumnIndex]
   }
 
+  // Word suppresses a paragraph's leading spacing when it lands at the very
+  // top of a page/column (an empty column here) — only apply it when this
+  // paragraph is continuing a column that already has content above it.
+  const appliedGapPt = column.usedHeightPt > 0 ? leadingGapPt : 0
+
   column.lines.push({
     paragraphPath,
     lineIndex,
     line,
-    topPt: currentPage.contentTopPt + column.usedHeightPt,
-    leftPt: column.leftPt,
+    topPt: currentPage.contentTopPt + column.usedHeightPt + appliedGapPt,
+    leftPt: column.leftPt + leftOffsetPt,
   })
-  column.usedHeightPt += line.lineHeight
+  column.usedHeightPt += appliedGapPt + line.lineHeight
 }
 
 function groupFitsOnPage(group: ReadonlyArray<LayoutUnit>, currentPage: ActivePage): boolean {
@@ -681,21 +740,27 @@ async function buildSectionUnits(
   styleCache: StyleResolutionCache,
 ): Promise<ReadonlyArray<LayoutUnit>> {
   const units: LayoutUnit[] = []
+  let previousParagraphSpacing: PreviousParagraphSpacing | undefined
 
   for (const [blockIndex, block] of section.blocks.entries()) {
     if (block.kind === 'paragraph') {
-      units.push(
-        await buildParagraphUnit(
-          input,
-          block,
-          sectionIndex,
-          blockIndex,
-          columnWidthPt,
-          styleCache,
-        ),
+      const unit = await buildParagraphUnit(
+        input,
+        block,
+        sectionIndex,
+        blockIndex,
+        columnWidthPt,
+        styleCache,
+        previousParagraphSpacing,
       )
+      units.push(unit)
+      previousParagraphSpacing = {
+        spacingAfterPt: twipToPt(unit.paraProps.spacing?.after),
+        pStyle: unit.paraProps.pStyle,
+      }
     } else if (block.kind === 'table') {
       units.push(await buildTableUnit(input, block, sectionIndex, blockIndex, columnWidthPt))
+      previousParagraphSpacing = undefined
     }
 
     progressState.completedBlocks += 1
@@ -713,6 +778,11 @@ async function buildSectionUnits(
   return units
 }
 
+type PreviousParagraphSpacing = {
+  readonly spacingAfterPt: number
+  readonly pStyle: string | undefined
+}
+
 async function buildParagraphUnit(
   input: PaginatorInput,
   paragraph: Paragraph,
@@ -720,6 +790,7 @@ async function buildParagraphUnit(
   blockIndex: number,
   columnWidthPt: number,
   styleCache: StyleResolutionCache,
+  previousParagraphSpacing: PreviousParagraphSpacing | undefined,
 ): Promise<ParagraphUnit> {
   void sectionIndex
 
@@ -743,7 +814,44 @@ async function buildParagraphUnit(
     keepLines: paraProps.keepLines === true,
     widowControl: paraProps.widowControl !== false,
     pageBreakBefore: paraProps.pageBreakBefore === true,
+    paraProps,
+    columnWidthPt,
+    leadingGapPt: resolveLeadingGapPt(paraProps, previousParagraphSpacing),
   }
+}
+
+/**
+ * The blank space reserved above a paragraph's first line: the larger of
+ * this paragraph's own `spacing.before` and the immediately preceding
+ * paragraph's `spacing.after` (Word collapses adjacent spacing rather than
+ * summing it), unless `contextualSpacing` is set and both paragraphs share
+ * the same style (Word's "don't add space between paragraphs of the same
+ * style"). `previous` is `undefined` for a section's first paragraph or
+ * right after a table, in which case only this paragraph's own `before`
+ * applies. Suppressing the gap entirely at an actual page/column top is
+ * handled separately, at placement time, since only the placer knows
+ * whether a column is currently empty.
+ */
+function resolveLeadingGapPt(
+  paraProps: EffectiveParaProps,
+  previous: PreviousParagraphSpacing | undefined,
+): number {
+  const beforePt = twipToPt(paraProps.spacing?.before)
+
+  if (previous === undefined) {
+    return beforePt
+  }
+
+  const suppressedByContext =
+    paraProps.contextualSpacing === true &&
+    previous.pStyle !== undefined &&
+    previous.pStyle === paraProps.pStyle
+
+  if (suppressedByContext) {
+    return 0
+  }
+
+  return Math.max(beforePt, previous.spacingAfterPt)
 }
 
 async function buildTableUnit(

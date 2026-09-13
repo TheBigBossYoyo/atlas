@@ -15,7 +15,7 @@ import type {
 import { halfPoint, hexColor, twip } from '../../model'
 
 import { paginate } from '../paginate'
-import type { Page } from '../pageTypes'
+import type { Page, PageLineRef } from '../pageTypes'
 import type { FontResolver, LineBox, LineItem } from '../types'
 
 describe('paginate', () => {
@@ -387,6 +387,106 @@ describe('paginate', () => {
     expect(item?.runProps.italic).toBe(true)
   })
 
+  it('renders a right-aligned paragraph flush with the far edge of the column (D2/DXL-02)', async () => {
+    const paragraph = createTextParagraph('aaaa', { jc: 'end' })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    // 4 chars * 5.5pt (11pt default font, 500/1000 em advance) = 22pt wide;
+    // a 400pt-wide column with no margins pushes it to leftPt = 400 - 22.
+    expect(lineRef?.line.width).toBe(22)
+    expect(lineRef?.leftPt).toBe(378)
+  })
+
+  it('renders a centered paragraph with equal space on both sides (D2/DXL-02)', async () => {
+    const paragraph = createTextParagraph('aaaa', { jc: 'center' })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    expect(lineRef?.leftPt).toBe((400 - 22) / 2)
+  })
+
+  it('offsets a paragraph by its left indent (D2/DXL-02)', async () => {
+    const paragraph = createTextParagraph('aaaa', { ind: { left: twip(200) } })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    expect(lineRef?.leftPt).toBe(10)
+  })
+
+  it('leaves a plain left-aligned paragraph flush with the column edge', async () => {
+    const paragraph = createTextParagraph('aaaa')
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    expect(lineRef?.leftPt).toBe(0)
+  })
+
+  it('applies the larger of adjacent spacing.after/spacing.before between two paragraphs (D2/DXL-05)', async () => {
+    const paragraphs = [
+      createTextParagraph('first', { spacing: { after: twip(120) } }),
+      createTextParagraph('second', { spacing: { before: twip(240) } }),
+    ]
+
+    const pages = await paginate({
+      document: createDocument([createSection(paragraphs, { pageHeightPt: 500 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRefs = allLineRefs(pages)
+    // Doc defaults pin every line's height at 20pt (exact spacing) — see
+    // createDocument's defaults — so the gap is directly observable as the
+    // difference between the second paragraph's top and 20pt.
+    expect(lineRefs[0]?.topPt).toBe(0)
+    expect(lineRefs[1]?.topPt).toBe(20 + 12)
+  })
+
+  it('suppresses spacing.before for the very first paragraph on a page (D2/DXL-05)', async () => {
+    const paragraph = createTextParagraph('first', { spacing: { before: twip(240) } })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageHeightPt: 500 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(firstLineRef(pages)?.topPt).toBe(0)
+  })
+
+  it('suppresses spacing between two contextualSpacing paragraphs sharing a style (D2/DXL-05)', async () => {
+    const paragraphs = [
+      createTextParagraph('first', { pStyle: 'ListParagraph', spacing: { after: twip(120) } }),
+      createTextParagraph('second', {
+        pStyle: 'ListParagraph',
+        contextualSpacing: true,
+        spacing: { before: twip(240) },
+      }),
+    ]
+
+    const pages = await paginate({
+      document: createDocument([createSection(paragraphs, { pageHeightPt: 500 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRefs = allLineRefs(pages)
+    expect(lineRefs[1]?.topPt).toBe(20)
+  })
+
   it('uses the injected tableLayout callback for table height', async () => {
     const tableLayout = vi.fn(async () => [40])
     const pages = await paginate({
@@ -533,6 +633,22 @@ function createParagraph(lineCount: number, props: ParaProps = {}) {
           ]
         : [],
   }
+}
+
+function createTextParagraph(text: string, props: ParaProps = {}): Paragraph {
+  return {
+    kind: 'paragraph',
+    props,
+    children: [{ kind: 'run', children: [{ kind: 'text', value: text }] }],
+  }
+}
+
+function allLineRefs(pages: ReadonlyArray<Page>): ReadonlyArray<PageLineRef> {
+  return pages.flatMap((page) => page.columns.flatMap((column) => column.lines))
+}
+
+function firstLineRef(pages: ReadonlyArray<Page>): PageLineRef | undefined {
+  return allLineRefs(pages)[0]
 }
 
 function createTable(): Table {

@@ -1,4 +1,5 @@
 import { measureLineMetricsPt, type FontMetrics } from '../fonts'
+import type { Indent } from '../model'
 
 import { effectiveFontFamily } from './fontResolution'
 import { itemizeRuns } from './itemize'
@@ -362,11 +363,49 @@ function getLineLimit(
   availableWidth: number,
   lineIndex: number,
 ): number {
-  const leftIndent = twipToPt(paraProps.ind?.left ?? paraProps.ind?.start)
-  const lineIndent =
-    lineIndex === 0 ? twipToPt(paraProps.ind?.firstLine) : twipToPt(paraProps.ind?.hanging)
+  const leftIndent = resolveLeftIndentPt(paraProps.ind)
+  const lineIndent = resolveLineIndentExtraPt(paraProps.ind, lineIndex)
 
   return Math.max(0, availableWidth - leftIndent - lineIndent)
+}
+
+/** The paragraph's base left indent (`w:ind/@w:left`, or `@w:start`), in points. */
+export function resolveLeftIndentPt(ind: Indent | undefined): number {
+  return twipToPt(ind?.left ?? ind?.start)
+}
+
+/**
+ * Extra horizontal offset for one specific line of a paragraph, beyond its
+ * base left indent (`resolveLeftIndentPt`):
+ *
+ * - `firstLine` PUSHES the first line right (a positive offset), leaving
+ *   continuation lines at the base indent — the classic prose first-line
+ *   indent.
+ * - `hanging` PULLS the first line left (a negative offset) instead, so
+ *   continuation lines sit at the base indent while the first line (where a
+ *   list marker lives, see D3) hangs out past it — the classic
+ *   marker-plus-hanging-indent list layout.
+ *
+ * `firstLine` and `hanging` are mutually exclusive per the OOXML schema;
+ * when a (malformed) paragraph sets both, `firstLine` wins. Used both to
+ * size each line's available width (here) and, in `paginate.ts`'s
+ * `placeLine`, to position it horizontally — the two MUST stay in sync so a
+ * line never renders wider than the space it was measured against.
+ */
+export function resolveLineIndentExtraPt(ind: Indent | undefined, lineIndex: number): number {
+  if (lineIndex !== 0) {
+    return 0
+  }
+
+  if (typeof ind?.firstLine === 'number') {
+    return twipToPt(ind.firstLine)
+  }
+
+  if (typeof ind?.hanging === 'number') {
+    return -twipToPt(ind.hanging)
+  }
+
+  return 0
 }
 
 function computeLineWidth(items: ReadonlyArray<LineItem>, penaltyWidth: number): number {

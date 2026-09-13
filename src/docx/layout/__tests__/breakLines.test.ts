@@ -153,13 +153,18 @@ describe('breakLines', () => {
     expect(lines.map((line) => line.width)).toEqual([25, 10])
   })
 
-  it('reduces subsequent line width by the hanging indent', async () => {
+  it('pulls the first line left under a hanging indent, leaving continuation lines at the base indent (D2/DXL-02)', async () => {
+    // `hanging` gives the FIRST line (where a list marker sits, see D3) more
+    // room by pulling it back past the base left indent; continuation lines
+    // sit at the (unindented-by-hanging) base — the opposite of `firstLine`.
     const lines = await breakLines(
-      createInput([wrapTextRun('aa aa aa aa aa')], { ind: { hanging: twip(400) } }, 50),
+      createInput([wrapTextRun('aa aa aa aa aa aa aa aa')], { ind: { hanging: twip(200) } }, 50),
     )
 
-    expect(lines).toHaveLength(2)
-    expect(lines.map((line) => line.width)).toEqual([40, 25])
+    expect(lines).toHaveLength(3)
+    // Line 0's limit is boosted by the 10pt hanging pull-back (60pt vs the
+    // continuation lines' base 50pt), so it fits one more "aa" than they do.
+    expect(lines.map((line) => line.width)).toEqual([55, 40, 10])
   })
 
   it('combines left and first-line indent when computing the first line limit', async () => {
