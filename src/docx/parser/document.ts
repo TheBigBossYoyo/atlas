@@ -135,6 +135,80 @@ export function parseDocument(xml: string): DocxDocument {
   }
 }
 
+// ---------------------------------------------------------------------------
+// D8 / DXP-08 — w:sdt / mc:AlternateContent unwrapping
+//
+// Word wraps content in `w:sdt` (a "structured document tag" — content
+// controls, TOC/repeating-section fields, and similar) and in
+// `mc:AlternateContent` (the markup-compatibility mechanism Word uses to
+// offer both a modern and a legacy representation of the same content,
+// most commonly shapes/drawings) far more pervasively than the parser
+// previously accounted for. Both were entirely unhandled: every sibling
+// list iterated below fell through to `parseUnknownNode`, so a document
+// using either — a TOC built from a content control, a shape wrapped for
+// backward compatibility — rendered nothing where that content should be.
+//
+// Neither actually needs its own model type: unwrapping to the real inner
+// content at parse time and re-dispatching it through the same per-kind
+// switch the caller already has recovers the content "for free". This
+// necessarily means round-tripping a document through Atlas discards the
+// `w:sdt`/`mc:AlternateContent` wrapper itself (its content control
+// metadata, or its rejected alternate branch) — an accepted, documented
+// trade-off for making the content visible at all, consistent with this
+// plan's freeze on new structural editing surface.
+// ---------------------------------------------------------------------------
+
+/**
+ * Expands `w:sdt` and `mc:AlternateContent` wrapper elements in a sibling
+ * list into their real inner children, recursively (a wrapper can contain
+ * another wrapper), so every call site below can iterate the result with
+ * its normal per-kind switch as if the wrappers were never there.
+ */
+function expandWrapperNodes(entries: ReadonlyArray<OrderedXmlNode>): ReadonlyArray<OrderedXmlNode> {
+  const expanded: OrderedXmlNode[] = []
+
+  for (const entry of entries) {
+    switch (nodeName(entry)) {
+      case 'w:sdt':
+        expanded.push(...expandWrapperNodes(nodeChildren(child(entry, 'w:sdtContent'))))
+        break
+      case 'mc:AlternateContent':
+        expanded.push(...expandWrapperNodes(resolveAlternateContentChildren(entry)))
+        break
+      default:
+        expanded.push(entry)
+        break
+    }
+  }
+
+  return expanded
+}
+
+/**
+ * Resolves which branch of an `mc:AlternateContent` wrapper to keep.
+ *
+ * Prefers the first `mc:Choice`: in real-world Word output this is
+ * overwhelmingly the modern DrawingML/wordprocessingShape representation,
+ * which Atlas's existing drawing parser already understands at least for
+ * plain pictures, whereas `mc:Fallback` overwhelmingly carries VML
+ * (`v:shape`/`w:pict`) markup Atlas has no model for at all — preferring
+ * Fallback would frequently still show nothing, defeating the point. Falls
+ * back to `mc:Fallback` only when there is no `mc:Choice` element at all.
+ */
+function resolveAlternateContentChildren(element: OrderedXmlNode): ReadonlyArray<OrderedXmlNode> {
+  const choice = child(element, 'mc:Choice')
+  if (choice !== undefined) {
+    return nodeChildren(choice)
+  }
+
+  const fallback = child(element, 'mc:Fallback')
+  if (fallback !== undefined) {
+    return nodeChildren(fallback)
+  }
+
+  return []
+}
+
 function parseBody(element: OrderedXmlNode | undefined): {
   readonly blocks: ReadonlyArray<Block>
   readonly sectionProps?: SectionProps
@@ -142,7 +216,7 @@ function parseBody(element: OrderedXmlNode | undefined): {
   const blocks: Block[] = []
   let sectionProps: SectionProps | undefined
 
-  for (const entry of nodeChildren(element)) {
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
     if (isIgnorableText(entry)) {
       continue
     }
@@ -206,7 +280,7 @@ function parseParagraph(element: OrderedXmlNode): Block {
   const props = parseParaProps(child(element, 'w:pPr'))
   const children: ParagraphChild[] = []
 
-  for (const entry of nodeChildren(element)) {
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
     if (isIgnorableText(entry)) {
       continue
     }
@@ -272,7 +346,7 @@ function parseRun(element: OrderedXmlNode): Run {
   const props = parseRunProps(child(element, 'w:rPr'))
   const children: RunChild[] = []
 
-  for (const entry of nodeChildren(element)) {
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
     if (isIgnorableText(entry) || nodeName(entry) === 'w:rPr') {
       continue
     }
@@ -283,6 +357,9 @@ function parseRun(element: OrderedXmlNode): Run {
         break
       case 'w:delText':
         children.push(parseTextNode(entry))
+        break
+      case 'w:sym':
+        children.push(parseSym(entry))
         break
       case 'w:tab':
         children.push({ kind: 'tab' })
@@ -328,7 +405,7 @@ function parseHyperlink(element: OrderedXmlNode): Hyperlink {
   const history = parseOnOff(attr(element, 'w:history'))
   const children: HyperlinkChild[] = []
 
-  for (const entry of nodeChildren(element)) {
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
     if (isIgnorableText(entry)) {
       continue
     }
@@ -386,6 +463,29 @@ function parseTextNode(element: OrderedXmlNode): TextNode {
   }
 }
 
+/**
+ * D8 / DXP-08: `<w:sym w:font="Wingdings" w:char="F0E0"/>` represents a
+ * single symbol-font glyph by its position in that font's own encoding —
+ * unlike everything else in a run, it's not a Unicode text run at all.
+ * Atlas has no model field for "this text is in font X, positioned by raw
+ * code point" (nor any of the symbol fonts themselves bundled), so this
+ * decodes `w:char` as a plain UTF-16 code unit into a synthetic text node —
+ * shows *something* in the position the character belongs, rather than
+ * nothing, even though the bundled substitute fonts can't reproduce the
+ * intended glyph. Documented as a best-effort approximation, not a
+ * faithful rendering.
+ */
+function parseSym(element: OrderedXmlNode): TextNode {
+  const charAttr = attr(element, 'w:char')
+  const codeUnit = charAttr !== undefined ? Number.parseInt(charAttr, 16) : Number.NaN
+  const value = Number.isFinite(codeUnit) && codeUnit > 0 ? String.fromCharCode(codeUnit) : ''
+
+  return {
+    kind: 'text',
+    value,
+  }
+}
+
 function parseRevision(
   element: OrderedXmlNode,
   variant: 'ins',
@@ -403,7 +503,7 @@ function parseRevision(
   const date = attr(element, 'w:date')
   const children: ParagraphChild[] = []
 
-  for (const entry of nodeChildren(element)) {
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
     if (isIgnorableText(entry)) {
       continue
     }
@@ -607,7 +707,7 @@ function parseTable(element: OrderedXmlNode): Table {
   const tblGrid = parseTableGrid(child(element, 'w:tblGrid'))
   const rows: Array<TableRow | UnknownNode> = []
 
-  for (const entry of nodeChildren(element)) {
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
     if (
       isIgnorableText(entry) ||
       nodeName(entry) === 'w:tblPr' ||
@@ -652,7 +752,7 @@ function parseTableRow(element: OrderedXmlNode): TableRow {
   const props = parseTableRowProps(child(element, 'w:trPr'))
   const cells: TableRowChild[] = []
 
-  for (const entry of nodeChildren(element)) {
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
     if (isIgnorableText(entry) || nodeName(entry) === 'w:trPr') {
       continue
     }
@@ -678,7 +778,7 @@ function parseTableCell(element: OrderedXmlNode): TableCell {
   const props = parseTableCellProps(child(element, 'w:tcPr'))
   const blocks: Block[] = []
 
-  for (const entry of nodeChildren(element)) {
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
     if (isIgnorableText(entry) || nodeName(entry) === 'w:tcPr') {
       continue
     }

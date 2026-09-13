@@ -803,6 +803,120 @@ describe('parseDocument', () => {
     })
   })
 
+  describe('w:sdt / mc:AlternateContent / w:sym (D8 / DXP-08)', () => {
+    it('unwraps a block-level w:sdt to its sdtContent paragraph', () => {
+      const document = parseBody(`
+        <w:sdt>
+          <w:sdtPr><w:alias w:val="Title Control"/></w:sdtPr>
+          <w:sdtContent>
+            <w:p><w:r><w:t>Content control text</w:t></w:r></w:p>
+          </w:sdtContent>
+        </w:sdt>
+      `)
+
+      expect(document.sections[0].blocks).toHaveLength(1)
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const run = expectRun(paragraph.children[0])
+      expect(run.children[0]).toEqual({ kind: 'text', value: 'Content control text' })
+    })
+
+    it('unwraps an inline (paragraph-level) w:sdt to its sdtContent run', () => {
+      const document = parseBody(`
+        <w:p>
+          <w:r><w:t>Before </w:t></w:r>
+          <w:sdt>
+            <w:sdtContent>
+              <w:r><w:t>inline control</w:t></w:r>
+            </w:sdtContent>
+          </w:sdt>
+          <w:r><w:t> after</w:t></w:r>
+        </w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      expect(paragraph.children).toHaveLength(3)
+      const runs = paragraph.children.map((child) => expectRun(child))
+      expect(runs.map((run) => run.children[0])).toEqual([
+        { kind: 'text', value: 'Before ' },
+        { kind: 'text', value: 'inline control' },
+        { kind: 'text', value: ' after' },
+      ])
+    })
+
+    it('unwraps a w:sdt with an empty sdtContent to nothing, without throwing', () => {
+      const document = parseBody(`
+        <w:sdt>
+          <w:sdtContent/>
+        </w:sdt>
+      `)
+
+      expect(document.sections[0].blocks).toHaveLength(0)
+    })
+
+    it('prefers mc:Choice over mc:Fallback in an mc:AlternateContent wrapper', () => {
+      const document = parseBody(`
+        <w:p>
+          <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+            <mc:Choice Requires="wps"><w:r><w:t>modern shape</w:t></w:r></mc:Choice>
+            <mc:Fallback><w:r><w:t>legacy VML</w:t></w:r></mc:Fallback>
+          </mc:AlternateContent>
+        </w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const run = expectRun(paragraph.children[0])
+      expect(run.children[0]).toEqual({ kind: 'text', value: 'modern shape' })
+    })
+
+    it('falls back to mc:Fallback when an mc:AlternateContent wrapper has no mc:Choice', () => {
+      const document = parseBody(`
+        <w:p>
+          <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+            <mc:Fallback><w:r><w:t>legacy VML only</w:t></w:r></mc:Fallback>
+          </mc:AlternateContent>
+        </w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const run = expectRun(paragraph.children[0])
+      expect(run.children[0]).toEqual({ kind: 'text', value: 'legacy VML only' })
+    })
+
+    it('shows nothing (rather than throwing) for an mc:AlternateContent wrapper with neither branch', () => {
+      const document = parseBody(`
+        <w:p>
+          <w:r><w:t>Before</w:t></w:r>
+          <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+          </mc:AlternateContent>
+          <w:r><w:t>After</w:t></w:r>
+        </w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      expect(paragraph.children).toHaveLength(2)
+    })
+
+    it('decodes a w:sym into a synthetic text node', () => {
+      const document = parseBody(`
+        <w:p><w:r><w:sym w:font="Wingdings" w:char="F0E0"/></w:r></w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const run = expectRun(paragraph.children[0])
+      expect(run.children[0]).toEqual({ kind: 'text', value: String.fromCharCode(0xf0e0) })
+    })
+
+    it('produces an empty text node for a w:sym missing w:char instead of throwing', () => {
+      const document = parseBody(`
+        <w:p><w:r><w:sym w:font="Wingdings"/></w:r></w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const run = expectRun(paragraph.children[0])
+      expect(run.children[0]).toEqual({ kind: 'text', value: '' })
+    })
+  })
+
   describe('malformed XML handling (D28 / DXP-16)', () => {
     it('wraps a fast-xml-parser failure in DocxParseError instead of letting it propagate raw', () => {
       expect(() => parseDocument('<<< not xml <<<')).toThrow(DocxParseError)

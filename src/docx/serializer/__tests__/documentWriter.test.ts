@@ -499,6 +499,12 @@ describe('writeDocumentXml', () => {
           + '</w:p><w:sectPr/>',
       ),
     ],
+    [
+      'w:sdt-wrapped paragraph, content unwrapped (D8 / DXP-08)',
+      documentXml(
+        '<w:sdt><w:sdtContent><w:p><w:r><w:t>Content control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/>',
+      ),
+    ],
   ])('round-trips parsed ASTs for %s', (_label, xml) => {
     expectRoundTrip(xml)
   })
