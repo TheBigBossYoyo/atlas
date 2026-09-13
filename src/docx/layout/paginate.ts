@@ -530,7 +530,26 @@ function placeUnit(
 
   while (lineOffset < unit.lines.length) {
     const remainingLines = unit.lines.slice(lineOffset)
+    const forcedBreakOffset = findForcedBreakLineOffset(remainingLines)
     let fitCount = countLinesThatFitOnPage(remainingLines, currentPage)
+
+    if (forcedBreakOffset !== undefined && forcedBreakOffset < fitCount) {
+      // D10: a manual page/column break (Ctrl+Enter / Ctrl+Shift+Enter)
+      // forces a break immediately after this line, regardless of how much
+      // room remains on the current page/column — unlike ordinary
+      // overflow-driven splitting just below, it isn't subject to
+      // widow-control adjustment; the document explicitly asked for a
+      // break exactly here.
+      const chunkCount = forcedBreakOffset + 1
+      placeLineSlice(unit, lineOffset, chunkCount, currentPage)
+      const breakingLine = remainingLines[forcedBreakOffset]
+      lineOffset += chunkCount
+      currentPage =
+        breakingLine.endsWithPageBreak === true
+          ? forcePageBreak(currentPage, pages, openNewPage)
+          : forceColumnBreak(currentPage, pages, openNewPage)
+      continue
+    }
 
     if (fitCount >= remainingLines.length) {
       placeLineSlice(unit, lineOffset, remainingLines.length, currentPage)
@@ -574,6 +593,27 @@ function placeUnit(
   }
 
   return currentPage
+}
+
+/** The offset (within `lines`) of the first line ending in a manual page or column break, or `undefined` if none. */
+function findForcedBreakLineOffset(lines: ReadonlyArray<LineBox>): number | undefined {
+  const index = lines.findIndex((line) => line.endsWithPageBreak === true || line.endsWithColumnBreak === true)
+  return index === -1 ? undefined : index
+}
+
+function forcePageBreak(currentPage: ActivePage, pages: Page[], openNewPage: () => ActivePage): ActivePage {
+  pages.push(finalizePage(currentPage, pages.length))
+  return openNewPage()
+}
+
+/** Advances to the next column on the current page, or opens a new page when already on the last column. */
+function forceColumnBreak(currentPage: ActivePage, pages: Page[], openNewPage: () => ActivePage): ActivePage {
+  if (currentPage.currentColumnIndex < currentPage.columns.length - 1) {
+    currentPage.currentColumnIndex += 1
+    return currentPage
+  }
+
+  return forcePageBreak(currentPage, pages, openNewPage)
 }
 
 function adjustSplitCount(totalRemainingLines: number, fitCount: number): number {

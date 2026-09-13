@@ -154,6 +154,10 @@ async function buildLineBox(
       ? Math.max(rawLine.lineLimit - rawLine.width, 0) / spaceCount
       : 0
 
+  const lastItem = rawLine.items[rawLine.items.length - 1]
+  const endsWithPageBreak = lastItem?.kind === 'break' && lastItem.breakKind === 'page'
+  const endsWithColumnBreak = lastItem?.kind === 'break' && lastItem.breakKind === 'column'
+
   return {
     items: rawLine.items,
     width: rawLine.width,
@@ -163,6 +167,8 @@ async function buildLineBox(
     isJustified: canJustify && spaceCount > 0,
     justificationStretch,
     ...(drawingClearancePt > 0 ? { drawingClearancePt } : {}),
+    ...(endsWithPageBreak ? { endsWithPageBreak: true } : {}),
+    ...(endsWithColumnBreak ? { endsWithColumnBreak: true } : {}),
   }
 }
 

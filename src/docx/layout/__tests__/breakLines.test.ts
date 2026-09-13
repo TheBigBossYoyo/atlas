@@ -240,6 +240,45 @@ describe('breakLines', () => {
     expect(lines[1]?.items.map((item) => item.kind)).toEqual(['word'])
   })
 
+  it('tags a line ending in a manual page break with endsWithPageBreak (D10/DXL-06)', async () => {
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'aa' },
+            { kind: 'break', breakType: 'page' },
+            { kind: 'text', value: 'bb' },
+          ]),
+        ],
+        {},
+        40,
+      ),
+    )
+
+    expect(lines[0]?.endsWithPageBreak).toBe(true)
+    expect(lines[0]?.endsWithColumnBreak).toBeUndefined()
+    expect(lines[1]?.endsWithPageBreak).toBeUndefined()
+  })
+
+  it('tags a line ending in a manual column break with endsWithColumnBreak (D10/DXL-06)', async () => {
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'aa' },
+            { kind: 'break', breakType: 'column' },
+            { kind: 'text', value: 'bb' },
+          ]),
+        ],
+        {},
+        40,
+      ),
+    )
+
+    expect(lines[0]?.endsWithColumnBreak).toBe(true)
+    expect(lines[0]?.endsWithPageBreak).toBeUndefined()
+  })
+
   it('splits line boxes around explicit line breaks', async () => {
     const lines = await breakLines(
       createInput(
@@ -258,6 +297,9 @@ describe('breakLines', () => {
     expect(lines).toHaveLength(2)
     expect(lines[0]?.items.map((item) => item.kind)).toEqual(['word', 'break'])
     expect(lines[1]?.items.map((item) => item.kind)).toEqual(['word'])
+    // An ordinary (Shift+Enter) line break is neither a page nor column break.
+    expect(lines[0]?.endsWithPageBreak).toBeUndefined()
+    expect(lines[0]?.endsWithColumnBreak).toBeUndefined()
   })
 
   it('emits a trailing empty line when a break terminates the paragraph', async () => {

@@ -280,6 +280,44 @@ describe('paginate', () => {
     expect(pageLineCounts([pages[2]])).toEqual([1])
   })
 
+  it('forces a new page right after a manual page break, even when everything would otherwise fit (D10/DXL-06)', async () => {
+    const paragraph = createParagraphWithManualBreak(2, 'page', 3)
+
+    const pages = await paginate({
+      // Default section is 200pt tall; 5 lines at the doc-default 20pt
+      // line height (100pt) would easily fit on one page without D10.
+      document: createDocument([createSection([paragraph])]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    expect(paragraphLineCounts(pages, 0)).toEqual([2, 3])
+  })
+
+  it('advances to the next column for a manual column break when one remains (D10/DXL-06)', async () => {
+    const paragraph = createParagraphWithManualBreak(1, 'column', 1)
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { columnCount: 2 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    expect(pages[0].columns.map((column) => column.lines.length)).toEqual([1, 1])
+  })
+
+  it('opens a new page for a manual column break when already on the last column (D10/DXL-06)', async () => {
+    const paragraph = createParagraphWithManualBreak(2, 'column', 3)
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { columnCount: 1 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    expect(paragraphLineCounts(pages, 0)).toEqual([2, 3])
+  })
+
   it('reserves header and footer line height from the page content area', async () => {
     const headerReference: HeaderReference = {
       id: 'header-default',
@@ -777,6 +815,32 @@ function createParagraph(lineCount: number, props: ParaProps = {}) {
             },
           ]
         : [],
+  }
+}
+
+/**
+ * A paragraph of `linesBefore + linesAfter` total lines (matching
+ * `createParagraph`'s line-count convention — see D10's tests), with a
+ * manual page/column break (`breakType`) ending the `linesBefore`-th line.
+ */
+function createParagraphWithManualBreak(
+  linesBefore: number,
+  breakType: 'page' | 'column',
+  linesAfter: number,
+): Paragraph {
+  return {
+    kind: 'paragraph',
+    props: {},
+    children: [
+      {
+        kind: 'run',
+        children: [
+          ...Array.from({ length: linesBefore - 1 }, () => ({ kind: 'break' as const })),
+          { kind: 'break' as const, breakType },
+          ...Array.from({ length: linesAfter - 1 }, () => ({ kind: 'break' as const })),
+        ],
+      },
+    ],
   }
 }
 

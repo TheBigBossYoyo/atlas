@@ -77,6 +77,22 @@ export type LineBox = {
    * Omitted when no drawing on the line needs it.
    */
   drawingClearancePt?: number
+  /**
+   * True when this line's last item is a manual page break (Ctrl+Enter) —
+   * i.e. a `break` item with `breakKind: 'page'`. `paginate.ts` (D10) uses
+   * this to force a new page immediately after this line, regardless of
+   * how much room remains, instead of treating it as an ordinary line
+   * break. Mutually exclusive with `endsWithColumnBreak`. Omitted (not
+   * `false`) when not set, matching `drawingClearancePt`'s convention.
+   */
+  endsWithPageBreak?: boolean
+  /**
+   * Same as `endsWithPageBreak`, but for a manual column break
+   * (Ctrl+Shift+Enter): advances to the next column on the current page
+   * (or opens a new page when already on the last column) instead of an
+   * ordinary line break.
+   */
+  endsWithColumnBreak?: boolean
 }
 
 export type FontResolver = (
