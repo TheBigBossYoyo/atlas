@@ -1,5 +1,5 @@
 /**
- * Consumer hooks for the viewer nav/stats context (W2.X2).
+ * Consumer hooks for the viewer nav/stats/document-session context (W2.X2, P1.1).
  *
  * Lives in its own file so the Provider component file only exports a component
  * (satisfies `react-refresh/only-export-components`).
@@ -8,7 +8,7 @@
 import { useContext } from 'react'
 
 import type { NavItem, ViewerStats } from '../../formats/types'
-import { ViewerContext, type ViewerContextValue } from './viewerContextValue'
+import { ViewerContext, type ExportableContent, type ViewerContextValue } from './viewerContextValue'
 
 function useViewerCtx(): ViewerContextValue {
   const ctx = useContext(ViewerContext)
@@ -30,4 +30,28 @@ export function useViewerStats(): ViewerStats | null {
 
 export function useSetViewerStats(): (stats: ViewerStats | null) => void {
   return useViewerCtx().setStats
+}
+
+/** Whether the active viewer has unsaved changes (P1.1 document-session contract). */
+export function useViewerIsDirty(): boolean {
+  return useViewerCtx().isDirty
+}
+
+export function useSetViewerDirty(): (dirty: boolean) => void {
+  return useViewerCtx().setDirty
+}
+
+/** The active viewer calls this to plug its own save implementation into the shared contract. */
+export function useRegisterViewerSave(): (save: (() => Promise<boolean>) | null) => void {
+  return useViewerCtx().registerSave
+}
+
+/** Invokes whichever save implementation the active viewer has registered (or resolves `false` if none has). */
+export function useViewerSave(): () => Promise<boolean> {
+  return useViewerCtx().save
+}
+
+/** Phase-3 placeholder — always resolves `null` until a viewer registers real export content. */
+export function useGetExportableContent(): () => ExportableContent | null {
+  return useViewerCtx().getExportableContent
 }

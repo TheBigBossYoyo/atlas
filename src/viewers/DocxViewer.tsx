@@ -56,7 +56,7 @@ import { domPointToPosition, positionToDomRange } from '../docx/editor/Cursor'
 import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
 import './__styles__/viewer-docx.css'
-import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
+import { useRegisterViewerSave, useSetNavItems, useSetViewerDirty, useSetViewerStats } from './shared/useViewerContext'
 
 type HeadingNavSeed = {
   id: string
@@ -525,6 +525,22 @@ function DocxEditor({
   const shadowEditor = useEditor(bundle.document)
   const spellCheck = useSpellCheck()
 
+  // P1.1/SHELL-03/DXE-09 — document-session capability contract: report dirty
+  // whenever documentModel diverges (by reference — every edit replaces it
+  // immutably) from the last-saved-or-loaded snapshot, and register our own
+  // save() so App.tsx's global Ctrl+S/Save can reach it when DOCX is active.
+  //
+  // `lastSavedDocument` is state, not a ref: dirty is derived from it and the
+  // *current* `documentModel` together in one effect below, so that if the
+  // user keeps typing while an async save() is still in flight, the edits
+  // made after the save started are correctly still reported dirty once the
+  // save resolves — the effect re-reads `documentModel` fresh on every
+  // render rather than trusting whatever value save()'s own closure captured
+  // when it started.
+  const [lastSavedDocument, setLastSavedDocument] = useState(bundle.document)
+  const setDirty = useSetViewerDirty()
+  const registerSave = useRegisterViewerSave()
+
   const matches = useMemo(() => {
     if (findQuery.length === 0) {
       return []
@@ -658,7 +674,11 @@ function DocxEditor({
       const widthPt = 200
       const heightPt = 150
 
-      const insertResult = insertImageIntoBundle(bundle, focus, {
+      // P1.6/DXE-01 — operate on the *live* documentModel, not the stale
+      // `bundle` prop (which still holds whatever was loaded from disk):
+      // otherwise inserting an image silently reverts every edit made since
+      // file-load, since insertImageIntoBundle appends to `bundle.document`.
+      const insertResult = insertImageIntoBundle({ ...bundle, document: documentModel }, focus, {
         bytes,
         mime,
         suggestedName: result.suggestedName,
@@ -671,7 +691,7 @@ function DocxEditor({
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
     }
-  }, [bundle, commitState, onBundleChange, range, shadowEditor.range])
+  }, [bundle, commitState, documentModel, onBundleChange, range, shadowEditor.range])
 
   const handlePaste = useCallback(
     (event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -731,6 +751,7 @@ function DocxEditor({
   // keyboard-shortcut callback below can reference them without TDZ errors.
   const handlePrintRef = useRef<() => void>(() => {})
   const handleToolbarCommandRef = useRef<(cmd: ToolbarCommand) => void>(() => {})
+  const handleSaveRef = useRef<() => Promise<boolean>>(async () => false)
 
   const handleKeyDownEvent = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -756,9 +777,14 @@ function DocxEditor({
         return
       }
 
-      // Ctrl+S — swallow (Save is a button; do not let browser save the page)
+      // Ctrl+S — save directly (DXE-07/RUN-03/SHELL-10: this used to swallow
+      // the key and do nothing, since Ctrl+S has no browser default to
+      // prevent here anyway — Save is otherwise only reachable via the
+      // button or App.tsx's global shortcut routed through the shared
+      // document-session `save()` contract).
       if (ctrl && !shift && lowerKey === 's') {
         event.preventDefault()
+        void handleSaveRef.current()
         return
       }
 
@@ -1077,7 +1103,10 @@ function DocxEditor({
     [applyEditorCommand, applyResult, documentModel, handleAddComment, handleInsertImage, range, shadowEditor.range],
   )
 
-  const handleSave = useCallback(async () => {
+  // P1.1 — returns whether the save actually succeeded, so both the shared
+  // document-session `save()` contract (App.tsx's global Ctrl+S/Save and the
+  // unsaved-changes confirmation dialog) and the Save button here can tell.
+  const handleSave = useCallback(async (): Promise<boolean> => {
     try {
       const nextBytes = await saveDocx({
         ...bundle,
@@ -1097,11 +1126,45 @@ function DocxEditor({
 
       if (!result?.saved) {
         setSaveError(result?.error ?? 'Save was cancelled or unavailable.')
+        return false
       }
+
+      // Record *what was actually written* (this closure's own `documentModel`
+      // snapshot, taken when the save started) as the new saved baseline. We
+      // deliberately do NOT also call `setDirty(false)` here: if the user kept
+      // editing while the `await`s above were in flight, `documentModel` may
+      // already have moved on since this snapshot, and the effect below
+      // recomputes dirty from whatever the *current* render's `documentModel`
+      // is once this state update lands — never from this stale closure.
+      setLastSavedDocument(documentModel)
+      return true
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
+      return false
     }
   }, [bundle, documentModel, savePath])
+
+  useEffect(() => {
+    handleSaveRef.current = handleSave
+  }, [handleSave])
+
+  // P1.1/SHELL-03/DXE-09 — publish dirty state and this viewer's save
+  // implementation to the shared document-session contract. Every commitState
+  // call replaces documentModel with a new object, so a plain reference
+  // compare against the last-saved-or-loaded snapshot is exactly "has this
+  // document changed since load/save". Deriving this from both pieces of
+  // state together (rather than reaching into a ref from inside handleSave)
+  // is what makes it correct even when an edit lands while a save is still
+  // in flight: this effect always compares against the render's *current*
+  // documentModel, never a snapshot captured before the save resolved.
+  useEffect(() => {
+    setDirty(documentModel !== lastSavedDocument)
+  }, [documentModel, lastSavedDocument, setDirty])
+
+  useEffect(() => {
+    registerSave(handleSave)
+    return () => registerSave(null)
+  }, [registerSave, handleSave])
 
   const handlePrint = useCallback(() => {
     if (typeof window === 'undefined') {

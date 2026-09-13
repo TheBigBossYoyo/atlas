@@ -1,5 +1,5 @@
 /**
- * useFileHandler — unit tests (W1.5)
+ * useFileHandler — unit tests (W1.5, extended for P1.1/P2.4/P2.10/P2.12)
  *
  * All tests mock window.electronAPI before rendering the hook so no real IPC
  * calls are made. localStorage is available via jsdom.
@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useFileHandler } from '../useFileHandler';
+import { useFileHandler, type UseFileHandlerOptions } from '../useFileHandler';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -23,6 +23,12 @@ function makePdfBuffer(): ArrayBuffer {
 
 function makeTextBuffer(text: string): ArrayBuffer {
   return new TextEncoder().encode(text).buffer;
+}
+
+/** Every test needs `addRecent`; most don't care about the recorded calls. */
+function renderFileHandler(overrides: Partial<UseFileHandlerOptions> = {}) {
+  const addRecent = overrides.addRecent ?? vi.fn();
+  return renderHook(() => useFileHandler({ addRecent, ...overrides }));
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +79,7 @@ describe('useFileHandler', () => {
       }),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     await act(async () => {
       await result.current.loadFromPath('/abs/foo.md');
@@ -97,7 +103,7 @@ describe('useFileHandler', () => {
       readBinaryByPath: vi.fn().mockResolvedValue({ path: '/abs/doc.pdf', buffer: buf }),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     await act(async () => {
       await result.current.loadFromPath('/abs/doc.pdf');
@@ -119,7 +125,7 @@ describe('useFileHandler', () => {
       readBinaryByPath: vi.fn().mockResolvedValue({ path: '/abs/mystery.xyz', buffer: buf }),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     await act(async () => {
       await result.current.loadFromPath('/abs/mystery.xyz');
@@ -141,7 +147,7 @@ describe('useFileHandler', () => {
       }),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     await act(async () => {
       await result.current.loadFromPath('/abs/notes.txt');
@@ -160,7 +166,7 @@ describe('useFileHandler', () => {
       openFileBinary: vi.fn().mockResolvedValue({ canceled: true, path: '', buffer: new ArrayBuffer(0) }),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     await act(async () => {
       await result.current.openDialog();
@@ -184,7 +190,7 @@ describe('useFileHandler', () => {
       }),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     await act(async () => {
       await result.current.openDialog();
@@ -213,7 +219,7 @@ describe('useFileHandler', () => {
       }),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     // Simulate the OS event firing
     await act(async () => {
@@ -242,7 +248,7 @@ describe('useFileHandler', () => {
       }),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     await waitFor(() => {
       expect(result.current.file).toMatchObject({
@@ -259,7 +265,7 @@ describe('useFileHandler', () => {
       readBinaryByPath: vi.fn().mockRejectedValue(new Error('IPC failure')),
     });
 
-    const { result } = renderHook(() => useFileHandler());
+    const { result } = renderFileHandler();
 
     await act(async () => {
       await result.current.loadFromPath('/abs/doc.pdf');
@@ -268,5 +274,208 @@ describe('useFileHandler', () => {
     expect(result.current.file).toBeNull();
     expect(result.current.error).toBe('IPC failure');
     expect(result.current.loading).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------
+  // P2.4 — addRecent lifted in as a parameter (single useRecentFiles instance)
+  // ---------------------------------------------------------------------------
+
+  it('P2.4: calls the injected addRecent with the loaded file, not an internal instance', async () => {
+    window.electronAPI = buildElectronAPI({
+      openFileByPath: vi.fn().mockResolvedValue({
+        content: '# Hello',
+        name: 'foo.md',
+        path: '/abs/foo.md',
+      }),
+    });
+
+    const addRecent = vi.fn();
+    const { result } = renderFileHandler({ addRecent });
+
+    await act(async () => {
+      await result.current.loadFromPath('/abs/foo.md');
+    });
+
+    expect(addRecent).toHaveBeenCalledWith({ path: '/abs/foo.md', name: 'foo.md' });
+  });
+
+  // ---------------------------------------------------------------------------
+  // P2.3 — clearError()
+  // ---------------------------------------------------------------------------
+
+  it('P2.3: clearError() dismisses the error without touching the loaded file', async () => {
+    window.electronAPI = buildElectronAPI({
+      openFileByPath: vi.fn().mockResolvedValue({ content: '# A', name: 'a.md', path: '/abs/a.md' }),
+      readBinaryByPath: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+
+    const { result } = renderFileHandler();
+
+    await act(async () => {
+      await result.current.loadFromPath('/abs/a.md');
+    });
+    await act(async () => {
+      await result.current.loadFromPath('/abs/b.pdf');
+    });
+
+    expect(result.current.error).toBe('boom');
+    // The previously-loaded file must not have been discarded by the failed load.
+    expect(result.current.file).toMatchObject({ path: '/abs/a.md' });
+
+    act(() => {
+      result.current.clearError();
+    });
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.file).toMatchObject({ path: '/abs/a.md' });
+  });
+
+  // ---------------------------------------------------------------------------
+  // P1.1 — confirmDiscardChanges guard
+  // ---------------------------------------------------------------------------
+
+  it('P1.1: loadFromPath aborts with no state change when confirmDiscardChanges resolves false', async () => {
+    const readBinaryByPath = vi.fn();
+    window.electronAPI = buildElectronAPI({ readBinaryByPath });
+
+    const confirmDiscardChanges = vi.fn().mockResolvedValue(false);
+    const { result } = renderFileHandler({ confirmDiscardChanges });
+
+    await act(async () => {
+      await result.current.loadFromPath('/abs/doc.pdf');
+    });
+
+    expect(confirmDiscardChanges).toHaveBeenCalledTimes(1);
+    expect(readBinaryByPath).not.toHaveBeenCalled();
+    expect(result.current.file).toBeNull();
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('P1.1: loadFromPath proceeds when confirmDiscardChanges resolves true', async () => {
+    window.electronAPI = buildElectronAPI({
+      openFileByPath: vi.fn().mockResolvedValue({ content: '# Ok', name: 'ok.md', path: '/abs/ok.md' }),
+    });
+
+    const confirmDiscardChanges = vi.fn().mockResolvedValue(true);
+    const { result } = renderFileHandler({ confirmDiscardChanges });
+
+    await act(async () => {
+      await result.current.loadFromPath('/abs/ok.md');
+    });
+
+    expect(confirmDiscardChanges).toHaveBeenCalledTimes(1);
+    expect(result.current.file).toMatchObject({ path: '/abs/ok.md' });
+  });
+
+  it('P1.1: openDialog also runs through the confirmDiscardChanges guard (via loadFromPath)', async () => {
+    window.electronAPI = buildElectronAPI({
+      openFileBinary: vi.fn().mockResolvedValue({
+        canceled: false,
+        path: '/abs/report.md',
+        buffer: makeTextBuffer('# Report'),
+      }),
+      openFileByPath: vi.fn().mockResolvedValue({ content: '# Report', name: 'report.md', path: '/abs/report.md' }),
+    });
+
+    const confirmDiscardChanges = vi.fn().mockResolvedValue(false);
+    const { result } = renderFileHandler({ confirmDiscardChanges });
+
+    await act(async () => {
+      await result.current.openDialog();
+    });
+
+    expect(confirmDiscardChanges).toHaveBeenCalledTimes(1);
+    expect(result.current.file).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // P2.10 — request-token race: a slower, earlier load can't overwrite a
+  // faster, newer one.
+  // ---------------------------------------------------------------------------
+
+  it('P2.10: a slower earlier load does not overwrite a faster later one', async () => {
+    let resolveSlow: ((value: { path: string; buffer: ArrayBuffer }) => void) | null = null;
+    const readBinaryByPath = vi.fn().mockImplementation((path: string) => {
+      if (path === '/abs/slow.pdf') {
+        return new Promise((resolve) => {
+          resolveSlow = resolve;
+        });
+      }
+      return Promise.resolve({ path, buffer: makePdfBuffer() });
+    });
+
+    window.electronAPI = buildElectronAPI({ readBinaryByPath });
+
+    const { result } = renderFileHandler();
+
+    let slowLoad!: Promise<void>;
+    act(() => {
+      slowLoad = result.current.loadFromPath('/abs/slow.pdf');
+    });
+
+    // Start (and finish) a second, newer load before the first resolves.
+    await act(async () => {
+      await result.current.loadFromPath('/abs/fast.pdf');
+    });
+
+    expect(result.current.file).toMatchObject({ path: '/abs/fast.pdf' });
+
+    // Now let the slow (stale) load resolve — it must not clobber the fast one.
+    await act(async () => {
+      resolveSlow?.({ path: '/abs/slow.pdf', buffer: makePdfBuffer() });
+      await slowLoad;
+    });
+
+    expect(result.current.file).toMatchObject({ path: '/abs/fast.pdf' });
+  });
+
+  it('P2.10: loadGeneration increments on every successful load, even reopening the same path', async () => {
+    window.electronAPI = buildElectronAPI({
+      openFileByPath: vi.fn().mockResolvedValue({ content: '# A', name: 'a.md', path: '/abs/a.md' }),
+    });
+
+    const { result } = renderFileHandler();
+
+    expect(result.current.loadGeneration).toBe(0);
+
+    await act(async () => {
+      await result.current.loadFromPath('/abs/a.md');
+    });
+    expect(result.current.loadGeneration).toBe(1);
+
+    await act(async () => {
+      await result.current.loadFromPath('/abs/a.md');
+    });
+    expect(result.current.loadGeneration).toBe(2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // P2.12/SHELL-20/ELEC-19/QA-26 — browser-mode guard (no window.electronAPI)
+  // ---------------------------------------------------------------------------
+
+  it('P2.12: loadFromPath surfaces a friendly error instead of throwing when electronAPI is missing', async () => {
+    delete (window as { electronAPI?: unknown }).electronAPI;
+
+    const { result } = renderFileHandler();
+
+    await act(async () => {
+      await expect(result.current.loadFromPath('/abs/anything.md')).resolves.toBeUndefined();
+    });
+
+    expect(result.current.error).toMatch(/desktop app/i);
+    expect(result.current.file).toBeNull();
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('P2.12: openDialog surfaces a friendly error instead of throwing when electronAPI is missing', async () => {
+    delete (window as { electronAPI?: unknown }).electronAPI;
+
+    const { result } = renderFileHandler();
+
+    await act(async () => {
+      await expect(result.current.openDialog()).resolves.toBeUndefined();
+    });
+
+    expect(result.current.error).toMatch(/desktop app/i);
   });
 });
