@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from '../App';
 
-function buildElectronAPI(): typeof window.electronAPI {
+function buildElectronAPI(overrides: Partial<typeof window.electronAPI> = {}): typeof window.electronAPI {
   return {
     getInitialFile: vi.fn().mockResolvedValue(null),
     openFileDialog: vi.fn().mockResolvedValue(null),
@@ -27,6 +27,7 @@ function buildElectronAPI(): typeof window.electronAPI {
     openFileBinary: vi.fn().mockResolvedValue({ canceled: true, path: '', buffer: new ArrayBuffer(0) }),
     readBinaryByPath: vi.fn().mockResolvedValue({ path: '', buffer: new ArrayBuffer(0) }),
     onFileOpenedPath: vi.fn().mockReturnValue(() => {}),
+    ...overrides,
   } as typeof window.electronAPI;
 }
 

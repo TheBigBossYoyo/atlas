@@ -353,3 +353,89 @@ describe('App — main-process close confirmation round-trip (P2.5/SHELL-02/ELEC
     });
   });
 });
+
+describe('App — markdown save-failure surfacing (a wave1 follow-up: saveFile errors used to be silent)', () => {
+  async function editSample() {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Load Sample Document' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# edited' },
+    });
+  }
+
+  it('shows a specific reason (e.g. the file is locked) via FileStatusBanner on a direct re-save failure', async () => {
+    window.electronAPI!.saveFile = vi.fn().mockResolvedValue({
+      saved: false,
+      error: 'This file appears to be open in another program.',
+    });
+
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (edited)' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/open in another program/i);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss error' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('falls back to a generic friendly message when main reports no specific reason for a direct re-save failure', async () => {
+    window.electronAPI!.saveFile = vi.fn().mockResolvedValue({ saved: false });
+
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (edited)' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/failed to save/i);
+  });
+
+  it('does not show an error banner when a Save-As-style dialog is simply cancelled (no existing path, no reason given)', async () => {
+    window.electronAPI!.saveFile = vi.fn().mockResolvedValue({ saved: false });
+
+    await editSample();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // No existingPath on an untitled document — main would have shown a
+    // Save dialog; a plain `{ saved: false }` here is an ordinary Cancel.
+    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalled());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('clears a prior save error once a subsequent save succeeds', async () => {
+    window.electronAPI!.saveFile = vi
+      .fn()
+      .mockResolvedValueOnce({ saved: false, error: 'Disk is full.' })
+      .mockResolvedValueOnce({ saved: true });
+
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (edited)' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/disk is full/i);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+});
