@@ -2,9 +2,12 @@
  * Atlas — DOCX Comments helpers (Wave E.2)
  *
  * Helpers for the CommentsPane UI:
- *   - extractCommentText: pulls plain text from the parser's `UnknownNode`
- *     payload (currently stored as JSON.stringify of the raw `<w:comment>`
- *     element).  Walks all `w:t` text nodes inside the JSON tree.
+ *   - extractCommentText: walks a Comment's structured `body` (the shape
+ *     `src/docx/parser/comments.ts` always produces for real DOCX files) to
+ *     build plain text. Also understands a legacy `blocks: UnknownNode[]`
+ *     shape — raw `<w:comment>` XML re-parsed as JSON — as a defensive
+ *     fallback for callers that still construct comments that way; the
+ *     current parser never produces this shape.
  *   - findCommentAnchors: walks a Document's sections and returns, for each
  *     comment id, the paragraphPath of the FIRST anchor (range-start or
  *     reference) so the UI can scroll to it on click.
@@ -73,9 +76,12 @@ function collectTextFromRawXml(node: unknown, out: string[]): void {
 /**
  * Extract a flat plain-text rendition of a parsed Comment node.
  *
- * Wave A.5 stores the comment body as a single `UnknownNode` whose `xml`
- * field is `JSON.stringify(rawCommentObject)`.  We re-parse that JSON,
- * walk all `w:t` (and #text) leaves, join with a single space between
+ * Prefers the structured `body: Paragraph[]` that `parseComments` always
+ * produces for real DOCX files, walking runs/hyperlinks/revisions to build
+ * text. Falls back to a legacy `blocks: UnknownNode[]` shape — where each
+ * block's `xml` field is `JSON.stringify(rawCommentObject)` — only when
+ * `body` is absent or empty, for callers that still construct comments that
+ * way; walks all `w:t` (and #text) leaves, join with a single space between
  * paragraphs, and trim whitespace.
  */
 export function extractCommentText(comment: CommentNode): string {
