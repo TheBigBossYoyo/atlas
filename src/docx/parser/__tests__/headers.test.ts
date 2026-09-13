@@ -30,6 +30,17 @@ const EMPTY_HEADER = `<?xml version="1.0" encoding="UTF-8"?>
 <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 </w:hdr>`
 
+// wave 1 follow-up: a letterhead-style header built around a table,
+// interleaved with a paragraph — both the table's own presence and its
+// position relative to the paragraph must survive parsing.
+const HEADER_WITH_TABLE = `<?xml version="1.0" encoding="UTF-8"?>
+<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:tbl>
+    <w:tr><w:tc><w:p><w:r><w:t>Acme Corp</w:t></w:r></w:p></w:tc></w:tr>
+  </w:tbl>
+  <w:p><w:r><w:t>Confidential</w:t></w:r></w:p>
+</w:hdr>`
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -100,5 +111,46 @@ describe('parseHeader', () => {
 </w:hdr>`
 
     expect(() => parseHeader(oversized, 'rId1')).toThrow(DocxParseError)
+  })
+
+  describe('table blocks (wave 1 follow-up)', () => {
+    it('parses a table block instead of silently dropping it', () => {
+      const header = parseHeader(HEADER_WITH_TABLE, 'rId3')
+
+      expect(header.blocks).toHaveLength(2)
+      expect(header.blocks[0].kind).toBe('table')
+      expect(header.blocks[1].kind).toBe('paragraph')
+    })
+
+    it('preserves table cell text', () => {
+      const header = parseHeader(HEADER_WITH_TABLE, 'rId3')
+      const table = header.blocks[0]
+      if (table.kind !== 'table') {
+        throw new Error('expected the first block to be a table')
+      }
+      const row = table.rows[0]
+      if (row.kind !== 'table-row') {
+        throw new Error('expected a table row')
+      }
+      const cell = row.cells[0]
+      if (cell.kind !== 'table-cell') {
+        throw new Error('expected a table cell')
+      }
+      const paragraph = cell.blocks[0]
+      expect(paragraph.kind).toBe('paragraph')
+    })
+
+    it('round-trips a table through the serializer without throwing', () => {
+      const header = parseHeader(HEADER_WITH_TABLE, 'rId3')
+      const xml = writeHeaderXml(header)
+
+      expect(xml).toContain('<w:tbl>')
+      expect(xml).toContain('Acme Corp')
+      expect(xml).toContain('Confidential')
+
+      const reparsed = parseHeader(xml, 'rId3')
+      expect(reparsed.blocks[0].kind).toBe('table')
+      expect(reparsed.blocks[1].kind).toBe('paragraph')
+    })
   })
 })

@@ -1,13 +1,16 @@
 /**
- * Atlas — DOCX footnotes parser (Wave A.5, hardened in P1.3)
+ * Atlas — DOCX footnotes parser (Wave A.5, hardened in P1.3, extended for
+ * table support in the wave 1 follow-up)
  *
  * Parses `word/footnotes.xml`.  Each `<w:footnote w:id="...">` becomes a
  * `Footnote` entry in the returned map (keyed by id string), whose body is
- * now real `Paragraph[]` blocks — ported from `comments.ts`'s
- * synthetic-wrapper technique (see `partBody.ts`) — replacing the earlier
- * "Option B" stub that stored each note's body as a single opaque
- * `UnknownNode` and made the serializer throw on every save that included a
- * footnote (DXP-03/DXS-01).
+ * now real `Block[]` blocks — paragraphs AND tables — using `partBody.ts`'s
+ * shared synthetic-wrapper technique (ported from `comments.ts`),
+ * replacing the earlier "Option B" stub that stored each note's body as a
+ * single opaque `UnknownNode` and made the serializer throw on every save
+ * that included a footnote (DXP-03/DXS-01), and later a paragraph-only
+ * extraction that silently dropped any table a footnote contained instead
+ * of throwing.
  *
  * Special separator types (separator, continuationSeparator, continuationNotice)
  * ARE included in the map but their `noteType` field is set accordingly so
@@ -16,7 +19,7 @@
 
 import { XMLParser } from 'fast-xml-parser'
 
-import { parseParagraphsFromRawNodes } from './partBody'
+import { extractElementInnerXmlsById, parseBlocksFromXmlFragment } from './partBody'
 import { DocxParseError } from './unzip'
 import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import type { Footnote, NoteType } from '../model/document'
@@ -34,7 +37,6 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
 interface RawFootnote {
   '@_w:id'?: string | number
   '@_w:type'?: string
-  'w:p'?: unknown
   [key: string]: unknown
 }
 
@@ -83,6 +85,7 @@ export function parseFootnotes(xml: string): ReadonlyMap<string, Footnote> {
   }
 
   const items: RawFootnote[] = Array.isArray(rawNotes) ? rawNotes : [rawNotes]
+  const innerXmlById = extractElementInnerXmlsById(xml, 'w:footnote')
   const result = new Map<string, Footnote>()
 
   for (const item of items) {
@@ -92,7 +95,7 @@ export function parseFootnotes(xml: string): ReadonlyMap<string, Footnote> {
     }
     const id = String(rawId)
     const noteType = toNoteType(item['@_w:type'])
-    const blocks = parseParagraphsFromRawNodes(item['w:p'])
+    const blocks = parseBlocksFromXmlFragment(innerXmlById.get(id))
 
     const footnote: Footnote = {
       kind: 'footnote',

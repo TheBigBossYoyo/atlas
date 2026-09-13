@@ -1,7 +1,7 @@
 import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 
-import type { Block, Paragraph } from '../model'
-import { buildParagraph } from './documentWriter'
+import { assertNever, type Block, type Paragraph, type Table } from '../model'
+import { buildParagraph, buildTable } from './documentWriter'
 
 type ObjectXmlPrimitive = string | number | boolean
 type ObjectXmlValue = ObjectXmlPrimitive | ObjectXmlNode | ObjectXmlValue[]
@@ -46,16 +46,39 @@ const orderedXmlParser = new XMLParser({
   trimValues: false,
 })
 
-export function buildParagraphBlockNodes(blocks: ReadonlyArray<Block>): ReadonlyArray<OrderedXmlNode> {
-  return blocks.map((block) => {
-    if (block.kind !== 'paragraph') {
-      throw new Error(
-        `Only paragraph blocks can be serialized in standalone DOCX parts; received ${block.kind}.`,
-      )
-    }
+/**
+ * Serializes the block content of a standalone DOCX part (header, footer,
+ * footnote, endnote, or comment body) — paragraphs and tables alike (wave 1
+ * follow-up: these parts previously supported only paragraph blocks, so a
+ * table inside one — e.g. a letterhead, or a table-formatted footnote —
+ * made `saveDocx` throw instead of round-tripping it).
+ *
+ * `UnknownNode` blocks are not supported at this level: the raw-XML
+ * placeholder/restoration mechanism `documentWriter.ts` uses for unknown
+ * *document*-body content requires a final restoration pass over the whole
+ * generated XML string, which these standalone parts don't currently have
+ * a hook for. This is an existing limitation carried forward, not a new
+ * one — every block kind other than paragraph already failed to serialize
+ * here before this fix; only `table` support is new.
+ */
+export function buildBlockNodes(blocks: ReadonlyArray<Block>): ReadonlyArray<OrderedXmlNode> {
+  return blocks.map((block) => normalizeBlockNode(block))
+}
 
-    return normalizeParagraphNode(block)
-  })
+function normalizeBlockNode(block: Block): OrderedXmlNode {
+  switch (block.kind) {
+    case 'paragraph':
+      return normalizeParagraphNode(block)
+    case 'table':
+      return normalizeTableNode(block)
+    case 'unknown':
+      throw new Error(
+        'Cannot serialize an unrecognized (UnknownNode) block inside a standalone DOCX part '
+          + '(header/footer/footnote/endnote/comment) — only paragraph and table blocks are supported here.',
+      )
+    default:
+      return assertNever(block)
+  }
 }
 
 export function serializeWordPart(
@@ -75,39 +98,53 @@ export function serializeWordPart(
 }
 
 function normalizeParagraphNode(paragraph: Paragraph): OrderedXmlNode {
-  const paragraphNode = buildParagraph(paragraph) as unknown
-
-  if (isOrderedParagraphNode(paragraphNode)) {
-    return paragraphNode
-  }
-
-  if (isWrappedObjectParagraphNode(paragraphNode)) {
-    return parseOrderedNode(fragmentXmlBuilder.build(paragraphNode))
-  }
-
-  if (isObjectXmlNode(paragraphNode)) {
-    return parseOrderedNode(fragmentXmlBuilder.build({ 'w:p': paragraphNode }))
-  }
-
-  throw new Error('buildParagraph returned an unsupported XML fragment shape.')
+  return normalizeBuiltNode(buildParagraph(paragraph), 'w:p', 'buildParagraph')
 }
 
-function parseOrderedNode(xml: string): OrderedXmlNode {
+function normalizeTableNode(table: Table): OrderedXmlNode {
+  return normalizeBuiltNode(buildTable(table), 'w:tbl', 'buildTable')
+}
+
+/**
+ * Normalizes whatever shape a documentWriter.ts `build*` helper returned
+ * into the `preserveOrder`-style `OrderedXmlNode` this part writer's own
+ * builder expects. In practice `build*` already returns that shape
+ * directly (the fast paths below), but the fallback paths handle a plain
+ * object-keyed shape defensively without assuming which one a given
+ * builder function produces.
+ */
+function normalizeBuiltNode(built: unknown, tagName: string, builderName: string): OrderedXmlNode {
+  if (isOrderedNodeForTag(built, tagName)) {
+    return built
+  }
+
+  if (isWrappedObjectNodeForTag(built, tagName)) {
+    return parseOrderedNode(fragmentXmlBuilder.build(built), builderName)
+  }
+
+  if (isObjectXmlNode(built)) {
+    return parseOrderedNode(fragmentXmlBuilder.build({ [tagName]: built }), builderName)
+  }
+
+  throw new Error(`${builderName} returned an unsupported XML fragment shape.`)
+}
+
+function parseOrderedNode(xml: string, builderName: string): OrderedXmlNode {
   const parsed = orderedXmlParser.parse(xml) as OrderedXmlNode[]
 
   if (parsed.length !== 1 || !isOrderedXmlNode(parsed[0])) {
-    throw new Error('Failed to normalize paragraph XML for DOCX part serialization.')
+    throw new Error(`Failed to normalize ${builderName} output for DOCX part serialization.`)
   }
 
   return parsed[0]
 }
 
-function isOrderedParagraphNode(value: unknown): value is OrderedXmlNode {
-  return isOrderedXmlNode(value) && Array.isArray(value['w:p'])
+function isOrderedNodeForTag(value: unknown, tagName: string): value is OrderedXmlNode {
+  return isOrderedXmlNode(value) && Array.isArray(value[tagName])
 }
 
-function isWrappedObjectParagraphNode(value: unknown): value is ObjectXmlNode {
-  return isObjectXmlNode(value) && 'w:p' in value
+function isWrappedObjectNodeForTag(value: unknown, tagName: string): value is ObjectXmlNode {
+  return isObjectXmlNode(value) && tagName in value
 }
 
 function isOrderedXmlNode(value: unknown): value is OrderedXmlNode {

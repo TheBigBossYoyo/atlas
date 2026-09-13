@@ -35,6 +35,17 @@ const EMPTY_ENDNOTES = `<?xml version="1.0" encoding="UTF-8"?>
 <w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 </w:endnotes>`
 
+// wave 1 follow-up: an endnote containing a table must survive instead of
+// being silently dropped.
+const ENDNOTES_WITH_TABLE = `<?xml version="1.0" encoding="UTF-8"?>
+<w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:endnote w:id="1">
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:r><w:t>Endnote table cell</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+  </w:endnote>
+</w:endnotes>`
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -95,5 +106,23 @@ describe('parseEndnotes', () => {
     const map = parseEndnotes(FULL_ENDNOTES)
     const xml = writeEndnotesXml([...map.values()])
     expect(xml).toContain('First endnote.')
+  })
+
+  describe('table blocks (wave 1 follow-up)', () => {
+    it('parses a table block instead of silently dropping it', () => {
+      const map = parseEndnotes(ENDNOTES_WITH_TABLE)
+      expect(map.get('1')?.blocks[0]?.kind).toBe('table')
+    })
+
+    it('round-trips a table through the serializer without throwing', () => {
+      const map = parseEndnotes(ENDNOTES_WITH_TABLE)
+      const xml = writeEndnotesXml([...map.values()])
+
+      expect(xml).toContain('<w:tbl>')
+      expect(xml).toContain('Endnote table cell')
+
+      const reparsed = parseEndnotes(xml)
+      expect(reparsed.get('1')?.blocks[0]?.kind).toBe('table')
+    })
   })
 })

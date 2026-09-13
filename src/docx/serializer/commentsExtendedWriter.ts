@@ -34,7 +34,9 @@ const xmlBuilder = new XMLBuilder({
  * recognize.
  */
 export function resolveCommentExtendedKey(comment: Comment): string {
-  return comment.body[0]?.paraId ?? comment.id
+  const firstBlock = comment.body[0]
+  const paraId = firstBlock?.kind === 'paragraph' ? firstBlock.paraId : undefined
+  return paraId ?? comment.id
 }
 
 export function writeCommentsExtendedXml(comments: ReadonlyArray<Comment>): string {

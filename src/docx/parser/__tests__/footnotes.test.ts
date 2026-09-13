@@ -38,6 +38,25 @@ const EMPTY_FOOTNOTES = `<?xml version="1.0" encoding="UTF-8"?>
 <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 </w:footnotes>`
 
+// wave 1 follow-up: one footnote among several contains a table — proves
+// both that the table survives (rather than being silently dropped) and
+// that per-id content extraction isn't confused by a sibling footnote's
+// table when correlating ids to bodies.
+const FOOTNOTES_WITH_TABLE = `<?xml version="1.0" encoding="UTF-8"?>
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:footnote w:id="1">
+    <w:p><w:r><w:t>Plain footnote.</w:t></w:r></w:p>
+  </w:footnote>
+  <w:footnote w:id="2">
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:r><w:t>Table footnote cell</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+  </w:footnote>
+  <w:footnote w:id="3">
+    <w:p><w:r><w:t>Another plain footnote.</w:t></w:r></w:p>
+  </w:footnote>
+</w:footnotes>`
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -113,5 +132,26 @@ describe('parseFootnotes', () => {
     const xml = writeFootnotesXml([...map.values()])
     expect(xml).toContain('First footnote text.')
     expect(xml).toContain('Second footnote text.')
+  })
+
+  describe('table blocks (wave 1 follow-up)', () => {
+    it('parses a table block instead of silently dropping it, without disturbing sibling footnotes', () => {
+      const map = parseFootnotes(FOOTNOTES_WITH_TABLE)
+
+      expect(map.get('1')?.blocks[0]?.kind).toBe('paragraph')
+      expect(map.get('2')?.blocks[0]?.kind).toBe('table')
+      expect(map.get('3')?.blocks[0]?.kind).toBe('paragraph')
+    })
+
+    it('round-trips a table through the serializer without throwing', () => {
+      const map = parseFootnotes(FOOTNOTES_WITH_TABLE)
+      const xml = writeFootnotesXml([...map.values()])
+
+      expect(xml).toContain('<w:tbl>')
+      expect(xml).toContain('Table footnote cell')
+
+      const reparsed = parseFootnotes(xml)
+      expect(reparsed.get('2')?.blocks[0]?.kind).toBe('table')
+    })
   })
 })

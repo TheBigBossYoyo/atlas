@@ -1,11 +1,15 @@
 /**
- * Atlas — DOCX footer parser (Wave A.5, hardened in P1.3)
+ * Atlas — DOCX footer parser (Wave A.5, hardened in P1.3, extended for
+ * table support in the wave 1 follow-up)
  *
- * Parses the body content of a `word/footer*.xml` part into real
- * `Paragraph[]` blocks by porting `comments.ts`'s synthetic-wrapper
- * technique (see `partBody.ts`), replacing the earlier "Option B" stub that
- * stored the whole part as a single opaque `UnknownNode` and made the
- * serializer throw on every save that included a footer (DXP-04/DXS-01).
+ * Parses the body content of a `word/footer*.xml` part into real `Block[]`
+ * blocks — paragraphs AND tables — by extracting the `<w:ftr>` wrapper's
+ * exact inner XML and re-parsing it via `partBody.ts`'s shared synthetic-
+ * wrapper technique, replacing the earlier "Option B" stub that stored the
+ * whole part as a single opaque `UnknownNode` and made the serializer throw
+ * on every save that included a footer (DXP-04/DXS-01), and later a
+ * paragraph-only extraction that silently dropped any table a footer
+ * contained instead of throwing.
  *
  * The `id` parameter is the relationship-derived file identifier (e.g. "rId2")
  * that the orchestrator must supply; the footer XML itself carries no self-id.
@@ -13,27 +17,15 @@
 
 import { XMLParser } from 'fast-xml-parser'
 
-import { parseParagraphsFromRawNodes } from './partBody'
+import { extractSingleElementInnerXml, parseBlocksFromXmlFragment } from './partBody'
 import { DocxParseError } from './unzip'
 import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import type { Footer } from '../model/document'
 
-// ---------------------------------------------------------------------------
-// Parser instance — same config as Wave A.1
-// ---------------------------------------------------------------------------
-
+// Used only to validate well-formedness up front (with the same error
+// message/behaviour this module always had) — the actual block content
+// comes from partBody.ts's substring-based, order-preserving extraction.
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
-
-// ---------------------------------------------------------------------------
-// Internal XML shapes
-// ---------------------------------------------------------------------------
-
-interface RawFooterDoc {
-  'w:ftr'?: {
-    'w:p'?: unknown
-    [key: string]: unknown
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -48,15 +40,16 @@ interface RawFooterDoc {
  */
 export function parseFooter(xml: string, id: string = ''): Footer {
   assertXmlPartSizeWithinLimit(xml, id === '' ? 'word/footer*.xml' : `word/footer*.xml (${id})`)
-  let parsed: RawFooterDoc
+
   try {
-    parsed = xmlParser.parse(xml) as RawFooterDoc
+    xmlParser.parse(xml)
   } catch (cause) {
     const msg = cause instanceof Error ? cause.message : String(cause)
     throw new DocxParseError(`Failed to parse footer XML: ${msg}`, id)
   }
 
-  const blocks = parseParagraphsFromRawNodes(parsed?.['w:ftr']?.['w:p'])
+  const innerXml = extractSingleElementInnerXml(xml, 'w:ftr')
+  const blocks = parseBlocksFromXmlFragment(innerXml)
 
   return { kind: 'footer', id, blocks }
 }

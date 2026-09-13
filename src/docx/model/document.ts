@@ -424,7 +424,13 @@ export interface Comment {
   readonly author?: string
   readonly initials?: string
   readonly date?: string
-  readonly body: ReadonlyArray<Paragraph>
+  /**
+   * Comment body blocks in source order. Paragraphs are overwhelmingly the
+   * common case, but a comment can legitimately contain a table too — see
+   * the wave 1 follow-up that stopped `parser/comments.ts` from silently
+   * discarding one.
+   */
+  readonly body: ReadonlyArray<Block>
   readonly parentId?: string
   /**
    * Whether the comment thread is marked resolved, sourced from

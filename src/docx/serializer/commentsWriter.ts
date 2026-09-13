@@ -2,7 +2,7 @@ import { XMLBuilder } from 'fast-xml-parser'
 
 import type { Comment } from '../model'
 import type { OrderedXmlNode } from './partWriterSupport'
-import { XML_DECLARATION, WORD_NAMESPACE, buildParagraphBlockNodes } from './partWriterSupport'
+import { XML_DECLARATION, WORD_NAMESPACE, buildBlockNodes } from './partWriterSupport'
 
 const WORD_2012_NAMESPACE = 'http://schemas.microsoft.com/office/word/2012/wordml'
 
@@ -30,7 +30,7 @@ export function writeCommentsXml(comments: ReadonlyArray<Comment>): string {
 
 function buildCommentNode(comment: Comment): OrderedXmlNode {
   return {
-    'w:comment': [...buildParagraphBlockNodes(comment.body)],
+    'w:comment': [...buildBlockNodes(comment.body)],
     ':@': {
       '@_w:id': comment.id,
       ...(comment.author !== undefined ? { '@_w:author': comment.author } : {}),

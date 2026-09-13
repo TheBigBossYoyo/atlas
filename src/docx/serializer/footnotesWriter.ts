@@ -1,6 +1,6 @@
 import type { Endnote, Footnote } from '../model'
 import type { OrderedXmlNode } from './partWriterSupport'
-import { buildParagraphBlockNodes, serializeWordPart } from './partWriterSupport'
+import { buildBlockNodes, serializeWordPart } from './partWriterSupport'
 
 export function writeFootnotesXml(footnotes: ReadonlyArray<Footnote>): string {
   return serializeWordPart('w:footnotes', footnotes.map((footnote) => buildNoteNode('w:footnote', footnote)), true)
@@ -15,7 +15,7 @@ function buildNoteNode(
   note: Footnote | Endnote,
 ): OrderedXmlNode {
   return {
-    [name]: [...buildParagraphBlockNodes(note.blocks)],
+    [name]: [...buildBlockNodes(note.blocks)],
     ':@': {
       '@_w:id': note.id,
       ...(note.noteType !== undefined && note.noteType !== 'normal' ? { '@_w:type': note.noteType } : {}),

@@ -1,9 +1,9 @@
 import { XMLParser } from 'fast-xml-parser'
 
-import { parseDocument } from './document'
+import { extractElementInnerXmlsById, parseBlocksFromXmlFragment } from './partBody'
 import { DocxParseError } from './unzip'
 import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
-import type { Comment, Paragraph } from '../model/document'
+import type { Block, Comment } from '../model/document'
 
 // ---------------------------------------------------------------------------
 // Parser instance — same config as Wave A.1
@@ -12,20 +12,15 @@ import type { Comment, Paragraph } from '../model/document'
 // like the main document parser (see parser/document.ts). It is only used
 // here to read scalar `w:comment` attributes (id/author/date/…), which are
 // unaffected by node ordering or whitespace trimming. Comment BODIES are
-// re-parsed from the original XML text (see `extractCommentBodyXmlById`
-// below) specifically to avoid round-tripping paragraph content through
-// this lossy, non-order-preserving representation — doing so previously
-// silently reordered interleaved run/hyperlink siblings and trimmed
-// significant leading/trailing whitespace out of `w:t` runs.
+// re-parsed from the original XML text (via `partBody.ts`'s
+// `extractElementInnerXmlsById`, this module's own proven technique lifted
+// into a shared helper) specifically to avoid round-tripping paragraph
+// content through this lossy, non-order-preserving representation — doing
+// so previously silently reordered interleaved run/hyperlink siblings and
+// trimmed significant leading/trailing whitespace out of `w:t` runs.
 // ---------------------------------------------------------------------------
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
-
-const WORD_NAMESPACE = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
-const WORD_2012_NAMESPACE = 'http://schemas.microsoft.com/office/word/2012/wordml'
-const COMMENT_OPEN_TAG_RE = /<w:comment\b([^>]*?)(\/?)>/g
-const COMMENT_CLOSE_TAG = '</w:comment>'
-const COMMENT_ID_ATTR_RE = /w:id\s*=\s*"([^"]*)"|w:id\s*=\s*'([^']*)'/
 
 // ---------------------------------------------------------------------------
 // Internal XML shapes
@@ -74,7 +69,7 @@ export function parseComments(xml: string): ReadonlyMap<string, Comment> {
   }
 
   const items: RawComment[] = Array.isArray(rawComments) ? rawComments : [rawComments]
-  const bodyXmlById = extractCommentBodyXmlById(xml)
+  const bodyXmlById = extractElementInnerXmlsById(xml, 'w:comment')
   const result = new Map<string, Comment>()
 
   for (const item of items) {
@@ -109,75 +104,15 @@ export function parseComments(xml: string): ReadonlyMap<string, Comment> {
 }
 
 /**
- * Scan the ORIGINAL comments.xml text for each `<w:comment>` element and
- * return a map of comment id → the raw inner XML between its opening and
- * closing tags (verbatim, not re-serialized).
+ * Parse a comment's raw inner XML (extracted verbatim from the original
+ * source text by `extractElementInnerXmlsById` above — never round-tripped
+ * through the non-order-preserving `xmlParser`) into `Block[]`.
  *
- * This runs against the source text rather than the `xmlParser` output
- * because that parser is not `preserveOrder`/`trimValues: false`: reading
- * paragraph content back out of its parsed object form and rebuilding XML
- * from it (the previous approach) silently reordered interleaved
- * same-tag/different-tag siblings (e.g. run, hyperlink, run → run, run,
- * hyperlink) and trimmed significant leading/trailing whitespace out of
- * `w:t` runs adjacent to another element. Slicing the untouched source text
- * avoids both problems.
+ * Previously restricted its result to `block.kind === 'paragraph'` (a wave 1
+ * follow-up fix): a comment containing a table — legitimate OOXML content —
+ * had that table silently discarded even though `parseBlocksFromXmlFragment`
+ * parsed it correctly, because this function threw it away afterwards.
  */
-function extractCommentBodyXmlById(xml: string): ReadonlyMap<string, string> {
-  const bodies = new Map<string, string>()
-  COMMENT_OPEN_TAG_RE.lastIndex = 0
-  let openTag: RegExpExecArray | null
-
-  while ((openTag = COMMENT_OPEN_TAG_RE.exec(xml)) !== null) {
-    const attrs = openTag[1]
-    const isSelfClosing = openTag[2] === '/'
-    const idMatch = COMMENT_ID_ATTR_RE.exec(attrs)
-    const id = idMatch !== null ? (idMatch[1] ?? idMatch[2]) : undefined
-
-    if (isSelfClosing) {
-      if (id !== undefined) {
-        bodies.set(id, '')
-      }
-      continue
-    }
-
-    const searchStart = COMMENT_OPEN_TAG_RE.lastIndex
-    const closeIndex = xml.indexOf(COMMENT_CLOSE_TAG, searchStart)
-    if (closeIndex === -1) {
-      // Malformed/truncated XML — the outer `xmlParser.parse` above will
-      // already have thrown for this before we get here in practice.
-      break
-    }
-
-    if (id !== undefined) {
-      bodies.set(id, xml.slice(searchStart, closeIndex))
-    }
-
-    COMMENT_OPEN_TAG_RE.lastIndex = closeIndex + COMMENT_CLOSE_TAG.length
-  }
-
-  return bodies
-}
-
-function parseCommentBody(innerXml: string | undefined): ReadonlyArray<Paragraph> {
-  if (innerXml === undefined || innerXml.trim().length === 0) {
-    return []
-  }
-
-  const syntheticXml =
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-    `<w:document xmlns:w="${WORD_NAMESPACE}" xmlns:w15="${WORD_2012_NAMESPACE}">` +
-    `<w:body>${innerXml}</w:body></w:document>`
-
-  const document = parseDocument(syntheticXml)
-  const paragraphs: Paragraph[] = []
-
-  for (const section of document.sections) {
-    for (const block of section.blocks) {
-      if (block.kind === 'paragraph') {
-        paragraphs.push(block)
-      }
-    }
-  }
-
-  return paragraphs
+function parseCommentBody(innerXml: string | undefined): ReadonlyArray<Block> {
+  return parseBlocksFromXmlFragment(innerXml)
 }
