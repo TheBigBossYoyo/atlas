@@ -58,6 +58,8 @@ interface ElectronAPI {
   registerDroppedPath: (path: string) => Promise<RegisterPathResult>;
   /** Re-validates and registers a recent-file path before it is reopened. */
   requestOpenRecent: (path: string) => Promise<RegisterPathResult>;
+  /** Reveals an already-allowlisted path in the OS file manager. */
+  revealInFolder: (path: string) => Promise<{ ok: boolean }>;
   image?: {
     pick: () => Promise<ImagePickResult>;
   };

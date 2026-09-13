@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // read/write allowlist after re-validating it still exists (P1.2/P1.4).
   registerDroppedPath: (path) => ipcRenderer.invoke('path:register-dropped', path),
   requestOpenRecent: (path) => ipcRenderer.invoke('recent:request-open', path),
+  // Reveals an allowlisted path in the OS file manager (P2.11/LOAD-18 —
+  // UnknownViewer's "Reveal in folder" action).
+  revealInFolder: (path) => ipcRenderer.invoke('shell:reveal-in-folder', path),
   image: {
     pick: () => ipcRenderer.invoke('image:pick'),
   },

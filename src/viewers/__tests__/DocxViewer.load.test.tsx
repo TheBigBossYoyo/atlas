@@ -98,6 +98,7 @@ describe('DocxViewer file-change effect', () => {
       getPathForFile: vi.fn(),
       registerDroppedPath: vi.fn(),
       requestOpenRecent: vi.fn(),
+      revealInFolder: vi.fn(),
       spellcheck: {
         onContextMenu: vi.fn(() => () => {}),
         replaceMisspelling: vi.fn(),
