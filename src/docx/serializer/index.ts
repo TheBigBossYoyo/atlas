@@ -4,6 +4,7 @@ export { writeHeaderXml } from './headerWriter'
 export { writeFooterXml } from './footerWriter'
 export { writeFootnotesXml, writeEndnotesXml } from './footnotesWriter'
 export { writeCommentsXml } from './commentsWriter'
+export { writeCommentsExtendedXml, resolveCommentExtendedKey } from './commentsExtendedWriter'
 export {
   writeDocumentXml,
   buildParagraph,

@@ -356,7 +356,9 @@ export function measureFragmentPt(
   // letter-spacing inserts inter-glyph spacing per *grapheme*; approximate
   // with codepoint count which matches CSS behaviour for Latin / accented
   // text. Cluster-script callers already segment to graphemes upstream.
-  const codepointCount = Array.from(transformed).length
+  // Counted against the original `text`, not a transformed copy — none of
+  // uppercase/lowercase/smallCaps change codepoint count.
+  const codepointCount = Array.from(text).length
 
   return cacheFragmentWidth(cacheKey, widthPt + letterSpacingPt * codepointCount)
 }

@@ -190,6 +190,98 @@ describe('loadDocx / saveDocx integration', () => {
     expect(reloaded.document.comments.size).toBe(1)
   })
 
+  it('persists a resolved comment across save/reload via commentsExtended.xml (D16 / DXS-11)', async () => {
+    const bundle = await loadDocx(fixtureBuffer)
+    const { document: withComment, commentId } = addCommentToDocument(
+      bundle.document,
+      {
+        anchor: { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 },
+        focus: { paragraphPath: [0, 0], runIndex: 0, charOffset: 4 },
+      },
+      'Please fix this',
+      'Reviewer',
+    )
+    const resolvedComments = new Map(withComment.comments)
+    const comment = resolvedComments.get(commentId)
+    if (!comment) {
+      throw new Error('expected the newly added comment to exist')
+    }
+    resolvedComments.set(commentId, { ...comment, resolved: true })
+    const resolvedBundle: DocxBundle = {
+      ...bundle,
+      document: { ...withComment, comments: resolvedComments },
+    }
+
+    const saved = await saveDocx(resolvedBundle)
+    const zip = await JSZip.loadAsync(saved)
+
+    const commentsExtendedXml = await zip.file('word/commentsExtended.xml')?.async('string')
+    expect(commentsExtendedXml).toContain('w15:done="1"')
+
+    const relsXml = await zip.file('word/_rels/document.xml.rels')?.async('string')
+    expect(relsXml).toContain('commentsExtended')
+
+    const contentTypesXml = await zip.file('[Content_Types].xml')?.async('string')
+    expect(contentTypesXml).toContain('commentsExtended')
+
+    const reloaded = await loadDocx(toArrayBuffer(saved))
+    const reloadedComment = [...reloaded.document.comments.values()][0]
+    expect(reloadedComment?.resolved).toBe(true)
+  })
+
+  it('removes stale comments.xml/commentsExtended.xml once every comment is deleted (wave 1 follow-up)', async () => {
+    const bundle = await loadDocx(fixtureBuffer)
+    const { document: withComment, commentId } = addCommentToDocument(
+      bundle.document,
+      {
+        anchor: { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 },
+        focus: { paragraphPath: [0, 0], runIndex: 0, charOffset: 4 },
+      },
+      'Temporary remark',
+      'Reviewer',
+    )
+    const resolvedComments = new Map(withComment.comments)
+    const comment = resolvedComments.get(commentId)
+    if (!comment) {
+      throw new Error('expected the newly added comment to exist')
+    }
+    resolvedComments.set(commentId, { ...comment, resolved: true })
+    const withResolvedComment: DocxBundle = {
+      ...bundle,
+      document: { ...withComment, comments: resolvedComments },
+    }
+
+    // First save: comments.xml + commentsExtended.xml both get created and
+    // registered — this reproduces the "stale archive copy" scenario by
+    // giving the *next* save a rawArchive that already contains both parts.
+    const firstSave = await saveDocx(withResolvedComment)
+    const afterFirstSave = await loadDocx(toArrayBuffer(firstSave))
+    expect(afterFirstSave.document.comments.size).toBe(1)
+
+    // Second save: the user deleted the only comment. Nothing in the model
+    // references it any more.
+    const emptiedBundle: DocxBundle = {
+      ...afterFirstSave,
+      document: { ...afterFirstSave.document, comments: new Map() },
+    }
+    const secondSave = await saveDocx(emptiedBundle)
+    const zip = await JSZip.loadAsync(secondSave)
+
+    expect(zip.file('word/comments.xml')).toBeNull()
+    expect(zip.file('word/commentsExtended.xml')).toBeNull()
+
+    const relsXml = await zip.file('word/_rels/document.xml.rels')?.async('string')
+    expect(relsXml ?? '').not.toContain('/comments')
+    expect(relsXml ?? '').not.toContain('commentsExtended')
+
+    const contentTypesXml = await zip.file('[Content_Types].xml')?.async('string')
+    expect(contentTypesXml ?? '').not.toContain('comments.xml')
+    expect(contentTypesXml ?? '').not.toContain('commentsExtended.xml')
+
+    const reloaded = await loadDocx(toArrayBuffer(secondSave))
+    expect(reloaded.document.comments.size).toBe(0)
+  })
+
   it('fails the save with a clear error instead of writing a broken package (D20)', async () => {
     const bundle = await loadDocx(fixtureBuffer)
     const table = findTable(bundle.document)

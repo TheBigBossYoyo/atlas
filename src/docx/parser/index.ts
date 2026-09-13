@@ -42,5 +42,7 @@ export { parseEndnotes } from './endnotes'
 
 export { parseComments } from './comments'
 
+export { parseCommentsExtended } from './commentsExtended'
+
 export { parseTheme, resolveThemeFont } from './theme'
 export type { Theme, FontScheme, FontSet } from './theme'
