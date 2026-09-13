@@ -286,7 +286,6 @@ function PdfViewerBase({ file }: ViewerProps) {
     }
 
     let cancelled = false
-    let destroyDocument: (() => Promise<void>) | null = null
     let destroyLoadingTask: (() => Promise<void>) | null = null
 
     void (async () => {
@@ -301,13 +300,14 @@ function PdfViewerBase({ file }: ViewerProps) {
         ).toString()
 
         const nextLoadingTask = pdfjs.getDocument({ data: file.content.slice(0) })
+        // pdfjs-dist 6.x moved document teardown onto the loading task —
+        // PDFDocumentProxy no longer exposes its own destroy() method.
         destroyLoadingTask = () => nextLoadingTask.destroy()
 
         const pdf = await nextLoadingTask.promise
-        destroyDocument = () => pdf.destroy()
 
         if (cancelled) {
-          await pdf.destroy()
+          await nextLoadingTask.destroy()
           return
         }
 
@@ -350,7 +350,6 @@ function PdfViewerBase({ file }: ViewerProps) {
     return () => {
       cancelled = true
       setPdfDoc(null)
-      if (destroyDocument) void destroyDocument()
       if (destroyLoadingTask) void destroyLoadingTask()
     }
   }, [file, setNavItems, setStats, scrollToPage])

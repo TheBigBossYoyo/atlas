@@ -33,7 +33,7 @@
     "mermaid": "^11.15.0",
     "odf-kit": "^0.13.4",
     "papaparse": "^5.5.3",
-    "pdfjs-dist": "^5.7.284",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
@@ -48,7 +48,7 @@
     "remark-math": "^6.0.0",
     "rtf.js": "^3.0.9",
     "shiki": "^4.0.2",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
