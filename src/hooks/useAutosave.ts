@@ -18,8 +18,22 @@ function isDraft(value: unknown): value is Draft {
   );
 }
 
-export function useAutosave(markdown: string, fileName: string | null, debounceMs = 800): void {
+/**
+ * @param enabled P2.6/SHELL-12 — gate autosave to markdown (pass
+ * `isMarkdownDocument`) so a stale draft is never written/paired with an
+ * unrelated binary file's name. When `false`, this hook does nothing at all
+ * (it neither writes nor clears any existing draft — restoring a draft is
+ * `App.tsx`'s job, via `loadDraft`/`clearDraft`).
+ */
+export function useAutosave(
+  markdown: string,
+  fileName: string | null,
+  enabled = true,
+  debounceMs = 800,
+): void {
   useEffect(() => {
+    if (!enabled) return;
+
     const trimmed = markdown.trim();
     if (trimmed.length === 0) {
       localStorage.removeItem(KEY);
@@ -34,7 +48,7 @@ export function useAutosave(markdown: string, fileName: string | null, debounceM
     return () => {
       window.clearTimeout(timer);
     };
-  }, [debounceMs, fileName, markdown]);
+  }, [debounceMs, enabled, fileName, markdown]);
 }
 
 export function loadDraft(): Draft | null {
