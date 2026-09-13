@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseEndnotes } from '../endnotes'
 import { DocxParseError } from '../unzip'
+import { writeEndnotesXml } from '../../serializer/footnotesWriter'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -61,11 +62,24 @@ describe('parseEndnotes', () => {
     expect(note?.noteType).toBeUndefined()
   })
 
-  it('each endnote wraps body in a single UnknownNode (Option B)', () => {
+  it('parses each endnote body into a real paragraph block, not an opaque UnknownNode', () => {
     const map = parseEndnotes(SINGLE_ENDNOTE)
     const note = map.get('1')
     expect(note?.blocks).toHaveLength(1)
-    expect(note?.blocks[0].kind).toBe('unknown')
+    expect(note?.blocks[0].kind).toBe('paragraph')
+  })
+
+  it('extracts the run text from the parsed endnote paragraph', () => {
+    const map = parseEndnotes(SINGLE_ENDNOTE)
+    const block = map.get('1')?.blocks[0]
+    expect(block?.kind).toBe('paragraph')
+    if (block?.kind === 'paragraph') {
+      const run = block.children[0]
+      expect(run.kind).toBe('run')
+      if (run.kind === 'run') {
+        expect(run.children[0]).toEqual({ kind: 'text', value: 'Only endnote.' })
+      }
+    }
   })
 
   it('returns empty map for empty <w:endnotes> element', () => {
@@ -75,5 +89,11 @@ describe('parseEndnotes', () => {
 
   it('throws DocxParseError on malformed XML', () => {
     expect(() => parseEndnotes('<<< invalid')).toThrow(DocxParseError)
+  })
+
+  it('round-trips through the serializer without throwing (DXS-01)', () => {
+    const map = parseEndnotes(FULL_ENDNOTES)
+    const xml = writeEndnotesXml([...map.values()])
+    expect(xml).toContain('First endnote.')
   })
 })

@@ -30,14 +30,6 @@ type ColumnConstraint = {
   maxWidthPt: number
 }
 
-type TableGridColumn = {
-  readonly w?: number
-}
-
-type TableWithGrid = Table & {
-  readonly tblGrid?: ReadonlyArray<number | TableGridColumn>
-}
-
 type CellLayoutDraft = {
   naturalHeightPt: number
   laidOutCell: Omit<LaidOutCell, 'heightPt'>
@@ -169,12 +161,7 @@ function resolveFixedColumnWidths(table: Table, columnCount: number): ReadonlyAr
 }
 
 function getTableGrid(table: Table): ReadonlyArray<number> {
-  const grid = (table as TableWithGrid).tblGrid
-  if (!grid) {
-    return []
-  }
-
-  return grid.map((column) => (typeof column === 'number' ? column : column.w ?? 0))
+  return table.tblGrid ?? []
 }
 
 function resolveColumnCount(table: Table, rows: ReadonlyArray<TableRow>): number {

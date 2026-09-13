@@ -150,4 +150,30 @@ describe('insertImageIntoBundle', () => {
     const result = insertImageIntoBundle(bundle, POSITION, jpeg)
     expect(result.bundle.rawArchive!.has('word/media/image1.jpeg')).toBe(true)
   })
+
+  it('registers a Default content-type entry for the image extension (DXS-07)', () => {
+    const bundle = makeBundle()
+    expect(bundle.contentTypes).toBeUndefined()
+
+    const result = insertImageIntoBundle(bundle, POSITION, IMAGE)
+
+    expect(result.bundle.contentTypes).toBeDefined()
+    const defaults = result.bundle.contentTypes!.defaults
+    expect(defaults).toContainEqual({ extension: 'png', contentType: 'image/png' })
+  })
+
+  it('does not duplicate the content-type entry when one already exists', () => {
+    const bundle: DocxBundle = {
+      ...makeBundle(),
+      contentTypes: {
+        defaults: [{ extension: 'png', contentType: 'image/png' }],
+        overrides: [],
+      },
+    }
+
+    const result = insertImageIntoBundle(bundle, POSITION, IMAGE)
+
+    const defaults = result.bundle.contentTypes!.defaults
+    expect(defaults.filter((entry) => entry.extension === 'png')).toHaveLength(1)
+  })
 })

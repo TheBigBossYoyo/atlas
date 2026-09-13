@@ -119,6 +119,21 @@ export interface DrawingExtent {
   readonly cy: number
 }
 
+/**
+ * Marks where one of Atlas's own modeled `wp:anchor` children (extent/docPr/
+ * graphic) sits among the raw, unmodeled ones captured in `Drawing.anchorChildren`,
+ * so the serializer can rebuild each slot from current model state instead of
+ * replaying stale captured XML, while still emitting position/wrap children
+ * (`wp:simplePos`, `wp:positionH`/`wp:positionV`, the wrap choice,
+ * `wp:effectExtent`, `wp:cNvGraphicFramePr`) verbatim in their original spot.
+ */
+export interface DrawingAnchorSlot {
+  readonly kind: 'anchor-slot'
+  readonly slot: 'extent' | 'docPr' | 'graphic'
+}
+
+export type DrawingAnchorChild = DrawingAnchorSlot | UnknownNode
+
 export interface Drawing {
   readonly kind: 'drawing'
   readonly layout: DrawingLayout
@@ -127,6 +142,14 @@ export interface Drawing {
   readonly description?: string
   readonly name?: string
   readonly extent?: DrawingExtent
+  /**
+   * For `layout: 'anchor'` drawings only: the exact original child order of
+   * `wp:anchor`, required so a save emits the schema-required position/wrap
+   * elements (DXS-03) instead of silently dropping them. Absent for
+   * `layout: 'inline'` drawings, which carry no position/wrap and are
+   * rebuilt from `extent`/`title`/`description`/`name`/`relationshipId`.
+   */
+  readonly anchorChildren?: ReadonlyArray<DrawingAnchorChild>
 }
 
 export type RunChild =
@@ -349,6 +372,12 @@ export type TableChild = TableRow | UnknownNode
 export interface Table {
   readonly kind: 'table'
   readonly props?: TableProps
+  /**
+   * Column widths from `w:tblGrid` (one entry per `w:gridCol`, in twips).
+   * Required by the OOXML schema on every `w:tbl`; layout consumes this
+   * directly for `w:tblLayout="fixed"` tables instead of measuring content.
+   */
+  readonly tblGrid?: ReadonlyArray<Twip>
   readonly rows: ReadonlyArray<TableChild>
 }
 

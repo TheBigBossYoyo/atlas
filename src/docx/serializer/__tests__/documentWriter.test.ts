@@ -284,6 +284,133 @@ describe('writeDocumentXml', () => {
     expectRoundTrip(xml)
   })
 
+  it('round-trips a table with w:tblGrid (P1.5 / DXS-02)', () => {
+    const xml = documentXml(`
+      <w:tbl>
+        <w:tblPr><w:tblLayout w:type="fixed"/></w:tblPr>
+        <w:tblGrid>
+          <w:gridCol w:w="2400"/>
+          <w:gridCol w:w="3600"/>
+        </w:tblGrid>
+        <w:tr>
+          <w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>
+          <w:tc><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc>
+        </w:tr>
+      </w:tbl>
+      <w:sectPr/>
+    `)
+
+    expectRoundTrip(xml)
+
+    const written = writeDocumentXml(parseDocument(xml))
+    expect(written).toContain('<w:tblGrid>')
+    expect(written).toContain('<w:gridCol w:w="2400"/>')
+    expect(written).toContain('<w:gridCol w:w="3600"/>')
+  })
+
+  it('emits w:tblGrid immediately after w:tblPr, before any w:tr', () => {
+    const document = createDocument([
+      {
+        kind: 'section',
+        props: {},
+        blocks: [
+          {
+            kind: 'table',
+            props: { tblLayout: 'fixed' },
+            tblGrid: [twip(1000), twip(2000)],
+            rows: [
+              {
+                kind: 'table-row',
+                cells: [
+                  { kind: 'table-cell', blocks: [createParagraph('A1')] },
+                  { kind: 'table-cell', blocks: [createParagraph('A2')] },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ])
+
+    const xml = writeDocumentXml(document)
+    const tblPrIndex = xml.indexOf('<w:tblPr')
+    const tblGridIndex = xml.indexOf('<w:tblGrid')
+    const trIndex = xml.indexOf('<w:tr')
+
+    expect(tblPrIndex).toBeGreaterThanOrEqual(0)
+    expect(tblGridIndex).toBeGreaterThan(tblPrIndex)
+    expect(trIndex).toBeGreaterThan(tblGridIndex)
+  })
+
+  it('round-trips an anchored image with position/wrap children as schema-valid wp:anchor output (P1.7 / DXS-03)', () => {
+    const xml = documentXml(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:anchor>
+              <wp:simplePos x="0" y="0"/>
+              <wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>
+              <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:effectExtent l="0" t="0" r="0" b="0"/>
+              <wp:wrapSquare wrapText="bothSides"/>
+              <wp:docPr id="1" name="Picture 1"/>
+              <wp:cNvGraphicFramePr/>
+              <a:graphic>
+                <a:graphicData>
+                  <pic:pic>
+                    <pic:blipFill>
+                      <a:blip r:embed="rIdImage2"/>
+                    </pic:blipFill>
+                  </pic:pic>
+                </a:graphicData>
+              </a:graphic>
+            </wp:anchor>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    expectRoundTrip(xml)
+
+    const written = writeDocumentXml(parseDocument(xml))
+    // The schema-required children the pre-fix serializer silently dropped.
+    expect(written).toContain('wp:simplePos')
+    expect(written).toContain('wp:positionH')
+    expect(written).toContain('wp:positionV')
+    expect(written).toContain('wp:wrapSquare')
+    expect(written).toContain('wp:cNvGraphicFramePr')
+    expect(written).toContain('rIdImage2')
+  })
+
+  it('preserves a non-picture graphicFrame (chart) verbatim instead of emitting an empty wrapper (P1.7 / DXS-04)', () => {
+    const xml = documentXml(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:inline>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:docPr id="2" name="Chart 1"/>
+              <a:graphic>
+                <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                  <c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rIdChart1"/>
+                </a:graphicData>
+              </a:graphic>
+            </wp:inline>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    expectRoundTrip(xml)
+
+    const written = writeDocumentXml(parseDocument(xml))
+    expect(written).toContain('c:chart')
+    expect(written).toContain('rIdChart1')
+    // Never emit a picture-shaped wp:inline with no a:blip for chart content.
+    expect(written).not.toContain('pic:pic')
+  })
+
   it('round-trips multiple sections', () => {
     const xml = documentXml(`
       <w:p>

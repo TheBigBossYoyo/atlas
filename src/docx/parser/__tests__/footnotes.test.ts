@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseFootnotes } from '../footnotes'
 import { DocxParseError } from '../unzip'
+import { writeFootnotesXml } from '../../serializer/footnotesWriter'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -72,11 +73,24 @@ describe('parseFootnotes', () => {
     expect(note?.noteType).toBeUndefined()
   })
 
-  it('each footnote wraps body in a single UnknownNode (Option B)', () => {
+  it('parses each footnote body into a real paragraph block, not an opaque UnknownNode', () => {
     const map = parseFootnotes(SINGLE_FOOTNOTE)
     const note = map.get('1')
     expect(note?.blocks).toHaveLength(1)
-    expect(note?.blocks[0].kind).toBe('unknown')
+    expect(note?.blocks[0].kind).toBe('paragraph')
+  })
+
+  it('extracts the run text from the parsed footnote paragraph', () => {
+    const map = parseFootnotes(SINGLE_FOOTNOTE)
+    const block = map.get('1')?.blocks[0]
+    expect(block?.kind).toBe('paragraph')
+    if (block?.kind === 'paragraph') {
+      const run = block.children[0]
+      expect(run.kind).toBe('run')
+      if (run.kind === 'run') {
+        expect(run.children[0]).toEqual({ kind: 'text', value: 'Only note.' })
+      }
+    }
   })
 
   it('returns empty map for empty <w:footnotes> element', () => {
@@ -92,5 +106,12 @@ describe('parseFootnotes', () => {
 
   it('throws DocxParseError on malformed XML', () => {
     expect(() => parseFootnotes('<<< invalid')).toThrow(DocxParseError)
+  })
+
+  it('round-trips through the serializer without throwing (DXS-01)', () => {
+    const map = parseFootnotes(FULL_FOOTNOTES)
+    const xml = writeFootnotesXml([...map.values()])
+    expect(xml).toContain('First footnote text.')
+    expect(xml).toContain('Second footnote text.')
   })
 })

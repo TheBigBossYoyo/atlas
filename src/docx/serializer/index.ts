@@ -33,3 +33,6 @@ export type { ContentTypesPart } from './contentTypesWriter'
 // Wave D.4 — zip packager
 export { packDocx, sortPartsForWord, WORD_PART_ORDER } from './zipPackager'
 export type { DocxPart } from './zipPackager'
+
+// D20 — post-serialization validation
+export { validateDocxPackage, DocxSaveError } from './validateDocxPackage'

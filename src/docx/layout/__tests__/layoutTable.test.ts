@@ -6,15 +6,21 @@ vi.mock('../../fonts', () => ({
   measureLineMetricsPt: () => null,
 }))
 
-import type { Block, Paragraph, Table, TableCell, TableProps, TableRow, TableRowProps, Width } from '../../model'
+import type {
+  Block,
+  Paragraph,
+  Table,
+  TableCell,
+  TableProps,
+  TableRow,
+  TableRowProps,
+  Twip,
+  Width,
+} from '../../model'
 import { pct, twip } from '../../model'
 
 import { layoutTable } from '../layoutTable'
 import type { FontResolver } from '../types'
-
-type TestTable = Table & {
-  readonly tblGrid?: ReadonlyArray<number>
-}
 
 const fontResolver: FontResolver = async () =>
   ({
@@ -324,8 +330,8 @@ describe('layoutTable', () => {
 function createTable(input: {
   rows: ReadonlyArray<TableRow>
   props?: TableProps
-  tblGrid?: ReadonlyArray<number>
-}): TestTable {
+  tblGrid?: ReadonlyArray<Twip>
+}): Table {
   return {
     kind: 'table',
     props: input.props,

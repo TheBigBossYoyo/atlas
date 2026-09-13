@@ -1,19 +1,22 @@
 /**
- * Atlas — DOCX endnotes parser (Wave A.5)
+ * Atlas — DOCX endnotes parser (Wave A.5, hardened in P1.3)
  *
  * Parses `word/endnotes.xml`.  Each `<w:endnote w:id="...">` becomes an
- * `Endnote` entry in the returned map (keyed by id string).
- *
- * OPTION B: body content is stored as a single UnknownNode; Wave A.6/B.x
- * will expand it using the shared body parser from document.ts (A.3).
+ * `Endnote` entry in the returned map (keyed by id string), whose body is
+ * now real `Paragraph[]` blocks — ported from `comments.ts`'s
+ * synthetic-wrapper technique (see `partBody.ts`) — replacing the earlier
+ * "Option B" stub that stored each note's body as a single opaque
+ * `UnknownNode` and made the serializer throw on every save that included an
+ * endnote (DXP-03/DXS-01).
  *
  * Special separator types are included with their noteType set accordingly.
  */
 
 import { XMLParser } from 'fast-xml-parser'
 
+import { parseParagraphsFromRawNodes } from './partBody'
 import { DocxParseError } from './unzip'
-import type { Endnote, UnknownNode, Block, NoteType } from '../model/document'
+import type { Endnote, NoteType } from '../model/document'
 
 // ---------------------------------------------------------------------------
 // Parser instance — same config as Wave A.1
@@ -28,6 +31,7 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
 interface RawEndnote {
   '@_w:id'?: string | number
   '@_w:type'?: string
+  'w:p'?: unknown
   [key: string]: unknown
 }
 
@@ -84,9 +88,7 @@ export function parseEndnotes(xml: string): ReadonlyMap<string, Endnote> {
     }
     const id = String(rawId)
     const noteType = toNoteType(item['@_w:type'])
-
-    const inner: UnknownNode = { kind: 'unknown', xml: JSON.stringify(item) }
-    const blocks: ReadonlyArray<Block> = [inner]
+    const blocks = parseParagraphsFromRawNodes(item['w:p'])
 
     const endnote: Endnote = {
       kind: 'endnote',
