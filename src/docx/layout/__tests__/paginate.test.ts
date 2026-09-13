@@ -5,6 +5,7 @@ import type {
   Document,
   FooterReference,
   HeaderReference,
+  NumberingDef,
   ParaProps,
   Paragraph,
   Section,
@@ -14,6 +15,7 @@ import type {
 } from '../../model'
 import { halfPoint, hexColor, twip } from '../../model'
 
+import { MARKER_RUN_INDEX } from '../listMarkers'
 import { paginate } from '../paginate'
 import type { Page, PageLineRef } from '../pageTypes'
 import type { FontResolver, LineBox, LineItem } from '../types'
@@ -487,6 +489,142 @@ describe('paginate', () => {
     expect(lineRefs[1]?.topPt).toBe(20)
   })
 
+  it('generates and increments decimal markers across paragraphs sharing a numId (D3/DXP-07/DXL-04)', async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [0, { level: 0, format: 'decimal', text: { value: '%1.', placeholders: [1] }, suffix: 'tab' }],
+          ]),
+        },
+      ],
+    ])
+
+    const paragraphs = [
+      createTextParagraph('first item', {
+        numPr: { numId: '1', ilvl: 0 },
+        ind: { left: twip(720), hanging: twip(360) },
+      }),
+      createTextParagraph('second item', {
+        numPr: { numId: '1', ilvl: 0 },
+        ind: { left: twip(720), hanging: twip(360) },
+      }),
+    ]
+
+    const pages = await paginate({
+      document: createDocument([createSection(paragraphs, { pageWidthPt: 400 })], undefined, numbering),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRefs = allLineRefs(pages)
+    expect(markerWordOf(lineRefs[0])?.text).toBe('1.')
+    expect(markerWordOf(lineRefs[1])?.text).toBe('2.')
+  })
+
+  it('positions the marker via hanging pull-back and lands its tab at the text-start indent (D3/DXL-04)', async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [0, { level: 0, format: 'decimal', text: { value: '%1.', placeholders: [1] }, suffix: 'tab' }],
+          ]),
+        },
+      ],
+    ])
+
+    const paragraph = createTextParagraph('item text', {
+      numPr: { numId: '1', ilvl: 0 },
+      ind: { left: twip(720), hanging: twip(360) },
+    })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })], undefined, numbering),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    const markerItem = markerWordOf(lineRef)
+    const tabItem = lineRef?.line.items.find((item) => item.kind === 'tab')
+    const firstRealWord = lineRef?.line.items.find(
+      (item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word' && item.runIndex === 0,
+    )
+
+    // Line 0 is pulled back by the 18pt hanging amount from the 36pt (720
+    // twip) base left indent, so the marker starts at 18pt...
+    expect(lineRef?.leftPt).toBe(18)
+    // ...and the marker + its tab together land exactly back at the 36pt
+    // text-start indent, where the real paragraph text begins.
+    expect((lineRef?.leftPt ?? 0) + (markerItem?.width ?? 0) + (tabItem?.width ?? 0)).toBe(36)
+    expect(firstRealWord?.text).toBe('item')
+  })
+
+  it("falls back to the numbering level's own indent when the paragraph sets none (D3)", async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [
+              0,
+              {
+                level: 0,
+                format: 'decimal',
+                text: { value: '%1.', placeholders: [1] },
+                suffix: 'tab',
+                paragraph: { ind: { left: twip(720), hanging: twip(360) } },
+              },
+            ],
+          ]),
+        },
+      ],
+    ])
+
+    const paragraph = createTextParagraph('item', { numPr: { numId: '1', ilvl: 0 } })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })], undefined, numbering),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(firstLineRef(pages)?.leftPt).toBe(18)
+  })
+
+  it('renders a bulleted paragraph marker without disturbing the real run\'s own index (D3)', async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [0, { level: 0, format: 'bullet', text: { value: '•', placeholders: [] }, suffix: 'tab' }],
+          ]),
+        },
+      ],
+    ])
+
+    const paragraph = createTextParagraph('bulleted', {
+      numPr: { numId: '1', ilvl: 0 },
+      ind: { left: twip(720), hanging: twip(360) },
+    })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })], undefined, numbering),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    expect(markerWordOf(lineRef)?.text).toBe('•')
+    const realWord = lineRef?.line.items.find(
+      (item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word' && item.runIndex === 0,
+    )
+    expect(realWord?.text).toBe('bulleted')
+  })
+
   it('uses the injected tableLayout callback for table height', async () => {
     const tableLayout = vi.fn(async () => [40])
     const pages = await paginate({
@@ -532,6 +670,12 @@ function makeStyles(styles: ReadonlyArray<Style>): ReadonlyMap<string, Style> {
   return map
 }
 
+function markerWordOf(lineRef: PageLineRef | undefined): Extract<LineItem, { kind: 'word' }> | undefined {
+  return lineRef?.line.items.find(
+    (item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word' && item.runIndex === MARKER_RUN_INDEX,
+  )
+}
+
 function firstWordItem(pages: ReadonlyArray<Page>): Extract<LineItem, { kind: 'word' }> | undefined {
   for (const page of pages) {
     for (const column of page.columns) {
@@ -549,12 +693,13 @@ function firstWordItem(pages: ReadonlyArray<Page>): Extract<LineItem, { kind: 'w
 function createDocument(
   sections: ReadonlyArray<Section>,
   styles: ReadonlyMap<string, Style> = new Map(),
+  numbering: ReadonlyMap<string, NumberingDef> = new Map(),
 ): Document {
   return {
     kind: 'document',
     sections,
     styles,
-    numbering: new Map(),
+    numbering,
     defaults: {
       paragraph: {
         spacing: {

@@ -101,4 +101,14 @@ export type LineBreakInput = {
   fontResolver: FontResolver
   tabStops: ReadonlyArray<TabStop>
   theme?: Theme
+  /**
+   * Already-itemized items prepended before `runs`' own content — used by
+   * D3 to give a list marker (and its trailing tab/space) real measured
+   * width so it participates in line-breaking and hanging-indent alignment
+   * instead of being painted separately outside layout. Being first in
+   * document order, they naturally land on line 0. Their `runIndex` is a
+   * caller-chosen sentinel (never a real index into `runs`) so they never
+   * collide with, or shift, real content's run indices.
+   */
+  leadingItems?: ReadonlyArray<LineItem>
 }

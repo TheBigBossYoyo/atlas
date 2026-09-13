@@ -30,7 +30,11 @@ type BreakOpportunity = {
 }
 
 export async function breakLines(input: LineBreakInput): Promise<ReadonlyArray<LineBox>> {
-  const items = await itemizeRuns(input.runs, input.fontResolver, input.theme)
+  const runItems = await itemizeRuns(input.runs, input.fontResolver, input.theme)
+  const items =
+    input.leadingItems !== undefined && input.leadingItems.length > 0
+      ? [...input.leadingItems, ...runItems]
+      : runItems
   const rawLines = buildRawLines(items, input)
   const metricsCache = new Map<string, Promise<FontMetrics>>()
 

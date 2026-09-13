@@ -3,6 +3,7 @@ import type {
   FooterReference,
   HeaderReference,
   HyperlinkChild,
+  LvlDef,
   ParaProps,
   Paragraph,
   ParagraphChild,
@@ -16,7 +17,14 @@ import type {
 import { resolveParaProps, resolveRunProps } from '../parser/cascade'
 
 import { breakLines, resolveLeftIndentPt, resolveLineIndentExtraPt } from './breakLines'
+import { itemizeRuns } from './itemize'
 import { layoutTable } from './layoutTable'
+import {
+  createNumberingCounterState,
+  MARKER_RUN_INDEX,
+  resolveListMarker,
+  type NumberingCounterState,
+} from './listMarkers'
 import type {
   ColumnBox,
   Page,
@@ -27,7 +35,7 @@ import type {
 } from './pageTypes'
 import { PaginationCancelledError } from './pageTypes'
 import type { LaidOutTable } from './tableTypes'
-import type { EffectiveParaProps, EffectiveRunProps, LineBox, TabStop } from './types'
+import type { EffectiveParaProps, EffectiveRunProps, LineBox, LineItem, TabStop } from './types'
 
 /**
  * Yield to the event loop so the renderer can paint the loading indicator
@@ -185,6 +193,10 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
    */
   const tableMetaByPath = new Map<string, LaidOutTable>()
   const styleCache = createStyleResolutionCache()
+  // Numbering counters persist across the whole document (a list can
+  // continue across a section break), so this is created once here rather
+  // than per-section.
+  const listCounterState = createNumberingCounterState()
 
   for (const [sectionIndex, section] of input.document.sections.entries()) {
     const sectionLayout = resolveSectionLayout(section)
@@ -196,6 +208,7 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
       totalBlocks,
       progressState,
       styleCache,
+      listCounterState,
     )
 
     for (const unit of units) {
@@ -738,6 +751,7 @@ async function buildSectionUnits(
   totalBlocks: number,
   progressState: { completedBlocks: number; tick: number },
   styleCache: StyleResolutionCache,
+  listCounterState: NumberingCounterState,
 ): Promise<ReadonlyArray<LayoutUnit>> {
   const units: LayoutUnit[] = []
   let previousParagraphSpacing: PreviousParagraphSpacing | undefined
@@ -752,6 +766,7 @@ async function buildSectionUnits(
         columnWidthPt,
         styleCache,
         previousParagraphSpacing,
+        listCounterState,
       )
       units.push(unit)
       previousParagraphSpacing = {
@@ -791,19 +806,25 @@ async function buildParagraphUnit(
   columnWidthPt: number,
   styleCache: StyleResolutionCache,
   previousParagraphSpacing: PreviousParagraphSpacing | undefined,
+  listCounterState: NumberingCounterState,
 ): Promise<ParagraphUnit> {
   void sectionIndex
 
   const document = input.document
-  const paraProps = resolveEffectiveParaProps(paragraph.props, document, styleCache)
+  const resolvedParaProps = resolveEffectiveParaProps(paragraph.props, document, styleCache)
+  const paraProps = applyNumberingIndentFallback(resolvedParaProps, document)
+  const leadingItems = await buildMarkerLeadingItems(input, paraProps, styleCache, listCounterState)
+  const tabStops = buildTabStops(paraProps, leadingItems.length > 0)
+
   const lines = await breakLines({
     paragraph,
     paraProps,
     runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, document, styleCache),
     availableWidth: columnWidthPt,
     fontResolver: input.fontResolver,
-    tabStops: resolveTabStops(paraProps.tabs?.items ?? EMPTY_TABS),
+    tabStops,
     theme: input.theme,
+    ...(leadingItems.length > 0 ? { leadingItems } : {}),
   })
 
   return {
@@ -818,6 +839,92 @@ async function buildParagraphUnit(
     columnWidthPt,
     leadingGapPt: resolveLeadingGapPt(paraProps, previousParagraphSpacing),
   }
+}
+
+/**
+ * A list paragraph's indent almost always lives on its NUMBERING LEVEL
+ * (`w:lvl/w:pPr/w:ind`), not directly on the paragraph itself — `resolveParaProps`
+ * has no numbering awareness, so a list paragraph with no direct `w:ind`
+ * would otherwise resolve to no indent at all and lose its hanging-indent
+ * marker layout entirely. Fall back to the level's indent only when the
+ * paragraph doesn't already resolve one of its own (direct formatting, or a
+ * paragraph style, always wins).
+ */
+function applyNumberingIndentFallback(paraProps: EffectiveParaProps, document: Document): EffectiveParaProps {
+  if (paraProps.ind !== undefined || paraProps.numPr?.numId === undefined) {
+    return paraProps
+  }
+
+  const levelDef = resolveNumberingLevelDef(document, paraProps.numPr.numId, paraProps.numPr.ilvl ?? 0)
+  const levelIndent = levelDef?.paragraph?.ind
+  if (levelIndent === undefined) {
+    return paraProps
+  }
+
+  return { ...paraProps, ind: levelIndent }
+}
+
+function resolveNumberingLevelDef(document: Document, numId: string, ilvl: number): LvlDef | undefined {
+  const def = document.numbering.get(numId)
+  return def?.levelOverrides?.get(ilvl)?.levelDefinition ?? def?.levels.get(ilvl)
+}
+
+/**
+ * Builds the already-itemized marker (+ trailing tab/space) for a list
+ * paragraph, measured through the same font pipeline as real content so it
+ * participates in line-breaking (D3). Returns an empty array for a
+ * non-list paragraph, or when the numbering definition/level can't be
+ * resolved.
+ */
+async function buildMarkerLeadingItems(
+  input: PaginatorInput,
+  paraProps: EffectiveParaProps,
+  styleCache: StyleResolutionCache,
+  listCounterState: NumberingCounterState,
+): Promise<ReadonlyArray<LineItem>> {
+  const marker = resolveListMarker(paraProps.numPr, input.document, listCounterState)
+  if (marker === undefined) {
+    return []
+  }
+
+  const markerRunProps = resolveEffectiveRunProps(marker.runProps, paraProps.pStyle, input.document, styleCache)
+  const markerRun: Run = {
+    kind: 'run',
+    props: marker.runProps,
+    children:
+      marker.suffix === 'tab'
+        ? [{ kind: 'text', value: marker.text }, { kind: 'tab' }]
+        : marker.suffix === 'space'
+          ? [{ kind: 'text', value: `${marker.text} ` }]
+          : [{ kind: 'text', value: marker.text }],
+  }
+
+  const markerItems = await itemizeRuns(
+    [{ run: markerRun, runProps: markerRunProps }],
+    input.fontResolver,
+    input.theme,
+  )
+
+  return markerItems.map((item) => ({ ...item, runIndex: MARKER_RUN_INDEX }))
+}
+
+/**
+ * When a marker's trailing tab needs to land at the paragraph's hanging
+ * "text starts here" position, add a synthetic tab stop there — see
+ * `resolveLineIndentExtraPt`'s doc comment for the hanging-vs-firstLine
+ * geometry this derives from. Line 0's own left offset is
+ * `leftIndent + extra` (negative `extra` for hanging); the marker's tab is
+ * line-relative, so it needs to travel exactly `-extra` from line 0's own
+ * origin to land back at `leftIndent`.
+ */
+function buildTabStops(paraProps: EffectiveParaProps, hasMarker: boolean): ReadonlyArray<TabStop> {
+  const configuredStops = resolveTabStops(paraProps.tabs?.items ?? EMPTY_TABS)
+  if (!hasMarker) {
+    return configuredStops
+  }
+
+  const markerTabStopPt = Math.max(0, -resolveLineIndentExtraPt(paraProps.ind, 0))
+  return [{ positionPt: markerTabStopPt, alignment: 'left', leader: 'none' }, ...configuredStops]
 }
 
 /**

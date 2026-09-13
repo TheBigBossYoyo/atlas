@@ -4,15 +4,15 @@ import { render } from '@testing-library/react';
 import { PageView } from '../PageView';
 import { PageStack } from '../PageStack';
 import { paginate } from '../../layout/paginate';
-import type { Document, Section, ParaProps } from '../../model';
+import type { Document, NumberingDef, Section, ParaProps } from '../../model';
 import { twip } from '../../model';
 
-function createDocument(sections: Section[]): Document {
+function createDocument(sections: Section[], numbering: ReadonlyMap<string, NumberingDef> = new Map()): Document {
   return {
     kind: 'document',
     sections,
     styles: new Map(),
-    numbering: new Map(),
+    numbering,
     headers: new Map(),
     footers: new Map(),
     comments: new Map(),
@@ -127,6 +127,38 @@ describe('PageView', () => {
     const pageEl = container.querySelector('.docx-page') as HTMLElement;
     // zoom = 2
     expect(pageEl.style.width).toBe(`${400 * 2 * (4/3)}px`);
+  });
+
+  it('renders a numbered list marker with the docx-list-marker class (D3/DXP-07/DXL-04)', async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [0, { level: 0, format: 'decimal', text: { value: '%1.', placeholders: [1] }, suffix: 'tab' }],
+          ]),
+        },
+      ],
+    ]);
+
+    const doc = createDocument(
+      [
+        createSection([
+          {
+            kind: 'paragraph' as const,
+            props: { numPr: { numId: '1', ilvl: 0 }, ind: { left: twip(720), hanging: twip(360) } },
+            children: [{ kind: 'run' as const, children: [{ kind: 'text' as const, value: 'first item' }] }],
+          },
+        ]),
+      ],
+      numbering,
+    );
+    const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+
+    const { container } = render(<PageView page={pages[0]} zoom={1} document={doc} />);
+    const marker = container.querySelector('.docx-list-marker');
+    expect(marker?.textContent).toBe('1.');
   });
 
   it('stretches a justified line flush to the column width (D5/DXL-11)', async () => {

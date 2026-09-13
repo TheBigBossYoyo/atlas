@@ -9,6 +9,7 @@ import type { Page, PageTableRef, PageTableRowRef } from '../layout/pageTypes';
 import type { LineBox } from '../layout/types';
 import type { Theme } from '../parser/theme';
 import { resolveStretchableSpaceIndices } from '../layout/breakLines';
+import { MARKER_RUN_INDEX } from '../layout/listMarkers';
 
 import { borderToCss, revisionStyleToCss, type RevisionRenderKind, runStyleToCss } from './style';
 import { InlineDrawing } from './InlineDrawing';
@@ -304,7 +305,8 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
             );
           }
           if (item.kind === 'word' || item.kind === 'glyph-cluster') {
-            const revision = revisionRuns?.[item.runIndex];
+            const isMarker = item.runIndex === MARKER_RUN_INDEX;
+            const revision = isMarker ? undefined : revisionRuns?.[item.runIndex];
             const revisionKind = revision?.kind ?? item.runProps._revision;
             const revisionClass =
               revisionKind === 'ins'
@@ -312,6 +314,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
                 : revisionKind === 'del'
                   ? ' docx-revision--del'
                   : '';
+            const markerClass = isMarker ? ' docx-list-marker' : '';
             const style =
               revisionKind === undefined
                 ? runStyleToCss(item.runProps, theme, { lengthUnit: 'layoutPx' })
@@ -322,7 +325,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
             return (
               <span
                 key={idx}
-                className={`docx-run${revisionClass}`}
+                className={`docx-run${revisionClass}${markerClass}`}
                 data-run-index={item.runIndex}
                 data-char-start={item.charStart}
                 data-char-end={item.charEnd}
