@@ -1,5 +1,6 @@
-import { halfPoint, hexColor, twip, type HighlightColor, type JustifyContent } from '../model'
+import { halfPoint, hexColor, twip, type Document, type HighlightColor, type JustifyContent } from '../model'
 
+import { findParagraph } from './commands'
 import type { Command, Range } from './commandTypes'
 import type { ToolbarCommand } from './toolbar/toolbarTypes'
 
@@ -100,7 +101,44 @@ function toHighlightColor(colorHex: string): HighlightColor | null {
   }
 }
 
-export function toolbarToCommand(toolbarCmd: ToolbarCommand, selection: Range | null): Command | null {
+/**
+ * DXE-11 — finds the nearest tracked-change revision to resolve for
+ * accept/reject-change: the backend (`accept-revision`/`reject-revision`)
+ * already resolves a revision addressed by an exact `{paragraphPath,
+ * childIndex}`, but the toolbar only has the current selection. Since a
+ * paragraph containing an `ins-revision`/`del-revision` child falls outside
+ * the run-index addressing scheme entirely (`getEditableRuns` only flattens
+ * plain runs and hyperlinks), the best a selection-driven Accept/Reject
+ * button can do is resolve to the first revision in the selection's
+ * paragraph — sufficient for the common case of one open revision at a time,
+ * with Accept All/Reject All covering documents with several.
+ */
+function findRevisionAtSelection(
+  document: Document,
+  selection: Range | null,
+): { paragraphPath: ReadonlyArray<number>; childIndex: number } | null {
+  const paragraphPath = getPrimaryParagraphPath(selection)
+  if (paragraphPath === null) {
+    return null
+  }
+
+  const paragraph = findParagraph(document, paragraphPath)
+  if (paragraph === null) {
+    return null
+  }
+
+  const childIndex = paragraph.children.findIndex(
+    (child) => child.kind === 'ins-revision' || child.kind === 'del-revision',
+  )
+
+  return childIndex === -1 ? null : { paragraphPath, childIndex }
+}
+
+export function toolbarToCommand(
+  toolbarCmd: ToolbarCommand,
+  selection: Range | null,
+  document: Document,
+): Command | null {
   switch (toolbarCmd.kind) {
     case 'set-font-family': {
       const range = getSelectionRange(selection)
@@ -259,10 +297,14 @@ export function toolbarToCommand(toolbarCmd: ToolbarCommand, selection: Range | 
       return null
     case 'toggle-track-changes':
       return null
-    case 'accept-change':
-      return null
-    case 'reject-change':
-      return null
+    case 'accept-change': {
+      const target = findRevisionAtSelection(document, selection)
+      return target === null ? null : { kind: 'accept-revision', ...target }
+    }
+    case 'reject-change': {
+      const target = findRevisionAtSelection(document, selection)
+      return target === null ? null : { kind: 'reject-revision', ...target }
+    }
     case 'open-comments-pane':
       return null
     case 'undo':
