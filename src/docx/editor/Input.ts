@@ -217,38 +217,106 @@ export function extendOrCollapse(
 }
 
 // ─── Word-boundary helpers ────────────────────────────────────────────────────
+//
+// DXE-21 — word-boundary delete used to search only the run the cursor sits
+// in, so Ctrl+Backspace/Ctrl+Delete silently did nothing once the cursor was
+// within a word of a run or paragraph boundary. These now flatten the whole
+// paragraph's text (crossing run boundaries transparently) and, when no
+// boundary is found within the paragraph, continue the search into the
+// adjacent paragraph.
+
+function paragraphFlatText(runs: ReadonlyArray<EditableRun>): string {
+  return runs.map((run) => run.text).join('')
+}
+
+function flatOffsetToPos(path: ReadonlyArray<number>, runs: ReadonlyArray<EditableRun>, offset: number): Position {
+  let remaining = offset
+  for (let i = 0; i < runs.length; i += 1) {
+    if (remaining <= runs[i].text.length) {
+      return makePos(path, i, remaining)
+    }
+    remaining -= runs[i].text.length
+  }
+  const lastIndex = runs.length - 1
+  return makePos(path, lastIndex < 0 ? 0 : lastIndex, runs[lastIndex]?.text.length ?? 0)
+}
+
+function adjacentParagraphBoundary(
+  pos: Position,
+  doc: Document,
+  direction: 'previous' | 'next',
+): Position | null {
+  const allPaths = collectParagraphPaths(doc)
+  const index = findPathIndex(allPaths, pos.paragraphPath)
+  if (index < 0) return null
+
+  const targetIndex = direction === 'previous' ? index - 1 : index + 1
+  const targetPath = allPaths[targetIndex]
+  if (targetPath === undefined) return null
+
+  const targetPara = findParagraph(doc, targetPath)
+  if (!targetPara) return null
+
+  return direction === 'previous' ? paragraphEndPos(targetPath, targetPara) : makePos(targetPath, 0, 0)
+}
 
 function wordBoundaryBefore(pos: Position, doc: Document): Position | null {
   const para = findParagraph(doc, pos.paragraphPath)
   if (!para) return null
   const runs = getTextRuns(para)
-  const cur = runs[pos.runIndex]
-  if (!cur) return null
 
-  const before = cur.text.slice(0, pos.charOffset)
+  if (runs.length === 0) {
+    return adjacentParagraphBoundary(pos, doc, 'previous')
+  }
+
+  const flatOffset = positionToFlatOffset(runs, pos)
+  const before = paragraphFlatText(runs).slice(0, flatOffset)
   const trimmed = before.trimEnd()
+
+  if (trimmed.length === 0) {
+    if (before.length > 0) {
+      // Only leading whitespace before the cursor: consume it, landing at the
+      // paragraph start, rather than crossing over (matches deleting a run of
+      // spaces before reaching the previous word/paragraph).
+      return flatOffsetToPos(pos.paragraphPath, runs, 0)
+    }
+    return adjacentParagraphBoundary(pos, doc, 'previous')
+  }
+
   const lastSpace = trimmed.lastIndexOf(' ')
   const newOffset = lastSpace >= 0 ? lastSpace + 1 : 0
-  if (newOffset === pos.charOffset) return null
-  return makePos(pos.paragraphPath, pos.runIndex, newOffset)
+  if (newOffset === flatOffset) return null
+  return flatOffsetToPos(pos.paragraphPath, runs, newOffset)
 }
 
 function wordBoundaryAfter(pos: Position, doc: Document): Position | null {
   const para = findParagraph(doc, pos.paragraphPath)
   if (!para) return null
   const runs = getTextRuns(para)
-  const cur = runs[pos.runIndex]
-  if (!cur) return null
 
-  const after = cur.text.slice(pos.charOffset)
+  if (runs.length === 0) {
+    return adjacentParagraphBoundary(pos, doc, 'next')
+  }
+
+  const flatText = paragraphFlatText(runs)
+  const flatOffset = positionToFlatOffset(runs, pos)
+  const after = flatText.slice(flatOffset)
   const trimmed = after.trimStart()
+
+  if (trimmed.length === 0) {
+    if (after.length > 0) {
+      return flatOffsetToPos(pos.paragraphPath, runs, flatText.length)
+    }
+    return adjacentParagraphBoundary(pos, doc, 'next')
+  }
+
   const firstSpace = trimmed.indexOf(' ')
   const newOffset =
     firstSpace >= 0
-      ? pos.charOffset + (after.length - trimmed.length) + firstSpace + 1
-      : pos.charOffset + after.length
-  if (newOffset === pos.charOffset) return null
-  return makePos(pos.paragraphPath, pos.runIndex, newOffset)
+      ? flatOffset + (after.length - trimmed.length) + firstSpace + 1
+      : flatOffset + after.length
+  if (newOffset === flatOffset) return null
+  return flatOffsetToPos(pos.paragraphPath, runs, newOffset)
 }
 
 // ─── Format toggle ────────────────────────────────────────────────────────────
@@ -548,7 +616,26 @@ export function handleKeyDown(
       return null
     }
 
-    if (key === 'Tab' && !shift) {
+    if (key === 'Tab') {
+      // D18 — Tab/Shift+Tab at the very start of a list paragraph changes its
+      // outline level (mirrors Word); anywhere else Tab still inserts a
+      // literal tab character, and Shift+Tab outside a list is a no-op.
+      if (range && samePos(range.anchor, range.focus) && range.focus.runIndex === 0 && range.focus.charOffset === 0) {
+        const paragraph = findParagraph(document, range.focus.paragraphPath)
+        if (paragraph?.props?.numPr?.numId !== undefined) {
+          const cmd: Command = {
+            kind: 'change-list-level',
+            paragraphPath: range.focus.paragraphPath,
+            delta: shift ? -1 : 1,
+          }
+          const result = applyCommand(document, cmd)
+          history.push(result.inverse)
+          return { document: result.document, range }
+        }
+      }
+
+      if (shift) return null
+
       return handleBeforeInput(
         new InputEvent('beforeinput', { inputType: 'insertText', data: '\t' }),
         ctx,

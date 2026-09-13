@@ -449,4 +449,112 @@ describe('handleKeyDown', () => {
     expect(result).not.toBeNull()
     expect(result!.document.sections[0].blocks.length).toBe(2)
   })
+
+  // ─── D18 — Tab/Shift+Tab list level ──────────────────────────────────────
+
+  it('Tab at the start of a list paragraph increases its level instead of inserting a tab', () => {
+    const listParagraph: Paragraph = Object.freeze({
+      kind: 'paragraph',
+      props: { numPr: { numId: '1', ilvl: 0 } },
+      children: Object.freeze([createRun('Item')]),
+    }) as Paragraph
+    const doc = createDocument([listParagraph])
+    const ctx = { document: doc, range: collapsedRange(pos([0, 0], 0, 0)), history: new History() }
+
+    const result = handleKeyDown(makeKeyEvent('Tab'), ctx)
+
+    expect(result).not.toBeNull()
+    const updated = result!.document.sections[0].blocks[0] as Paragraph
+    expect(updated.props?.numPr).toEqual({ numId: '1', ilvl: 1 })
+  })
+
+  it('Shift+Tab at the start of a list paragraph decreases its level', () => {
+    const listParagraph: Paragraph = Object.freeze({
+      kind: 'paragraph',
+      props: { numPr: { numId: '1', ilvl: 1 } },
+      children: Object.freeze([createRun('Item')]),
+    }) as Paragraph
+    const doc = createDocument([listParagraph])
+    const ctx = { document: doc, range: collapsedRange(pos([0, 0], 0, 0)), history: new History() }
+
+    const result = handleKeyDown(makeKeyEvent('Tab', { shift: true }), ctx)
+
+    expect(result).not.toBeNull()
+    const updated = result!.document.sections[0].blocks[0] as Paragraph
+    expect(updated.props?.numPr).toEqual({ numId: '1', ilvl: 0 })
+  })
+
+  it('Tab still inserts a literal tab character outside a list', () => {
+    const doc = createDocument([createParagraph(['hello'])])
+    const history = new History()
+    const ctx = { document: doc, range: collapsedRange(pos([0, 0], 0, 0)), history }
+
+    const result = handleKeyDown(makeKeyEvent('Tab'), ctx)
+
+    expect(result).not.toBeNull()
+    expect(getText(result!.document)).toEqual([['\thello']])
+  })
+
+  it('Tab mid-paragraph in a list still inserts a literal tab (only line-start Tab changes level)', () => {
+    const listParagraph: Paragraph = Object.freeze({
+      kind: 'paragraph',
+      props: { numPr: { numId: '1', ilvl: 0 } },
+      children: Object.freeze([createRun('Item')]),
+    }) as Paragraph
+    const doc = createDocument([listParagraph])
+    const ctx = { document: doc, range: collapsedRange(pos([0, 0], 0, 2)), history: new History() }
+
+    const result = handleKeyDown(makeKeyEvent('Tab'), ctx)
+
+    expect(result).not.toBeNull()
+    expect(getText(result!.document)).toEqual([['It\tem']])
+  })
+
+  it('Shift+Tab outside a list is a no-op', () => {
+    const doc = createDocument([createParagraph(['hello'])])
+    const ctx = { document: doc, range: collapsedRange(pos([0, 0], 0, 0)), history: new History() }
+
+    expect(handleKeyDown(makeKeyEvent('Tab', { shift: true }), ctx)).toBeNull()
+  })
+})
+
+// ─── DXE-21 — word-boundary delete crosses runs and paragraphs ──────────────
+
+describe('word-boundary delete (DXE-21)', () => {
+  it('Ctrl+Backspace deletes a word that spans a run boundary', () => {
+    const doc = createDocument([createParagraph(['foo', 'bar baz'])])
+    const history = new History()
+    // Cursor right after "foobar" (run0="foo", run1="bar baz" — offset 3
+    // within run1, i.e. right after "bar").
+    const ctx = { document: doc, range: collapsedRange(pos([0, 0], 1, 3)), history }
+
+    const result = handleBeforeInput(makeInputEvent('deleteWordBackward'), ctx)
+
+    expect(result).not.toBeNull()
+    expect(getText(result!.document).flat().join('')).toBe(' baz')
+  })
+
+  it('Ctrl+Backspace at the start of a paragraph merges into the previous paragraph', () => {
+    const doc = createDocument([createParagraph(['hello']), createParagraph(['world'])])
+    const history = new History()
+    const ctx = { document: doc, range: collapsedRange(pos([0, 1], 0, 0)), history }
+
+    const result = handleBeforeInput(makeInputEvent('deleteWordBackward'), ctx)
+
+    expect(result).not.toBeNull()
+    expect(result!.document.sections[0].blocks.length).toBe(1)
+    expect(getText(result!.document)).toEqual([['helloworld']])
+  })
+
+  it('Ctrl+Delete at the end of a paragraph merges the next paragraph in', () => {
+    const doc = createDocument([createParagraph(['hello']), createParagraph(['world'])])
+    const history = new History()
+    const ctx = { document: doc, range: collapsedRange(pos([0, 0], 0, 5)), history }
+
+    const result = handleBeforeInput(makeInputEvent('deleteWordForward'), ctx)
+
+    expect(result).not.toBeNull()
+    expect(result!.document.sections[0].blocks.length).toBe(1)
+    expect(getText(result!.document)).toEqual([['helloworld']])
+  })
 })
