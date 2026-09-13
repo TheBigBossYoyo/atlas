@@ -11,8 +11,8 @@ export function DropZone({ isVisible }: DropZoneProps) {
     <div className="dropzone">
       <div className="dropzone__content">
         <FileDown size={48} strokeWidth={1.5} />
-        <h3>Drop your Markdown file</h3>
-        <p>.md, .markdown, or .txt</p>
+        <h3>Drop a file to open it</h3>
+        <p>Markdown, DOCX, PDF, spreadsheets, slides, and more</p>
       </div>
     </div>
   );
