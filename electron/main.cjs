@@ -4,6 +4,7 @@ const os = require('os');
 const fs = require('fs');
 
 const { createPathAllowlist } = require('./lib/pathAllowlist.cjs');
+const { createRecentFilesStore } = require('./lib/recentFilesStore.cjs');
 const { atomicWriteFile, FileLockedError } = require('./lib/atomicWrite.cjs');
 const { decodeTextBuffer } = require('./lib/textDecoding.cjs');
 const { buildContentSecurityPolicy } = require('./lib/csp.cjs');
@@ -44,6 +45,45 @@ const isDev = !app.isPackaged;
 // through `path:register-dropped`), save-as dialog results, and recent
 // files re-validated through `recent:request-open`.
 const pathAllowlist = createPathAllowlist();
+
+// ---- Recent-files ground truth (security-review fix) ---- //
+//
+// `recent:request-open` re-opens a path from the renderer's own "recent
+// files" list — but that list lives in `localStorage`, which any script
+// running in the page can read AND write. Checking only `fs.existsSync`
+// there would let such a script claim ANY existing file on disk is "recent"
+// and get it added to `pathAllowlist`, defeating the allowlist entirely
+// (ELEC-02/03). This persisted, renderer-unreachable store records paths
+// only when they arrive through a flow the main process itself trusts
+// (dialog results, argv/second-instance/open-file, successful saves) —
+// deliberately NOT from drag-drop registration, which has the same
+// unverifiable-provenance shape. See recentFilesStore.cjs.
+/** @type {import('./lib/recentFilesStore.cjs').RecentFilesStore | null} */
+let recentFilesStoreInstance = null;
+function getRecentFilesStore() {
+  if (!recentFilesStoreInstance) {
+    let storeDir;
+    try {
+      storeDir = app.getPath('userData');
+    } catch {
+      storeDir = os.tmpdir();
+    }
+    recentFilesStoreInstance = createRecentFilesStore(storeDir);
+  }
+  return recentFilesStoreInstance;
+}
+
+/**
+ * Adds `filePath` to both the session allowlist and the persisted
+ * trusted-history store. Use this (instead of `pathAllowlist.add` directly)
+ * at every call site where the path came from a source the main process
+ * itself vouches for.
+ * @param {unknown} filePath
+ */
+function trustPath(filePath) {
+  pathAllowlist.add(filePath);
+  getRecentFilesStore().record(filePath);
+}
 
 const NOT_ALLOWLISTED_MESSAGE =
   'This file cannot be opened because it was not selected through Atlas. Try File > Open instead.';
@@ -153,17 +193,37 @@ function sendFileToWindow(win, filePath) {
 }
 
 /**
- * Registers `filePath` into the allowlist after re-validating it still
- * exists on disk. Shared by the drag-drop path-registration IPC and the
- * "request open recent" IPC (P1.2/P1.4).
+ * Registers a drag-dropped `filePath` into the SESSION allowlist only, after
+ * re-validating it still exists on disk (P1.2/P1.4). This does not add to
+ * the persisted `recentFilesStore` — see that module's header for why.
  * @param {Electron.IpcMainInvokeEvent} event
  * @param {unknown} filePath
  */
-function registerExistingPath(event, filePath) {
+function registerDroppedPath(event, filePath) {
   if (!isFromMainFrame(event)) return { ok: false };
   if (typeof filePath !== 'string' || filePath.length === 0) return { ok: false };
   if (!fs.existsSync(filePath)) return { ok: false };
   pathAllowlist.add(filePath);
+  return { ok: true };
+}
+
+/**
+ * Re-opens a path from the renderer's "recent files" list. Unlike drag-drop
+ * registration, this additionally requires `filePath` to already be present
+ * in the persisted `recentFilesStore` — i.e. to have been genuinely opened
+ * or saved through a trusted flow at some point — so a script that can only
+ * write to `localStorage` (or call this IPC channel directly) cannot claim
+ * an arbitrary existing file is "recent" (security-review fix; see
+ * recentFilesStore.cjs).
+ * @param {Electron.IpcMainInvokeEvent} event
+ * @param {unknown} filePath
+ */
+function registerRecentPath(event, filePath) {
+  if (!isFromMainFrame(event)) return { ok: false };
+  if (typeof filePath !== 'string' || filePath.length === 0) return { ok: false };
+  if (!getRecentFilesStore().has(filePath)) return { ok: false };
+  if (!fs.existsSync(filePath)) return { ok: false };
+  trustPath(filePath);
   return { ok: true };
 }
 
@@ -460,7 +520,7 @@ ipcMain.handle('dialog:openFileBinary', async (event) => {
     return { canceled: true, path: '', buffer: new ArrayBuffer(0) };
   }
 
-  pathAllowlist.add(filePath);
+  trustPath(filePath);
   const buf = await fs.promises.readFile(filePath);
   const buffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   return { canceled: false, path: filePath, buffer };
@@ -496,7 +556,7 @@ ipcMain.handle('open-file-dialog', async (event) => {
 
   if (result.canceled || result.filePaths.length === 0) return null;
 
-  pathAllowlist.add(result.filePaths[0]);
+  trustPath(result.filePaths[0]);
   return readMarkdownFile(result.filePaths[0]);
 });
 
@@ -512,9 +572,9 @@ ipcMain.handle('open-file-by-path', (event, filePath) => {
   return readMarkdownFile(filePath);
 });
 
-ipcMain.handle('path:register-dropped', (event, filePath) => registerExistingPath(event, filePath));
+ipcMain.handle('path:register-dropped', (event, filePath) => registerDroppedPath(event, filePath));
 
-ipcMain.handle('recent:request-open', (event, filePath) => registerExistingPath(event, filePath));
+ipcMain.handle('recent:request-open', (event, filePath) => registerRecentPath(event, filePath));
 
 ipcMain.handle('save-file', async (event, req) => {
   if (!isFromMainFrame(event)) return { saved: false, error: SENDER_FRAME_ERROR_MESSAGE };
@@ -543,7 +603,7 @@ ipcMain.handle('save-file', async (event, req) => {
 
   try {
     atomicWriteFile(targetPath, req.content);
-    pathAllowlist.add(targetPath);
+    trustPath(targetPath);
     return { saved: true, path: targetPath, name: path.basename(targetPath) };
   } catch (err) {
     logMainEvent('ERROR', 'save-file failed', err);
@@ -575,7 +635,7 @@ ipcMain.handle('save-binary-file', async (event, req) => {
 
   try {
     atomicWriteFile(targetPath, Buffer.from(req.content));
-    pathAllowlist.add(targetPath);
+    trustPath(targetPath);
     return { saved: true, path: targetPath, name: path.basename(targetPath) };
   } catch (err) {
     logMainEvent('ERROR', 'save-binary-file failed', err);
@@ -683,7 +743,12 @@ ipcMain.on('set-theme', (_event, theme) => {  currentOverlayColors = OVERLAY_COL
 
 // ---- App lifecycle ---- //
 
-// Grab file from argv before app is ready
+// Grab file from argv before app is ready. `app.getPath('userData')` is not
+// guaranteed to work this early, so only the session allowlist is updated
+// here — the persisted recentFilesStore write is deferred to `whenReady`
+// below (once `app.getPath` is safe to call) rather than risking pinning
+// the store's lazily-created singleton to a tmpdir fallback for the rest of
+// the session.
 pendingFilePath = extractFilePath(process.argv);
 if (pendingFilePath) {
   pathAllowlist.add(pendingFilePath);
@@ -692,7 +757,7 @@ if (pendingFilePath) {
 app.on('second-instance', (_event, argv) => {
   const filePath = extractFilePath(argv);
   if (filePath) {
-    pathAllowlist.add(filePath);
+    trustPath(filePath);
   }
   if (filePath && mainWindow) {
     sendFileToWindow(mainWindow, filePath);
@@ -710,6 +775,13 @@ app.on('second-instance', (_event, argv) => {
 app.whenReady().then(() => {
   createWindow();
 
+  // Now safe to touch the persisted recent-files store — flush the
+  // cold-start argv path (if any) into it. The session allowlist was
+  // already updated synchronously above, before the app was ready.
+  if (pendingFilePath) {
+    getRecentFilesStore().record(pendingFilePath);
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -725,7 +797,15 @@ app.on('window-all-closed', () => {
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
   if (typeof filePath !== 'string' || filePath.length === 0) return;
-  pathAllowlist.add(filePath);
+  if (app.isReady()) {
+    trustPath(filePath);
+  } else {
+    // Mirrors the argv case above: `app.getPath('userData')` isn't
+    // guaranteed to work before 'ready' (this event can fire pre-ready on
+    // macOS cold start), so only the session allowlist is updated now; the
+    // `whenReady` flush above will persist `pendingFilePath` once it's safe.
+    pathAllowlist.add(filePath);
+  }
   if (mainWindow) {
     sendFileToWindow(mainWindow, filePath);
   } else {
