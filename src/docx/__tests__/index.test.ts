@@ -31,6 +31,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 import { loadDocx, saveDocx, type DocxBundle } from '..'
 import { addCommentToDocument } from '../editor/commentMutations'
+import type { Block } from '../model'
 
 // `Packer.toBuffer` returns a Node `Buffer`, and `saveDocx` returns whatever
 // realm's `Uint8Array` JSZip constructed it with — under Vitest's jsdom
@@ -280,6 +281,39 @@ describe('loadDocx / saveDocx integration', () => {
 
     const reloaded = await loadDocx(toArrayBuffer(secondSave))
     expect(reloaded.document.comments.size).toBe(0)
+  })
+
+  it('parses and round-trips a table inside a header (wave 1 follow-up)', async () => {
+    const doc = new DocxJsDocument({
+      sections: [
+        {
+          headers: {
+            default: new DocxJsHeader({
+              children: [
+                new DocxJsTable({
+                  rows: [
+                    new DocxJsTableRow({
+                      children: [new DocxJsTableCell({ children: [new DocxJsParagraph('Acme Corp')] })],
+                    }),
+                  ],
+                }),
+              ],
+            }),
+          },
+          children: [new DocxJsParagraph('Body text')],
+        },
+      ],
+    })
+    const buffer = toArrayBuffer(await Packer.toBuffer(doc))
+
+    const bundle = await loadDocx(buffer)
+    const header = [...bundle.document.headers.values()][0]
+    expect(header?.blocks.some((block: Block) => block.kind === 'table')).toBe(true)
+
+    const saved = await saveDocx(bundle)
+    const reloaded = await loadDocx(toArrayBuffer(saved))
+    const reloadedHeader = [...reloaded.document.headers.values()][0]
+    expect(reloadedHeader?.blocks.some((block: Block) => block.kind === 'table')).toBe(true)
   })
 
   it('fails the save with a clear error instead of writing a broken package (D20)', async () => {
