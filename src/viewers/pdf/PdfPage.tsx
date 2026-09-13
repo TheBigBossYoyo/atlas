@@ -199,10 +199,21 @@ function PdfPageBase({
         canvasContext.scale(dpr, dpr)
 
         renderTask = page.render({ canvas, canvasContext, viewport })
+        // `renderTask.cancel()` (called from this effect's cleanup, e.g. on
+        // unmount or a zoom/rotation change) rejects this promise — but this
+        // function may already have returned early below (the `if
+        // (cancelled) return` guards while awaiting the text layer) by the
+        // time that happens, leaving nothing awaiting it. Attaching a no-op
+        // catch immediately avoids that becoming an unhandled rejection; the
+        // real `await renderTask.promise` further down still throws/settles
+        // independently for the actual error handling.
+        renderTask.promise.catch(() => {})
 
         const textLayerDiv = textLayerRef.current
         const textContentPromise = page.getTextContent()
         const annotationsPromise = page.getAnnotations({ intent: 'display' })
+        textContentPromise.catch(() => {})
+        annotationsPromise.catch(() => {})
 
         if (textLayerDiv) {
           textLayerDiv.replaceChildren()

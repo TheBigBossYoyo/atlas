@@ -189,6 +189,8 @@ function PdfViewerBase({ file }: ViewerProps) {
       // `.pdf-viewer__print-root` and hide the interactive toolbar/pages.
       document.body.classList.add('atlas-printing')
       window.print()
+    } catch (err) {
+      console.error('Failed to prepare PDF for printing', err)
     } finally {
       document.body.classList.remove('atlas-printing')
       printRoot.replaceChildren()
