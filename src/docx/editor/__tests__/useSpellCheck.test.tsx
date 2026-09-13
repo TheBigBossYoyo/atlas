@@ -23,8 +23,8 @@ function installMockBridge(): MockState {
   const state: MockState = {
     listeners: new Set(),
     unsubscribed: 0,
-    replaceMisspelling: vi.fn(async (_word: string) => ({ replaced: true })),
-    addWord: vi.fn(async (_word: string) => ({ added: true })),
+    replaceMisspelling: vi.fn(async () => ({ replaced: true })),
+    addWord: vi.fn(async () => ({ added: true })),
   }
   const bridge: MockBridge = {
     onSpellCheckMenu: (cb) => {

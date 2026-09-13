@@ -9,7 +9,6 @@ import {
   type FormEvent,
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
 } from 'react'
 
 import { Printer, Save } from 'lucide-react'
@@ -1181,7 +1180,6 @@ function DocxEditor({
         })
 
         if (!cancelled) {
-          // eslint-disable-next-line no-console
           console.info(
             `[Atlas/DocxViewer] paginate returned ${nextPages.length} page(s) for document with ${documentModel.sections.length} section(s)`,
           )
@@ -1193,7 +1191,6 @@ function DocxEditor({
           return
         }
         if (!cancelled) {
-          // eslint-disable-next-line no-console
           console.error('[Atlas/DocxViewer] pagination failed', error)
           setPaginationError(error instanceof Error ? error.message : String(error))
           setPaginationProgress(null)
@@ -1260,7 +1257,7 @@ function DocxEditor({
           spellCheck={true}
           onBeforeInput={handleBeforeInputEvent}
           onKeyDown={handleKeyDownEvent}
-          onMouseUp={(_: ReactMouseEvent<HTMLDivElement>) => syncRangeFromDom()}
+          onMouseUp={() => syncRangeFromDom()}
           onKeyUp={() => syncRangeFromDom()}
           onFocus={() => syncRangeFromDom()}
           onCompositionStart={handleCompositionStart}
@@ -1345,22 +1342,22 @@ function DocxViewerBase({ file }: ViewerProps) {
   const setStats = useSetViewerStats()
 
   useEffect(() => {
-    if (file.kind === 'text') {
+    let cancelled = false
+
+    // Runs synchronously up to the first `await`, so this reset lands in the
+    // same tick as the effect itself — identical timing to setting state
+    // directly in the effect body, but nested in a callback so it synchronizes
+    // with the external `loadDocx` call rather than reading as derivable state.
+    void (async () => {
       setBundle(null)
       setNavItems([])
       setStats(null)
       setErrorMessage(null)
-      return
-    }
 
-    let cancelled = false
+      if (file.kind === 'text') {
+        return
+      }
 
-    setBundle(null)
-    setNavItems([])
-    setStats(null)
-    setErrorMessage(null)
-
-    void (async () => {
       try {
         const nextBundle = await loadDocx(normalizeDocxBuffer(file.content))
 
@@ -1388,23 +1385,23 @@ function DocxViewerBase({ file }: ViewerProps) {
     return documentModel ? collectDocxMetrics(documentModel) : null
   }, [documentModel])
 
-  const navItems = useMemo<ReadonlyArray<NavItem>>(() => {
-    if (metrics === null) {
-      return []
-    }
-
-    return metrics.navSeeds.map(seed => ({
-      id: seed.id,
-      label: seed.label,
-      level: seed.level,
-      onSelect: () => {
-        containerRef.current
-          ?.querySelectorAll<HTMLElement>('.docx-page__line[data-paragraph-path]')
-          .item(seed.paragraphIndex)
-          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      },
-    }))
-  }, [metrics])
+  const navItems = useMemo<ReadonlyArray<NavItem>>(
+    () =>
+      metrics === null
+        ? []
+        : metrics.navSeeds.map(seed => ({
+            id: seed.id,
+            label: seed.label,
+            level: seed.level,
+            onSelect: () => {
+              containerRef.current
+                ?.querySelectorAll<HTMLElement>('.docx-page__line[data-paragraph-path]')
+                .item(seed.paragraphIndex)
+                ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            },
+          })),
+    [metrics],
+  )
 
   useEffect(() => {
     setNavItems(navItems)
