@@ -1,0 +1,86 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`useToc characterization > matches a full snapshot of heading extraction over the "kitchen-sink" fixture 1`] = `
+[
+  {
+    "id": "atlas-characterization-fixture",
+    "level": 1,
+    "text": "Atlas Characterization Fixture",
+  },
+  {
+    "id": "heading-two-with-bold",
+    "level": 2,
+    "text": "Heading Two with Bold",
+  },
+  {
+    "id": "heading-three-with-code",
+    "level": 3,
+    "text": "Heading Three with Code",
+  },
+  {
+    "id": "heading-four-with-italic",
+    "level": 4,
+    "text": "Heading Four with Italic",
+  },
+  {
+    "id": "heading-five-with-link",
+    "level": 5,
+    "text": "Heading Five with Link",
+  },
+  {
+    "id": "heading-six-with-strikethrough",
+    "level": 6,
+    "text": "Heading Six with Strikethrough",
+  },
+  {
+    "id": "team-roster",
+    "level": 2,
+    "text": "Team Roster",
+  },
+  {
+    "id": "release-checklist",
+    "level": 2,
+    "text": "Release Checklist",
+  },
+  {
+    "id": "notes",
+    "level": 2,
+    "text": "Notes",
+  },
+  {
+    "id": "example",
+    "level": 2,
+    "text": "Example",
+  },
+  {
+    "id": "math",
+    "level": 2,
+    "text": "Math",
+  },
+  {
+    "id": "flow",
+    "level": 2,
+    "text": "Flow",
+  },
+  {
+    "id": "nested-lists",
+    "level": 2,
+    "text": "Nested Lists",
+  },
+  {
+    "id": "quoting",
+    "level": 2,
+    "text": "Quoting",
+  },
+  {
+    "id": "embedded-html",
+    "level": 2,
+    "text": "Embedded HTML",
+  },
+  {
+    "id": "links-and-images",
+    "level": 2,
+    "text": "Links and Images",
+  },
+]
+`;
