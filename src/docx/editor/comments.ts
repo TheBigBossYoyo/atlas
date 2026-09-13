@@ -82,11 +82,15 @@ export function extractCommentText(comment: CommentNode): string {
   const parts: string[] = []
   const structuredBody = (comment as CommentNode & { readonly body?: ReadonlyArray<Block> }).body
   const legacyBlocks = (comment as CommentNode & { readonly blocks?: ReadonlyArray<Block> }).blocks
-  const blocks = Array.isArray(structuredBody)
-    ? structuredBody
-    : Array.isArray(legacyBlocks)
-      ? legacyBlocks
-      : []
+  // Prefer the structured body, but only when it actually has content — an
+  // empty `body` (e.g. a legacy-shaped Comment that stashed its content in
+  // `blocks` instead) must still fall through to the raw-XML fallback below.
+  const blocks: ReadonlyArray<Block> =
+    Array.isArray(structuredBody) && structuredBody.length > 0
+      ? structuredBody
+      : Array.isArray(legacyBlocks)
+        ? legacyBlocks
+        : []
 
   for (const block of blocks) {
     if (block.kind === 'paragraph') {

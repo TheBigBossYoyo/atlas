@@ -20,6 +20,7 @@ import type {
   UnknownNode,
 } from '../../model/document'
 import { extractCommentText, findCommentAnchors } from '../comments'
+import { parseComments } from '../../parser/comments'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -143,6 +144,26 @@ describe('extractCommentText', () => {
     }
 
     expect(extractCommentText(comment)).toBe('Structured comment.')
+  })
+
+  it('extracts text from a real parsed comment containing a hyperlink', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:comment w:id="11" w:author="Alice">
+    <w:p>
+      <w:hyperlink r:id="rId1">
+        <w:r><w:t>See the style guide</w:t></w:r>
+      </w:hyperlink>
+    </w:p>
+  </w:comment>
+</w:comments>`
+
+    const parsed = parseComments(xml)
+    const comment = parsed.get('11')
+    expect(comment).toBeDefined()
+    expect(comment?.body[0]?.kind).toBe('paragraph')
+    expect((comment?.body[0] as Paragraph).children[0]?.kind).toBe('hyperlink')
+    expect(extractCommentText(comment as CommentNode)).toBe('See the style guide')
   })
 })
 
