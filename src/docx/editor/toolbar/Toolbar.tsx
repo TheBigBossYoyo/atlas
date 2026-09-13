@@ -24,7 +24,9 @@ import {
   MessageSquare,
   Eye,
   Check,
-  X
+  X,
+  Subscript,
+  Superscript
 } from 'lucide-react';
 import type { ToolbarCommand, ToolbarState } from './toolbarTypes';
 import './__styles__/toolbar.css';
@@ -49,6 +51,12 @@ const DEFAULT_COLORS = [
   '#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff',
   '#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff'
 ];
+
+/** D18/DXE-06/DXE-12 — controls with no real implementation behind them yet
+ * (unlike lists/indent/hyperlink/page-break/table, which this wave
+ * implemented) get a disabled state and an explanatory tooltip instead of
+ * silently no-opping when clicked. */
+const NOT_YET_SUPPORTED = 'Not yet supported';
 
 interface ToolbarProps {
   state: ToolbarState;
@@ -142,13 +150,14 @@ const HomeTab: React.FC<TabProps> = ({ onCommand, state, activeFormats, availabl
   return (
     <>
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'undo' })} title="Undo"><Undo2 /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'redo' })} title="Redo"><Redo2 /></button>
+        <IconButton label="Undo" onClick={() => onCommand({ kind: 'undo' })}><Undo2 /></IconButton>
+        <IconButton label="Redo" onClick={() => onCommand({ kind: 'redo' })}><Redo2 /></IconButton>
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
         <select
           className="docx-toolbar__font-select"
+          aria-label="Font"
           value={state?.fontFamily || ''}
           onChange={(e) => onCommand({ kind: 'set-font-family', family: e.target.value })}
         >
@@ -157,6 +166,7 @@ const HomeTab: React.FC<TabProps> = ({ onCommand, state, activeFormats, availabl
         </select>
         <select
           className="docx-toolbar__size-select"
+          aria-label="Font size"
           value={state?.fontSizePt || ''}
           onChange={(e) => onCommand({ kind: 'set-font-size', sizePt: Number(e.target.value) })}
         >
@@ -170,6 +180,8 @@ const HomeTab: React.FC<TabProps> = ({ onCommand, state, activeFormats, availabl
         <FormatButton kind="toggle-italic" icon={<Italic />} active={activeFormats?.has('italic')} onCommand={onCommand} />
         <FormatButton kind="toggle-underline" icon={<Underline />} active={activeFormats?.has('underline')} onCommand={onCommand} />
         <FormatButton kind="toggle-strike" icon={<Strikethrough />} active={activeFormats?.has('strike')} onCommand={onCommand} />
+        <FormatButton kind="toggle-subscript" label="Subscript" icon={<Subscript />} active={activeFormats?.has('subscript')} onCommand={onCommand} />
+        <FormatButton kind="toggle-superscript" label="Superscript" icon={<Superscript />} active={activeFormats?.has('superscript')} onCommand={onCommand} />
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
@@ -178,21 +190,21 @@ const HomeTab: React.FC<TabProps> = ({ onCommand, state, activeFormats, availabl
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <FormatButton kind="set-alignment" payload={{ kind: 'set-alignment', align: 'left' }} icon={<AlignLeft />} active={state?.alignment === 'left'} onCommand={onCommand} />
-        <FormatButton kind="set-alignment" payload={{ kind: 'set-alignment', align: 'center' }} icon={<AlignCenter />} active={state?.alignment === 'center'} onCommand={onCommand} />
-        <FormatButton kind="set-alignment" payload={{ kind: 'set-alignment', align: 'right' }} icon={<AlignRight />} active={state?.alignment === 'right'} onCommand={onCommand} />
-        <FormatButton kind="set-alignment" payload={{ kind: 'set-alignment', align: 'justify' }} icon={<AlignJustify />} active={state?.alignment === 'justify'} onCommand={onCommand} />
+        <FormatButton kind="set-alignment" label="Align left" payload={{ kind: 'set-alignment', align: 'left' }} icon={<AlignLeft />} active={state?.alignment === 'left'} onCommand={onCommand} />
+        <FormatButton kind="set-alignment" label="Align center" payload={{ kind: 'set-alignment', align: 'center' }} icon={<AlignCenter />} active={state?.alignment === 'center'} onCommand={onCommand} />
+        <FormatButton kind="set-alignment" label="Align right" payload={{ kind: 'set-alignment', align: 'right' }} icon={<AlignRight />} active={state?.alignment === 'right'} onCommand={onCommand} />
+        <FormatButton kind="set-alignment" label="Justify" payload={{ kind: 'set-alignment', align: 'justify' }} icon={<AlignJustify />} active={state?.alignment === 'justify'} onCommand={onCommand} />
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'toggle-bullet-list' })} title="Bullet List"><List /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'toggle-numbered-list' })} title="Numbered List"><ListOrdered /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'change-indent', delta: -1 })} title="Decrease Indent"><IndentDecrease /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'change-indent', delta: 1 })} title="Increase Indent"><IndentIncrease /></button>
+        <IconButton label="Bullet List" onClick={() => onCommand({ kind: 'toggle-bullet-list' })}><List /></IconButton>
+        <IconButton label="Numbered List" onClick={() => onCommand({ kind: 'toggle-numbered-list' })}><ListOrdered /></IconButton>
+        <IconButton label="Decrease Indent" onClick={() => onCommand({ kind: 'change-indent', delta: -1 })}><IndentDecrease /></IconButton>
+        <IconButton label="Increase Indent" onClick={() => onCommand({ kind: 'change-indent', delta: 1 })}><IndentIncrease /></IconButton>
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'open-find-replace' })} title="Find and Replace"><Search /></button>
+        <IconButton label="Find and Replace" onClick={() => onCommand({ kind: 'open-find-replace' })}><Search /></IconButton>
       </div>
     </>
   );
@@ -202,22 +214,22 @@ const InsertTab: React.FC<TabProps> = ({ onCommand }) => {
   return (
     <>
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'insert-page-break' })} title="Page Break"><FileText /></button>
+        <IconButton label="Page Break" onClick={() => onCommand({ kind: 'insert-page-break' })}><FileText /></IconButton>
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
         <TablePickerPopover onCommand={onCommand} />
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'insert-image' })} title="Image"><ImageIcon /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'insert-hyperlink' })} title="Hyperlink"><LinkIcon /></button>
+        <IconButton label="Image" onClick={() => onCommand({ kind: 'insert-image' })}><ImageIcon /></IconButton>
+        <IconButton label="Hyperlink" onClick={() => onCommand({ kind: 'insert-hyperlink' })}><LinkIcon /></IconButton>
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'insert-header' })} title="Header"><Heading /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'insert-footer' })} title="Footer"><FileText /></button>
+        <IconButton label="Header" disabled disabledReason={NOT_YET_SUPPORTED} onClick={() => onCommand({ kind: 'insert-header' })}><Heading /></IconButton>
+        <IconButton label="Footer" disabled disabledReason={NOT_YET_SUPPORTED} onClick={() => onCommand({ kind: 'insert-footer' })}><FileText /></IconButton>
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'insert-comment' })} title="Comment"><MessageSquare /></button>
+        <IconButton label="Comment" onClick={() => onCommand({ kind: 'insert-comment' })}><MessageSquare /></IconButton>
       </div>
     </>
   );
@@ -227,13 +239,13 @@ const LayoutTab: React.FC<TabProps> = ({ onCommand }) => {
   return (
     <>
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'set-margins', preset: 'normal' })} title="Margins"><FileText /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'set-orientation', orientation: 'portrait' })} title="Orientation"><FileText /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'set-page-size', preset: 'a4' })} title="Size"><FileText /></button>
+        <IconButton label="Margins" disabled disabledReason={NOT_YET_SUPPORTED} onClick={() => onCommand({ kind: 'set-margins', preset: 'normal' })}><FileText /></IconButton>
+        <IconButton label="Orientation" disabled disabledReason={NOT_YET_SUPPORTED} onClick={() => onCommand({ kind: 'set-orientation', orientation: 'portrait' })}><FileText /></IconButton>
+        <IconButton label="Size" disabled disabledReason={NOT_YET_SUPPORTED} onClick={() => onCommand({ kind: 'set-page-size', preset: 'a4' })}><FileText /></IconButton>
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'set-columns', count: 2 })} title="Columns"><Columns /></button>
+        <IconButton label="Columns" disabled disabledReason={NOT_YET_SUPPORTED} onClick={() => onCommand({ kind: 'set-columns', count: 2 })}><Columns /></IconButton>
       </div>
     </>
   );
@@ -243,17 +255,17 @@ const ReviewTab: React.FC<TabProps> = ({ onCommand, state }) => {
   return (
     <>
       <div className="docx-toolbar__group">
-        <FormatButton kind="toggle-spell-check" payload={{ kind: 'toggle-spell-check' }} icon={<Check />} active={state?.spellCheck} onCommand={onCommand} />
+        <FormatButton kind="toggle-spell-check" label="Toggle spell check" payload={{ kind: 'toggle-spell-check' }} icon={<Check />} active={state?.spellCheck} onCommand={onCommand} />
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <FormatButton kind="toggle-track-changes" payload={{ kind: 'toggle-track-changes' }} icon={<Eye />} active={state?.trackChanges} onCommand={onCommand} />
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'accept-change' })} title="Accept"><Check /></button>
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'reject-change' })} title="Reject"><X /></button>
+        <FormatButton kind="toggle-track-changes" label="Toggle track changes" payload={{ kind: 'toggle-track-changes' }} icon={<Eye />} active={state?.trackChanges} onCommand={onCommand} />
+        <IconButton label="Accept" onClick={() => onCommand({ kind: 'accept-change' })}><Check /></IconButton>
+        <IconButton label="Reject" onClick={() => onCommand({ kind: 'reject-change' })}><X /></IconButton>
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <button className="docx-toolbar__button" onClick={() => onCommand({ kind: 'open-comments-pane' })} title="Comments"><MessageSquare /></button>
+        <IconButton label="Comments" onClick={() => onCommand({ kind: 'open-comments-pane' })}><MessageSquare /></IconButton>
       </div>
     </>
   );
@@ -261,12 +273,47 @@ const ReviewTab: React.FC<TabProps> = ({ onCommand, state }) => {
 
 // --- COMPONENTS ---
 
-const FormatButton = ({ kind, payload, icon, active, onCommand }: { kind: string; payload?: ToolbarCommand; icon: React.ReactNode; active?: boolean; onCommand: (cmd: ToolbarCommand) => void }) => {
+/** A plain icon-only toolbar button: `title` (tooltip) and `aria-label`
+ * (screen reader) always mirror the same human-readable `label` (UX-09).
+ * `disabled`+`disabledReason` renders a real disabled control with an
+ * explanatory tooltip instead of a silently no-op click handler (D18/DXE-12). */
+const IconButton = ({
+  label,
+  onClick,
+  disabled,
+  disabledReason,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  disabledReason?: string;
+  children: React.ReactNode;
+}) => {
   return (
     <button
+      type="button"
+      className="docx-toolbar__button"
+      onClick={onClick}
+      disabled={disabled}
+      title={disabled ? (disabledReason ?? label) : label}
+      aria-label={label}
+    >
+      {children}
+    </button>
+  );
+};
+
+const FormatButton = ({ kind, label, payload, icon, active, onCommand }: { kind: string; label?: string; payload?: ToolbarCommand; icon: React.ReactNode; active?: boolean; onCommand: (cmd: ToolbarCommand) => void }) => {
+  const text = label ?? kind;
+  return (
+    <button
+      type="button"
       className={`docx-toolbar__button ${active ? 'docx-toolbar__button--active' : ''}`}
       onClick={() => onCommand(payload || { kind } as ToolbarCommand)}
-      title={kind}
+      title={text}
+      aria-label={text}
+      aria-pressed={active ?? false}
     >
       {icon}
     </button>
@@ -281,30 +328,55 @@ const ColorPickerPopover = ({ icon, onSelect, title }: { icon: React.ReactNode; 
 
   return (
     <div className="docx-toolbar__popover-container" ref={ref}>
-      <button className="docx-toolbar__button" onClick={() => setOpen(!open)} title={title}>
+      <button
+        type="button"
+        className="docx-toolbar__button"
+        onClick={() => setOpen(!open)}
+        title={title}
+        aria-label={title}
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
         {icon}
       </button>
       {open && (
-        <div className="docx-toolbar__popover">
-          <div className="docx-toolbar__color-grid">
+        <div className="docx-toolbar__popover" role="dialog" aria-label={title}>
+          <div className="docx-toolbar__color-grid" role="group" aria-label="Color swatches">
             {DEFAULT_COLORS.map(c => (
-              <div
+              // DXE-23 — a real, keyboard-focusable/activatable button (not a
+              // bare div) so the color grid is operable without a mouse.
+              <button
                 key={c}
+                type="button"
                 className="docx-toolbar__color-swatch"
                 style={{ backgroundColor: c }}
+                aria-label={`Color ${c}`}
                 onClick={() => { onSelect(c); setOpen(false); }}
               />
             ))}
           </div>
           <div className="docx-toolbar__color-input-row">
-            <input type="text" value={hex} onChange={e => setHex(e.target.value)} placeholder="#000000" />
-            <button onClick={() => { if (hex) { onSelect(hex); setOpen(false); } }}>Ok</button>
+            <label className="docx-toolbar__visually-hidden" htmlFor="docx-toolbar-custom-color">
+              Custom color (hex)
+            </label>
+            <input
+              id="docx-toolbar-custom-color"
+              type="text"
+              value={hex}
+              onChange={e => setHex(e.target.value)}
+              placeholder="#000000"
+              aria-label="Custom color (hex)"
+            />
+            <button type="button" onClick={() => { if (hex) { onSelect(hex); setOpen(false); } }}>Ok</button>
           </div>
         </div>
       )}
     </div>
   );
 };
+
+const TABLE_PICKER_ROWS = 8;
+const TABLE_PICKER_COLS = 10;
 
 const TablePickerPopover = ({ onCommand }: { onCommand: (cmd: ToolbarCommand) => void }) => {
   const [open, setOpen] = useState(false);
@@ -313,25 +385,37 @@ const TablePickerPopover = ({ onCommand }: { onCommand: (cmd: ToolbarCommand) =>
   const ref = useRef<HTMLDivElement>(null);
   useClickOutside(ref, () => setOpen(false));
 
-  const rows = 8;
-  const cols = 10;
-
   return (
     <div className="docx-toolbar__popover-container" ref={ref}>
-      <button className="docx-toolbar__button" onClick={() => setOpen(!open)} title="Insert Table">
+      <button
+        type="button"
+        className="docx-toolbar__button"
+        onClick={() => setOpen(!open)}
+        title="Insert Table"
+        aria-label="Insert Table"
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
         <TableIcon />
       </button>
       {open && (
-        <div className="docx-toolbar__popover">
-          <div className="docx-toolbar__table-grid">
-            {Array.from({ length: rows }).map((_, r) => (
-              Array.from({ length: cols }).map((_, c) => {
+        <div className="docx-toolbar__popover" role="dialog" aria-label="Insert table">
+          <div className="docx-toolbar__table-grid" role="group" aria-label="Table size">
+            {Array.from({ length: TABLE_PICKER_ROWS }).map((_, r) => (
+              Array.from({ length: TABLE_PICKER_COLS }).map((_, c) => {
                 const isHovered = r <= hoverRow && c <= hoverCol;
+                const setHover = () => { setHoverRow(r); setHoverCol(c); };
                 return (
-                  <div
+                  // DXE-23 — a real button so Tab/Shift+Tab and Enter/Space
+                  // work; onFocus mirrors onMouseEnter so keyboard users see
+                  // the same live "RxC Table" preview as mouse users.
+                  <button
                     key={`${r}-${c}`}
+                    type="button"
                     className={`docx-toolbar__table-cell ${isHovered ? 'docx-toolbar__table-cell--hover' : ''}`}
-                    onMouseEnter={() => { setHoverRow(r); setHoverCol(c); }}
+                    aria-label={`${r + 1} by ${c + 1} table`}
+                    onMouseEnter={setHover}
+                    onFocus={setHover}
                     onClick={() => {
                       onCommand({ kind: 'insert-table', rows: hoverRow + 1, cols: hoverCol + 1 });
                       setOpen(false);
@@ -341,7 +425,7 @@ const TablePickerPopover = ({ onCommand }: { onCommand: (cmd: ToolbarCommand) =>
               })
             ))}
           </div>
-          <div className="docx-toolbar__table-label">
+          <div className="docx-toolbar__table-label" aria-live="polite">
             {hoverRow + 1}x{hoverCol + 1} Table
           </div>
         </div>
