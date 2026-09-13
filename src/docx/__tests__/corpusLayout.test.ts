@@ -99,3 +99,24 @@ describe('corpus layout: lists-bullets-numbered (D3)', () => {
     }
   })
 })
+
+describe('corpus layout: section-breaks (D9)', () => {
+  it('does not force an extra page break at a continuous section boundary, but does at the following nextPage/landscape one', async () => {
+    const buffer = await readCorpusFixture('section-breaks')
+    const bundle = await loadDocx(buffer)
+
+    const pages = await paginate({
+      document: bundle.document,
+      fontResolver: createFontResolver(),
+      theme: bundle.theme,
+    })
+
+    // Per scripts/generate-docx-corpus.mjs's fixtureSectionBreaks: section 0
+    // (portrait) and section 1 (continuous, still portrait) share one page;
+    // section 2 (nextPage, landscape) starts a genuinely new, wider-than-
+    // tall page.
+    expect(pages).toHaveLength(2)
+    expect(pages[0].sizePt.width).toBeLessThanOrEqual(pages[0].sizePt.height)
+    expect(pages[1].sizePt.width).toBeGreaterThan(pages[1].sizePt.height)
+  })
+})

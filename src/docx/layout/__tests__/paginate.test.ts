@@ -318,6 +318,59 @@ describe('paginate', () => {
     expect(paragraphLineCounts(pages, 0)).toEqual([2, 3])
   })
 
+  it("flows a continuous section break's content onto the previous section's page instead of an unwanted extra page break (D9/DXL-07)", async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)]),
+        createSection([createParagraph(1)], { type: 'continuous' }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    expect(pageLineCounts(pages)).toEqual([2])
+  })
+
+  it('recomputes column geometry for a continuous section break that changes column count (D9/DXL-07)', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)]),
+        createSection([createParagraph(1)], { type: 'continuous', columnCount: 2 }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    expect(pages[0].columns).toHaveLength(2)
+    expect(pageLineCounts(pages)).toEqual([2])
+  })
+
+  it('advances to the next column for a nextColumn section break when one remains (D9/DXL-07)', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)], { columnCount: 2 }),
+        createSection([createParagraph(1)], { type: 'nextColumn', columnCount: 2 }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    expect(pages[0].columns.map((column) => column.lines.length)).toEqual([1, 1])
+  })
+
+  it('opens a new page for a nextColumn section break when already on the last column (D9/DXL-07)', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)]),
+        createSection([createParagraph(1)], { type: 'nextColumn' }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    expect(pageLineCounts(pages)).toEqual([1, 1])
+  })
+
   it('reserves header and footer line height from the page content area', async () => {
     const headerReference: HeaderReference = {
       id: 'header-default',

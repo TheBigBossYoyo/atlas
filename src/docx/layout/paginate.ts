@@ -198,6 +198,12 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
   // than per-section.
   const listCounterState = createNumberingCounterState()
 
+  // Carries across the `for` loop below (rather than being section-local)
+  // so a 'continuous'/'nextColumn' section break (D9) can keep flowing
+  // into the page the PREVIOUS section left in progress instead of always
+  // starting a fresh one. `undefined` only before the first section.
+  let currentPage: ActivePage | undefined
+
   for (const [sectionIndex, section] of input.document.sections.entries()) {
     const sectionLayout = resolveSectionLayout(section)
     const units = await buildSectionUnits(
@@ -218,27 +224,47 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
     }
 
     let pageNumberInSection = 0
-
-    if (sectionIndex > 0) {
-      pageNumberInSection = addParityPaddingPages(
-        pages,
-        sectionLayout,
-        sectionIndex,
-        pageNumberInSection,
-        headerFooterLines,
-      )
+    const openNewPage = (): ActivePage => {
+      pageNumberInSection += 1
+      return createActivePage(sectionLayout, sectionIndex, pageNumberInSection, pages.length + 1, headerFooterLines)
     }
 
-    let currentPage = createActivePage(
-      sectionLayout,
-      sectionIndex,
-      ++pageNumberInSection,
-      pages.length + 1,
-      headerFooterLines,
-    )
+    // A section break's own type decides whether this section continues
+    // flowing into the previous section's last page (D9) or always starts
+    // a fresh one — the very first section never has a "previous" page to
+    // continue.
+    const continuation = sectionIndex === 0 ? 'fresh' : resolveSectionContinuation(section.props.type)
+
+    // `sectionPage` (definitely `ActivePage`, unlike the loop-spanning
+    // `currentPage`) carries this section's in-progress page through the
+    // rest of this iteration, including the nested unit-placement loop
+    // below — reassigning `currentPage` itself across a loop boundary
+    // doesn't narrow its `ActivePage | undefined` type back down reliably.
+    let sectionPage: ActivePage
+
+    if (continuation === 'continuous' && currentPage !== undefined) {
+      sectionPage = applyContinuousSectionGeometry(currentPage, sectionLayout, sectionIndex)
+    } else if (continuation === 'nextColumn' && currentPage !== undefined) {
+      sectionPage = forceColumnBreak(currentPage, pages, openNewPage)
+      sectionPage.sectionIndex = sectionIndex
+    } else {
+      if (currentPage !== undefined) {
+        pages.push(finalizePage(currentPage, pages.length))
+      }
+      if (sectionIndex > 0) {
+        pageNumberInSection = addParityPaddingPages(
+          pages,
+          sectionLayout,
+          sectionIndex,
+          pageNumberInSection,
+          headerFooterLines,
+        )
+      }
+      sectionPage = openNewPage()
+    }
 
     if (units.length === 0) {
-      pages.push(finalizePage(currentPage, pages.length))
+      currentPage = sectionPage
       continue
     }
 
@@ -248,33 +274,19 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
       pendingGroup.push(unit)
 
       if (!unit.keepWithNext) {
-        currentPage = flushPendingGroup(pendingGroup, currentPage, pages, () => {
-          pageNumberInSection += 1
-          return createActivePage(
-            sectionLayout,
-            sectionIndex,
-            pageNumberInSection,
-            pages.length + 1,
-            headerFooterLines,
-          )
-        })
+        sectionPage = flushPendingGroup(pendingGroup, sectionPage, pages, openNewPage)
         pendingGroup = []
       }
     }
 
     if (pendingGroup.length > 0) {
-      currentPage = flushPendingGroup(pendingGroup, currentPage, pages, () => {
-        pageNumberInSection += 1
-        return createActivePage(
-          sectionLayout,
-          sectionIndex,
-          pageNumberInSection,
-          pages.length + 1,
-          headerFooterLines,
-        )
-      })
+      sectionPage = flushPendingGroup(pendingGroup, sectionPage, pages, openNewPage)
     }
 
+    currentPage = sectionPage
+  }
+
+  if (currentPage !== undefined) {
     pages.push(finalizePage(currentPage, pages.length))
   }
 
@@ -614,6 +626,68 @@ function forceColumnBreak(currentPage: ActivePage, pages: Page[], openNewPage: (
   }
 
   return forcePageBreak(currentPage, pages, openNewPage)
+}
+
+type SectionContinuation = 'fresh' | 'continuous' | 'nextColumn'
+
+/**
+ * D9: a `continuous` or `nextColumn` section break keeps flowing into the
+ * page the previous section left in progress instead of always starting a
+ * fresh page — every other section type (the vast majority: `nextPage`,
+ * `evenPage`, `oddPage`, or no explicit type at all) starts fresh, exactly
+ * as before this task.
+ */
+function resolveSectionContinuation(sectionType: SectionProps['type']): SectionContinuation {
+  if (sectionType === 'continuous') {
+    return 'continuous'
+  }
+  if (sectionType === 'nextColumn') {
+    return 'nextColumn'
+  }
+  return 'fresh'
+}
+
+/**
+ * A `continuous` section break doesn't start a new page, so the page's own
+ * geometry (size, margins, header/footer — already resolved and, for
+ * header/footer, already laid out — when the page was created) stays
+ * exactly as it was; Word itself defers a page-level property change
+ * specified on a continuous section until the next real page. Only the
+ * COLUMN geometry can meaningfully change content flow without a page
+ * break, so this rebuilds `columns` from the new section's `cols`
+ * definition and resumes flowing from the first of them.
+ *
+ * Existing columns whose index still exists in the new layout keep their
+ * already-placed lines (the common case: the break doesn't actually change
+ * column count); a genuinely new column index starts empty. Both start at
+ * the SAME resumed height — the tallest of the old columns' used height —
+ * so new content never overlaps whatever was already placed, even though
+ * an actual change in column count means the old and new column shapes
+ * don't isometrically line up (a documented, deliberate approximation:
+ * getting this pixel-perfect would need the page model to represent
+ * differently-shaped column regions stacked vertically on one page, which
+ * is out of scope for this task).
+ */
+function applyContinuousSectionGeometry(
+  currentPage: ActivePage,
+  sectionLayout: ResolvedSectionLayout,
+  sectionIndex: number,
+): ActivePage {
+  const resumeUsedHeightPt = currentPage.columns.reduce(
+    (tallest, column) => Math.max(tallest, column.usedHeightPt),
+    0,
+  )
+
+  currentPage.sectionIndex = sectionIndex
+  currentPage.columns = sectionLayout.columnLeftsPt.map((leftPt, columnIndex) => ({
+    widthPt: sectionLayout.columnWidthPt,
+    leftPt,
+    lines: currentPage.columns[columnIndex]?.lines ?? [],
+    usedHeightPt: resumeUsedHeightPt,
+  }))
+  currentPage.currentColumnIndex = 0
+
+  return currentPage
 }
 
 function adjustSplitCount(totalRemainingLines: number, fitCount: number): number {
@@ -1192,7 +1266,7 @@ function createStyleResolutionCache(): StyleResolutionCache {
 }
 
 function buildStyleCacheKey(styleId: string | undefined, direct: unknown): string {
-  return `${styleId ?? ''} ${JSON.stringify(direct ?? null)}`
+  return `${styleId ?? ''}::${JSON.stringify(direct ?? null)}`
 }
 
 function resolveEffectiveParaProps(
