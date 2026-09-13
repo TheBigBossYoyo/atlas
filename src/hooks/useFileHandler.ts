@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { LoadedFile, FormatId } from '../formats/types';
 import { detectByExtension, detectByMagic, detectFormat } from '../formats/detect';
-import { useRecentFiles } from './useRecentFiles';
+import type { RecentFile } from '../types';
 
 // ---------------------------------------------------------------------------
 // Format class sets — single source of truth for routing decisions
@@ -15,6 +15,9 @@ const BINARY_CLASS_FORMATS = new Set<FormatId>([
   'pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf',
 ]);
 
+const BROWSER_MODE_ERROR =
+  'This feature requires the Atlas desktop app — file access is unavailable in a plain browser tab.';
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -23,12 +26,21 @@ export interface FileHandlerState {
   file: LoadedFile | null;
   loading: boolean;
   error: string | null;
+  /**
+   * Increments every time a load successfully commits a new `file` (P2.10).
+   * Combined with `file.path`, it gives callers a stable "which load is this"
+   * identity even when the same path is reopened, so a dirty-reset guard can
+   * key off file *identity* instead of comparing derived content strings.
+   */
+  loadGeneration: number;
 }
 
 export interface FileHandlerActions {
   openDialog: () => Promise<void>;
   loadFromPath: (absPath: string) => Promise<void>;
   clear: () => void;
+  /** Dismiss the current error without discarding the currently-open file (P2.3). */
+  clearError: () => void;
 }
 
 export type UseFileHandlerReturn = FileHandlerState & FileHandlerActions & {
@@ -42,25 +54,71 @@ export type UseFileHandlerReturn = FileHandlerState & FileHandlerActions & {
   filePath: string;
 };
 
+export interface UseFileHandlerOptions {
+  /**
+   * P2.4 — the single `useRecentFiles()` instance lives in App.tsx; this hook
+   * no longer keeps its own, so a removed recent entry can't be silently
+   * resurrected by a stale internal copy.
+   */
+  addRecent: (file: Omit<RecentFile, 'openedAt'>) => void;
+  /**
+   * P1.1 — called before every open (dialog result, Recent click, drag-drop,
+   * or the OS "Open with" IPC event — all of which funnel through
+   * `loadFromPath`) so the caller can show a Save/Discard/Cancel prompt when
+   * there are unsaved changes. Resolving `false` aborts the open with no
+   * state change. Omit to allow every open unconditionally (e.g. in tests
+   * that don't exercise the guard).
+   */
+  confirmDiscardChanges?: () => Promise<boolean>;
+}
+
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
-export function useFileHandler(): UseFileHandlerReturn {
+export function useFileHandler({
+  addRecent,
+  confirmDiscardChanges,
+}: UseFileHandlerOptions): UseFileHandlerReturn {
   const [file, setFile] = useState<LoadedFile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadGeneration, setLoadGeneration] = useState(0);
 
   // Guard so getInitialFile only fires once even in StrictMode double-invoke
   const initialFileFetched = useRef(false);
 
-  const { addRecent } = useRecentFiles();
+  // Monotonically increasing request id (P2.10) — lets a slower, earlier
+  // load discover it's been superseded and discard its own result instead of
+  // overwriting a faster, newer one.
+  const requestIdRef = useRef(0);
 
   // -------------------------------------------------------------------------
   // Core loader
   // -------------------------------------------------------------------------
 
   const loadFromPath = useCallback(async (absPath: string): Promise<void> => {
+    // P2.12/SHELL-20/ELEC-19/QA-26 — running outside Electron (e.g. `npm run
+    // dev` in a plain browser tab) must fail with a friendly, surfaced error
+    // instead of throwing on a non-null assertion.
+    if (typeof window === 'undefined' || !window.electronAPI) {
+      setError(BROWSER_MODE_ERROR);
+      return;
+    }
+    const electronAPI = window.electronAPI;
+
+    // P1.1 — guard every open path behind the combined dirty check. This is
+    // the single funnel every entry point (dialog, Recent click, drag-drop,
+    // and the OS "Open with" IPC subscription below) already calls through,
+    // so gating here covers all of them at once.
+    if (confirmDiscardChanges) {
+      const canProceed = await confirmDiscardChanges();
+      if (!canProceed) {
+        return;
+      }
+    }
+
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
 
@@ -70,7 +128,7 @@ export function useFileHandler(): UseFileHandlerReturn {
       let loaded: LoadedFile;
 
       if (TEXT_CLASS_FORMATS.has(extFormat)) {
-        const data = await window.electronAPI!.openFileByPath(absPath);
+        const data = await electronAPI.openFileByPath(absPath);
         if (!data) throw new Error(`Failed to read file: ${absPath}`);
         loaded = {
           kind: 'text',
@@ -79,7 +137,7 @@ export function useFileHandler(): UseFileHandlerReturn {
           format: extFormat,
         };
       } else if (BINARY_CLASS_FORMATS.has(extFormat)) {
-        const data = await window.electronAPI!.readBinaryByPath(absPath);
+        const data = await electronAPI.readBinaryByPath(absPath);
         loaded = {
           kind: 'binary',
           content: data.buffer,
@@ -88,7 +146,7 @@ export function useFileHandler(): UseFileHandlerReturn {
         };
       } else {
         // Unknown extension — read binary then use magic-byte detection
-        const data = await window.electronAPI!.readBinaryByPath(absPath);
+        const data = await electronAPI.readBinaryByPath(absPath);
         const magicFormat = detectByMagic(data.buffer);
         const finalFormat = detectFormat(absPath, data.buffer);
 
@@ -111,27 +169,44 @@ export function useFileHandler(): UseFileHandlerReturn {
         }
       }
 
+      // A newer load already started while we were awaiting IPC — discard
+      // this now-stale result instead of clobbering the newer one (P2.10).
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
+
       setFile(loaded);
+      setLoadGeneration(g => g + 1);
 
       // Push to recents — name derived from path tail
       const name = absPath.split(/[\\/]/).pop() ?? absPath;
       addRecent({ path: absPath, name });
     } catch (err) {
+      if (requestIdRef.current !== requestId) {
+        return;
+      }
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (requestIdRef.current === requestId) {
+        setLoading(false);
+      }
     }
-  }, [addRecent]);
+  }, [addRecent, confirmDiscardChanges]);
 
   // -------------------------------------------------------------------------
   // Dialog opener
   // -------------------------------------------------------------------------
 
   const openDialog = useCallback(async (): Promise<void> => {
+    if (typeof window === 'undefined' || !window.electronAPI) {
+      setError(BROWSER_MODE_ERROR);
+      return;
+    }
+
     // NOTE: openFileBinary() returns the buffer alongside the path, but we
     // deliberately route through loadFromPath so all detection logic stays in
     // one place. The second IPC read is acceptable overhead for now.
-    const result = await window.electronAPI!.openFileBinary();
+    const result = await window.electronAPI.openFileBinary();
     if (result.canceled) return;
     await loadFromPath(result.path);
   }, [loadFromPath]);
@@ -144,6 +219,10 @@ export function useFileHandler(): UseFileHandlerReturn {
     setFile(null);
     setError(null);
     setLoading(false);
+  }, []);
+
+  const clearError = useCallback(() => {
+    setError(null);
   }, []);
 
   // -------------------------------------------------------------------------
@@ -185,9 +264,11 @@ export function useFileHandler(): UseFileHandlerReturn {
     file,
     loading,
     error,
+    loadGeneration,
     openDialog,
     loadFromPath,
     clear,
+    clearError,
     // Legacy shim
     markdown,
     fileName,
