@@ -1,8 +1,76 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { Document as DocxDocument, RunChild } from '../../docx/model'
 import { ViewerProvider } from '../shared/ViewerContext'
+import { useViewerIsDirty, useViewerSave } from '../shared/useViewerContext'
 import { DocxViewer } from '../DocxViewer'
+
+// ---------------------------------------------------------------------------
+// Test-only helpers
+// ---------------------------------------------------------------------------
+
+/** Renders the active viewer's shared-context dirty flag as text for assertions. */
+function ViewerDirtyProbe() {
+  const isDirty = useViewerIsDirty()
+  return <span data-testid="viewer-dirty">{String(isDirty)}</span>
+}
+
+/** Renders a button that calls the shared context's registered save(). */
+function ViewerSaveProbe() {
+  const save = useViewerSave()
+  return (
+    <button type="button" onClick={() => void save()}>
+      Context Save
+    </button>
+  )
+}
+
+function collectRunChildren(document: DocxDocument): ReadonlyArray<RunChild> {
+  const children: RunChild[] = []
+  for (const section of document.sections) {
+    for (const block of section.blocks) {
+      if (block.kind !== 'paragraph') continue
+      for (const child of block.children) {
+        if (child.kind === 'run') {
+          children.push(...child.children)
+        } else if (child.kind === 'hyperlink') {
+          for (const grandchild of child.children) {
+            if (grandchild.kind === 'run') {
+              children.push(...grandchild.children)
+            }
+          }
+        }
+      }
+    }
+  }
+  return children
+}
+
+function collectText(document: DocxDocument): string {
+  return collectRunChildren(document)
+    .filter((child): child is Extract<RunChild, { kind: 'text' }> => child.kind === 'text')
+    .map((child) => child.value)
+    .join('')
+}
+
+function hasDrawing(document: DocxDocument): boolean {
+  return collectRunChildren(document).some((child) => child.kind === 'drawing')
+}
+
+/** Types into Find, then Replace, and clicks "Replace" — a real edit via the
+ * real (unmocked) find/replace/command pipeline, without needing a genuine
+ * DOM selection (the mocked PageStack doesn't render real paragraph text). */
+function replaceFirstMatch(query: string, replacement: string): void {
+  const findInput = document.querySelector<HTMLInputElement>('.docx-find__input[aria-label="Find"]')
+  const replaceInput = document.querySelector<HTMLInputElement>('.docx-find__input[aria-label="Replace"]')
+  if (!findInput || !replaceInput) {
+    throw new Error('Find/Replace inputs not found')
+  }
+  fireEvent.change(findInput, { target: { value: query } })
+  fireEvent.change(replaceInput, { target: { value: replacement } })
+  fireEvent.click(screen.getByRole('button', { name: 'Replace' }))
+}
 
 const { loadDocxMock, saveDocxMock, paginateMock } = vi.hoisted(() => ({
   loadDocxMock: vi.fn(),
@@ -96,7 +164,12 @@ describe('DocxViewer editor', () => {
       onSpellCheckMenu: vi.fn(() => () => {}),
       replaceMisspelling: vi.fn(),
       addWordToDictionary: vi.fn(),
-    }
+      image: { pick: vi.fn() },
+      // `saveBinaryFile` isn't part of the typed `ElectronAPI` (DocxViewer reads
+      // it through its own local `BinaryElectronAPI` extension) — cast through
+      // `unknown` rather than typing this test double as `any`.
+      saveBinaryFile: vi.fn().mockResolvedValue({ saved: true, path: 'C:/docs/sample.docx' }),
+    } as unknown as typeof window.electronAPI
   })
 
   afterEach(() => {
@@ -188,10 +261,14 @@ describe('DocxViewer editor', () => {
     fireEvent.keyDown(editor, { key: 'h', ctrlKey: true })
     expect(document.querySelector('.docx-find__input[aria-label="Replace"]')).not.toBeNull()
 
-    // Ctrl+S → swallowed (no throw, no save dialog from browser)
+    // Ctrl+S — DXE-07/RUN-03: must actually save (used to swallow the key and
+    // do nothing at all).
     const ctrlS = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
     fireEvent(editor, ctrlS)
     expect(ctrlS.defaultPrevented).toBe(true)
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
 
     // Ctrl+L alignment shortcut — must call preventDefault
     const ctrlL = new KeyboardEvent('keydown', { key: 'l', ctrlKey: true, bubbles: true, cancelable: true })
@@ -214,5 +291,124 @@ describe('DocxViewer editor', () => {
     expect(ctrl1.defaultPrevented).toBe(true)
 
     printSpy.mockRestore()
+  })
+
+  // ---------------------------------------------------------------------------
+  // P1.1/SHELL-03/DXE-09 — document-session capability contract
+  // ---------------------------------------------------------------------------
+
+  it('P1.1: reports dirty via the shared ViewerContext after an edit, and clears it after a successful save', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <ViewerDirtyProbe />
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+
+    replaceFirstMatch('Hello', 'Howdy')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+    })
+  })
+
+  it('P1.1/DXE-07/RUN-03: the shared context save() reaches this viewer\'s own save implementation', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <ViewerSaveProbe />
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Context Save' }))
+
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // P1.6/DXE-01 — image insert must operate on the live documentModel
+  // ---------------------------------------------------------------------------
+
+  it('P1.6/DXE-01: inserting an image preserves edits made since the file was loaded', async () => {
+    window.electronAPI!.image!.pick = vi.fn().mockResolvedValue({
+      cancelled: false,
+      bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      mime: 'image/png',
+      suggestedName: 'photo.png',
+    })
+
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    // Edit the document first (via the real find/replace pipeline) — this
+    // also leaves `range` pointing at a real, valid position, which
+    // handleInsertImage needs as its insertion cursor.
+    replaceFirstMatch('Hello', 'Howdy')
+
+    // Insert an image. Before the P1.6 fix, insertImageIntoBundle ran against
+    // the stale `bundle.document` (still "Hello DOCX"), silently reverting
+    // the "Howdy" edit above.
+    fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
+    fireEvent.click(screen.getByTitle('Image'))
+
+    await waitFor(() => {
+      expect(saveDocxMock).not.toHaveBeenCalled() // sanity: haven't saved yet
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(collectText(savedDocument)).toContain('Howdy')
+    expect(hasDrawing(savedDocument)).toBe(true)
   })
 })
