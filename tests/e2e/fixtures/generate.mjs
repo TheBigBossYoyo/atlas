@@ -188,7 +188,11 @@ export async function generateFixtures() {
   const pdfBuffer = makePdfBuffer()
 
   const writes = [
-    writeFixture('sample.md', '# Atlas Markdown fixture\n\nSmoke test paragraph.\n'),
+    writeFixture(
+      'sample.md',
+      '# Atlas Markdown fixture\n\nSmoke test paragraph.\n\n' +
+        '```mermaid\nflowchart TD\n  A[Start] --> B[Atlas]\n```\n',
+    ),
     writeFixture('sample.txt', 'Atlas text fixture\nSecond line\n'),
     writeFixture('sample.ts', 'export function atlasFixture(): string {\n  return \'ok\'\n}\n'),
     writeFixture('sample.csv', 'name,value\nAtlas,2\nPhase,1\n'),
