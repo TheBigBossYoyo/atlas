@@ -60,3 +60,38 @@ for (const fixture of fixtures) {
     }
   })
 }
+
+// Regression coverage for the mermaid dependency bump (P1.16): the markdown
+// fixture embeds a fenced ```mermaid block, so this asserts the diagram
+// actually renders to a real <svg> (not the Mermaid.tsx error fallback)
+// with no console errors, catching a future mermaid/markdown regression
+// that the per-format loop above wouldn't (it never inspects diagram output).
+test('renders a mermaid diagram in the markdown fixture', async () => {
+  const electronApp = await electron.launch({
+    args: ['.', path.join(fixtureDir, 'sample.md')],
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      CI: '1',
+      PLAYWRIGHT: '1',
+    },
+  })
+
+  try {
+    const page = await electronApp.firstWindow()
+    const consoleErrors: string[] = []
+
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        consoleErrors.push(message.text())
+      }
+    })
+
+    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1)
+    await expect(page.locator('.mermaid--error')).toHaveCount(0)
+    await expect(page.locator('.mermaid svg')).toBeVisible({ timeout: 15_000 })
+    expect(consoleErrors, consoleErrors.join('\n')).toEqual([])
+  } finally {
+    await electronApp.close()
+  }
+})
