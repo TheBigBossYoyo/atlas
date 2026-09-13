@@ -201,6 +201,12 @@ function isAllowedExternalScheme(urlString) {
 
 function applyNavigationGuards(win) {
   win.webContents.on('will-navigate', (event, url) => {
+    // A same-URL "navigation" is a reload (Ctrl+R, Vite HMR's full-reload
+    // fallback, or the P1.15 recovery dialog's win.reload()) — allow it.
+    // Anything else is a genuine navigation attempt and must be blocked.
+    if (url === win.webContents.getURL()) {
+      return;
+    }
     event.preventDefault();
     if (isAllowedExternalScheme(url)) {
       void shell.openExternal(url);
