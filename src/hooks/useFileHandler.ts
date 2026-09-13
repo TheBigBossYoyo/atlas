@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { LoadedFile, FormatId } from '../formats/types';
 import { detectByExtension, detectByMagic, detectFormat } from '../formats/detect';
+import { decodeTextBuffer } from '../utils/textDecoding';
 import { useRecentFiles } from './useRecentFiles';
 
 // ---------------------------------------------------------------------------
@@ -93,7 +94,10 @@ export function useFileHandler(): UseFileHandlerReturn {
         const finalFormat = detectFormat(absPath, data.buffer);
 
         if (TEXT_CLASS_FORMATS.has(finalFormat)) {
-          const content = new TextDecoder('utf-8').decode(data.buffer);
+          // Sniffs a BOM and falls back to Windows-1252 for non-UTF-8
+          // content instead of blindly UTF-8-decoding into U+FFFD mojibake
+          // (LOAD-05/DAT-03/RUN-05).
+          const content = decodeTextBuffer(data.buffer);
           loaded = {
             kind: 'text',
             content,
