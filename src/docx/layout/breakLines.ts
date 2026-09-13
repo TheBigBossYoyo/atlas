@@ -481,6 +481,32 @@ function findLastVisibleIndex(items: ReadonlyArray<LineItem>): number {
   return cursor
 }
 
+/**
+ * Indices of the `space` items within a justified line that should absorb
+ * `line.justificationStretch` when rendering (D5) — the exact same set
+ * `countJustificationSpaces` counted when computing that stretch amount in
+ * the first place, so the renderer must reuse this rather than re-deriving
+ * its own notion of "which spaces stretch": trailing whitespace after the
+ * last visible glyph is excluded both times, or a render pass that
+ * stretched it too would overshoot `lineLimit`.
+ */
+export function resolveStretchableSpaceIndices(items: ReadonlyArray<LineItem>): ReadonlySet<number> {
+  const lastVisibleIndex = findLastVisibleIndex(items)
+  if (lastVisibleIndex < 0) {
+    return new Set()
+  }
+
+  const indices = new Set<number>()
+  for (let index = 0; index <= lastVisibleIndex; index += 1) {
+    const item = items[index]
+    if (item.kind === 'space' && item.stretchable) {
+      indices.add(index)
+    }
+  }
+
+  return indices
+}
+
 function resolveLineHeight(paraProps: EffectiveParaProps, naturalLineHeight: number): number {
   const spacing = paraProps.spacing
   const lineRule = spacing?.lineRule ?? 'auto'

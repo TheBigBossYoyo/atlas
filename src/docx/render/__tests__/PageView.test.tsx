@@ -129,6 +129,39 @@ describe('PageView', () => {
     expect(pageEl.style.width).toBe(`${400 * 2 * (4/3)}px`);
   });
 
+  it('stretches a justified line flush to the column width (D5/DXL-11)', async () => {
+    const doc = createDocument([
+      createSection([createParagraph(4, { jc: 'both' })], { pageWidthPt: 100 }),
+    ]);
+    const pages = await paginate({
+      document: doc,
+      fontResolver: mockFontResolver,
+    });
+
+    const { container } = render(<PageView page={pages[0]} zoom={1} document={doc} />);
+    const lines = container.querySelectorAll('.docx-page__line');
+    // The paragraph wraps to more than one line at this column width, so its
+    // non-final first line is eligible for "both" justification.
+    expect(lines.length).toBeGreaterThan(1);
+
+    const firstLine = lines[0] as HTMLElement;
+    expect(firstLine.style.width).toBe('100px');
+  });
+
+  it('leaves a non-justified line at its natural (ragged) width', async () => {
+    const doc = createDocument([
+      createSection([createParagraph(4)], { pageWidthPt: 100 }),
+    ]);
+    const pages = await paginate({
+      document: doc,
+      fontResolver: mockFontResolver,
+    });
+
+    const { container } = render(<PageView page={pages[0]} zoom={1} document={doc} />);
+    const firstLine = container.querySelector('.docx-page__line') as HTMLElement;
+    expect(firstLine.style.width).not.toBe('100px');
+  });
+
   it('renders pages with headers and footers', async () => {
     const doc = createDocument([createSection([createParagraph(5)])]);
     const pages = await paginate({

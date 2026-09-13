@@ -8,6 +8,8 @@ import type {
 import type { Page, PageTableRef, PageTableRowRef } from '../layout/pageTypes';
 import type { LineBox } from '../layout/types';
 import type { Theme } from '../parser/theme';
+import { resolveStretchableSpaceIndices } from '../layout/breakLines';
+
 import { borderToCss, revisionStyleToCss, type RevisionRenderKind, runStyleToCss } from './style';
 import { InlineDrawing } from './InlineDrawing';
 import './__styles__/page-view.css';
@@ -26,6 +28,8 @@ type RevisionRunMeta = {
 
 // CSS px is 96dpi, pt is 72dpi. So 1pt = 1.333px.
 const PT_TO_PX = 4 / 3;
+
+const EMPTY_STRETCH_INDICES: ReadonlySet<number> = new Set();
 
 type RenderLineFn = (
   line: LineBox,
@@ -255,6 +259,19 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
     // Tall drawings reserve clearance above the text strut; the strut keeps
     // its own line height so the baseline lands where the paginator put it.
     const clearance = line.drawingClearancePt ?? 0;
+    // D5: `line.isJustified`/`justificationStretch` were already computed by
+    // the paginator but never read here — a "Justify" paragraph rendered
+    // with its natural (ragged) width instead of a flush right edge. Widen
+    // each stretchable space by the paginator's per-space stretch amount,
+    // and widen the line container to match so the flush edge is real
+    // (not clipped/overflowing).
+    const stretchableIndices = line.isJustified
+      ? resolveStretchableSpaceIndices(line.items)
+      : EMPTY_STRETCH_INDICES;
+    const lineWidthPt =
+      stretchableIndices.size > 0
+        ? line.width + stretchableIndices.size * line.justificationStretch
+        : line.width;
 
     return (
       <div
@@ -264,7 +281,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
         style={{
           top: `${topPt}px`,
           left: `${leftPt}px`,
-          width: `${line.width}px`,
+          width: `${lineWidthPt}px`,
           height: `${line.lineHeight}px`,
           lineHeight: `${line.lineHeight - clearance}px`,
           ...(clearance > 0 ? { paddingTop: `${clearance}px`, boxSizing: 'border-box' as const } : {}),
@@ -328,14 +345,18 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
             );
           }
           if (item.kind === 'space') {
-            // Spaces MUST keep their measured width — the paginator uses them
-            // to drive justification stretch and to anchor glue positions.
-            // Emit a real space character so accessibility tools and copy/paste
-            // see the document's actual whitespace, not an invisible spacer.
+            // Spaces keep their measured width, EXCEPT on a justified line's
+            // stretchable spaces, which absorb the paginator's per-space
+            // stretch amount so the line's flush-right edge is real. Emit a
+            // real space character so accessibility tools and copy/paste see
+            // the document's actual whitespace, not an invisible spacer.
+            const width = stretchableIndices.has(idx)
+              ? item.width + line.justificationStretch
+              : item.width;
             return (
               <span
                 key={idx}
-                style={{ display: 'inline-block', width: `${item.width}px`, whiteSpace: 'pre' }}
+                style={{ display: 'inline-block', width: `${width}px`, whiteSpace: 'pre' }}
               >
                 {' '}
               </span>
