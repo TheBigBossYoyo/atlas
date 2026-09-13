@@ -1,5 +1,10 @@
 /* Atlas — Find & Replace dialog styles (Wave C.6) */
 /* BEM: .docx-find */
+/* D26/UX-08: `--surface-1`/`--text`/`--border` below are app CSS variables
+   that were never actually defined anywhere, so every color here silently
+   fell back to its light-mode literal in every theme (dark, nord, dracula,
+   sepia). Renamed to the app's real tokens (`--bg-secondary`, `--text-
+   primary`, `--border-primary`) so Find & Replace follows the active theme. */
 
 .docx-find {
   position: fixed;
@@ -8,9 +13,9 @@
   z-index: 1000;
   min-width: 360px;
   max-width: 480px;
-  background: var(--surface-1, #ffffff);
-  color: var(--text, #1a1a1a);
-  border: 1px solid var(--border, #d0d0d0);
+  background: var(--bg-secondary, #ffffff);
+  color: var(--text-primary, #1a1a1a);
+  border: 1px solid var(--border-primary, #d0d0d0);
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   padding: 12px 16px 14px;
@@ -38,9 +43,9 @@
   flex: 1;
   height: 30px;
   padding: 0 8px;
-  background: var(--surface-1, #ffffff);
-  color: var(--text, #1a1a1a);
-  border: 1px solid var(--border, #d0d0d0);
+  background: var(--bg-secondary, #ffffff);
+  color: var(--text-primary, #1a1a1a);
+  border: 1px solid var(--border-primary, #d0d0d0);
   border-radius: 4px;
   font-size: 13px;
   outline: none;
@@ -60,7 +65,7 @@
   gap: 4px;
   cursor: pointer;
   user-select: none;
-  color: var(--text, #1a1a1a);
+  color: var(--text-primary, #1a1a1a);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -88,8 +93,8 @@
   height: 28px;
   padding: 0 10px;
   background: transparent;
-  color: var(--text, #1a1a1a);
-  border: 1px solid var(--border, #d0d0d0);
+  color: var(--text-primary, #1a1a1a);
+  border: 1px solid var(--border-primary, #d0d0d0);
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
@@ -115,7 +120,7 @@
 
 .docx-find__button--close:hover {
   background: rgba(200, 0, 0, 0.1);
-  color: var(--text, #1a1a1a);
+  color: var(--text-primary, #1a1a1a);
   border-color: transparent;
 }
 
@@ -123,7 +128,7 @@
 
 .docx-find__status {
   font-size: 11px;
-  color: var(--text, #1a1a1a);
+  color: var(--text-primary, #1a1a1a);
   opacity: 0.6;
   padding-left: 2px;
 }

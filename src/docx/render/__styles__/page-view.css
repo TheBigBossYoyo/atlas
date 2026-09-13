@@ -4,11 +4,19 @@
   align-items: center;
   gap: 24px;
   padding: 24px;
-  background: var(--surface-2, #e5e5e5);
+  /* D26/DXL-21: follow the active theme — was `var(--surface-2, #e5e5e5)`,
+     an app CSS variable that is never actually defined anywhere, so this
+     backdrop silently rendered the light-mode fallback color in every
+     theme (dark, nord, dracula, sepia). */
+  background: var(--bg-secondary, #e5e5e5);
 }
 
 .docx-page {
-  background: var(--surface-0, #ffffff);
+  /* Intentionally pinned to literal white, not a theme token — the page
+     itself represents Word's paper, which stays white regardless of the
+     app's active theme (matching how a physical printed page looks the
+     same under any office lighting). */
+  background: #ffffff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   position: relative;
   overflow: hidden;
