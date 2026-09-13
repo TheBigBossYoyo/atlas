@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   # Electron's postinstall normally downloads a matching Electron binary for
   # the target platform; CI only needs the package installed to type-check,
@@ -20,7 +23,10 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 24.14.0
+          # Single source of truth for the pinned Node version — kept in
+          # .nvmrc alongside package.json's "engines" field so CI can't drift
+          # from what local development validates against.
+          node-version-file: .nvmrc
           cache: npm
 
       - name: Install dependencies
