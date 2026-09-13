@@ -4,8 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import type { NavItem, ViewerStats } from '../../../formats/types'
 import { ViewerProvider } from '../ViewerContext'
 import {
+  useCanFindViewer,
   useGetExportableContent,
   useNavItems,
+  useOpenViewerFind,
+  useRegisterViewerFind,
   useRegisterViewerSave,
   useSetNavItems,
   useSetViewerDirty,
@@ -231,5 +234,97 @@ describe('ViewerContext', () => {
       await expect(result.current()).resolves.toBe(false)
     })
     expect(registeredSave).toHaveBeenCalledTimes(1)
+  })
+
+  // ---------------------------------------------------------------------------
+  // Wave 3-T — in-viewer find capability contract
+  // ---------------------------------------------------------------------------
+
+  it('canFind starts false and openFind() is a no-op when nothing is registered', () => {
+    const wrapper = makeWrapper('/a.csv')
+    const { result } = renderHook(
+      () => ({ canFind: useCanFindViewer(), openFind: useOpenViewerFind() }),
+      { wrapper },
+    )
+
+    expect(result.current.canFind).toBe(false)
+    expect(() => result.current.openFind()).not.toThrow()
+  })
+
+  it('registerFind flips canFind to true and openFind() calls the registered implementation', () => {
+    const wrapper = makeWrapper('/a.csv')
+    const { result } = renderHook(
+      () => ({
+        canFind: useCanFindViewer(),
+        registerFind: useRegisterViewerFind(),
+        openFind: useOpenViewerFind(),
+      }),
+      { wrapper },
+    )
+
+    const viewerOpenFind = vi.fn()
+
+    act(() => {
+      result.current.registerFind(viewerOpenFind)
+    })
+
+    expect(result.current.canFind).toBe(true)
+
+    act(() => {
+      result.current.openFind()
+    })
+
+    expect(viewerOpenFind).toHaveBeenCalledTimes(1)
+  })
+
+  it('registerFind(null) unregisters — canFind returns to false and openFind() no-ops again', () => {
+    const wrapper = makeWrapper('/a.csv')
+    const { result } = renderHook(
+      () => ({
+        canFind: useCanFindViewer(),
+        registerFind: useRegisterViewerFind(),
+        openFind: useOpenViewerFind(),
+      }),
+      { wrapper },
+    )
+
+    const viewerOpenFind = vi.fn()
+
+    act(() => {
+      result.current.registerFind(viewerOpenFind)
+    })
+    act(() => {
+      result.current.registerFind(null)
+    })
+
+    expect(result.current.canFind).toBe(false)
+
+    act(() => {
+      result.current.openFind()
+    })
+    expect(viewerOpenFind).not.toHaveBeenCalled()
+  })
+
+  it('canFind resets to false when filePath changes (new file, fresh session)', () => {
+    let filePath = '/a.csv'
+
+    const { result, rerender } = renderHook(
+      () => ({ canFind: useCanFindViewer(), registerFind: useRegisterViewerFind() }),
+      {
+        wrapper: ({ children }: { children: React.ReactNode }) => (
+          <ViewerProvider filePath={filePath}>{children}</ViewerProvider>
+        ),
+      },
+    )
+
+    act(() => {
+      result.current.registerFind(() => {})
+    })
+    expect(result.current.canFind).toBe(true)
+
+    filePath = '/b.csv'
+    rerender()
+
+    expect(result.current.canFind).toBe(false)
   })
 })

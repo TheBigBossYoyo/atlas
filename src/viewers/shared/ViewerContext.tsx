@@ -32,12 +32,14 @@ type InternalState = {
   navItems: ReadonlyArray<NavItem>
   stats: ViewerStats | null
   isDirty: boolean
+  canFind: boolean
 }
 
 const INITIAL_STATE_EXCEPT_PATH = {
   navItems: [] as ReadonlyArray<NavItem>,
   stats: null,
   isDirty: false,
+  canFind: false,
 } as const
 
 export function ViewerProvider({
@@ -60,6 +62,13 @@ export function ViewerProvider({
   // `file.path`) and its own cleanup effect calls `registerSave(null)` before
   // any new save() call could reach it.
   const saveRef = useRef<(() => Promise<boolean>) | null>(null)
+
+  // Same reasoning as `saveRef` above: the active viewer's find-overlay
+  // opener is an implementation detail swapped in/out via `registerFind`,
+  // not something that itself needs to trigger a re-render. `canFind`
+  // (whether *something* is registered) does live in state, since Toolbar's
+  // search button needs to reactively enable/disable.
+  const findRef = useRef<(() => void) | null>(null)
 
   // setState-during-render reset: when the incoming filePath differs from the
   // stored one, schedule fresh InternalState. React discards the in-progress
@@ -96,6 +105,15 @@ export function ViewerProvider({
   // implementation deferred to the Phase 3 per-format export work.
   const getExportableContent = useCallback((): ExportableContent | null => null, [])
 
+  const registerFind = useCallback((find: (() => void) | null) => {
+    findRef.current = find
+    setState(prev => (prev.canFind === (find !== null) ? prev : { ...prev, canFind: find !== null }))
+  }, [])
+
+  const openFind = useCallback(() => {
+    findRef.current?.()
+  }, [])
+
   const value = useMemo<ViewerContextValue>(
     () => ({
       navItems: state.navItems,
@@ -107,17 +125,23 @@ export function ViewerProvider({
       registerSave,
       save,
       getExportableContent,
+      canFind: state.canFind,
+      registerFind,
+      openFind,
     }),
     [
       state.navItems,
       state.stats,
       state.isDirty,
+      state.canFind,
       setNavItems,
       setStats,
       setDirty,
       registerSave,
       save,
       getExportableContent,
+      registerFind,
+      openFind,
     ],
   )
 

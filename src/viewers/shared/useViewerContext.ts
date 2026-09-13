@@ -55,3 +55,18 @@ export function useViewerSave(): () => Promise<boolean> {
 export function useGetExportableContent(): () => ExportableContent | null {
   return useViewerCtx().getExportableContent
 }
+
+/** Whether the active viewer has registered an in-viewer find implementation. */
+export function useCanFindViewer(): boolean {
+  return useViewerCtx().canFind
+}
+
+/** The active viewer calls this to plug its own "open find" implementation into the shared contract. */
+export function useRegisterViewerFind(): (find: (() => void) | null) => void {
+  return useViewerCtx().registerFind
+}
+
+/** Invokes whichever find implementation the active viewer has registered (a no-op if none has). */
+export function useOpenViewerFind(): () => void {
+  return useViewerCtx().openFind
+}

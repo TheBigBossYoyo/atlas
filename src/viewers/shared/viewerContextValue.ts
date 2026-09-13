@@ -12,6 +12,14 @@
  * global Ctrl+S/Save to whichever viewer is actually active. `getExportableContent`
  * is a typed placeholder for the per-format export work in Phase 3 — no viewer
  * registers one yet, so it always resolves to `null` today.
+ *
+ * `canFind`/`registerFind`/`openFind` (Wave 3-T) mirror the same
+ * register-from-the-active-viewer pattern for in-viewer find: SpreadsheetViewer
+ * and CsvViewer register their own find-overlay opener here, so App.tsx's
+ * Ctrl+F/Toolbar-search dispatcher can reach whichever viewer is active
+ * without knowing anything about grids. Markdown's own Ctrl+F handling
+ * (`useSearch`) is untouched — this contract only ever applies to non-markdown
+ * viewers that opt in.
  */
 
 import { createContext } from 'react'
@@ -41,6 +49,15 @@ export type ViewerContextValue = {
   save: () => Promise<boolean>
   /** Phase-3 placeholder — no viewer registers this yet. */
   getExportableContent: () => ExportableContent | null
+  /** Whether the active viewer has registered an in-viewer find implementation. */
+  canFind: boolean
+  /**
+   * The active viewer registers its own "open find" implementation here (or
+   * `null` to unregister, e.g. on unmount). `openFind()` calls whatever is
+   * currently registered and is a no-op when nothing is.
+   */
+  registerFind: (find: (() => void) | null) => void
+  openFind: () => void
 }
 
 export const ViewerContext = createContext<ViewerContextValue | null>(null)
