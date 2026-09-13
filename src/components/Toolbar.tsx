@@ -27,6 +27,7 @@ interface ToolbarProps {
   hasContent: boolean;
   canSave: boolean;
   canSearch: boolean;
+  canChangeFontSize: boolean;
   isMarkdown: boolean;
   isElectron: boolean;
   exportFormat: FormatId;
@@ -61,6 +62,7 @@ export function Toolbar({
   hasContent,
   canSave,
   canSearch,
+  canChangeFontSize,
   isMarkdown,
   isElectron,
   exportFormat,
@@ -95,15 +97,16 @@ export function Toolbar({
           <span>Open</span>
         </button>
 
-        <button
-          className="toolbar__btn toolbar__nodrag"
-          onClick={onSave}
-          title="Save (Ctrl+S)"
-          disabled={!canSave}
-        >
-          <Save size={16} />
-          <span>Save</span>
-        </button>
+        {canSave ? (
+          <button
+            className="toolbar__btn toolbar__nodrag"
+            onClick={onSave}
+            title="Save (Ctrl+S)"
+          >
+            <Save size={16} />
+            <span>Save</span>
+          </button>
+        ) : null}
 
         {fileName && (
           <span className="toolbar__filename">
@@ -133,32 +136,34 @@ export function Toolbar({
       </div>
 
       <div className="toolbar__right">
-        <div className="toolbar__font-group toolbar__nodrag" role="group" aria-label="Font size">
-          <button
-            className="toolbar__btn toolbar__btn--icon"
-            onClick={onDecreaseFont}
-            title="Decrease font size (Ctrl+-)"
-            aria-label="Decrease font size"
-          >
-            <Minus size={16} />
-          </button>
-          <button
-            className="toolbar__btn toolbar__btn--icon"
-            onClick={onResetFont}
-            title="Reset font size (Ctrl+0)"
-            aria-label="Reset font size"
-          >
-            <RotateCcw size={14} />
-          </button>
-          <button
-            className="toolbar__btn toolbar__btn--icon"
-            onClick={onIncreaseFont}
-            title="Increase font size (Ctrl+=)"
-            aria-label="Increase font size"
-          >
-            <Plus size={16} />
-          </button>
-        </div>
+        {canChangeFontSize ? (
+          <div className="toolbar__font-group toolbar__nodrag" role="group" aria-label="Font size">
+            <button
+              className="toolbar__btn toolbar__btn--icon"
+              onClick={onDecreaseFont}
+              title="Decrease font size (Ctrl+-)"
+              aria-label="Decrease font size"
+            >
+              <Minus size={16} />
+            </button>
+            <button
+              className="toolbar__btn toolbar__btn--icon"
+              onClick={onResetFont}
+              title="Reset font size (Ctrl+0)"
+              aria-label="Reset font size"
+            >
+              <RotateCcw size={14} />
+            </button>
+            <button
+              className="toolbar__btn toolbar__btn--icon"
+              onClick={onIncreaseFont}
+              title="Increase font size (Ctrl+=)"
+              aria-label="Increase font size"
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+        ) : null}
 
         {canSearch ? (
           <button
