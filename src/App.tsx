@@ -21,6 +21,7 @@ import { SAMPLE_MARKDOWN } from './constants';
 import { THEMES, type ViewMode, type ExportFormat, type RecentFile } from './types';
 import { exportMarkdown, exportHtml, exportPdf, exportDocx } from './utils/export';
 import type { LoadedFile, NavItem } from './formats/types';
+import { resolveDroppedFilePath } from './utils/dragDropPath';
 import { ViewerProvider } from './viewers/shared/ViewerContext';
 import { useSetNavItems, useSetViewerStats } from './viewers/shared/useViewerContext';
 
@@ -122,23 +123,32 @@ function App() {
     return false;
   }, [fileName, isMarkdownDocument, localMarkdown]);
 
+  // Counts nested dragenter/dragleave pairs so the overlay only hides once
+  // the drag has actually left the window, not merely a child element
+  // (SHELL-24 — the classic target-identity check goes false-negative on
+  // nested children).
+  const dragCounterRef = useRef(0);
+
   const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation(); setIsDragging(true);
+    e.preventDefault(); e.stopPropagation();
+    dragCounterRef.current += 1;
+    setIsDragging(true);
   }, []);
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
-    if (e.currentTarget === e.target) setIsDragging(false);
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setIsDragging(false);
   }, []);
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
   }, []);
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
+    dragCounterRef.current = 0;
     setIsDragging(false);
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile && 'path' in droppedFile) {
-      void openFileFromPath((droppedFile as File & { path: string }).path);
-    }
+    void resolveDroppedFilePath(window.electronAPI, e.dataTransfer.files[0]).then((path) => {
+      if (path) void openFileFromPath(path);
+    });
   }, [openFileFromPath]);
 
   // Track recents when a file is loaded
@@ -209,7 +219,19 @@ function App() {
   const handleOpenRecent = useCallback(
     (file: RecentFile) => {
       if (file.path && isElectron) {
-        void openFileFromPath(file.path);
+        // Recent-file paths are renderer-persisted (localStorage), so they
+        // must be re-validated and re-registered with the main process's
+        // read allowlist (P1.2) before loadFromPath's IPC reads will accept
+        // them — a file removed or moved since it was remembered is simply
+        // not reopened rather than surfacing a raw IPC rejection.
+        const requestOpen = window.electronAPI?.requestOpenRecent;
+        if (requestOpen) {
+          void requestOpen(file.path).then((result) => {
+            if (result.ok) void openFileFromPath(file.path);
+          });
+        } else {
+          void openFileFromPath(file.path);
+        }
       } else {
         void openFile();
       }
