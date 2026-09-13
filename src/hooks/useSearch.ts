@@ -1,5 +1,17 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useShellShortcut } from './useShortcutManager';
+import type { ShortcutHandler } from './shortcutManagerContext';
 
+/**
+ * `enabled` gates in-app search entirely (P2.1/X4/DAT-15/RUN-08): pass
+ * `true` for any format whose DOM structure this TreeWalker-based search can
+ * actually walk (markdown, Text/Code/RTF/ODT), and `false` for everything
+ * else (PDF, spreadsheets, slide decks) — the search shortcut simply isn't
+ * registered at all in that case, so Ctrl+F is never intercepted for those
+ * formats and falls through to whatever (if anything) the viewer or the
+ * platform does with it, instead of the old behavior of unconditionally
+ * calling `preventDefault()` with no feature behind it (RUN-08).
+ */
 export function useSearch(contentRef: React.RefObject<HTMLElement | null>, enabled = true) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -111,20 +123,12 @@ export function useSearch(contentRef: React.RefObject<HTMLElement | null>, enabl
     clearHighlights();
   }, [clearHighlights]);
 
-  // Keyboard shortcut
-  useEffect(() => {
-    if (!enabled) {
-      const disabledHandler = (e: KeyboardEvent) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-          e.preventDefault();
-        }
-      };
-
-      window.addEventListener('keydown', disabledHandler);
-      return () => window.removeEventListener('keydown', disabledHandler);
-    }
-
-    const handler = (e: KeyboardEvent) => {
+  // P2.1/X4/RUN-08 — registered only while `enabled`; the dispatcher simply
+  // never calls this handler for a disabled format, so Ctrl+F is never
+  // preventDefault()-ed with nothing behind it (the old "disabled branch"
+  // bug).
+  const handler = useCallback<ShortcutHandler>(
+    (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
         if (isOpen) {
@@ -132,14 +136,18 @@ export function useSearch(contentRef: React.RefObject<HTMLElement | null>, enabl
         } else {
           open();
         }
+        return true;
       }
       if (e.key === 'Escape' && isOpen) {
         close();
+        return true;
       }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [close, enabled, isOpen, open]);
+      return false;
+    },
+    [close, isOpen, open],
+  );
+
+  useShellShortcut(handler, enabled);
 
   // Re-highlight on query change
   useEffect(() => {

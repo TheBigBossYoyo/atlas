@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Download, FileCode, FileText, FileType, FileDown } from 'lucide-react';
 import type { FormatId } from '../formats/types';
 import type { ExportFormat } from '../types';
+import { useShellShortcut } from '../hooks/useShortcutManager';
 
 interface ExportMenuProps {
   onExport: (format: ExportFormat) => void;
@@ -26,20 +27,27 @@ export function ExportMenu({ onExport, format, open, onOpenChange, disabled }: E
         onOpenChange(false);
       }
     };
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onOpenChange(false);
-      }
-    };
     if (open) {
       window.addEventListener('mousedown', handleOutsideClick);
-      window.addEventListener('keydown', handleEsc);
     }
     return () => {
       window.removeEventListener('mousedown', handleOutsideClick);
-      window.removeEventListener('keydown', handleEsc);
     };
   }, [onOpenChange, open]);
+
+  // P2.1 — Escape-close registered with the shared dispatcher instead of its
+  // own ad hoc `window` listener; only listens while the menu is open.
+  useShellShortcut(
+    useCallback(
+      (e) => {
+        if (e.key !== 'Escape') return false;
+        onOpenChange(false);
+        return true;
+      },
+      [onOpenChange],
+    ),
+    open,
+  );
 
   const handleExport = useCallback((targetFormat: ExportFormat) => {
     onExport(targetFormat);

@@ -1,5 +1,7 @@
-import { useEffect } from 'react';
+import { useCallback } from 'react';
 import type { ViewMode } from '../types';
+import { useShellShortcut } from './useShortcutManager';
+import type { ShortcutHandler } from './shortcutManagerContext';
 
 interface UseUniversalShortcutsOptions {
   openFile: () => void | Promise<void>;
@@ -11,9 +13,20 @@ interface UseUniversalShortcutsOptions {
   toggleSidebar: () => void;
   setViewMode: (mode: ViewMode) => void;
   toggleShortcuts: () => void;
+  closeFile: () => void;
   isMarkdown: boolean;
 }
 
+/**
+ * The app-chrome shell-global shortcuts (P2.1) — the lowest-precedence tier
+ * of the centralized dispatcher (`useShortcutManager.ts`). Ctrl+S/Ctrl+Shift+S
+ * (save) and Ctrl+P (print/export) intentionally fire even while a plain
+ * text field has focus (mirroring the pre-dispatcher behavior — a user
+ * mid-edit in RawEditor should still be able to save/print), everything else
+ * is skipped while `ctx.inPlainField` is true so typing a shortcut's letter
+ * into a text field doesn't also trigger the shell action (SHELL-08/09's
+ * root cause, now handled structurally instead of per-viewer).
+ */
 export function useUniversalShortcuts({
   openFile,
   saveFile,
@@ -24,89 +37,92 @@ export function useUniversalShortcuts({
   toggleSidebar,
   setViewMode,
   toggleShortcuts,
+  closeFile,
   isMarkdown,
 }: UseUniversalShortcutsOptions): void {
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const meta = e.ctrlKey || e.metaKey;
-      if (!meta) return;
+  const handler = useCallback<ShortcutHandler>(
+    (event, ctx) => {
+      const meta = event.ctrlKey || event.metaKey;
+      if (!meta) return false;
 
-      const inField =
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement;
+      const lowerKey = event.key.toLowerCase();
 
-      if (e.key.toLowerCase() === 's') {
-        if (e.shiftKey) {
-          e.preventDefault();
+      if (lowerKey === 's') {
+        event.preventDefault();
+        if (event.shiftKey) {
           void saveFileAs();
         } else {
-          e.preventDefault();
           void saveFile();
         }
-        return;
+        return true;
       }
 
-      if (e.key.toLowerCase() === 'p') {
-        e.preventDefault();
+      if (lowerKey === 'p') {
+        event.preventDefault();
         void exportPrimary();
-        return;
+        return true;
       }
 
-      if (inField) return;
+      if (ctx.inPlainField) return false;
 
-      switch (e.key.toLowerCase()) {
+      switch (lowerKey) {
         case 'o':
-          e.preventDefault();
+          event.preventDefault();
           void openFile();
-          break;
+          return true;
+        case 'w':
+          event.preventDefault();
+          closeFile();
+          return true;
         case 'e':
-          e.preventDefault();
+          event.preventDefault();
           openExportMenu();
-          break;
+          return true;
         case 't':
-          e.preventDefault();
+          event.preventDefault();
           cycleTheme();
-          break;
+          return true;
         case 'b':
-          e.preventDefault();
+          event.preventDefault();
           toggleSidebar();
-          break;
+          return true;
         case '1':
-          if (!isMarkdown) break;
-          e.preventDefault();
+          if (!isMarkdown) return false;
+          event.preventDefault();
           setViewMode('preview');
-          break;
+          return true;
         case '2':
-          if (!isMarkdown) break;
-          e.preventDefault();
+          if (!isMarkdown) return false;
+          event.preventDefault();
           setViewMode('split');
-          break;
+          return true;
         case '3':
-          if (!isMarkdown) break;
-          e.preventDefault();
+          if (!isMarkdown) return false;
+          event.preventDefault();
           setViewMode('editor');
-          break;
+          return true;
         case '/':
-          e.preventDefault();
+          event.preventDefault();
           toggleShortcuts();
-          break;
+          return true;
         default:
-          break;
+          return false;
       }
-    };
+    },
+    [
+      closeFile,
+      cycleTheme,
+      exportPrimary,
+      isMarkdown,
+      openExportMenu,
+      openFile,
+      saveFile,
+      saveFileAs,
+      setViewMode,
+      toggleShortcuts,
+      toggleSidebar,
+    ],
+  );
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [
-    cycleTheme,
-    exportPrimary,
-    isMarkdown,
-    openExportMenu,
-    openFile,
-    saveFile,
-    saveFileAs,
-    setViewMode,
-    toggleShortcuts,
-    toggleSidebar,
-  ]);
+  useShellShortcut(handler);
 }

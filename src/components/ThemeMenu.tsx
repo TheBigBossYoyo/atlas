@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Palette, Check } from 'lucide-react';
 import type { Theme, ThemeMeta } from '../types';
+import { useShellShortcut } from '../hooks/useShortcutManager';
 
 interface ThemeMenuProps {
   current: Theme;
@@ -18,20 +19,27 @@ export function ThemeMenu({ current, themes, onSelect }: ThemeMenuProps) {
         setOpen(false);
       }
     };
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-      }
-    };
     if (open) {
       window.addEventListener('mousedown', handleOutsideClick);
-      window.addEventListener('keydown', handleEsc);
     }
     return () => {
       window.removeEventListener('mousedown', handleOutsideClick);
-      window.removeEventListener('keydown', handleEsc);
     };
   }, [open]);
+
+  // P2.1 — Escape-close registered with the shared dispatcher instead of its
+  // own ad hoc `window` listener; only listens while the menu is open.
+  useShellShortcut(
+    useCallback(
+      (e) => {
+        if (e.key !== 'Escape') return false;
+        setOpen(false);
+        return true;
+      },
+      [],
+    ),
+    open,
+  );
 
   return (
     <div className="dropdown" ref={ref}>
