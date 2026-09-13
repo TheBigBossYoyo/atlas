@@ -1,88 +1,12 @@
 import type { FormatId } from './types'
+import { EXTENSION_TO_FORMAT } from './extensionManifest'
+import { isValidUtf8 } from '../utils/textDecoding'
 
-const EXTENSION_MAP: Readonly<Record<string, FormatId>> = {
-  md: 'markdown',
-  markdown: 'markdown',
-  mdx: 'markdown',
-  mkd: 'markdown',
-  docx: 'docx',
-  xlsx: 'xlsx',
-  xlsm: 'xlsx',
-  xlsb: 'xlsx',
-  pptx: 'pptx',
-  pptm: 'pptx',
-  pdf: 'pdf',
-  csv: 'csv',
-  tsv: 'tsv',
-  tab: 'tsv',
-  txt: 'text',
-  log: 'text',
-  ts: 'code',
-  tsx: 'code',
-  js: 'code',
-  jsx: 'code',
-  mjs: 'code',
-  cjs: 'code',
-  py: 'code',
-  pyw: 'code',
-  rb: 'code',
-  go: 'code',
-  rs: 'code',
-  java: 'code',
-  kt: 'code',
-  kts: 'code',
-  swift: 'code',
-  c: 'code',
-  h: 'code',
-  cpp: 'code',
-  hpp: 'code',
-  cc: 'code',
-  cs: 'code',
-  php: 'code',
-  pl: 'code',
-  lua: 'code',
-  r: 'code',
-  scala: 'code',
-  clj: 'code',
-  ex: 'code',
-  exs: 'code',
-  erl: 'code',
-  hs: 'code',
-  ml: 'code',
-  dart: 'code',
-  vue: 'code',
-  svelte: 'code',
-  sh: 'code',
-  bash: 'code',
-  zsh: 'code',
-  fish: 'code',
-  ps1: 'code',
-  bat: 'code',
-  cmd: 'code',
-  json: 'code',
-  jsonc: 'code',
-  yaml: 'code',
-  yml: 'code',
-  toml: 'code',
-  xml: 'code',
-  html: 'code',
-  htm: 'code',
-  css: 'code',
-  scss: 'code',
-  sass: 'code',
-  less: 'code',
-  sql: 'code',
-  graphql: 'code',
-  proto: 'code',
-  dockerfile: 'code',
-  ini: 'code',
-  cfg: 'code',
-  conf: 'code',
-  odt: 'odt',
-  ods: 'ods',
-  odp: 'odp',
-  rtf: 'rtf',
-}
+// P2.2/ELEC-05/ELEC-15/LOAD-03/LOAD-12 — this used to be a hand-maintained
+// literal that disagreed with electron/main.cjs's known-extensions set and
+// electron-builder.yml's file associations. All three now derive from the
+// single canonical table in `extensionManifest.ts`.
+const EXTENSION_MAP: Readonly<Record<string, FormatId>> = EXTENSION_TO_FORMAT
 
 function getExtension(path: string): string | null {
   const fileName = path.split(/[\\/]/).pop() ?? path
@@ -95,8 +19,19 @@ function getExtension(path: string): string | null {
   return fileName.slice(dotIndex + 1).toLowerCase()
 }
 
-function decodeAscii(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer)
+// P4.10/LOAD-15 — a ZIP-format file (docx/xlsx/pptx/odt/ods/odp) can be
+// large, and the old implementation decoded the ENTIRE buffer to a JS string
+// one character at a time just to substring-search it. The filename markers
+// we look for live in early local-file-header entries ("[Content_Types].xml"
+// / "_rels/.rels" / the "mimetype" store are conventionally first) or in the
+// central directory at the very end of the archive, so scanning a bounded
+// head + tail window finds them without ever materializing a multi-hundred-
+// -megabyte string.
+const ZIP_SCAN_HEAD_BYTES = 64 * 1024
+const ZIP_SCAN_TAIL_BYTES = 16 * 1024
+
+function decodeAsciiWindow(buffer: ArrayBuffer, start: number, end: number): string {
+  const bytes = new Uint8Array(buffer, start, end - start)
   let decoded = ''
 
   for (const byte of bytes) {
@@ -104,6 +39,19 @@ function decodeAscii(buffer: ArrayBuffer): string {
   }
 
   return decoded
+}
+
+function scanZipMarkers(buffer: ArrayBuffer): string {
+  const length = buffer.byteLength
+  const headEnd = Math.min(length, ZIP_SCAN_HEAD_BYTES)
+  const head = decodeAsciiWindow(buffer, 0, headEnd)
+
+  if (length <= headEnd) {
+    return head
+  }
+
+  const tailStart = Math.max(headEnd, length - ZIP_SCAN_TAIL_BYTES)
+  return head + decodeAsciiWindow(buffer, tailStart, length)
 }
 
 function detectByMagicMarker(buffer: ArrayBuffer): FormatId {
@@ -118,7 +66,7 @@ function detectByMagicMarker(buffer: ArrayBuffer): FormatId {
   }
 
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
-    const ascii = decodeAscii(buffer)
+    const ascii = scanZipMarkers(buffer)
 
     if (ascii.includes('word/document.xml')) return 'docx'
     if (ascii.includes('xl/workbook.xml')) return 'xlsx'
@@ -167,4 +115,27 @@ export function detectFormat(path: string, buffer?: ArrayBuffer): FormatId {
   }
 
   return magicFormat
+}
+
+// P2.11/LOAD-10 — a cheap heuristic for "is this probably plain text" when
+// both extension and magic-byte detection came up empty (an extensionless
+// README, LICENSE, Dockerfile, or .gitignore-style file). Only the leading
+// sample is checked: large enough to reliably distinguish text from binary,
+// small enough to never decode a huge file just to answer a yes/no question.
+const TEXT_SNIFF_SAMPLE_BYTES = 8192
+
+export function looksLikeText(buffer: ArrayBuffer): boolean {
+  if (buffer.byteLength === 0) {
+    return false
+  }
+
+  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, TEXT_SNIFF_SAMPLE_BYTES))
+
+  for (const byte of bytes) {
+    if (byte === 0x00) {
+      return false
+    }
+  }
+
+  return isValidUtf8(bytes)
 }

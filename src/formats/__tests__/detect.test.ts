@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { detectByExtension, detectByMagic, detectFormat } from '../detect'
+import { detectByExtension, detectByMagic, detectFormat, looksLikeText } from '../detect'
 import type { FormatId } from '../types'
 
 function bytesToBuffer(bytes: ReadonlyArray<number>): ArrayBuffer {
@@ -120,6 +120,24 @@ describe('detectByExtension', () => {
     expect(detectByExtension(path)).toBe(expected)
   })
 
+  // P2.2/ELEC-05/LOAD-03/LOAD-12 — extensions added when the extension map
+  // was consolidated onto the single extensionManifest.ts source of truth.
+  it.each([
+    ['notes.mdown', 'markdown'],
+    ['config.ini', 'code'],
+    ['macro.docm', 'docx'],
+    ['letterhead.dotx', 'docx'],
+    ['letterhead.dotm', 'docx'],
+    ['budget.xltx', 'xlsx'],
+    ['budget.xltm', 'xlsx'],
+    ['deck.potx', 'pptx'],
+    ['deck.potm', 'pptx'],
+    ['deck.ppsx', 'pptx'],
+    ['deck.ppsm', 'pptx'],
+  ] as const)('detects the newly-consolidated extension %s -> %s', (path, expected) => {
+    expect(detectByExtension(path)).toBe(expected)
+  })
+
   it.each(codeExtensionCases)('maps .%s to code', (extension) => {
     expect(detectByExtension(`source.${extension}`)).toBe('code')
   })
@@ -192,5 +210,56 @@ describe('detectFormat', () => {
 
   it('keeps extension when magic is unknown', () => {
     expect(detectFormat('report.pdf', zipWithAscii('plain/archive.bin'))).toBe('pdf')
+  })
+})
+
+describe('detectByMagic — ZIP-based formats stay correct with the windowed scan (P4.10/LOAD-15)', () => {
+  function zipWithAsciiAndPadding(marker: string, paddingBytes: number): ArrayBuffer {
+    const encodedMarker = new TextEncoder().encode(marker)
+    const prefix = new Uint8Array([0x50, 0x4b, 0x03, 0x04])
+    const bytes = new Uint8Array(prefix.length + paddingBytes + encodedMarker.length)
+
+    bytes.set(prefix, 0)
+    // Padding is left as zero bytes — irrelevant filler simulating a larger archive.
+    bytes.set(encodedMarker, prefix.length + paddingBytes)
+
+    return bytes.buffer
+  }
+
+  it('still finds a marker inside the head scan window of a larger archive', () => {
+    const buffer = zipWithAsciiAndPadding('word/document.xml', 1024)
+    expect(detectByMagic(buffer)).toBe('docx')
+  })
+
+  it('finds a marker that only appears in the tail scan window (simulating a central directory entry)', () => {
+    // Padding larger than the head-scan window (64 KiB) so the marker can
+    // only be found by the tail-window scan.
+    const buffer = zipWithAsciiAndPadding('xl/workbook.xml', 70 * 1024)
+    expect(detectByMagic(buffer)).toBe('xlsx')
+  })
+})
+
+describe('looksLikeText (P2.11/LOAD-10)', () => {
+  it('returns true for plain ASCII/UTF-8 text', () => {
+    const buffer = new TextEncoder().encode('# README\n\nJust some plain text.\n').buffer
+    expect(looksLikeText(buffer)).toBe(true)
+  })
+
+  it('returns false for a buffer containing a NUL byte', () => {
+    // Built from explicit byte values (rather than a JS string literal
+    // escape) so the NUL lands only in the resulting ArrayBuffer, never in
+    // this source file itself.
+    const helloBytes = Array.from(new TextEncoder().encode('hello'))
+    const worldBytes = Array.from(new TextEncoder().encode('world'))
+    const buffer = bytesToBuffer([...helloBytes, 0x00, ...worldBytes])
+    expect(looksLikeText(buffer)).toBe(false)
+  })
+
+  it('returns false for invalid UTF-8 (raw binary)', () => {
+    expect(looksLikeText(bytesToBuffer([0xff, 0xfe, 0x00, 0x01, 0x02, 0xc0, 0xaf]))).toBe(false)
+  })
+
+  it('returns false for an empty buffer', () => {
+    expect(looksLikeText(new ArrayBuffer(0))).toBe(false)
   })
 })

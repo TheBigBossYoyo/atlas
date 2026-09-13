@@ -1,46 +1,18 @@
-export const extToLang: Readonly<Record<string, string>> = {
-  '.ts': 'typescript',
-  '.tsx': 'tsx',
-  '.js': 'javascript',
-  '.jsx': 'jsx',
-  '.py': 'python',
-  '.rs': 'rust',
-  '.go': 'go',
-  '.java': 'java',
-  '.c': 'c',
-  '.cpp': 'cpp',
-  '.h': 'c',
-  '.hpp': 'cpp',
-  '.cs': 'csharp',
-  '.rb': 'ruby',
-  '.php': 'php',
-  '.sh': 'bash',
-  '.ps1': 'powershell',
-  '.sql': 'sql',
-  '.html': 'html',
-  '.css': 'css',
-  '.scss': 'scss',
-  '.json': 'json',
-  '.yaml': 'yaml',
-  '.yml': 'yaml',
-  '.toml': 'toml',
-  '.ini': 'ini',
-  '.xml': 'xml',
-  '.vue': 'vue',
-  '.svelte': 'svelte',
-  '.swift': 'swift',
-  '.kt': 'kotlin',
-  '.scala': 'scala',
-  '.clj': 'clojure',
-  '.ex': 'elixir',
-  '.erl': 'erlang',
-  '.lua': 'lua',
-  '.pl': 'perl',
-  '.r': 'r',
-  '.dart': 'dart',
-  '.nim': 'nim',
-  '.md': 'markdown'
-}
+/**
+ * T6 / DAT-14 — extension -> shiki language map, derived from the single
+ * canonical extension manifest (`src/formats/extensionManifest.ts`) instead
+ * of a hand-maintained literal that only covered 39 of the 61 extensions
+ * `detect.ts` actually routes to `CodeViewer` (`extensionManifest.test.ts`
+ * asserts every code-routed extension is covered and resolves to a real
+ * shiki bundled language).
+ */
+import { CODE_EXTENSION_TO_SHIKI_LANG } from '../formats/extensionManifest'
+
+export const extToLang: Readonly<Record<string, string>> = Object.freeze(
+  Object.fromEntries(
+    Object.entries(CODE_EXTENSION_TO_SHIKI_LANG).map(([ext, lang]) => [`.${ext}`, lang]),
+  ),
+)
 
 export function getLangForExt(ext: string): string | undefined {
   const normalized = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`
