@@ -12,7 +12,12 @@
 
 .code-viewer__pre {
   margin: 0;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  /* --font-mono is not defined anywhere in the app (there is no such custom
+     property) — reference the same monospace stack every other code
+     surface uses (.editor-panel__textarea etc.) so the highlighted/fallback
+     text actually renders in JetBrains Mono instead of silently falling
+     through to a generic system monospace font. */
+  font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
 }
