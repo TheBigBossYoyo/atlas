@@ -16,14 +16,11 @@ export interface UseSpellCheckResult {
   readonly addToDictionary: (word: string) => Promise<boolean>
 }
 
-function getSpellcheckBridge(): Pick<
-  NonNullable<Window['electronAPI']>,
-  'onSpellCheckMenu' | 'replaceMisspelling' | 'addWordToDictionary'
-> | undefined {
+function getSpellcheckBridge(): NonNullable<Window['electronAPI']>['spellcheck'] | undefined {
   if (typeof window === 'undefined') {
     return undefined
   }
-  return window.electronAPI
+  return window.electronAPI?.spellcheck
 }
 
 export function useSpellCheck(): UseSpellCheckResult {
@@ -31,11 +28,11 @@ export function useSpellCheck(): UseSpellCheckResult {
 
   useEffect(() => {
     const bridge = getSpellcheckBridge()
-    if (bridge === undefined || typeof bridge.onSpellCheckMenu !== 'function') {
+    if (bridge === undefined || typeof bridge.onContextMenu !== 'function') {
       return
     }
 
-    const unsubscribe = bridge.onSpellCheckMenu((payload: SpellCheckContextMenuPayload) => {
+    const unsubscribe = bridge.onContextMenu((payload: SpellCheckContextMenuPayload) => {
       setState({
         word: payload.word,
         suggestions: payload.suggestions,
@@ -68,11 +65,11 @@ export function useSpellCheck(): UseSpellCheckResult {
 
   const addToDictionary = useCallback(async (word: string): Promise<boolean> => {
     const bridge = getSpellcheckBridge()
-    if (bridge === undefined || typeof bridge.addWordToDictionary !== 'function') {
+    if (bridge === undefined || typeof bridge.addWord !== 'function') {
       return false
     }
     try {
-      const result = await bridge.addWordToDictionary(word)
+      const result = await bridge.addWord(word)
       setState(null)
       return result.added === true
     } catch {
