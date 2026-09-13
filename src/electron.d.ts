@@ -49,6 +49,18 @@ interface ElectronAPI {
   saveBinaryFile: (req: BinarySaveFileRequest) => Promise<SaveFileResult>;
   onFileOpened: (callback: (data: ElectronFileData) => void) => () => void;
   setTheme: (theme: Theme) => void;
+  /**
+   * P2.5/SHELL-02/ELEC-06 — pushes the renderer's combined dirty state to
+   * main's window `close` handler. Optional (like `image`/`spellcheck`
+   * below) so existing test doubles that only implement the file-open/save
+   * surface keep compiling; every real call site invokes it defensively
+   * (`window.electronAPI?.notifyDirtyState?.(...)`).
+   */
+  notifyDirtyState?: (dirty: boolean) => void;
+  /** Main asks the renderer to save (the user chose "Save" in the native close-confirmation prompt). */
+  onRequestSaveBeforeClose?: (callback: () => void) => () => void;
+  /** The renderer reports whether that save succeeded so main knows whether to actually close the window. */
+  reportSaveBeforeCloseResult?: (result: { saved: boolean }) => void;
   openFileBinary: () => Promise<{ canceled: boolean; path: string; buffer: ArrayBuffer }>;
   readBinaryByPath: (path: string) => Promise<{ path: string; buffer: ArrayBuffer }>;
   onFileOpenedPath: (callback: (path: string) => void) => () => void;
