@@ -1,8 +1,16 @@
 /**
- * ViewerProvider — Nav/Stats context provider component (W2.X2).
+ * ViewerProvider — Nav/Stats/document-session context provider component (W2.X2, P1.1).
  *
  * Lets viewers publish nav items + stats and lets the app shell
- * (Sidebar/StatusBar) consume them. Auto-clears when `filePath` changes.
+ * (Sidebar/StatusBar) consume them. Also carries the document-session
+ * capability contract (P1.1): the active viewer reports `isDirty` and
+ * registers its own `save()` implementation here, so App.tsx can combine it
+ * with markdown's own dirty state and route a global Ctrl+S/Save to whichever
+ * viewer is actually active.
+ *
+ * Everything resets when `filePath` changes — a new file means a fresh
+ * session: no nav items/stats yet, nothing dirty, and no stale save handler
+ * left registered by whichever viewer was just unmounted.
  *
  * Context value lives in `viewerContextValue.ts` and consumer hooks live in
  * `useViewerContext.ts` so this file only exports a React component
@@ -14,16 +22,23 @@
  * `react-hooks/set-state-in-effect` (no cascading-render effect).
  */
 
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 
 import type { NavItem, ViewerStats } from '../../formats/types'
-import { ViewerContext, type ViewerContextValue } from './viewerContextValue'
+import { ViewerContext, type ExportableContent, type ViewerContextValue } from './viewerContextValue'
 
 type InternalState = {
   filePath: string | null
   navItems: ReadonlyArray<NavItem>
   stats: ViewerStats | null
+  isDirty: boolean
 }
+
+const INITIAL_STATE_EXCEPT_PATH = {
+  navItems: [] as ReadonlyArray<NavItem>,
+  stats: null,
+  isDirty: false,
+} as const
 
 export function ViewerProvider({
   filePath,
@@ -34,16 +49,24 @@ export function ViewerProvider({
 }): React.ReactElement {
   const [state, setState] = useState<InternalState>({
     filePath,
-    navItems: [],
-    stats: null,
+    ...INITIAL_STATE_EXCEPT_PATH,
   })
+
+  // The registered save implementation lives in a ref, not state: it is an
+  // implementation detail the active viewer swaps in/out (via `registerSave`)
+  // and does not itself need to trigger a re-render. It does not need an
+  // explicit reset here when `filePath` changes: the viewer that registered
+  // it unmounts as part of that same file switch (ViewerRouter remounts on
+  // `file.path`) and its own cleanup effect calls `registerSave(null)` before
+  // any new save() call could reach it.
+  const saveRef = useRef<(() => Promise<boolean>) | null>(null)
 
   // setState-during-render reset: when the incoming filePath differs from the
   // stored one, schedule fresh InternalState. React discards the in-progress
-  // render and re-runs with the new state — the lint-clean way to "reset state
-  // when a prop changes" (no render-time ref mutation, no effect).
+  // render and re-runs with the new state — the lint-clean way to "reset
+  // state when a prop changes" (no render-time ref mutation, no effect).
   if (state.filePath !== filePath) {
-    setState({ filePath, navItems: [], stats: null })
+    setState({ filePath, ...INITIAL_STATE_EXCEPT_PATH })
   }
 
   const setNavItems = useCallback((items: ReadonlyArray<NavItem>) => {
@@ -54,14 +77,48 @@ export function ViewerProvider({
     setState(prev => ({ ...prev, stats }))
   }, [])
 
+  const setDirty = useCallback((dirty: boolean) => {
+    setState(prev => (prev.isDirty === dirty ? prev : { ...prev, isDirty: dirty }))
+  }, [])
+
+  const registerSave = useCallback((save: (() => Promise<boolean>) | null) => {
+    saveRef.current = save
+  }, [])
+
+  const save = useCallback(async (): Promise<boolean> => {
+    if (saveRef.current === null) {
+      return false
+    }
+    return saveRef.current()
+  }, [])
+
+  // P1.1 placeholder — no viewer registers export content yet; real
+  // implementation deferred to the Phase 3 per-format export work.
+  const getExportableContent = useCallback((): ExportableContent | null => null, [])
+
   const value = useMemo<ViewerContextValue>(
     () => ({
       navItems: state.navItems,
       setNavItems,
       stats: state.stats,
       setStats,
+      isDirty: state.isDirty,
+      setDirty,
+      registerSave,
+      save,
+      getExportableContent,
     }),
-    [state.navItems, state.stats, setNavItems, setStats],
+    [
+      state.navItems,
+      state.stats,
+      state.isDirty,
+      setNavItems,
+      setStats,
+      setDirty,
+      registerSave,
+      save,
+      getExportableContent,
+    ],
   )
 
   return (
