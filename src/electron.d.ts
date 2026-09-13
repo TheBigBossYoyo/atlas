@@ -10,6 +10,8 @@ interface SaveFileResult {
   saved: boolean;
   path?: string;
   name?: string;
+  /** Present on failure when a specific, user-friendly reason is known (e.g. the file is locked by another program). */
+  error?: string;
 }
 
 interface SaveFileRequest {
@@ -21,9 +23,22 @@ interface SaveFileRequest {
   existingPath?: string;
 }
 
+interface BinarySaveFileRequest {
+  content: Uint8Array;
+  suggestedName: string;
+  /** Optional dialog filters; defaults to Word Documents */
+  filters?: Array<{ name: string; extensions: string[] }>;
+  /** If provided, save there silently (no dialog) */
+  existingPath?: string;
+}
+
 interface SpellCheckOperationResult {
   readonly added?: boolean;
   readonly replaced?: boolean;
+}
+
+interface RegisterPathResult {
+  readonly ok: boolean;
 }
 
 interface ElectronAPI {
@@ -31,20 +46,22 @@ interface ElectronAPI {
   openFileDialog: () => Promise<ElectronFileData | null>;
   openFileByPath: (path: string) => Promise<ElectronFileData | null>;
   saveFile: (req: SaveFileRequest) => Promise<SaveFileResult>;
+  saveBinaryFile: (req: BinarySaveFileRequest) => Promise<SaveFileResult>;
   onFileOpened: (callback: (data: ElectronFileData) => void) => () => void;
   setTheme: (theme: Theme) => void;
   openFileBinary: () => Promise<{ canceled: boolean; path: string; buffer: ArrayBuffer }>;
   readBinaryByPath: (path: string) => Promise<{ path: string; buffer: ArrayBuffer }>;
   onFileOpenedPath: (callback: (path: string) => void) => () => void;
-  onSpellCheckMenu: (
-    callback: (payload: SpellCheckContextMenuPayload) => void,
-  ) => () => void;
-  replaceMisspelling: (word: string) => Promise<SpellCheckOperationResult>;
-  addWordToDictionary: (word: string) => Promise<SpellCheckOperationResult>;
+  /** Resolves a dropped `File` to its absolute path (Electron 32+ removed `File.path`). */
+  getPathForFile: (file: File) => string;
+  /** Registers a drag-dropped path into the main process's read/write allowlist. */
+  registerDroppedPath: (path: string) => Promise<RegisterPathResult>;
+  /** Re-validates and registers a recent-file path before it is reopened. */
+  requestOpenRecent: (path: string) => Promise<RegisterPathResult>;
   image?: {
     pick: () => Promise<ImagePickResult>;
   };
-  spellcheck?: {
+  spellcheck: {
     onContextMenu: (
       callback: (payload: SpellCheckContextMenuPayload) => void,
     ) => () => void;

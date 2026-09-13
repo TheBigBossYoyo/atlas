@@ -6,10 +6,12 @@ import { useSpellCheck } from '../useSpellCheck'
 
 type Listener = (payload: SpellCheckContextMenuPayload) => void
 
-interface MockBridge {
-  readonly onSpellCheckMenu: (cb: Listener) => () => void
+interface MockSpellcheckBridge {
+  readonly onContextMenu: (cb: Listener) => () => void
   readonly replaceMisspelling: (word: string) => Promise<{ replaced: boolean }>
-  readonly addWordToDictionary: (word: string) => Promise<{ added: boolean }>
+  readonly addWord: (word: string) => Promise<{ added: boolean }>
+  readonly getLanguages: () => Promise<{ available: string[]; enabled: string[] }>
+  readonly setLanguages: (languages: string[]) => Promise<{ ok: boolean }>
 }
 
 interface MockState {
@@ -23,22 +25,24 @@ function installMockBridge(): MockState {
   const state: MockState = {
     listeners: new Set(),
     unsubscribed: 0,
-    replaceMisspelling: vi.fn(async (_word: string) => ({ replaced: true })),
-    addWord: vi.fn(async (_word: string) => ({ added: true })),
+    replaceMisspelling: vi.fn(async () => ({ replaced: true })),
+    addWord: vi.fn(async () => ({ added: true })),
   }
-  const bridge: MockBridge = {
-    onSpellCheckMenu: (cb) => {
+  const spellcheck: MockSpellcheckBridge = {
+    onContextMenu: (cb) => {
       state.listeners.add(cb)
       return () => {
         state.listeners.delete(cb)
         state.unsubscribed += 1
       }
     },
-    replaceMisspelling: state.replaceMisspelling as unknown as MockBridge['replaceMisspelling'],
-    addWordToDictionary: state.addWord as unknown as MockBridge['addWordToDictionary'],
+    replaceMisspelling: state.replaceMisspelling as unknown as MockSpellcheckBridge['replaceMisspelling'],
+    addWord: state.addWord as unknown as MockSpellcheckBridge['addWord'],
+    getLanguages: async () => ({ available: [], enabled: [] }),
+    setLanguages: async () => ({ ok: true }),
   }
-  ;(window as unknown as { electronAPI?: MockBridge }).electronAPI = {
-    ...bridge,
+  ;(window as unknown as { electronAPI?: { spellcheck: MockSpellcheckBridge } }).electronAPI = {
+    spellcheck,
   }
   return state
 }

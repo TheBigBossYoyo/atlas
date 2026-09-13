@@ -66,23 +66,6 @@ type HeadingNavSeed = {
   paragraphIndex: number
 }
 
-type BinarySaveFileRequest = {
-  readonly content: Uint8Array
-  readonly suggestedName: string
-  readonly existingPath?: string
-  readonly filters?: ReadonlyArray<{ name: string; extensions: string[] }>
-}
-
-type BinarySaveFileResult = {
-  readonly saved: boolean
-  readonly path?: string
-  readonly name?: string
-}
-
-type BinaryElectronAPI = NonNullable<Window['electronAPI']> & {
-  saveBinaryFile?: (req: BinarySaveFileRequest) => Promise<BinarySaveFileResult>
-}
-
 const DEFAULT_FIND_OPTIONS: FindOptions = {
   caseSensitive: false,
   wholeWord: false,
@@ -1102,8 +1085,7 @@ function DocxEditor({
         document: documentModel,
       })
 
-      const electronApi = window.electronAPI as BinaryElectronAPI | undefined
-      const result = await electronApi?.saveBinaryFile?.({
+      const result = await window.electronAPI?.saveBinaryFile?.({
         content: nextBytes,
         suggestedName: getSuggestedFileName(savePath),
         existingPath: savePath,
@@ -1115,7 +1097,7 @@ function DocxEditor({
       }
 
       if (!result?.saved) {
-        setSaveError('Save was cancelled or unavailable.')
+        setSaveError(result?.error ?? 'Save was cancelled or unavailable.')
       }
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
