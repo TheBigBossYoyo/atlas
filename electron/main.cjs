@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, screen } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -12,6 +12,7 @@ const { logToFile } = require('./lib/crashLog.cjs');
 const { FileTooLargeError, assertFileSizeAllowed } = require('./lib/fileSizeGuard.cjs');
 const { EXTENSIONS: MANIFEST_EXTENSIONS } = require('./lib/extensionManifest.generated.cjs');
 const { CLOSE_PROMPT_BUTTONS, decideOnClose, decideAfterPromptChoice } = require('./lib/closeGuard.cjs');
+const { clampBoundsToDisplays, loadWindowState, saveWindowState } = require('./lib/windowState.cjs');
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -73,17 +74,26 @@ const pathAllowlist = createPathAllowlist();
 // (dialog results, argv/second-instance/open-file, successful saves) —
 // deliberately NOT from drag-drop registration, which has the same
 // unverifiable-provenance shape. See recentFilesStore.cjs.
+/**
+ * `app.getPath('userData')` before `whenReady` (or if the profile directory
+ * is otherwise unavailable) throws — every small persisted-JSON store in
+ * this file (recent files, window state) falls back to the OS temp dir in
+ * that case rather than failing to load/save at all.
+ * @returns {string}
+ */
+function getUserDataDir() {
+  try {
+    return app.getPath('userData');
+  } catch {
+    return os.tmpdir();
+  }
+}
+
 /** @type {import('./lib/recentFilesStore.cjs').RecentFilesStore | null} */
 let recentFilesStoreInstance = null;
 function getRecentFilesStore() {
   if (!recentFilesStoreInstance) {
-    let storeDir;
-    try {
-      storeDir = app.getPath('userData');
-    } catch {
-      storeDir = os.tmpdir();
-    }
-    recentFilesStoreInstance = createRecentFilesStore(storeDir);
+    recentFilesStoreInstance = createRecentFilesStore(getUserDataDir());
   }
   return recentFilesStoreInstance;
 }
@@ -366,6 +376,25 @@ function applyCrashHandlers(win) {
   });
 }
 
+// The native Save/Discard/Cancel dialog is modal to `mainWindow`, so a
+// second close attempt can't realistically land while it's on screen — but
+// the *async* gap after the user picks "Save" (waiting on the renderer's own
+// save round-trip to finish) has no such protection: the window still looks
+// interactive, so an impatient second Alt+F4/titlebar-X click reaches
+// `handleWindowCloseRequest` again while `rendererDirty` is still `true`.
+// Without a guard that re-entrant call would show a second stacked dialog
+// and register a second `ipcMain.once('save-before-close-result', ...)`
+// listener for the same in-flight save. This flag makes a repeated close
+// attempt while a round-trip is already pending a no-op instead — it just
+// waits on the original attempt's outcome rather than starting a new one.
+// (Trade-off: if the renderer's save never responds at all — e.g. a hung
+// renderer — the window can no longer be force-closed via a second attempt
+// choosing Discard, the way the old code allowed. A hung renderer already
+// needs a harder recovery path than repeated close-clicking, so this is
+// accepted rather than reintroducing the double-dialog bug.)
+/** @type {boolean} */
+let closeConfirmationInFlight = false;
+
 /**
  * P2.5/SHELL-02/ELEC-06 — blocks the native window close while the renderer
  * has reported unsaved changes (`rendererDirty`, kept current by the
@@ -385,6 +414,9 @@ function handleWindowCloseRequest(event) {
 
   event.preventDefault();
 
+  if (closeConfirmationInFlight) return;
+  closeConfirmationInFlight = true;
+
   const choice = dialog.showMessageBoxSync(mainWindow, {
     type: 'warning',
     buttons: [...CLOSE_PROMPT_BUTTONS],
@@ -397,18 +429,22 @@ function handleWindowCloseRequest(event) {
 
   const action = decideAfterPromptChoice(choice);
 
-  if (action === 'cancel') return;
+  if (action === 'cancel') {
+    closeConfirmationInFlight = false;
+    return;
+  }
 
   if (action === 'discard') {
     rendererDirty = false;
+    closeConfirmationInFlight = false;
     mainWindow.destroy();
     return;
   }
 
-  // action === 'save' — exactly one close attempt can be in flight at a
-  // time (the window is blocked on the dialog above until the user answers,
-  // and this IPC round-trip until the renderer responds), so `once` is safe.
+  // action === 'save' — the in-flight guard above ensures at most one of
+  // these `once` registrations is ever pending at a time.
   ipcMain.once('save-before-close-result', (_event, result) => {
+    closeConfirmationInFlight = false;
     if (result && result.saved) {
       rendererDirty = false;
       if (mainWindow) mainWindow.destroy();
@@ -432,12 +468,61 @@ process.on('unhandledRejection', (reason) => {
   logMainEvent('ERROR', 'unhandledRejection', reason);
 });
 
+// ---- Window state persistence (P5.2 / ELEC-11) ---- //
+//
+// Restores the window's size/position/maximized state from the previous
+// launch, clamped against the displays actually connected right now (a
+// saved position from a monitor that's since been unplugged or resized
+// would otherwise land the window fully off-screen with no way to drag it
+// back — see windowState.cjs's `clampBoundsToDisplays`). Saved on every
+// resize/move (debounced) and on every close attempt, using
+// `getNormalBounds()` so a maximized window's persisted size/position is
+// its restored (non-maximized) geometry, not the full-screen bounds.
+
+const DEFAULT_WINDOW_WIDTH = 1200;
+const DEFAULT_WINDOW_HEIGHT = 800;
+/** Debounce for the resize/move listeners below — these can fire many times
+ * a second during a drag; there's no need to hit disk on every one. */
+const WINDOW_STATE_SAVE_DEBOUNCE_MS = 300;
+
+/**
+ * @returns {{ bounds: import('./lib/windowState.cjs').WindowBounds | null, isMaximized: boolean }}
+ */
+function resolveInitialWindowState() {
+  const saved = loadWindowState(getUserDataDir());
+  if (!saved) return { bounds: null, isMaximized: false };
+  const { x, y, width, height, isMaximized } = saved;
+  const bounds = clampBoundsToDisplays({ x, y, width, height }, screen.getAllDisplays());
+  return { bounds, isMaximized };
+}
+
+/** @type {ReturnType<typeof setTimeout> | null} */
+let windowStateSaveTimer = null;
+
+function persistWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const bounds = mainWindow.getNormalBounds();
+    saveWindowState(getUserDataDir(), { ...bounds, isMaximized: mainWindow.isMaximized() });
+  } catch (err) {
+    logMainEvent('WARN', 'persistWindowState failed', err);
+  }
+}
+
+function schedulePersistWindowState() {
+  if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer);
+  windowStateSaveTimer = setTimeout(persistWindowState, WINDOW_STATE_SAVE_DEBOUNCE_MS);
+}
+
 // ---- Window creation ---- //
 
 function createWindow() {
+  const initialState = resolveInitialWindowState();
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: initialState.bounds?.width ?? DEFAULT_WINDOW_WIDTH,
+    height: initialState.bounds?.height ?? DEFAULT_WINDOW_HEIGHT,
+    ...(initialState.bounds ? { x: initialState.bounds.x, y: initialState.bounds.y } : {}),
     minWidth: 600,
     minHeight: 400,
     titleBarStyle: 'hidden',
@@ -456,6 +541,18 @@ function createWindow() {
       spellcheck: true,
     },
   });
+
+  if (initialState.isMaximized) {
+    mainWindow.maximize();
+  }
+
+  mainWindow.on('resize', schedulePersistWindowState);
+  mainWindow.on('move', schedulePersistWindowState);
+  // A final, immediate (non-debounced) save on every close attempt — the
+  // window hasn't moved just because a close was requested, so this simply
+  // guarantees the last-known state is flushed even if the debounced timer
+  // above hasn't fired yet when the process actually exits.
+  mainWindow.on('close', persistWindowState);
 
   applyContentSecurityPolicy(mainWindow);
   applyNavigationGuards(mainWindow);
@@ -534,6 +631,10 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    if (windowStateSaveTimer) {
+      clearTimeout(windowStateSaveTimer);
+      windowStateSaveTimer = null;
+    }
   });
 
   if (isDev && process.env.PLAYWRIGHT !== '1') {

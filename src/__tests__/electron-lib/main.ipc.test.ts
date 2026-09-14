@@ -37,16 +37,21 @@ const REJECTED_EVENT = { senderFrame: OTHER_FRAME }
 
 function createElectronMock(tempDir: string) {
   const ipcHandlers = new Map<string, IpcHandler>()
+  const onceHandlers = new Map<string, IpcHandler[]>()
 
   const fakeWindow = {
     isDestroyed: () => false,
     isMinimized: () => false,
+    isMaximized: vi.fn(() => false),
     isVisible: () => true,
     focus: vi.fn(),
     restore: vi.fn(),
+    maximize: vi.fn(),
     show: vi.fn(),
     reload: vi.fn(),
+    destroy: vi.fn(),
     setTitleBarOverlay: vi.fn(),
+    getNormalBounds: vi.fn(() => ({ x: 10, y: 20, width: 1200, height: 800 })),
     loadURL: vi.fn(),
     loadFile: vi.fn(),
     on: vi.fn(),
@@ -68,6 +73,7 @@ function createElectronMock(tempDir: string) {
       },
       on: vi.fn(),
       once: vi.fn(),
+      send: vi.fn(),
       setWindowOpenHandler: vi.fn(),
       getURL: vi.fn(() => 'http://localhost:5173'),
       openDevTools: vi.fn(),
@@ -92,7 +98,9 @@ function createElectronMock(tempDir: string) {
     setApplicationMenu: vi.fn(),
   }
 
-  function BrowserWindowCtor() {
+  const browserWindowCalls: Array<Record<string, unknown>> = []
+  function BrowserWindowCtor(options?: Record<string, unknown>) {
+    browserWindowCalls.push(options ?? {})
     return fakeWindow
   }
   BrowserWindowCtor.getAllWindows = vi.fn(() => [])
@@ -116,9 +124,35 @@ function createElectronMock(tempDir: string) {
     on: vi.fn((channel: string, fn: IpcHandler) => {
       ipcHandlers.set(channel, fn)
     }),
+    // Mirrors real EventEmitter.once semantics closely enough for these
+    // tests: every registration for a channel is kept (not just the last),
+    // so a test can assert exactly how many `once` listeners a given flow
+    // registered — the close in-flight guard's whole point is keeping this
+    // at 1 across repeated close attempts instead of accumulating.
+    once: vi.fn((channel: string, fn: IpcHandler) => {
+      const list = onceHandlers.get(channel) ?? []
+      list.push(fn)
+      onceHandlers.set(channel, list)
+    }),
   }
 
-  return { app, BrowserWindow: BrowserWindowCtor, ipcMain, dialog, shell, Menu, ipcHandlers, fakeWindow }
+  const screen = {
+    getAllDisplays: vi.fn(() => [{ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }]),
+  }
+
+  return {
+    app,
+    BrowserWindow: BrowserWindowCtor,
+    ipcMain,
+    dialog,
+    shell,
+    Menu,
+    screen,
+    ipcHandlers,
+    onceHandlers,
+    browserWindowCalls,
+    fakeWindow,
+  }
 }
 
 describe('electron/main.cjs IPC handlers', () => {
