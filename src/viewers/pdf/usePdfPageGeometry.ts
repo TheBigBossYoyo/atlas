@@ -48,7 +48,11 @@ export function usePdfPageGeometry(pdfDoc: PdfDocument | null, pageCount: number
         try {
           const page = await doc.getPage(pageNumber)
           if (cancelled) return
-          const viewport = page.getViewport({ scale: 1, rotation: 0 })
+          // Measured against the page's OWN intrinsic rotation (not a
+          // hardcoded 0) so the stored "unscaled" geometry already reflects
+          // its natural upright appearance — see rotation.ts's
+          // `combineRotation` for why this matters.
+          const viewport = page.getViewport({ scale: 1, rotation: page.rotate })
           collected.set(pageNumber, { width: viewport.width, height: viewport.height })
         } catch {
           // Leave ungeometried; the fallback placeholder size is used until

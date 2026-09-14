@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyRotationToDimensions, normalizeRotation, rotateClockwise, rotateCounterClockwise } from '../rotation'
+import {
+  applyRotationToDimensions,
+  combineRotation,
+  normalizeRotation,
+  rotateClockwise,
+  rotateCounterClockwise,
+} from '../rotation'
 
 describe('normalizeRotation', () => {
   it('passes through the four valid rotations', () => {
@@ -47,5 +53,26 @@ describe('applyRotationToDimensions', () => {
     // container size.
     expect(applyRotationToDimensions(300, 500, 90)).toEqual({ width: 500, height: 300 })
     expect(applyRotationToDimensions(300, 500, 270)).toEqual({ width: 500, height: 300 })
+  })
+})
+
+describe('combineRotation', () => {
+  it('is a plain sum (normalized) when the page has no intrinsic rotation', () => {
+    expect(combineRotation(0, 0)).toBe(0)
+    expect(combineRotation(0, 90)).toBe(90)
+  })
+
+  it("adds the viewer's rotation on top of the page's own intrinsic /Rotate entry", () => {
+    // A scanned page stored with /Rotate 90 must still show as 90deg total
+    // even before the user ever touches the Rotate button (additional=0) —
+    // pdf.js's getViewport({rotation}) would otherwise silently strip the
+    // page's own baked-in orientation once a caller passes an explicit
+    // rotation (see this module's own doc comment).
+    expect(combineRotation(90, 0)).toBe(90)
+  })
+
+  it('wraps past 360 the same way normalizeRotation does', () => {
+    expect(combineRotation(270, 180)).toBe(90)
+    expect(combineRotation(180, 180)).toBe(0)
   })
 })

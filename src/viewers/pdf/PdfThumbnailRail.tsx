@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 
 import { computeActivePageWindow } from './virtualization'
+import { combineRotation } from './rotation'
 import type { PageRotation, PdfDocument } from './types'
 
 const THUMBNAIL_WIDTH = 120
@@ -43,9 +44,13 @@ function PdfThumbnailBase({
       try {
         const page = await pdfDoc.getPage(pageNumber)
         if (cancelled) return
-        const unscaledViewport = page.getViewport({ scale: 1, rotation })
+        // TOTAL rotation (intrinsic /Rotate + the Rotate-button state) so a
+        // thumbnail's orientation always matches the corresponding main page
+        // (see rotation.ts's `combineRotation`).
+        const totalRotation = combineRotation(page.rotate, rotation)
+        const unscaledViewport = page.getViewport({ scale: 1, rotation: totalRotation })
         const scale = THUMBNAIL_WIDTH / unscaledViewport.width
-        const viewport = page.getViewport({ scale, rotation })
+        const viewport = page.getViewport({ scale, rotation: totalRotation })
 
         const canvas = canvasRef.current
         if (!canvas) return

@@ -59,5 +59,12 @@ export type PdfjsRuntime = {
     container: HTMLElement
     viewport: PageViewport
   }) => TextLayerInstance
+  /** Numeric `AnnotationMode` enum (DISABLE/ENABLE/ENABLE_FORMS/ENABLE_STORAGE).
+   * Only `ENABLE_STORAGE` is used here — `page.render()` defaults to
+   * `ENABLE`, which draws annotations' static appearance streams but does
+   * NOT read back the live values this viewer's form-field overlay writes
+   * into `pdfDoc.annotationStorage` (PDF-11). Printing without it would
+   * silently drop whatever the user just typed/checked. */
+  readonly AnnotationMode: { readonly ENABLE_STORAGE: number }
 }
 

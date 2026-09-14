@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react'
 import type { RenderTask } from 'pdfjs-dist'
 
 import { resolveScaleForPage } from './geometry'
-import { applyRotationToDimensions } from './rotation'
+import { applyRotationToDimensions, combineRotation } from './rotation'
 import { renderAnnotationOverlay } from './annotationOverlay'
 import type { RawPdfAnnotation } from './annotations'
 import type { PageGeometry, PageRotation, PdfDocument, PdfjsRuntime, TextLayerInstance, ZoomMode } from './types'
@@ -172,7 +172,11 @@ function PdfPageBase({
 
         let resolvedGeometry = geometry
         if (!resolvedGeometry) {
-          const rawViewport = page.getViewport({ scale: 1, rotation: 0 })
+          // Measured against the page's OWN intrinsic rotation, matching
+          // usePdfPageGeometry.ts, so `resolvedGeometry` always represents
+          // the page's natural upright size regardless of any baked-in
+          // `/Rotate` entry.
+          const rawViewport = page.getViewport({ scale: 1, rotation: page.rotate })
           resolvedGeometry = { width: rawViewport.width, height: rawViewport.height }
           onGeometryResolved(pageNumber, resolvedGeometry)
         }
@@ -189,7 +193,12 @@ function PdfPageBase({
           containerWidth,
           containerHeight,
         )
-        const viewport = page.getViewport({ scale: pageScale, rotation })
+        // The actual render must ask pdf.js for the TOTAL rotation (the
+        // page's own intrinsic /Rotate plus this viewer's Rotate-button
+        // state) — `rotation` alone would silently strip the page's built-in
+        // orientation (see rotation.ts's `combineRotation`).
+        const totalRotation = combineRotation(page.rotate, rotation)
+        const viewport = page.getViewport({ scale: pageScale, rotation: totalRotation })
 
         const canvas = canvasRef.current
         if (!canvas) return

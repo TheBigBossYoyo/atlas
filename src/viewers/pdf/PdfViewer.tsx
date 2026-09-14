@@ -7,7 +7,7 @@ import '../__styles__/viewer-pdf.css'
 
 import { buildFallbackNavItems, buildOutlineNavItems } from './outline'
 import { DEFAULT_ZOOM, FIT_PADDING_PX, clampZoom, zoomIn as computeZoomIn, zoomOut as computeZoomOut } from './geometry'
-import { applyRotationToDimensions, rotateClockwise } from './rotation'
+import { applyRotationToDimensions, combineRotation, rotateClockwise } from './rotation'
 import {
   DEFAULT_OVERSCAN,
   clampPageNumber,
@@ -156,7 +156,7 @@ function PdfViewerBase({ file }: ViewerProps) {
   // ---- Print (PDF-10/P9) ------------------------------------------------
 
   const handlePrint = useCallback(async () => {
-    if (!pdfDoc || pageCount === 0 || isPrinting) return
+    if (!pdfDoc || !pdfjs || pageCount === 0 || isPrinting) return
     const printRoot = printRootRef.current
     if (!printRoot) return
 
@@ -166,7 +166,11 @@ function PdfViewerBase({ file }: ViewerProps) {
     try {
       for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
         const page = await pdfDoc.getPage(pageNumber)
-        const viewport = page.getViewport({ scale: PDF_POINTS_TO_CSS_PX, rotation })
+        // TOTAL rotation (intrinsic /Rotate + the Rotate-button state) —
+        // see rotation.ts's `combineRotation`, and geometry.ts/PdfPage.tsx
+        // for the same fix applied to the interactive view.
+        const totalRotation = combineRotation(page.rotate, rotation)
+        const viewport = page.getViewport({ scale: PDF_POINTS_TO_CSS_PX, rotation: totalRotation })
 
         const canvas = document.createElement('canvas')
         canvas.className = 'pdf-viewer__print-page-canvas'
@@ -174,7 +178,18 @@ function PdfViewerBase({ file }: ViewerProps) {
         canvas.height = Math.ceil(viewport.height)
         const canvasContext = canvas.getContext('2d')
         if (canvasContext) {
-          await page.render({ canvas, canvasContext, viewport }).promise
+          // `annotationMode: ENABLE_STORAGE` (pdf.js defaults to plain
+          // `ENABLE`) so a filled-in form field or a checked checkbox —
+          // live in `pdfDoc.annotationStorage` via this viewer's form
+          // overlay (PDF-11) — actually appears in the printed output
+          // instead of being silently dropped in favor of the PDF's
+          // original, pristine field appearance.
+          await page.render({
+            canvas,
+            canvasContext,
+            viewport,
+            annotationMode: pdfjs.AnnotationMode.ENABLE_STORAGE,
+          }).promise
         }
 
         const pageDiv = document.createElement('div')
@@ -196,7 +211,7 @@ function PdfViewerBase({ file }: ViewerProps) {
       printRoot.replaceChildren()
       setIsPrinting(false)
     }
-  }, [pdfDoc, pageCount, rotation, isPrinting])
+  }, [pdfDoc, pdfjs, pageCount, rotation, isPrinting])
 
   // ---- Find (PDF-06/P6) --------------------------------------------------
 
@@ -488,6 +503,14 @@ function PdfViewerBase({ file }: ViewerProps) {
     return () => {
       cancelled = true
       setPdfDoc(null)
+      // Terminate the previous document's pdfjs-dist Worker + release its
+      // retained buffers (PDF-01 follow-through): without this, every file
+      // switch or unmount leaked a full Worker thread and the document's
+      // parsed state for the lifetime of the renderer process, regardless of
+      // how well the per-page virtualization above bounded memory. Safe to
+      // call unconditionally — `destroy()` is a no-op on an already-destroyed
+      // task (e.g. one already torn down by `handlePasswordCancel`).
+      void destroyLoadingTaskRef.current?.()
     }
   }, [file, setNavItems, setStats, scrollToPage])
 

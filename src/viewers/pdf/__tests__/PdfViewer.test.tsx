@@ -15,27 +15,44 @@ import { PdfViewer } from '../PdfViewer'
 // unit tests (outline/geometry/virtualization/search/annotations) already
 // cover in isolation.
 
-const { getDocumentMock } = vi.hoisted(() => {
-  function makeViewport({ scale = 1 }: { scale?: number; rotation?: number } = {}) {
-    const width = 100 * scale
-    const height = 200 * scale
+const { getDocumentMock, destroyMock, pageRotateState, renderCalls } = vi.hoisted(() => {
+  // `sideways` mimics real pdf.js: getViewport({rotation}) swaps
+  // width/height for a 90/270 TOTAL rotation. The page's raw (unrotated)
+  // size here is a fixed 100x200 (portrait) — `pageRotateState.current`
+  // lets individual tests simulate a page's own intrinsic /Rotate entry
+  // (PDFPageProxy.rotate), independent of the viewer's own rotation state,
+  // to prove the two get combined rather than one silently overriding the
+  // other (see rotation.ts's `combineRotation`).
+  function makeViewport({ scale = 1, rotation = 0 }: { scale?: number; rotation?: number } = {}) {
+    const sideways = rotation === 90 || rotation === 270
+    const width = (sideways ? 200 : 100) * scale
+    const height = (sideways ? 100 : 200) * scale
     return {
       width,
       height,
       scale,
-      rotation: 0,
+      rotation,
       rawDims: { pageWidth: 100, pageHeight: 200, pageX: 0, pageY: 0 },
       convertToViewportPoint: (x: number, y: number) => [x, y],
     }
   }
 
+  const pageRotateState = { current: 0 }
+  const renderCalls: Array<{ annotationMode?: number }> = []
+
   const makePageMock = vi.fn(() => ({
+    rotate: pageRotateState.current,
     getViewport: (opts?: { scale?: number; rotation?: number }) => makeViewport(opts),
-    render: () => ({ promise: Promise.resolve(), cancel: vi.fn() }),
+    render: (params: { annotationMode?: number }) => {
+      renderCalls.push(params)
+      return { promise: Promise.resolve(), cancel: vi.fn() }
+    },
     getTextContent: () => Promise.resolve({ items: [], styles: {}, lang: null }),
     getAnnotations: () => Promise.resolve([]),
     cleanup: () => {},
   }))
+
+  const destroyMock = vi.fn(() => Promise.resolve())
 
   const getDocumentMock = vi.fn(() => {
     const pdf = {
@@ -48,17 +65,18 @@ const { getDocumentMock } = vi.hoisted(() => {
     }
     return {
       promise: Promise.resolve(pdf),
-      destroy: () => Promise.resolve(),
+      destroy: destroyMock,
       onPassword: undefined as unknown,
     }
   })
 
-  return { getDocumentMock, makePageMock }
+  return { getDocumentMock, makePageMock, destroyMock, pageRotateState, renderCalls }
 })
 
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
   PasswordResponses: { NEED_PASSWORD: 1, INCORRECT_PASSWORD: 2 },
+  AnnotationMode: { DISABLE: 0, ENABLE: 1, ENABLE_FORMS: 2, ENABLE_STORAGE: 3 },
   TextLayer: class FakeTextLayer {
     render() {
       return Promise.resolve()
@@ -129,6 +147,17 @@ describe('PdfViewer', () => {
       scale: vi.fn(),
       setTransform: vi.fn(),
     })) as unknown as typeof HTMLCanvasElement.prototype.getContext
+    pageRotateState.current = 0
+    renderCalls.length = 0
+    // `vi.clearAllMocks()` below runs in `afterEach`, which — being
+    // registered inside this `describe` block (innermost) — fires BEFORE
+    // Testing Library's own auto-cleanup `afterEach` (registered at this
+    // module's top-level import, outermost), per standard innermost-first
+    // afterEach ordering. That means the PREVIOUS test's component actually
+    // unmounts (and calls `destroyMock` via this branch's cleanup fix)
+    // AFTER `vi.clearAllMocks()` already ran — so a leftover call can only
+    // be cleared here, at the START of the next test.
+    destroyMock.mockClear()
   })
 
   afterEach(() => {
@@ -190,5 +219,113 @@ describe('PdfViewer', () => {
     })
 
     expect(await screen.findByPlaceholderText('Find in document…')).toBeInTheDocument()
+  })
+
+  it('destroys the pdfjs loading task (terminating its Worker) when the viewer unmounts', async () => {
+    // Regression test: the document-load effect's cleanup previously only
+    // called `setPdfDoc(null)` and never `destroyLoadingTaskRef.current()`,
+    // so every unmount/file-switch leaked a full pdfjs-dist Worker thread
+    // plus its retained document state for the life of the renderer process
+    // — silently defeating the whole point of the P1 virtualization work.
+    const { unmount } = render(
+      <ViewerProvider filePath="/fixtures/sample.pdf">
+        <PdfViewer file={binaryFile()} />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+    expect(destroyMock).not.toHaveBeenCalled()
+
+    unmount()
+
+    await waitFor(() => expect(destroyMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('destroys the previous document when the file changes, before loading the next one', async () => {
+    const { rerender } = render(
+      <ViewerProvider filePath="/fixtures/sample.pdf">
+        <PdfViewer file={binaryFile()} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+
+    rerender(
+      <ViewerProvider filePath="/fixtures/other.pdf">
+        <PdfViewer file={{ ...binaryFile(), path: '/fixtures/other.pdf' }} />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => expect(destroyMock).toHaveBeenCalledTimes(1))
+    // Let the new document's own load settle fully before the test ends —
+    // otherwise a pending continuation of its async load chain can fire
+    // after this test's `afterEach` has already un-stubbed the
+    // IntersectionObserver/ResizeObserver globals.
+    await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+  })
+
+  it("renders a page at the TOTAL rotation (its own intrinsic /Rotate plus the viewer's rotation state)", async () => {
+    // The page's own baked-in rotation (common for scanned/camera-captured
+    // PDFs) must still take effect even at the viewer's default 0deg
+    // rotation state — pdf.js's getViewport({rotation}) would otherwise
+    // silently discard it once this viewer passes an explicit `rotation`
+    // (see rotation.ts's `combineRotation`).
+    pageRotateState.current = 90
+
+    render(
+      <ViewerProvider filePath="/fixtures/sample.pdf">
+        <PdfViewer file={binaryFile()} />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+
+    const canvas = await waitFor(() => {
+      const el = document.querySelector(
+        '.pdf-viewer__page-wrapper[data-page="1"] canvas.pdf-viewer__page',
+      ) as HTMLCanvasElement | null
+      if (!el || el.style.width === '') throw new Error('canvas not sized yet')
+      return el
+    })
+
+    // Page's raw (unrotated) size is 100x200 (portrait). At a combined
+    // total rotation of 90deg (0 from the viewer + 90 intrinsic), pdf.js's
+    // viewport swaps width/height, so the rendered canvas must come out
+    // landscape.
+    expect(parseFloat(canvas.style.width)).toBeGreaterThan(parseFloat(canvas.style.height))
+  })
+
+  it('prints with annotationMode ENABLE_STORAGE so filled-in form values are included', async () => {
+    // handlePrint previously called page.render() with no annotationMode
+    // (pdf.js defaults to plain ENABLE), which paints annotations' static
+    // appearance streams but never reads back the live values this
+    // viewer's form-field overlay writes into pdfDoc.annotationStorage —
+    // so a filled-in text field or a checked checkbox silently vanished
+    // from the printed output.
+    vi.stubGlobal('print', vi.fn())
+
+    render(
+      <ViewerProvider filePath="/fixtures/sample.pdf">
+        <PdfViewer file={binaryFile()} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+    // Wait for both pages' own initial canvas render to finish before
+    // resetting `renderCalls` — otherwise a still-in-flight main-view
+    // render() call (annotationMode undefined) can land in the array right
+    // alongside the print handler's own calls below and fail `every(...)`
+    // for a reason that has nothing to do with print.
+    await waitFor(() => {
+      const canvases = document.querySelectorAll('.pdf-viewer__page-wrapper canvas.pdf-viewer__page')
+      expect(canvases).toHaveLength(2)
+      canvases.forEach((canvas) => expect((canvas as HTMLCanvasElement).style.width).not.toBe(''))
+    })
+
+    renderCalls.length = 0
+    await act(async () => {
+      screen.getByTitle('Print (Ctrl+P)').click()
+    })
+
+    await waitFor(() => expect(renderCalls.length).toBe(2))
+    expect(renderCalls.every((call) => call.annotationMode === 3)).toBe(true)
   })
 })
