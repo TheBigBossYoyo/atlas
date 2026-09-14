@@ -1,4 +1,5 @@
 import React from 'react'
+import { AlertTriangle } from 'lucide-react'
 
 type ViewerErrorBoundaryProps = {
   readonly children: React.ReactNode
@@ -37,10 +38,14 @@ export class ViewerErrorBoundary extends React.Component<
     const { error } = this.state
     if (error !== null) {
       return (
-        <div className="viewer-error" role="alert">
-          <h2>Viewer crashed</h2>
-          <pre>{error.message}</pre>
-          <button onClick={this.handleReset}>Try again</button>
+        // UX-17 — themed, centered fallback (was an unstyled div/pre/button).
+        <div className="viewer-fallback viewer-error" role="alert">
+          <AlertTriangle size={32} className="viewer-fallback__icon" aria-hidden="true" />
+          <h2 className="viewer-fallback__title">Viewer crashed</h2>
+          <p className="viewer-fallback__detail">{error.message}</p>
+          <button className="viewer-fallback__btn" onClick={this.handleReset}>
+            Try again
+          </button>
         </div>
       )
     }

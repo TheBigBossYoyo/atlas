@@ -4,6 +4,7 @@ import './__styles__/viewer-pdf.css'
 
 import type { NavItem, ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
+import { toFriendlyError } from '../utils/friendlyLibraryError'
 
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 
@@ -340,8 +341,11 @@ function PdfViewerBase({ file }: ViewerProps) {
         if (!cancelled) {
           setNavItems([])
           setStats(null)
+          // RUN-14 — wrap pdfjs-dist's raw exception text (e.g. "Invalid PDF
+          // structure") into a friendlier message where we recognize it;
+          // fall back to a plain generic message for a non-Error throw.
           setErrorMessage(
-            err instanceof Error ? err.message : 'Failed to render PDF.',
+            err instanceof Error ? toFriendlyError(err, 'Failed to render PDF').message : 'Failed to render PDF.',
           )
         }
       }

@@ -58,7 +58,9 @@ export function SearchOverlay({
           onKeyDown={handleKeyDown}
         />
         {query && (
-          <span className="search-overlay__count">
+          // UX-15 — announced to screen readers as the match count changes
+          // (was silent: sighted-only feedback).
+          <span className="search-overlay__count" role="status" aria-live="polite">
             {matchCount > 0 ? `${currentMatch + 1} of ${matchCount}` : 'No results'}
           </span>
         )}

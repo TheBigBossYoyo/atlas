@@ -1,4 +1,5 @@
 import React from 'react'
+import { Loader2 } from 'lucide-react'
 import type { FormatId } from '../formats/types'
 
 export type ViewerLoadingProps = {
@@ -7,8 +8,10 @@ export type ViewerLoadingProps = {
 
 export function ViewerLoading({ format }: ViewerLoadingProps): React.ReactElement {
   return (
-    <div className="viewer-loading" role="status" aria-live="polite">
-      Loading {format ?? 'document'}…
+    // UX-17 — themed, centered fallback (was plain unstyled text).
+    <div className="viewer-fallback viewer-loading" role="status" aria-live="polite">
+      <Loader2 size={28} className="viewer-fallback__icon viewer-loading__spinner" aria-hidden="true" />
+      <p className="viewer-fallback__title">Loading {format ?? 'document'}…</p>
     </div>
   )
 }
