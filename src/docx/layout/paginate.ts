@@ -1114,6 +1114,7 @@ async function buildTableUnit(
     availableWidthPt: columnWidthPt,
     fontResolver: input.fontResolver,
     theme: input.theme,
+    styles: input.document.styles,
   })
 
   const lines: LineBox[] =
