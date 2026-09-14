@@ -30,6 +30,9 @@ export type { AbstractNum, NumberingPart, NumInstance } from './numbering'
 
 export { resolveParaProps, resolveRunProps } from './cascade'
 
+export { resolveTableStyle, resolveTableCellStyle } from './cascadeTable'
+export type { TableCellStyleContext, ResolvedTableCellStyle } from './cascadeTable'
+
 // Wave A.5 — part parsers
 
 export { parseHeader } from './headers'

@@ -47,8 +47,16 @@ import type {
   TabAlignment,
   TabLeader,
   TabSet,
+  TableCellMerge,
+  TableCellProps,
+  TableCellVerticalAlign,
+  TableConditionalFormat,
+  TableConditionalFormatType,
   TableLayout,
   TableLook,
+  TableRowHeight,
+  TableRowHeightRule,
+  TableRowProps,
   TableStyleProps,
   TextAlignment,
   Underline,
@@ -80,6 +88,15 @@ export interface StylesPart {
     readonly pPr?: ParaProps
   }
   readonly styles: ReadonlyMap<string, Style>
+  /**
+   * Opaque passthrough for `<w:latentStyles>` (D19 / DXS-14) — Word's
+   * per-style-name UI defaults (a `w:lsdException` list) that Atlas's
+   * model has no first-class representation for. Captured as the raw
+   * parsed object shape (this module's plain, non-`preserveOrder` XML
+   * shape) and re-emitted as-is by `stylesWriter.ts` instead of being
+   * silently dropped on every save.
+   */
+  readonly latentStyles?: unknown
 }
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
@@ -110,12 +127,15 @@ export function parseStyles(xml: string): StylesPart {
     styles.set(style.id, style)
   }
 
+  const latentStyles = getNode(stylesRoot, 'w:latentStyles')
+
   return {
     docDefaults: {
       ...(rPr !== undefined ? { rPr } : {}),
       ...(pPr !== undefined ? { pPr } : {}),
     },
     styles,
+    ...(latentStyles !== undefined ? { latentStyles } : {}),
   }
 }
 
@@ -140,6 +160,7 @@ function parseStyleNode(node: XmlNode): Style | undefined {
   const table = parseTableStylePropsElement(getNode(node, 'w:tblPr'))
   const numbering = parseNumberingStyleProps(type, paragraph)
   const aliases = parseAliases(getValAttr(getNode(node, 'w:aliases')))
+  const conditionalFormats = parseTableConditionalFormats(node)
 
   return {
     id,
@@ -161,6 +182,180 @@ function parseStyleNode(node: XmlNode): Style | undefined {
     ...(run !== undefined ? { run } : {}),
     ...(table !== undefined ? { table } : {}),
     ...(numbering !== undefined ? { numbering } : {}),
+    ...(conditionalFormats !== undefined ? { conditionalFormats } : {}),
+  }
+}
+
+/**
+ * D7 / DXP-06, DXL-08, DXS-05: parses every `<w:tblStylePr>` sibling of
+ * `<w:tblPr>`/`<w:pPr>`/`<w:rPr>` within a `<w:style>` element — one block
+ * per table "region" (header row, banded rows/columns, first/last column,
+ * corner-cell intersections) a table style conditionally formats. Returns
+ * `undefined` when the style has none (the overwhelmingly common case for
+ * non-table styles, and even for many table styles).
+ */
+function parseTableConditionalFormats(
+  node: XmlNode,
+): ReadonlyMap<TableConditionalFormatType, TableConditionalFormat> | undefined {
+  const formats = new Map<TableConditionalFormatType, TableConditionalFormat>()
+
+  for (const tblStylePrNode of getNodes(node, 'w:tblStylePr')) {
+    const type = parseTableConditionalFormatType(getAttr(tblStylePrNode, 'w:type'))
+    if (type === undefined) continue
+
+    const format = parseTableConditionalFormat(tblStylePrNode)
+    if (format !== undefined) {
+      formats.set(type, format)
+    }
+  }
+
+  return formats.size > 0 ? formats : undefined
+}
+
+function parseTableConditionalFormat(node: XmlNode): TableConditionalFormat | undefined {
+  const paragraph = parseParaPropsElement(getNode(node, 'w:pPr'))
+  const run = parseRunPropsElement(getNode(node, 'w:rPr'))
+  const table = parseTableStylePropsElement(getNode(node, 'w:tblPr'))
+  const row = parseTableStylePrRowProps(getNode(node, 'w:trPr'))
+  const cell = parseTableStylePrCellProps(getNode(node, 'w:tcPr'))
+
+  const format: TableConditionalFormat = {
+    ...(paragraph !== undefined ? { paragraph } : {}),
+    ...(run !== undefined ? { run } : {}),
+    ...(table !== undefined ? { table } : {}),
+    ...(row !== undefined ? { row } : {}),
+    ...(cell !== undefined ? { cell } : {}),
+  }
+
+  return hasKeys(format) ? format : undefined
+}
+
+const TABLE_CONDITIONAL_FORMAT_TYPES: ReadonlySet<TableConditionalFormatType> = new Set([
+  'wholeTable',
+  'firstRow',
+  'lastRow',
+  'firstCol',
+  'lastCol',
+  'band1Vert',
+  'band2Vert',
+  'band1Horz',
+  'band2Horz',
+  'neCell',
+  'nwCell',
+  'seCell',
+  'swCell',
+])
+
+function parseTableConditionalFormatType(value: string | undefined): TableConditionalFormatType | undefined {
+  if (value === undefined) return undefined
+  return (TABLE_CONDITIONAL_FORMAT_TYPES as ReadonlySet<string>).has(value)
+    ? (value as TableConditionalFormatType)
+    : undefined
+}
+
+/**
+ * The `w:trPr` subset OOXML's `CT_TrPrBase` allows inside `w:tblStylePr`
+ * (a small subset of the full row-properties schema — no `w:divId` or
+ * `w:tblCellSpacing`, which Atlas's `TableRowProps` model has no field for
+ * anyway).
+ */
+function parseTableStylePrRowProps(node: XmlNode | undefined): TableRowProps | undefined {
+  if (node === undefined) return undefined
+
+  const props: Mutable<TableRowProps> = {}
+
+  const trHeight = parseTableStylePrRowHeight(getNode(node, 'w:trHeight'))
+  if (trHeight !== undefined) props.trHeight = trHeight
+
+  const cantSplit = parseOnOffElement(node['w:cantSplit'])
+  if (cantSplit !== undefined) props.cantSplit = cantSplit
+
+  const tblHeader = parseOnOffElement(node['w:tblHeader'])
+  if (tblHeader !== undefined) props.tblHeader = tblHeader
+
+  const jc = parseJustifyContent(getValAttr(getNode(node, 'w:jc')))
+  if (jc !== undefined) props.jc = jc
+
+  return hasKeys(props) ? props : undefined
+}
+
+function parseTableStylePrRowHeight(node: XmlNode | undefined): TableRowHeight | undefined {
+  if (node === undefined) return undefined
+
+  const val = parseTwipAttr(node, 'w:val')
+  if (val === undefined) return undefined
+
+  const hRule = parseTableRowHeightRule(getAttr(node, 'w:hRule'))
+  return { val, ...(hRule !== undefined ? { hRule } : {}) }
+}
+
+function parseTableRowHeightRule(value: string | undefined): TableRowHeightRule | undefined {
+  switch (value) {
+    case 'auto':
+    case 'atLeast':
+    case 'exact':
+      return value
+    default:
+      return undefined
+  }
+}
+
+/**
+ * The `w:tcPr` subset OOXML's `CT_TcPrBase` allows inside `w:tblStylePr` —
+ * covers everything `layout/layoutTable.ts` consumes from a cell's direct
+ * `w:tcPr` today (shading, borders, margins, vertical alignment).
+ */
+function parseTableStylePrCellProps(node: XmlNode | undefined): TableCellProps | undefined {
+  if (node === undefined) return undefined
+
+  const props: Mutable<TableCellProps> = {}
+
+  const tcW = parseWidth(getNode(node, 'w:tcW'))
+  if (tcW !== undefined) props.tcW = tcW
+
+  const gridSpan = parseInteger(getValAttr(getNode(node, 'w:gridSpan')))
+  if (gridSpan !== undefined) props.gridSpan = gridSpan
+
+  const vMerge = parseTableStylePrCellMerge(getNode(node, 'w:vMerge'))
+  if (vMerge !== undefined) props.vMerge = vMerge
+
+  const tcBorders = parseBorderSet(getNode(node, 'w:tcBorders'))
+  if (tcBorders !== undefined) props.tcBorders = tcBorders
+
+  const shd = parseShading(getNode(node, 'w:shd'))
+  if (shd !== undefined) props.shd = shd
+
+  const tcMar = parseInsetSet(getNode(node, 'w:tcMar'))
+  if (tcMar !== undefined) props.tcMar = tcMar
+
+  const vAlign = parseTableStylePrCellVerticalAlign(getValAttr(getNode(node, 'w:vAlign')))
+  if (vAlign !== undefined) props.vAlign = vAlign
+
+  const noWrap = parseOnOffElement(node['w:noWrap'])
+  if (noWrap !== undefined) props.noWrap = noWrap
+
+  const hideMark = parseOnOffElement(node['w:hideMark'])
+  if (hideMark !== undefined) props.hideMark = hideMark
+
+  return hasKeys(props) ? props : undefined
+}
+
+function parseTableStylePrCellMerge(node: XmlNode | undefined): TableCellMerge | undefined {
+  if (node === undefined) return undefined
+  // `w:val`'s schema default is "continue" — mirrors `parser/document.ts`'s
+  // `parseTableCellMerge` for the same element on a direct `w:tcPr`.
+  return getValAttr(node) === 'restart' ? 'restart' : 'continue'
+}
+
+function parseTableStylePrCellVerticalAlign(value: string | undefined): TableCellVerticalAlign | undefined {
+  switch (value) {
+    case 'top':
+    case 'center':
+    case 'bottom':
+    case 'both':
+      return value
+    default:
+      return undefined
   }
 }
 
@@ -321,6 +516,8 @@ function parseTableStylePropsElement(node: XmlNode | undefined): TableStyleProps
     ...(withValue('look', parseTableLook(getNode(node, 'w:tblLook')))),
     ...(withValue('justification', parseJustifyContent(getValAttr(getNode(node, 'w:jc'))))),
     ...(withValue('shading', parseShading(getNode(node, 'w:shd')))),
+    ...(withValue('rowBandSize', parseInteger(getValAttr(getNode(node, 'w:tblStyleRowBandSize'))))),
+    ...(withValue('colBandSize', parseInteger(getValAttr(getNode(node, 'w:tblStyleColBandSize'))))),
   }
 
   return hasKeys(props) ? props : undefined

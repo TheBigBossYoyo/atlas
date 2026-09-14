@@ -89,6 +89,31 @@ const BASE_STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   </w:style>
 </w:styles>`
 
+// Mirrors scripts/generate-docx-corpus.mjs's `table-styled-banded` fixture
+// (AtlasBandedTable) so the parser is exercised against the exact same
+// real-world shape the round-trip corpus test covers.
+const BANDED_TABLE_STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:latentStyles w:defLockedState="0" w:defUIPriority="99" w:count="1">
+    <w:lsdException w:name="Normal" w:uiPriority="0"/>
+  </w:latentStyles>
+  <w:style w:type="table" w:customStyle="1" w:styleId="AtlasBandedTable">
+    <w:name w:val="Atlas Banded Table"/>
+    <w:basedOn w:val="TableNormal"/>
+    <w:tblPr>
+      <w:tblStyleRowBandSize w:val="1"/>
+      <w:tblStyleColBandSize w:val="1"/>
+    </w:tblPr>
+    <w:tblStylePr w:type="firstRow">
+      <w:rPr><w:b/><w:color w:val="FFFFFF"/></w:rPr>
+      <w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="4472C4"/></w:tcPr>
+    </w:tblStylePr>
+    <w:tblStylePr w:type="band1Horz">
+      <w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="D9E2F3"/></w:tcPr>
+    </w:tblStylePr>
+  </w:style>
+</w:styles>`
+
 const THREE_LEVEL_CHAIN_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:style w:type="paragraph" w:styleId="Base"/>
@@ -262,6 +287,54 @@ describe('parseStyles', () => {
   describe('malformed XML handling (D28 / DXP-16)', () => {
     it('wraps a fast-xml-parser failure in DocxParseError instead of letting it propagate raw', () => {
       expect(() => parseStyles('<<< not xml <<<')).toThrow(DocxParseError)
+    })
+  })
+
+  describe('table conditional formatting (D7 / DXP-06, DXL-08, DXS-05)', () => {
+    it('parses each w:tblStylePr block keyed by its w:type, plus row/col band sizes', () => {
+      const part = parseStyles(BANDED_TABLE_STYLES_XML)
+      const style = part.styles.get('AtlasBandedTable')
+
+      expect(style?.table).toMatchObject({ rowBandSize: 1, colBandSize: 1 })
+      expect(style?.conditionalFormats?.size).toBe(2)
+
+      expect(style?.conditionalFormats?.get('firstRow')).toEqual({
+        run: { bold: true, color: 'FFFFFF' },
+        cell: { shd: { pattern: 'clear', color: 'auto', fill: '4472C4' } },
+      })
+      expect(style?.conditionalFormats?.get('band1Horz')).toEqual({
+        cell: { shd: { pattern: 'clear', color: 'auto', fill: 'D9E2F3' } },
+      })
+    })
+
+    it('ignores an unrecognized w:tblStylePr type instead of throwing', () => {
+      const xml = BANDED_TABLE_STYLES_XML.replace('w:type="band1Horz"', 'w:type="notARealType"')
+      const part = parseStyles(xml)
+      const style = part.styles.get('AtlasBandedTable')
+
+      expect(style?.conditionalFormats?.size).toBe(1)
+      expect(style?.conditionalFormats?.has('firstRow')).toBe(true)
+    })
+
+    it('returns undefined conditionalFormats for a style with no w:tblStylePr children', () => {
+      const part = parseStyles(BASE_STYLES_XML)
+      expect(part.styles.get('AtlasTable')?.conditionalFormats).toBeUndefined()
+    })
+  })
+
+  describe('w:latentStyles passthrough (D19 / DXS-14)', () => {
+    it('captures the raw latentStyles node when present', () => {
+      const part = parseStyles(BANDED_TABLE_STYLES_XML)
+      expect(part.latentStyles).toBeDefined()
+      expect(part.latentStyles).toMatchObject({
+        '@_w:defLockedState': '0',
+        'w:lsdException': expect.any(Object),
+      })
+    })
+
+    it('is undefined when the part has no w:latentStyles element', () => {
+      const part = parseStyles(BASE_STYLES_XML)
+      expect(part.latentStyles).toBeUndefined()
     })
   })
 })

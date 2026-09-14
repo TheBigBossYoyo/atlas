@@ -13,7 +13,11 @@ import type {
   SectionProps,
   Shading,
   Style,
+  TableCellProps,
+  TableConditionalFormat,
+  TableConditionalFormatType,
   TableLook,
+  TableRowProps,
   TableStyleProps,
   Width,
 } from '../model'
@@ -45,6 +49,10 @@ export function writeStylesXml(stylesPart: StylesPart): string {
     '@_xmlns:w': WORD_NAMESPACE,
     '@_xmlns:r': RELATIONSHIP_NAMESPACE,
     'w:docDefaults': buildDocDefaultsXml(stylesPart.docDefaults),
+    // D19 / DXS-14: re-emit `<w:latentStyles>` verbatim (as parsed) rather
+    // than silently dropping it — see `StylesPart.latentStyles`'s doc
+    // comment in `parser/styles.ts`.
+    ...(stylesPart.latentStyles !== undefined ? { 'w:latentStyles': stylesPart.latentStyles as XmlNode } : {}),
     ...(styles.length > 0 ? { 'w:style': styles } : {}),
   }
 
@@ -134,6 +142,7 @@ function buildDocDefaultsXml(defaults: StylesPart['docDefaults']): XmlNode {
 function buildStyleXml(style: Style): XmlNode {
   const paragraph = buildStyleParagraphProps(style)
   const aliases = serializeAliases(style.aliases)
+  const tblStylePr = buildTableConditionalFormatsXml(style.conditionalFormats)
 
   return {
     '@_w:type': style.type,
@@ -154,7 +163,68 @@ function buildStyleXml(style: Style): XmlNode {
     ...withElement('w:pPr', buildParagraphPropertiesXml(paragraph)),
     ...withElement('w:rPr', buildRunPropertiesXml(style.run)),
     ...withElement('w:tblPr', buildTableStylePropertiesXml(style.table)),
+    ...(tblStylePr.length > 0 ? { 'w:tblStylePr': tblStylePr } : {}),
   }
+}
+
+/**
+ * D7 / DXP-06, DXL-08, DXS-05: re-emits one `<w:tblStylePr>` per
+ * conditional-formatting region the style carries — closes the "loses all
+ * table formatting on save" data loss for any table style using Word's
+ * Table Style Options (banded rows/columns, header/total row, first/last
+ * column).
+ */
+function buildTableConditionalFormatsXml(
+  conditionalFormats: ReadonlyMap<TableConditionalFormatType, TableConditionalFormat> | undefined,
+): XmlNode[] {
+  if (conditionalFormats === undefined) return []
+
+  return Array.from(conditionalFormats.entries()).map(([type, format]) => ({
+    '@_w:type': type,
+    ...withElement('w:pPr', buildParagraphPropertiesXml(format.paragraph)),
+    ...withElement('w:rPr', buildRunPropertiesXml(format.run)),
+    ...withElement('w:tblPr', buildTableStylePropertiesXml(format.table)),
+    ...withElement('w:trPr', buildTableConditionalRowPropertiesXml(format.row)),
+    ...withElement('w:tcPr', buildTableConditionalCellPropertiesXml(format.cell)),
+  }))
+}
+
+function buildTableConditionalRowPropertiesXml(row: TableRowProps | undefined): XmlNode | undefined {
+  if (row === undefined) return undefined
+
+  const node: XmlNode = {
+    ...(row.trHeight !== undefined
+      ? {
+          'w:trHeight': {
+            '@_w:val': toOptionalString(row.trHeight.val),
+            ...withAttribute('@_w:hRule', row.trHeight.hRule),
+          },
+        }
+      : {}),
+    ...withElement('w:cantSplit', buildOnOffElement(row.cantSplit)),
+    ...withElement('w:tblHeader', buildOnOffElement(row.tblHeader)),
+    ...buildValElement('w:jc', row.jc),
+  }
+
+  return hasEntries(node) ? node : undefined
+}
+
+function buildTableConditionalCellPropertiesXml(cell: TableCellProps | undefined): XmlNode | undefined {
+  if (cell === undefined) return undefined
+
+  const node: XmlNode = {
+    ...withElement('w:tcW', buildWidthXml(cell.tcW)),
+    ...buildValElement('w:gridSpan', cell.gridSpan),
+    ...(cell.vMerge !== undefined ? { 'w:vMerge': withAttribute('@_w:val', cell.vMerge) } : {}),
+    ...withElement('w:tcBorders', buildBorderSetXml(cell.tcBorders)),
+    ...withElement('w:shd', buildShadingXml(cell.shd)),
+    ...withElement('w:tcMar', buildInsetSetXml(cell.tcMar)),
+    ...buildValElement('w:vAlign', cell.vAlign),
+    ...withElement('w:noWrap', buildOnOffElement(cell.noWrap)),
+    ...withElement('w:hideMark', buildOnOffElement(cell.hideMark)),
+  }
+
+  return hasEntries(node) ? node : undefined
 }
 
 function buildStyleParagraphProps(style: Style): ParaProps | undefined {
@@ -447,6 +517,8 @@ function buildTableStylePropertiesXml(tableStyleProps: TableStyleProps | undefin
     ...withElement('w:tblBorders', buildBorderSetXml(tableStyleProps.borders)),
     ...withElement('w:tblCellMar', buildInsetSetXml(tableStyleProps.cellMargin)),
     ...buildValElement('w:tblLayout', tableStyleProps.layout),
+    ...buildValElement('w:tblStyleRowBandSize', tableStyleProps.rowBandSize),
+    ...buildValElement('w:tblStyleColBandSize', tableStyleProps.colBandSize),
     ...withElement('w:tblLook', buildTableLookXml(tableStyleProps.look)),
     ...buildValElement('w:jc', tableStyleProps.justification),
     ...withElement('w:shd', buildShadingXml(tableStyleProps.shading)),

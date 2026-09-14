@@ -146,4 +146,72 @@ describe('writeStylesXml', () => {
     expect(xml).toContain('<w:style w:type="paragraph" w:styleId="Mid"><w:basedOn w:val="Base"/></w:style>')
     expect(xml).toContain('<w:style w:type="paragraph" w:styleId="Leaf"><w:basedOn w:val="Mid"/></w:style>')
   })
+
+  describe('table conditional formatting (D7 / DXP-06, DXL-08, DXS-05)', () => {
+    it('emits one w:tblStylePr per conditional format, plus row/col band sizes', () => {
+      const xml = writeStylesXml(
+        makeStylesPart([
+          {
+            id: 'AtlasBandedTable',
+            type: 'table',
+            basedOn: 'TableNormal',
+            table: { rowBandSize: 1, colBandSize: 1 },
+            conditionalFormats: new Map([
+              [
+                'firstRow',
+                {
+                  run: { bold: true, color: hexColor('FFFFFF') },
+                  cell: { shd: { pattern: 'clear', color: 'auto', fill: hexColor('4472C4') } },
+                },
+              ],
+              [
+                'band1Horz',
+                { cell: { shd: { pattern: 'clear', color: 'auto', fill: hexColor('D9E2F3') } } },
+              ],
+            ]),
+          },
+        ]),
+      )
+
+      expect(xml).toContain('<w:tblStyleRowBandSize w:val="1"/><w:tblStyleColBandSize w:val="1"/>')
+      expect(xml).toContain(
+        '<w:tblStylePr w:type="firstRow"><w:rPr><w:b/><w:color w:val="FFFFFF"/></w:rPr>'
+          + '<w:tcPr><w:shd w:fill="4472C4" w:color="auto" w:val="clear"/></w:tcPr></w:tblStylePr>',
+      )
+      expect(xml).toContain(
+        '<w:tblStylePr w:type="band1Horz"><w:tcPr><w:shd w:fill="D9E2F3" w:color="auto" w:val="clear"/></w:tcPr></w:tblStylePr>',
+      )
+    })
+
+    it('omits w:tblStylePr entirely when a style has no conditional formats', () => {
+      const xml = writeStylesXml(makeStylesPart([{ id: 'Plain', type: 'table' }]))
+      expect(xml).not.toContain('w:tblStylePr')
+    })
+  })
+
+  describe('w:latentStyles passthrough (D19 / DXS-14)', () => {
+    it('re-emits the captured latentStyles node between docDefaults and the first style', () => {
+      const part = makeStylesPart([{ id: 'Base', type: 'paragraph' }])
+      const xml = writeStylesXml({
+        ...part,
+        latentStyles: {
+          '@_w:defLockedState': '0',
+          'w:lsdException': { '@_w:name': 'Normal', '@_w:uiPriority': '0' },
+        },
+      })
+
+      const docDefaultsIndex = xml.indexOf('</w:docDefaults>')
+      const latentStylesIndex = xml.indexOf('<w:latentStyles')
+      const firstStyleIndex = xml.indexOf('<w:style ')
+
+      expect(latentStylesIndex).toBeGreaterThan(docDefaultsIndex)
+      expect(firstStyleIndex).toBeGreaterThan(latentStylesIndex)
+      expect(xml).toContain('<w:latentStyles w:defLockedState="0"><w:lsdException w:name="Normal" w:uiPriority="0"/></w:latentStyles>')
+    })
+
+    it('omits w:latentStyles when the part has none', () => {
+      const xml = writeStylesXml(makeStylesPart([]))
+      expect(xml).not.toContain('w:latentStyles')
+    })
+  })
 })

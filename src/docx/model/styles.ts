@@ -5,7 +5,7 @@
  * DOCX parser, style cascade resolver, renderer, and editor pipeline.
  */
 
-import type { SectionProps } from './document'
+import type { SectionProps, TableCellProps, TableRowProps } from './document'
 
 // ---------------------------------------------------------------------------
 // Branded scalar values
@@ -399,6 +399,49 @@ export interface TableStyleProps {
   readonly look?: TableLook
   readonly justification?: JustifyContent
   readonly shading?: Shading
+  /**
+   * `w:tblStyleRowBandSize`/`w:tblStyleColBandSize` (D7 / DXP-06) — how many
+   * consecutive rows/columns each `band1Horz`/`band2Horz`/`band1Vert`/
+   * `band2Vert` stripe covers before alternating. Word defaults both to 1
+   * (alternate every row/column) when absent.
+   */
+  readonly rowBandSize?: number
+  readonly colBandSize?: number
+}
+
+/**
+ * The `w:type` values `<w:tblStylePr>` accepts (D7 / DXP-06, DXL-08,
+ * DXS-05) — one conditional-formatting block per table-style "region" Word
+ * exposes as Table Style Options checkboxes (Header/Total Row, First/Last
+ * Column, Banded Rows/Columns) plus the four corner-cell intersections.
+ */
+export type TableConditionalFormatType =
+  | 'wholeTable'
+  | 'firstRow'
+  | 'lastRow'
+  | 'firstCol'
+  | 'lastCol'
+  | 'band1Vert'
+  | 'band2Vert'
+  | 'band1Horz'
+  | 'band2Horz'
+  | 'neCell'
+  | 'nwCell'
+  | 'seCell'
+  | 'swCell'
+
+/**
+ * One `<w:tblStylePr>` block's formatting — the OOXML schema (`CT_TblStylePr`)
+ * allows the same paragraph/run/table/row/cell property groups as direct
+ * formatting, scoped to whichever table region `TableConditionalFormatType`
+ * names.
+ */
+export interface TableConditionalFormat {
+  readonly paragraph?: ParaProps
+  readonly run?: RunProps
+  readonly table?: TableStyleProps
+  readonly row?: TableRowProps
+  readonly cell?: TableCellProps
 }
 
 export interface NumberingStyleProps {
@@ -433,4 +476,13 @@ export interface Style {
   readonly run?: RunProps
   readonly table?: TableStyleProps
   readonly numbering?: NumberingStyleProps
+  /**
+   * `<w:tblStylePr>` conditional-formatting blocks, keyed by `w:type`
+   * (D7 / DXP-06, DXL-08, DXS-05). Only populated for `type: 'table'`
+   * styles. `cascadeTable.ts`'s `resolveTableCellStyle` walks the
+   * `basedOn` chain and applies the blocks whose type is "active" for a
+   * given cell position, gated by the table instance's own `tblLook`
+   * flags.
+   */
+  readonly conditionalFormats?: ReadonlyMap<TableConditionalFormatType, TableConditionalFormat>
 }
