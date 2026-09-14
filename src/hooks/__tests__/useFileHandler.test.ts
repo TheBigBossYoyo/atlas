@@ -327,7 +327,7 @@ describe('useFileHandler', () => {
       expect(result.current.loading).toBe(false);
     });
 
-    it('does not prompt for a ZIP-family mismatch where magic is confidently a different supported binary format', async () => {
+    it('still prompts for a ZIP-family mismatch where magic is confidently a different supported binary format', async () => {
       // .pdf extension, but the bytes are actually a ZIP-based xlsx — still
       // a real mismatch worth confirming.
       const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
