@@ -15,30 +15,28 @@
  *  - reports each sheet's `hidden` flag from the workbook's own sheet
  *    visibility state (T4/DAT-11) so the UI can filter/toggle it.
  *
- * Frozen panes (T4/DAT-10's other sub-item) are a deliberate scope cut, not
- * an oversight: this `xlsx` build never parses a sheet's `<pane>`/`xSplit`/
- * `ySplit` XML at all (confirmed by grepping the bundled `xlsx.js` — every
- * freeze/split/pane-related case in its own settings parser is a no-op
- * `break`), so there is no `ws['!freeze']`-equivalent field to read; getting
- * it would mean re-unzipping and regexing each sheet's raw XML ourselves.
- * Doing that on the *main* thread would re-block it on exactly the huge
- * sheets T2 exists to protect (a 100k-row sheet's XML has to be fully
- * inflated to reach its `<sheetViews>` element); doing it correctly for
- * every file size would mean teaching the Worker path a second, unrelated
- * parsing format. Given `@glideapps/glide-data-grid` v6 only supports
- * frozen *columns* anyway (no frozen-rows prop exists), the fidelity this
- * would buy is partial at a real complexity and performance-risk cost — so
- * SpreadsheetViewer/CsvViewer keep their fixed `freezeColumns={1}` default
- * (freeze the row-number column) rather than attempting a from-scratch,
- * file-driven implementation here.
+ * Frozen panes (T4/DAT-10's other sub-item): this `xlsx` build never parses a
+ * sheet's `<pane>`/`xSplit`/`ySplit` XML at all (confirmed by grepping the
+ * bundled `xlsx.js` — every freeze/split/pane-related case in its own
+ * settings parser is a no-op `break`), so there is no `ws['!freeze']`
+ * -equivalent field to read here. `spreadsheet/spreadsheetPanes.ts` reads it
+ * separately, by re-unzipping the raw file buffer with JSZip and parsing the
+ * relevant `xl/worksheets/sheetN.xml` with `DOMParser` — see that module's
+ * header for why this is a distinct, buffer-driven step (not part of
+ * `sheetToGrid`/`parseWorkbookBuffer` above) and how it stays off the main
+ * thread for large files. `attachFrozenPanes` below merges its result back
+ * onto this module's own `ParsedSheet[]` by sheet name.
  *
  * `XLSX.read`'s `cellStyles:true` is kept even though T3 asks to drop
  * "expensive, immediately-discarded" parse options: in this SheetJS build,
  * `!cols` (column widths) and `!rows` (row heights) are ONLY populated when
  * `cellStyles` is requested (see `parse_ws_xml_cols`/`parse_ws_xml_data` in
  * xlsx.js) — so it is no longer "immediately discarded", it is the only way
- * to get T4's column/row sizing. `cellFormula` and `sheetStubs` are dropped:
- * nothing in Atlas reads `cell.f` or consumes stub (`t:'z'`) cells.
+ * to get T4's column/row sizing. `sheetStubs` is dropped: nothing in Atlas
+ * consumes stub (`t:'z'`) cells. `cellFormula` is NOT dropped (its default is
+ * already `true`) — wave 3 editing reads each cell's `.f` into `formulas`
+ * below so the editable-document model can tell "this cell is a formula"
+ * apart from a plain value without re-walking the worksheet a second time.
  */
 import * as XLSX from 'xlsx'
 import { formatCellText } from './xlsxCellFormat'
@@ -68,10 +66,35 @@ export type SheetGrid = {
   readonly formulas: ReadonlyArray<ReadonlyArray<string | undefined>>
 }
 
+/** Frozen-pane split, in leading column/row counts (T4/DAT-10 remainder). */
+export type FrozenPanes = {
+  readonly cols: number
+  readonly rows: number
+}
+
 export type ParsedSheet = {
   readonly name: string
   readonly hidden: boolean
   readonly grid: SheetGrid
+  /**
+   * Present only when `spreadsheet/spreadsheetPanes.ts` found a `state="frozen"`
+   * `<pane>` in this sheet's own XML (OOXML zip formats only — see that
+   * module's header). `undefined` means "unknown/not applicable", NOT "no
+   * freeze" — callers that want a UI default when this is absent should fall
+   * back explicitly rather than treating `undefined` as `{cols:0,rows:0}`.
+   */
+  readonly freeze?: FrozenPanes
+}
+
+/** Merges a sheet-name-keyed frozen-pane map (from `readFrozenPanes`) onto already-parsed sheets. Pure/sync. */
+export function attachFrozenPanes(
+  sheets: ReadonlyArray<ParsedSheet>,
+  paneMap: Readonly<Record<string, FrozenPanes>>,
+): ParsedSheet[] {
+  return sheets.map((sheet) => {
+    const freeze = paneMap[sheet.name]
+    return freeze ? { ...sheet, freeze } : sheet
+  })
 }
 
 const EMPTY_GRID: SheetGrid = {
@@ -156,7 +179,7 @@ export function sheetToGrid(ws: XLSX.WorkSheet): SheetGrid {
     }
   }
 
-  return { rows, colCount, merges, colWidthsPx, rowHeightsPx }
+  return { rows, colCount, merges, colWidthsPx, rowHeightsPx, formulas }
 }
 
 /** Sheet visibility state (0=visible, 1=hidden, 2=very hidden) → `hidden` (T4/DAT-11). */
