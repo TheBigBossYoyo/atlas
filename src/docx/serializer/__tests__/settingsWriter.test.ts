@@ -21,6 +21,38 @@ describe('writeSettingsXml', () => {
     expect(parseSettings(result as string)).toEqual({ trackChanges: true })
   })
 
+  // ECMA-376 §17.15.1's CT_Settings sequence places w:trackChanges after
+  // w:zoom but before w:defaultTabStop — inserting it unconditionally as the
+  // very first child (as this module used to) would put it BEFORE w:zoom,
+  // an out-of-schema-order settings.xml a strict OOXML consumer could reject
+  // or flag for repair.
+  it('inserts trackChanges after a known-preceding element instead of always as the first child', () => {
+    const original = settingsXml('<w:zoom w:percent="100"/><w:defaultTabStop w:val="720"/>')
+    const result = writeSettingsXml(original, true) as string
+
+    const zoomEnd = result.indexOf('<w:zoom w:percent="100"/>') + '<w:zoom w:percent="100"/>'.length
+    const trackChangesStart = result.indexOf('<w:trackChanges/>')
+    const defaultTabStopStart = result.indexOf('<w:defaultTabStop')
+
+    expect(trackChangesStart).toBe(zoomEnd)
+    expect(trackChangesStart).toBeLessThan(defaultTabStopStart)
+  })
+
+  it('inserts trackChanges after the LAST known-preceding element when several are present', () => {
+    const original = settingsXml('<w:view w:val="print"/><w:zoom w:percent="100"/><w:mailMerge/>')
+    const result = writeSettingsXml(original, true) as string
+
+    const mailMergeEnd = result.indexOf('<w:mailMerge/>') + '<w:mailMerge/>'.length
+    expect(result.indexOf('<w:trackChanges/>')).toBe(mailMergeEnd)
+  })
+
+  it('still inserts as the first child when the document has none of the known-preceding elements', () => {
+    const original = settingsXml('<w:defaultTabStop w:val="720"/>')
+    const result = writeSettingsXml(original, true) as string
+
+    expect(result.indexOf('<w:trackChanges/>')).toBeLessThan(result.indexOf('<w:defaultTabStop'))
+  })
+
   it('is a no-op when disabling on a document that never had the element', () => {
     const original = settingsXml('<w:zoom w:percent="100"/>')
     expect(writeSettingsXml(original, false)).toBe(original)
