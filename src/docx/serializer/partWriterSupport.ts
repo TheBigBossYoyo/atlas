@@ -1,7 +1,12 @@
 import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 
 import { assertNever, type Block, type Paragraph, type Table } from '../model'
-import { buildParagraph, buildTable } from './documentWriter'
+import {
+  buildNamespaceDeclarationAttributes,
+  buildParagraph,
+  buildTable,
+  STANDARD_NAMESPACE_URIS,
+} from './documentWriter'
 
 type ObjectXmlPrimitive = string | number | boolean
 type ObjectXmlValue = ObjectXmlPrimitive | ObjectXmlNode | ObjectXmlValue[]
@@ -81,17 +86,20 @@ function normalizeBlockNode(block: Block): OrderedXmlNode {
   }
 }
 
-export function serializeWordPart(
-  rootName: string,
-  children: ReadonlyArray<OrderedXmlNode>,
-  includeRelationshipsNamespace: boolean = false,
-): string {
+/**
+ * D19 / DXS-08: standalone parts (header/footer/footnote/endnote) previously
+ * declared only `xmlns:w` (+ `xmlns:r` when the caller opted in), so a
+ * drawing/revision/shape/etc. inside one of those parts emitted an
+ * undeclared namespace prefix — an XML well-formedness violation Word may
+ * reject or "repair" on open. Declares the same full standard namespace set
+ * `documentWriter.ts` declares on the document root instead, so any content
+ * `buildBlockNodes` can produce (which reuses `documentWriter.ts`'s own
+ * paragraph/table builders) always has its namespaces in scope.
+ */
+export function serializeWordPart(rootName: string, children: ReadonlyArray<OrderedXmlNode>): string {
   const root: OrderedXmlNode = {
     [rootName]: [...children],
-    ':@': {
-      '@_xmlns:w': WORD_NAMESPACE,
-      ...(includeRelationshipsNamespace ? { '@_xmlns:r': RELATIONSHIP_NAMESPACE } : {}),
-    },
+    ':@': buildNamespaceDeclarationAttributes(STANDARD_NAMESPACE_URIS),
   }
 
   return `${XML_DECLARATION}${orderedXmlBuilder.build([root])}`

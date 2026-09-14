@@ -3,11 +3,11 @@ import type { OrderedXmlNode } from './partWriterSupport'
 import { buildBlockNodes, serializeWordPart } from './partWriterSupport'
 
 export function writeFootnotesXml(footnotes: ReadonlyArray<Footnote>): string {
-  return serializeWordPart('w:footnotes', footnotes.map((footnote) => buildNoteNode('w:footnote', footnote)), true)
+  return serializeWordPart('w:footnotes', footnotes.map((footnote) => buildNoteNode('w:footnote', footnote)))
 }
 
 export function writeEndnotesXml(endnotes: ReadonlyArray<Endnote>): string {
-  return serializeWordPart('w:endnotes', endnotes.map((endnote) => buildNoteNode('w:endnote', endnote)), true)
+  return serializeWordPart('w:endnotes', endnotes.map((endnote) => buildNoteNode('w:endnote', endnote)))
 }
 
 function buildNoteNode(
