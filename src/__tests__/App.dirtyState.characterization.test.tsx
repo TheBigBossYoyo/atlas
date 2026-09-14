@@ -158,6 +158,12 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('App dirty-state characterization', () => {
+  // P4.2 — this end-to-end render/type/save/reopen sequence is close enough
+  // to the default 5000ms testTimeout that `npm run coverage`'s v8
+  // instrumentation overhead (measured: reliably fine standalone, flaky
+  // alongside the full 1800+-test suite) pushes it over on a loaded machine.
+  // A longer timeout costs nothing when the suite is fast; it's the
+  // difference between a flaky and a reliable coverage run when it isn't.
   it('records isDirty / Save-button / active-file at each step of load sample -> edit -> save -> open another .md -> open a non-.md file', async () => {
     // P4.10/LOAD-13 — the Toolbar's "Open" button now decodes the buffer
     // openFileBinary() itself reads (openFileByPath is no longer called for
@@ -272,5 +278,5 @@ describe('App dirty-state characterization', () => {
         },
       ]
     `);
-  });
+  }, 15000);
 });

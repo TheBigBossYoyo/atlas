@@ -1,90 +1,127 @@
-import { gzipSync } from 'node:zlib'
+#!/usr/bin/env node
+// Bundle regression gate (P4.3 / RUN-15 / QA-17).
+//
+// Wired as `postbuild` (package.json) so it runs automatically after every
+// `npm run build`. Compares every `dist/assets/*.{js,css}` chunk — not just
+// the main entry chunk the original Phase-0 version tracked — against
+// `.sisyphus/baselines/atlas-phase3-bundle.json`, and fails the build if any
+// single chunk or the total bundle size grew more than `THRESHOLD_PERCENT`.
+//
+// A chunk name changes its content hash on every build even when nothing
+// about it changed logically, so comparisons are keyed on the
+// hash-stripped "stable" chunk name (see `lib/bundleChunks.mjs`).
+//
+// To refresh the baseline after an intentional size change:
+//   node scripts/capture-bundle-baseline.mjs
+
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
+import { collectChunks, toKb } from './lib/bundleChunks.mjs'
+
 const projectRoot = process.cwd()
-const baselinePath = path.join(projectRoot, '.sisyphus', 'baselines', 'atlas-phase0.json')
-const distDir = path.join(projectRoot, 'dist')
-const thresholdPercent = 25
+const baselinePath = path.join(projectRoot, '.sisyphus', 'baselines', 'atlas-phase3-bundle.json')
+const THRESHOLD_PERCENT = 25
 
-function formatKb(value) {
-  return `${value.toFixed(2)} KB`
+function formatKb(bytes) {
+  return `${toKb(bytes).toFixed(2)} KB`
 }
 
-function toKb(bytes) {
-  return bytes / 1000
+function formatDelta(percent) {
+  if (!Number.isFinite(percent)) return 'n/a'
+  const sign = percent >= 0 ? '+' : ''
+  return `${sign}${percent.toFixed(2)}%`
 }
 
-function formatDelta(deltaPercent) {
-  const sign = deltaPercent >= 0 ? '+' : ''
-  return `${sign}${deltaPercent.toFixed(2)}%`
+/** @returns {number} Percent change from `baseline` to `current`; `Infinity` when baseline was 0 and current isn't. */
+function percentDelta(current, baseline) {
+  if (baseline === 0) return current === 0 ? 0 : Infinity
+  return ((current - baseline) / baseline) * 100
 }
 
 async function readBaseline() {
-  const raw = await fs.readFile(baselinePath, 'utf8')
-  return JSON.parse(raw)
-}
-
-async function findMainChunk() {
-  const indexHtmlPath = path.join(distDir, 'index.html')
-  const indexHtml = await fs.readFile(indexHtmlPath, 'utf8')
-  const match = indexHtml.match(/<script\s+type="module"\s+crossorigin\s+src="([^\"]+index-[^\"]+\.js)"><\/script>/)
-
-  if (!match) {
-    throw new Error(`Could not find main entry chunk in ${indexHtmlPath}`)
-  }
-
-  const relativeAssetPath = match[1].replace(/^\//, '')
-  const assetPath = path.join(distDir, relativeAssetPath.replace(/^assets\//, 'assets/'))
-  const content = await fs.readFile(assetPath)
-
-  return {
-    file: path.relative(projectRoot, assetPath).replace(/\\/g, '/'),
-    sizeKb: toKb(content.byteLength),
-    gzipKb: toKb(gzipSync(content).byteLength),
-  }
-}
-
-function buildRows(baseline, current) {
-  const mainDelta = ((current.sizeKb - baseline.mainChunkKB) / baseline.mainChunkKB) * 100
-  const gzipDelta = ((current.gzipKb - baseline.mainChunkGzipKB) / baseline.mainChunkGzipKB) * 100
-
-  return {
-    rows: [
-      {
-        metric: 'main',
-        baseline: formatKb(baseline.mainChunkKB),
-        current: formatKb(current.sizeKb),
-        delta: formatDelta(mainDelta),
-      },
-      {
-        metric: 'gzip',
-        baseline: formatKb(baseline.mainChunkGzipKB),
-        current: formatKb(current.gzipKb),
-        delta: formatDelta(gzipDelta),
-      },
-    ],
-    mainDelta,
-    gzipDelta,
+  try {
+    return JSON.parse(await fs.readFile(baselinePath, 'utf8'))
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(
+        `No bundle baseline found at ${path.relative(projectRoot, baselinePath)}. ` +
+          'Run `node scripts/capture-bundle-baseline.mjs` once to create it.',
+      )
+    }
+    throw err
   }
 }
 
 async function main() {
   const baseline = await readBaseline()
-  const current = await findMainChunk()
-  const { rows, mainDelta, gzipDelta } = buildRows(baseline, current)
+  const currentChunks = await collectChunks(projectRoot)
+  const baselineChunks = baseline.chunks ?? {}
 
-  console.log(`Main chunk: ${current.file}`)
+  const rows = []
+  const violations = []
+  let totalBytes = 0
+  let totalGzipBytes = 0
+
+  for (const chunk of currentChunks.values()) {
+    totalBytes += chunk.bytes
+    totalGzipBytes += chunk.gzipBytes
+
+    const base = baselineChunks[chunk.name]
+    if (!base) {
+      rows.push({ chunk: chunk.name, baseline: '(new)', current: formatKb(chunk.bytes), delta: 'n/a' })
+      continue
+    }
+
+    const delta = percentDelta(chunk.bytes, base.bytes)
+    rows.push({
+      chunk: chunk.name,
+      baseline: formatKb(base.bytes),
+      current: formatKb(chunk.bytes),
+      delta: formatDelta(delta),
+    })
+    if (delta > THRESHOLD_PERCENT) {
+      violations.push(
+        `Chunk "${chunk.name}" grew ${formatDelta(delta)} (${formatKb(base.bytes)} -> ${formatKb(chunk.bytes)}), exceeding the ${THRESHOLD_PERCENT}% threshold.`,
+      )
+    }
+  }
+
+  // A baseline chunk that no longer exists (renamed, merged, or removed
+  // entirely) is reported for visibility but never fails the gate on its
+  // own — disappearing is never the regression this check exists to catch.
+  for (const name of Object.keys(baselineChunks)) {
+    if (!currentChunks.has(name)) {
+      rows.push({ chunk: name, baseline: formatKb(baselineChunks[name].bytes), current: '(removed)', delta: 'n/a' })
+    }
+  }
+
+  rows.sort((a, b) => a.chunk.localeCompare(b.chunk))
   console.table(rows)
 
-  if (mainDelta > thresholdPercent || gzipDelta > thresholdPercent) {
+  const totalDelta = percentDelta(totalBytes, baseline.totalBytes)
+  const totalGzipDelta = percentDelta(totalGzipBytes, baseline.totalGzipBytes)
+  console.log(
+    `Total dist/assets: ${formatKb(totalBytes)} (gzip ${formatKb(totalGzipBytes)}) vs baseline ` +
+      `${formatKb(baseline.totalBytes)} (gzip ${formatKb(baseline.totalGzipBytes)}) — ` +
+      `${formatDelta(totalDelta)} (gzip ${formatDelta(totalGzipDelta)})`,
+  )
+  if (totalDelta > THRESHOLD_PERCENT || totalGzipDelta > THRESHOLD_PERCENT) {
+    violations.push(
+      `Total bundle size grew ${formatDelta(totalDelta)} (gzip ${formatDelta(totalGzipDelta)}), exceeding the ${THRESHOLD_PERCENT}% threshold.`,
+    )
+  }
+
+  if (violations.length > 0) {
+    console.error('')
+    for (const message of violations) console.error(message)
     console.error(
-      `Bundle regression exceeded ${thresholdPercent}% threshold (main ${formatDelta(mainDelta)}, gzip ${formatDelta(gzipDelta)}).`,
+      '\nIf this growth is intentional, refresh the baseline: node scripts/capture-bundle-baseline.mjs',
     )
     process.exit(1)
   }
 
-  console.log(`Bundle regression check passed (threshold ${thresholdPercent}%).`)
+  console.log(`\nBundle regression check passed (threshold ${THRESHOLD_PERCENT}%, ${currentChunks.size} chunks checked).`)
 }
 
 await main()
