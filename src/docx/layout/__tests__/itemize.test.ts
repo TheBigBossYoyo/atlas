@@ -114,7 +114,7 @@ describe('itemizeRuns', () => {
     ])
   })
 
-  it('emits soft hyphen opportunities between word fragments', async () => {
+  it('emits soft hyphen opportunities between word fragments (D24/DXL-18 — the full extent of hyphenation support)', async () => {
     const items = await itemizeRuns([wrapTextRun('co\u00adoperate')], fontResolver)
 
     expect(items).toHaveLength(3)

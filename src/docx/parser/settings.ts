@@ -12,9 +12,16 @@
  *   header/footer reference is actually honored; when absent/off, even
  *   pages fall back to the same header/footer as odd pages even if the
  *   document happens to define an `even`-typed reference.
- * - `autoHyphenation` (D24/DXL-18) — whether the paginator should run its
- *   heuristic hyphenator on long words that don't already carry an
- *   explicit soft hyphen.
+ * - `autoHyphenation` (D24/DXL-18) — parsed and exposed for a future
+ *   pattern-based hyphenator, but not yet consumed by the layout pipeline:
+ *   no small, permissively-licensed hyphenation pattern set was available
+ *   to bundle without adding a new dependency (this worktree cannot run
+ *   `npm install`), so DXL-18 was resolved by keeping Atlas's EXISTING
+ *   explicit-soft-hyphen (`­`) and discretionary-break support (see
+ *   `layout/itemize.ts`'s `SOFT_HYPHEN` handling, present before this task)
+ *   as the full extent of hyphenation support — a document that never
+ *   authors an explicit soft hyphen sees no automatic mid-word breaks
+ *   whether or not this flag is on. Documented scope limitation, not a bug.
  * - `footnotePr`/`endnotePr` (D11 milestone 5) — the document's default
  *   footnote/endnote numbering format and restart rule.
  */

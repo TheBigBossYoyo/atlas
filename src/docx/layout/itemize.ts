@@ -9,6 +9,16 @@ const DEFAULT_DRAWING_SIZE_PT = 96
 const DEFAULT_FONT_SIZE_PT = 11
 const EMUS_PER_POINT = 12700
 const NO_BREAK_SPACE = '\u00a0'
+/**
+ * D24/DXL-18 \u2014 an explicit soft hyphen (`\u00ad`) is Atlas's full extent of
+ * hyphenation support: it's turned into a `hyphen-opportunity` break point
+ * below whenever real content precedes and follows it, letting
+ * `breakLines.ts` split the word there under overflow exactly like any
+ * other break opportunity. Automatic, pattern-based hyphenation of a word
+ * with NO explicit soft hyphen (what `w:autoHyphenation` nominally
+ * requests) is out of scope \u2014 see `parser/settings.ts`'s doc comment for
+ * why \u2014 so that setting is parsed but not read here.
+ */
 const SOFT_HYPHEN = '\u00ad'
 
 type FontVariant = 'regular' | 'bold' | 'italic' | 'boldItalic'

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ViewerProvider } from '../shared/ViewerContext'
@@ -228,5 +228,98 @@ describe('DocxViewer file-change effect', () => {
 
     // The second file's content must still be what's displayed.
     expect(screen.getByTestId('section-count')).toHaveTextContent('2')
+  })
+})
+
+describe('DocxViewer zoom controls (D24/DXL-19)', () => {
+  beforeEach(() => {
+    paginateMock.mockResolvedValue([
+      {
+        sectionIndex: 0,
+        pageIndex: 0,
+        sizePt: { width: 400, height: 300 },
+        marginsPt: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0, gutter: 0 },
+        columns: [],
+        headerLines: [],
+        footerLines: [],
+      },
+    ])
+    loadDocxMock.mockResolvedValue(createBundle(1))
+
+    window.electronAPI = {
+      getInitialFile: vi.fn(),
+      openFileDialog: vi.fn(),
+      openFileByPath: vi.fn(),
+      saveFile: vi.fn(),
+      saveBinaryFile: vi.fn(),
+      onFileOpened: vi.fn(),
+      setTheme: vi.fn(),
+      openFileBinary: vi.fn(),
+      readBinaryByPath: vi.fn(),
+      onFileOpenedPath: vi.fn(),
+      getPathForFile: vi.fn(),
+      registerDroppedPath: vi.fn(),
+      requestOpenRecent: vi.fn(),
+      revealInFolder: vi.fn(),
+      spellcheck: {
+        onContextMenu: vi.fn(() => () => {}),
+        replaceMisspelling: vi.fn(),
+        addWord: vi.fn(),
+        getLanguages: vi.fn(),
+        setLanguages: vi.fn(),
+      },
+    }
+  })
+
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('starts at 100% and steps up/down/reset via the toolbar controls', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/zoom.docx">
+        <DocxViewer file={binaryFile('C:/docs/zoom.docx')} />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('100%')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+    expect(screen.getByText('110%')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }))
+    expect(screen.getByText('90%')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset zoom to 100%' }))
+    expect(screen.getByText('100%')).toBeInTheDocument()
+  })
+
+  it('clamps zoom to the documented min/max range', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/zoom-clamp.docx">
+        <DocxViewer file={binaryFile('C:/docs/zoom-clamp.docx')} />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('100%')).toBeInTheDocument()
+    })
+
+    const zoomOut = screen.getByRole('button', { name: 'Zoom out' })
+    for (let i = 0; i < 20; i += 1) {
+      fireEvent.click(zoomOut)
+    }
+    expect(screen.getByText('25%')).toBeInTheDocument()
+    expect(zoomOut).toBeDisabled()
+
+    const zoomIn = screen.getByRole('button', { name: 'Zoom in' })
+    for (let i = 0; i < 40; i += 1) {
+      fireEvent.click(zoomIn)
+    }
+    expect(screen.getByText('300%')).toBeInTheDocument()
+    expect(zoomIn).toBeDisabled()
   })
 })
