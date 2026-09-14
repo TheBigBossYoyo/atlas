@@ -28,3 +28,6 @@ export {
   resolveReferencedFontFamilies,
   resolveUnreferencedFontFamilies,
 } from './referencedFamilies'
+export { FontKeyError, guidToFontKeyBytes, xorObfuscatedFontHeader } from './deobfuscate'
+export { parseFontTable, type EmbeddedFontRef, type FontTableEntry } from './fontTable'
+export { loadEmbeddedFonts, type EmbeddedFontFaces, type EmbeddedFontFamily } from './embedded'
