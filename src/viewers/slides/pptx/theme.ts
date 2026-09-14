@@ -162,7 +162,9 @@ export type ColorModifiers = {
 /** Applies OOXML `lumMod`/`lumOff`/`tint`/`shade` (each a 0..1 fraction) to a `#rrggbb` color. */
 export function applyColorModifiers(hex: string, modifiers: ColorModifiers): string {
   const { r, g, b } = hexToRgb(hex)
-  let { h, s, l } = rgbToHsl(r, g, b)
+  const hsl = rgbToHsl(r, g, b)
+  const { h, s } = hsl
+  let { l } = hsl
 
   if (modifiers.lumMod !== undefined) {
     l *= modifiers.lumMod
