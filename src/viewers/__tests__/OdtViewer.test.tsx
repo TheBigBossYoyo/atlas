@@ -16,6 +16,12 @@ import { OdtViewer } from '../OdtViewer'
 const FIXTURES_DIR = path.resolve(process.cwd(), 'src/viewers/__fixtures__')
 const CORPUS_DIR = path.join(FIXTURES_DIR, 'odt-corpus')
 
+// A generous timeout for assertions that wait on OdtViewer's real (non-mocked)
+// dynamic import of odf-kit/reader + dompurify — under full-suite worker
+// contention that transform can occasionally take longer than the default
+// 1000ms waitFor/findBy* timeout.
+const IMPORT_TIMEOUT = { timeout: 10_000 }
+
 function readArrayBuffer(filePath: string): ArrayBuffer {
   const buf = readFileSync(filePath)
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
@@ -44,8 +50,8 @@ describe('OdtViewer — fixture render/parse (T11)', () => {
 
     const { result } = renderOdtWithStats(file)
 
-    await screen.findByText(/Atlas ODT fixture/i)
-    await waitFor(() => expect(result.current).toMatchObject({ kind: 'document' }))
+    await screen.findByText(/Atlas ODT fixture/i, {}, IMPORT_TIMEOUT)
+    await waitFor(() => expect(result.current).toMatchObject({ kind: 'document' }), IMPORT_TIMEOUT)
     expect(result.current).toMatchObject({ pages: 1 })
   })
 
@@ -58,7 +64,7 @@ describe('OdtViewer — fixture render/parse (T11)', () => {
     }
 
     renderOdtWithStats(file)
-    await screen.findByText(/Atlas ODT fixture/i)
+    await screen.findByText(/Atlas ODT fixture/i, {}, IMPORT_TIMEOUT)
 
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
@@ -75,7 +81,7 @@ describe('OdtViewer — tracked changes visible by default (T7/DAT-18)', () => {
 
     renderOdtWithStats(file)
 
-    await screen.findByRole('status')
+    await screen.findByRole('status', {}, IMPORT_TIMEOUT)
     expect(document.querySelector('.odt-viewer__body ins')).not.toBeNull()
     expect(document.querySelector('.odt-viewer__body del')).not.toBeNull()
     expect(screen.getByText(/This paragraph was inserted by a reviewer\./)).toBeInTheDocument()
@@ -91,7 +97,7 @@ describe('OdtViewer — tracked changes visible by default (T7/DAT-18)', () => {
     }
 
     renderOdtWithStats(file)
-    await screen.findByText(/First bullet/i)
+    await screen.findByText(/First bullet/i, {}, IMPORT_TIMEOUT)
 
     expect(document.querySelector('.odt-viewer__body table')).not.toBeNull()
     expect(document.querySelector('.odt-viewer__body ul')).not.toBeNull()

@@ -38,7 +38,11 @@ describe('RtfViewer — fixture render/parse (T11)', () => {
       ),
     })
 
-    await waitFor(() => expect(result.current).toMatchObject({ kind: 'document' }))
+    // A generous timeout: this is the first real (non-mocked) dynamic
+    // import of rtf.js (~2.2MB) in the suite, and under full-suite worker
+    // contention that transform can occasionally take longer than
+    // waitFor's 1000ms default.
+    await waitFor(() => expect(result.current).toMatchObject({ kind: 'document' }), { timeout: 10_000 })
     // jsdom lays out nothing (scrollHeight is always 0), so the page-count
     // fallback in pageEstimate.ts always resolves to 1 here — the actual
     // height-driven multi-page math is unit-tested directly in
