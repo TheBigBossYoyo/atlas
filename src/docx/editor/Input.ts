@@ -1,6 +1,6 @@
 import type { Document, Paragraph, Run, RunProps, Underline } from '../model'
 import type { Command, Position, Range } from './commandTypes'
-import { applyCommand, findParagraph } from './commands'
+import { applyCommand, findParagraph, getFlatTextRuns } from './commands'
 import type { History } from './History'
 
 // ─── Public interfaces ───────────────────────────────────────────────────────
@@ -25,18 +25,20 @@ type EditableRun = {
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
+/**
+ * DXE-21 fix — delegates to commands.ts's `getFlatTextRuns` (hyperlink and
+ * atomic image/break/tab runs flattened, same as the edit pipeline) instead
+ * of this module's own former hand-rolled "every child must be a plain
+ * text-only run or reject the whole paragraph" version. See
+ * `getFlatTextRuns`'s own comment for the cross-paragraph data-loss bug that
+ * caused. `null` (a paragraph shape this editor doesn't support at all) is
+ * intentionally NOT collapsed to `[]` here — callers that treat an empty
+ * result as "this paragraph is empty, safe to cross into the next/previous
+ * one" (see `wordBoundaryBefore`/`wordBoundaryAfter`) must tell that apart
+ * from "couldn't be measured" or they'd repeat the same bug.
+ */
 function getTextRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> {
-  const result: EditableRun[] = []
-  for (const child of paragraph.children) {
-    if (child.kind !== 'run') return []
-    let text = ''
-    for (const c of child.children) {
-      if (c.kind !== 'text') return []
-      text += c.value
-    }
-    result.push({ text, run: child })
-  }
-  return result
+  return getFlatTextRuns(paragraph) ?? []
 }
 
 function collectParagraphPaths(doc: Document): ReadonlyArray<ReadonlyArray<number>> {
@@ -266,6 +268,11 @@ function wordBoundaryBefore(pos: Position, doc: Document): Position | null {
   const runs = getTextRuns(para)
 
   if (runs.length === 0) {
+    // A paragraph with children that still flattened to zero runs is a
+    // shape getFlatTextRuns couldn't measure (not genuinely empty) — bail
+    // out rather than guessing, so an unsupported shape never gets treated
+    // as "empty, safe to delete into" (see getFlatTextRuns's doc comment).
+    if (para.children.length > 0) return null
     return adjacentParagraphBoundary(pos, doc, 'previous')
   }
 
@@ -295,6 +302,8 @@ function wordBoundaryAfter(pos: Position, doc: Document): Position | null {
   const runs = getTextRuns(para)
 
   if (runs.length === 0) {
+    // See the matching guard in wordBoundaryBefore.
+    if (para.children.length > 0) return null
     return adjacentParagraphBoundary(pos, doc, 'next')
   }
 

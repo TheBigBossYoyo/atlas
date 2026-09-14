@@ -1550,6 +1550,31 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> | nul
 }
 
 /**
+ * DXE-21 fix — exposes this module's owner-aware run flattening (hyperlink
+ * content and atomic image/break/tab runs included) to editor code outside
+ * the Command pipeline that only needs character-offset math over a
+ * paragraph's real editable text, without reconstructing paragraph children.
+ *
+ * Input.ts's word-boundary/cursor helpers used to keep their own narrow
+ * "every child must be a plain text-only run" flattener, which rejected the
+ * *entire* paragraph — not just the offending run — the moment it contained
+ * a hyperlink or an atomic image/page-break/tab run, exactly the shapes D12
+ * and D14/D18 add first-class editing support for elsewhere in this module.
+ * That rejection was silently reinterpreted by the new cross-paragraph
+ * word-boundary-delete logic as "this paragraph is empty," which then jumped
+ * the deletion into the *adjacent* paragraph and merged it away entirely —
+ * e.g. Ctrl+Backspace to delete one word, in a paragraph that merely
+ * contains an inline image anywhere in it, could silently delete the whole
+ * previous paragraph instead. Routing through the same flattening logic the
+ * rest of this module already trusts for editing fixes that at the source.
+ */
+export function getFlatTextRuns(
+  paragraph: Paragraph,
+): ReadonlyArray<{ readonly text: string; readonly run: Run }> | null {
+  return getEditableRuns(paragraph)
+}
+
+/**
  * DXE-18/D18 — `insertImage`/page-break insertion (`applyInsertInline`) each
  * put their inline leaf (a `Drawing`, `BreakNode`, or `TabNode`) into its own
  * dedicated run, never mixed with text. Before this, `getEditableRuns`

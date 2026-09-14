@@ -557,4 +557,83 @@ describe('word-boundary delete (DXE-21)', () => {
     expect(result!.document.sections[0].blocks.length).toBe(1)
     expect(getText(result!.document)).toEqual([['helloworld']])
   })
+
+  // Regression: a paragraph containing an inline image (or a hyperlink) used
+  // to make getTextRuns bail out on the WHOLE paragraph, and the
+  // cross-paragraph word-boundary logic above then misread that as "this
+  // paragraph is empty" and jumped/deleted into the adjacent paragraph —
+  // silently destroying it — instead of deleting just the intended word in
+  // the current paragraph.
+
+  function imageRun(): Run {
+    return Object.freeze({
+      kind: 'run',
+      children: Object.freeze([Object.freeze({ kind: 'drawing', layout: 'inline' })]),
+    }) as unknown as Run
+  }
+
+  it('Ctrl+Backspace mid-text in a paragraph that also has an inline image stays within that paragraph', () => {
+    const doc = createDocument([
+      createParagraph(['previous paragraph']),
+      Object.freeze({
+        kind: 'paragraph',
+        children: Object.freeze([createRun('Hello world'), imageRun()]),
+      }) as Paragraph,
+    ])
+    const history = new History()
+    // Cursor between "Hello" and " world" in the SECOND paragraph.
+    const ctx = { document: doc, range: collapsedRange(pos([0, 1], 0, 5)), history }
+
+    const result = handleBeforeInput(makeInputEvent('deleteWordBackward'), ctx)
+
+    expect(result).not.toBeNull()
+    // The previous paragraph must survive untouched, and only "Hello" is
+    // removed from the current one.
+    expect(result!.document.sections[0].blocks.length).toBe(2)
+    expect(getText(result!.document)[0]).toEqual(['previous paragraph'])
+    expect(getText(result!.document)[1].join('')).toBe(' world')
+  })
+
+  it('Ctrl+Delete mid-text in a paragraph that also has an inline image stays within that paragraph', () => {
+    const doc = createDocument([
+      Object.freeze({
+        kind: 'paragraph',
+        children: Object.freeze([createRun('Hello world'), imageRun()]),
+      }) as Paragraph,
+      createParagraph(['next paragraph']),
+    ])
+    const history = new History()
+    // Cursor right after "Hello" in the FIRST paragraph.
+    const ctx = { document: doc, range: collapsedRange(pos([0, 0], 0, 5)), history }
+
+    const result = handleBeforeInput(makeInputEvent('deleteWordForward'), ctx)
+
+    expect(result).not.toBeNull()
+    expect(result!.document.sections[0].blocks.length).toBe(2)
+    expect(getText(result!.document)[0].join('')).toBe('Hello')
+    expect(getText(result!.document)[1]).toEqual(['next paragraph'])
+  })
+
+  it('Ctrl+Backspace mid-text in a paragraph that has a hyperlink elsewhere in it stays within that paragraph', () => {
+    const hyperlinkChild = Object.freeze({
+      kind: 'hyperlink',
+      relationshipId: 'rId1',
+      children: Object.freeze([createRun('a link')]),
+    })
+    const doc = createDocument([
+      createParagraph(['previous paragraph']),
+      Object.freeze({
+        kind: 'paragraph',
+        children: Object.freeze([createRun('Hello world '), hyperlinkChild]),
+      }) as Paragraph,
+    ])
+    const history = new History()
+    const ctx = { document: doc, range: collapsedRange(pos([0, 1], 0, 5)), history }
+
+    const result = handleBeforeInput(makeInputEvent('deleteWordBackward'), ctx)
+
+    expect(result).not.toBeNull()
+    expect(result!.document.sections[0].blocks.length).toBe(2)
+    expect(getText(result!.document)[0]).toEqual(['previous paragraph'])
+  })
 })
