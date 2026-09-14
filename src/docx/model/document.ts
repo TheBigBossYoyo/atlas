@@ -481,4 +481,22 @@ export interface Document {
   readonly endnotes: ReadonlyMap<string, Endnote>
   readonly headers: ReadonlyMap<string, Header>
   readonly footers: ReadonlyMap<string, Footer>
+  /**
+   * `{prefix: uri}` namespace declarations the source `<w:document>` root
+   * element itself carried (D19 / DXS-15). `undefined` when the document
+   * was constructed in memory rather than parsed from a source file.
+   * `documentWriter.ts` unions this with Atlas's own required baseline
+   * namespace set when re-emitting the root, instead of emitting a fixed
+   * hardcoded set regardless of what the source actually declared — this
+   * preserves any namespace prefix a source document declares that Atlas's
+   * own serializer doesn't otherwise know about (most relevantly one used
+   * only by unknown-node passthrough content).
+   */
+  readonly rootNamespaces?: ReadonlyMap<string, string>
+  /**
+   * The source `<w:document>` root's `mc:Ignorable` attribute value
+   * (space-separated namespace prefixes), unioned with Atlas's own
+   * baseline token list on save for the same reason as `rootNamespaces`.
+   */
+  readonly mcIgnorable?: string
 }

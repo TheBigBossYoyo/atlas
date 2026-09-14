@@ -121,6 +121,8 @@ export function parseDocument(xml: string): DocxDocument {
   const documentElement = findElement(raw, 'w:document')
   const bodyElement = child(documentElement, 'w:body')
   const body = parseBody(bodyElement)
+  const rootNamespaces = parseRootNamespaces(documentElement)
+  const mcIgnorable = attr(documentElement, 'mc:Ignorable')
 
   return {
     kind: 'document',
@@ -132,7 +134,32 @@ export function parseDocument(xml: string): DocxDocument {
     endnotes: Object.freeze(new Map<string, Endnote>()),
     headers: Object.freeze(new Map<string, Header>()),
     footers: Object.freeze(new Map<string, Footer>()),
+    ...(rootNamespaces.size > 0 ? { rootNamespaces } : {}),
+    ...(mcIgnorable !== undefined ? { mcIgnorable } : {}),
   }
+}
+
+/**
+ * D19 / DXS-15: captures every `xmlns:*` declaration the source
+ * `<w:document>` root actually carried, so `documentWriter.ts` can union
+ * it with Atlas's own required baseline set instead of emitting a fixed
+ * hardcoded namespace list regardless of what the source declared.
+ */
+function parseRootNamespaces(element: OrderedXmlNode | undefined): ReadonlyMap<string, string> {
+  const namespaces = new Map<string, string>()
+  const attributes = element?.[':@']
+  if (attributes === undefined) {
+    return namespaces
+  }
+
+  const XMLNS_PREFIX = '@_xmlns:'
+  for (const [key, value] of Object.entries(attributes)) {
+    if (key.startsWith(XMLNS_PREFIX) && value !== undefined) {
+      namespaces.set(key.slice(XMLNS_PREFIX.length), value)
+    }
+  }
+
+  return namespaces
 }
 
 // ---------------------------------------------------------------------------

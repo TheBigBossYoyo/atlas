@@ -69,6 +69,17 @@ function normalizeAst(value: unknown): unknown {
         continue
       }
 
+      // `rootNamespaces`/`mcIgnorable` (D19 / DXS-15) are a source-only
+      // capture that `writeDocumentXml` deliberately unions with Atlas's
+      // own required baseline namespace set rather than reproducing
+      // byte-for-byte — a fixture that declares only a handful of
+      // namespaces legitimately re-parses with the full baseline added on
+      // top after a round-trip. That's the point of the fix, not a
+      // regression, so it's excluded from this structural-equality check.
+      if (record.kind === 'document' && (key === 'rootNamespaces' || key === 'mcIgnorable')) {
+        continue
+      }
+
       normalized[key] = normalizeAst(entry)
     }
 
@@ -442,6 +453,34 @@ describe('writeDocumentXml', () => {
     expect(written).toContain('<w:customBlock w:foo="bar"><w:customChild w:val="1"/></w:customBlock>')
     expectRoundTrip(xml)
   })
+
+  it(
+    'declares a custom namespace prefix used only by unknown-node passthrough content (D19 / DXS-15, DXS-16)',
+    () => {
+      // Previously the document root always emitted a fixed, hardcoded
+      // namespace set (DXS-15) — a source document's own custom prefix
+      // (used only inside content Atlas doesn't otherwise model) had no
+      // declaration anywhere in the saved output, an XML well-formedness
+      // violation. DXS-15's `rootNamespaces` capture closes the gap for
+      // the common real-world case (Word always declares every namespace
+      // it uses on the document root, not on some inner ancestor), which
+      // is also DXS-16's primary practical concern.
+      const xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        + 'xmlns:ext123="http://example.com/custom-extension">'
+        + '<w:body><w:customBlock ext123:feature="on"><ext123:payload>value</ext123:payload></w:customBlock></w:body>'
+        + '</w:document>'
+
+      const parsed = parseDocument(xml)
+      expect(parsed.rootNamespaces?.get('ext123')).toBe('http://example.com/custom-extension')
+
+      const written = writeDocumentXml(parsed)
+      expect(written).toContain('xmlns:ext123="http://example.com/custom-extension"')
+      expect(written).toContain(
+        '<w:customBlock ext123:feature="on"><ext123:payload>value</ext123:payload></w:customBlock>',
+      )
+    },
+  )
 
   it('escapes special characters and preserves unicode text', () => {
     const text = '5 < 7 & 9 > 2 "quoted" \'single\' café Ω'
