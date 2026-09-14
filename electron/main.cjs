@@ -11,6 +11,7 @@ const { buildContentSecurityPolicy } = require('./lib/csp.cjs');
 const { logToFile } = require('./lib/crashLog.cjs');
 const { FileTooLargeError, assertFileSizeAllowed } = require('./lib/fileSizeGuard.cjs');
 const { EXTENSIONS: MANIFEST_EXTENSIONS } = require('./lib/extensionManifest.generated.cjs');
+const { CLOSE_PROMPT_BUTTONS, decideOnClose, decideAfterPromptChoice } = require('./lib/closeGuard.cjs');
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -24,6 +25,19 @@ let mainWindow = null;
 
 /** @type {string | null} */
 let pendingFilePath = null;
+
+// ---- Close confirmation (P2.5 / SHELL-02, ELEC-06) ---- //
+//
+// The renderer has no way to show a visible "unsaved changes" prompt from a
+// `beforeunload` handler alone — Electron/Chromium never surfaces one for a
+// renderer-only listener. Instead the renderer pushes its combined dirty
+// state (markdown's own `isDirty` OR the active viewer's registered dirty
+// signal, from the P1.1 capability contract) here via a lightweight IPC
+// signal every time it changes, and the `close` handler below decides
+// whether to let the window close immediately or block it behind a native
+// Save/Discard/Cancel prompt.
+/** @type {boolean} */
+let rendererDirty = false;
 
 const OVERLAY_COLORS = {
   light:   { color: '#f6f8fa', symbolColor: '#1f2328' },
@@ -352,6 +366,64 @@ function applyCrashHandlers(win) {
   });
 }
 
+/**
+ * P2.5/SHELL-02/ELEC-06 — blocks the native window close while the renderer
+ * has reported unsaved changes (`rendererDirty`, kept current by the
+ * `renderer:dirty-state` IPC signal below), showing a native Save/Discard/
+ * Cancel prompt. "Save" round-trips through the renderer via IPC
+ * (`request-save-before-close` / `save-before-close-result`) — driving
+ * whichever save the active document-session contract (P1.1) has
+ * registered, exactly like Ctrl+S/the Save button would — and only actually
+ * closes the window once that save reports success, so a failed save never
+ * silently loses the user's only warning.
+ *
+ * @param {Electron.Event} event
+ */
+function handleWindowCloseRequest(event) {
+  if (!mainWindow) return;
+  if (decideOnClose(rendererDirty) === 'allow') return;
+
+  event.preventDefault();
+
+  const choice = dialog.showMessageBoxSync(mainWindow, {
+    type: 'warning',
+    buttons: [...CLOSE_PROMPT_BUTTONS],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Unsaved changes',
+    message: 'This document has unsaved changes.',
+    detail: 'Do you want to save your changes before closing?',
+  });
+
+  const action = decideAfterPromptChoice(choice);
+
+  if (action === 'cancel') return;
+
+  if (action === 'discard') {
+    rendererDirty = false;
+    mainWindow.destroy();
+    return;
+  }
+
+  // action === 'save' — exactly one close attempt can be in flight at a
+  // time (the window is blocked on the dialog above until the user answers,
+  // and this IPC round-trip until the renderer responds), so `once` is safe.
+  ipcMain.once('save-before-close-result', (_event, result) => {
+    if (result && result.saved) {
+      rendererDirty = false;
+      if (mainWindow) mainWindow.destroy();
+    }
+    // A failed/cancelled save leaves the window open — the user can retry
+    // closing (or saving directly) once they've addressed why it failed.
+  });
+  mainWindow.webContents.send('request-save-before-close');
+}
+
+ipcMain.on('renderer:dirty-state', (event, dirty) => {
+  if (!isFromMainFrame(event)) return;
+  rendererDirty = dirty === true;
+});
+
 process.on('uncaughtException', (error) => {
   logMainEvent('ERROR', 'uncaughtException', error);
 });
@@ -457,6 +529,8 @@ function createWindow() {
       }, 300);
     }
   });
+
+  mainWindow.on('close', handleWindowCloseRequest);
 
   mainWindow.on('closed', () => {
     mainWindow = null;

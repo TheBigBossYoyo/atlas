@@ -54,13 +54,17 @@ Cycle with `Ctrl+T`.
 | `Ctrl+O` | Open file |
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save As |
+| `Ctrl+W` | Close file |
+| `Ctrl+P` | Print / export (format-dependent) |
 | `Ctrl+E` | Export menu |
 | `Ctrl+T` | Cycle theme |
 | `Ctrl+B` | Toggle sidebar |
-| `Ctrl+F` | Search in document |
-| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Preview / Editor / Split view |
+| `Ctrl+F` | Search in document (Markdown, Text, Code, RTF, ODT) |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Preview / Split / Editor view (Markdown only) |
 | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Increase / decrease / reset font size |
 | `Ctrl+/` | Show all shortcuts |
+
+While editing a DOCX, its own editor shortcuts (Ctrl+B/I/U/E/L/R/J/P/S/K/F/H, Ctrl+1/2/5 for line spacing, Ctrl+Z/Y for undo/redo) take priority over the shell shortcuts above with the same key.
 
 ---
 

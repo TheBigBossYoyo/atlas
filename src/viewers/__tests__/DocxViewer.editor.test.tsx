@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Document as DocxDocument, RunChild } from '../../docx/model'
+import { ShortcutManagerProvider } from '../../hooks/ShortcutManagerProvider'
 import { ViewerProvider } from '../shared/ViewerContext'
 import { useViewerIsDirty, useViewerSave } from '../shared/useViewerContext'
 import { DocxViewer } from '../DocxViewer'
@@ -913,4 +914,67 @@ describe('DocxViewer editor', () => {
     const savedBundle = saveDocxMock.mock.calls[0][0] as { settings?: { trackChanges: boolean } }
     expect(savedBundle.settings?.trackChanges).toBe(true)
   })
+
+  // ---------------------------------------------------------------------------
+  // P2.1 — active-viewer combo registration must not swallow native
+  // text-editing shortcuts in the viewer's own plain <input> fields
+  // ---------------------------------------------------------------------------
+
+  it(
+    'P2.1: reserves Ctrl+B for the document while focus is on a non-field element (e.g. after clicking a ' +
+      'Toolbar button), but leaves native shortcuts alone inside the Find/Replace panel\'s own <input>s',
+    async () => {
+      render(
+        <ShortcutManagerProvider>
+          <ViewerProvider filePath="C:/docs/sample.docx">
+            <DocxViewer
+              file={{
+                kind: 'binary',
+                content: new Uint8Array([1, 2, 3]).buffer,
+                path: 'C:/docs/sample.docx',
+                format: 'docx',
+              }}
+            />
+          </ViewerProvider>
+        </ShortcutManagerProvider>,
+      )
+
+      const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+
+      // Open Find (also proves the viewer-tier registration is reachable
+      // through a real window-level dispatch when wrapped in the real
+      // ShortcutManagerProvider, not just via the direct onKeyDown prop).
+      const ctrlF = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true, cancelable: true })
+      fireEvent(editor, ctrlF)
+      const findInput = await screen.findByLabelText('Find')
+
+      // Focus is now on a genuine <input>, not the contentEditable — Ctrl+A
+      // (select all text typed into the search box) must NOT be swallowed by
+      // the viewer's own reserved-combo detector.
+      findInput.focus()
+      const ctrlA = new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true })
+      fireEvent(findInput, ctrlA)
+      expect(ctrlA.defaultPrevented).toBe(false)
+
+      // Same for Ctrl+Z (undo typed text) and Ctrl+B (would otherwise bold
+      // the document) while focus is in the search box.
+      const ctrlZ = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true })
+      fireEvent(findInput, ctrlZ)
+      expect(ctrlZ.defaultPrevented).toBe(false)
+
+      const ctrlBInField = new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true, cancelable: true })
+      fireEvent(findInput, ctrlBInField)
+      expect(ctrlBInField.defaultPrevented).toBe(false)
+
+      // But away from any plain field — e.g. focus on a toolbar button,
+      // mirroring "clicked Bold, then pressed Ctrl+B again" — Ctrl+B is
+      // still reserved for the document (SHELL-08's own scenario), not left
+      // to fall through to a shell-global handler.
+      const boldButton = screen.getByRole('button', { name: /bold/i })
+      boldButton.focus()
+      const ctrlBOnButton = new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true, cancelable: true })
+      fireEvent(boldButton, ctrlBOnButton)
+      expect(ctrlBOnButton.defaultPrevented).toBe(true)
+    },
+  )
 })

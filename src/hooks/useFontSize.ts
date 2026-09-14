@@ -1,4 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useShellShortcut } from './useShortcutManager';
+import type { ShortcutHandler } from './shortcutManagerContext';
 
 const KEY = 'atlas-font-size';
 const MIN = 12;
@@ -40,26 +42,36 @@ export function useFontSize() {
     setSize(DEFAULT);
   }, []);
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  // P2.1 — shell-global tier: skipped while a plain field/contentEditable has
+  // focus (e.g. Ctrl+0 while editing a DOCX no longer resets *markdown's*
+  // font size out from under it — the same collision class as SHELL-08/09,
+  // just never independently ticketed).
+  const handler = useCallback<ShortcutHandler>(
+    (e, ctx) => {
+      if (!(e.ctrlKey || e.metaKey)) return false;
+      if (ctx.inPlainField) return false;
 
       if (e.key === '=' || e.key === '+') {
         e.preventDefault();
         increase();
-      } else if (e.key === '-') {
+        return true;
+      }
+      if (e.key === '-') {
         e.preventDefault();
         decrease();
-      } else if (e.key === '0') {
+        return true;
+      }
+      if (e.key === '0') {
         e.preventDefault();
         reset();
+        return true;
       }
-    };
+      return false;
+    },
+    [decrease, increase, reset],
+  );
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [decrease, increase, reset]);
+  useShellShortcut(handler);
 
   return { size, increase, decrease, reset } as const;
 }

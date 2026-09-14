@@ -9,15 +9,22 @@
 import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { ShortcutManagerProvider } from '../../hooks/ShortcutManagerProvider';
 import { ShortcutsModal } from '../ShortcutsModal';
 
+// P2.1 — ShortcutsModal's own Escape-close now registers through the shared
+// dispatcher (useShellShortcut) instead of an ad hoc `window` listener, so
+// exercising it for real requires a real <ShortcutManagerProvider> ancestor
+// (without one, the registration silently no-ops — see useShortcutManager.ts).
 function Harness() {
   const [open, setOpen] = useState(false);
   return (
-    <div>
-      <button onClick={() => setOpen(true)}>open shortcuts</button>
-      <ShortcutsModal isOpen={open} onClose={() => setOpen(false)} />
-    </div>
+    <ShortcutManagerProvider>
+      <div>
+        <button onClick={() => setOpen(true)}>open shortcuts</button>
+        <ShortcutsModal isOpen={open} onClose={() => setOpen(false)} />
+      </div>
+    </ShortcutManagerProvider>
   );
 }
 

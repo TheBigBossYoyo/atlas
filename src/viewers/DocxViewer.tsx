@@ -60,6 +60,7 @@ import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
 import './__styles__/viewer-docx.css'
 import { useRegisterViewerSave, useSetNavItems, useSetViewerDirty, useSetViewerStats } from './shared/useViewerContext'
+import { useViewerShortcuts } from '../hooks/useShortcutManager'
 
 type HeadingNavSeed = {
   id: string
@@ -1304,6 +1305,44 @@ function DocxEditor({
     registerSave(handleSave)
     return () => registerSave(null)
   }, [registerSave, handleSave])
+
+  // P2.1/SHELL-08/SHELL-09/UX-03/RUN-02 — claim every combo this viewer's own
+  // `handleKeyDownEvent`/commands.ts already recognize at the *active-viewer*
+  // precedence tier, so shell-global shortcuts (sidebar toggle, Export menu,
+  // print/export) never see them — independent of exactly where focus is
+  // within the viewer, not just whether the contentEditable itself is
+  // focused (e.g. after clicking a Toolbar button, which isn't itself the
+  // contentEditable). Detection-only: it never performs the actual
+  // edit/print/save itself (that stays solely in
+  // `handleKeyDownEvent`/commands.ts, reached through React's own bubble
+  // phase, which always runs first when the contentEditable has focus) —
+  // this only prevents the *shell* from also reacting to the same keystroke.
+  //
+  // Deliberately bails out for a real `<input>`/`<textarea>` target (the
+  // Find/Replace panel's own search boxes, rendered as siblings of the
+  // contentEditable, not inside it) so their native text-editing shortcuts
+  // — Ctrl+A select-all, Ctrl+Z/Y undo/redo the typed text, etc. — keep
+  // working. Only the document's contentEditable surface (a `<div>`, never
+  // an `<input>`/`<textarea>`) and non-field focus targets (e.g. a Toolbar
+  // button) should have these combos reserved for document commands.
+  useViewerShortcuts(
+    useCallback((event) => {
+      const ctrl = event.ctrlKey || event.metaKey
+      if (!ctrl) return false
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return false
+      }
+      const key = event.key.toLowerCase()
+      const isReservedCombo =
+        key === 'f' || key === 'h' || key === 's' || key === 'p' || key === 'k' ||
+        key === 'l' || key === 'e' || key === 'r' || key === 'j' ||
+        key === '1' || key === '2' || key === '5' ||
+        key === 'z' || key === 'y' || key === 'a' || key === 'b' || key === 'i' || key === 'u'
+      if (!isReservedCombo) return false
+      event.preventDefault()
+      return true
+    }, []),
+  )
 
   const handlePrint = useCallback(() => {
     if (typeof window === 'undefined') {

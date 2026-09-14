@@ -1521,6 +1521,15 @@ mark.search-highlight--active {
   margin-bottom: 0;
 }
 
+.modal__note {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-primary);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
 .modal__section-title {
   font-size: 11px;
   font-weight: 600;
@@ -1782,6 +1791,57 @@ mark.search-highlight--active {
 .file-status__error-dismiss:hover {
   background: var(--accent-subtle);
   color: var(--accent);
+}
+
+/* ---- 25b. Draft Recovery Banner (P2.6) ---- */
+.draft-recovery {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-primary);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  z-index: 90;
+}
+
+.draft-recovery__message {
+  flex: 1;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.draft-recovery__actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.draft-recovery__btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.draft-recovery__btn:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+
+.draft-recovery__btn--restore {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-primary);
+}
+
+.draft-recovery__btn--restore:hover {
+  filter: brightness(1.08);
 }
 
 /* ---- 25. Unsaved Changes Dialog (P1.1) ---- */

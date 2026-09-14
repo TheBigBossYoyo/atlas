@@ -1,6 +1,7 @@
 import {
   FileText,
   Save,
+  X,
   Columns2,
   Eye,
   Code2,
@@ -28,6 +29,8 @@ interface ToolbarProps {
   canSave: boolean;
   canSearch: boolean;
   canChangeFontSize: boolean;
+  /** P2.8/SHELL-16 — whether a document is open to close (Ctrl+W is enabled independently of this button's own visibility). */
+  canClose: boolean;
   isMarkdown: boolean;
   isElectron: boolean;
   exportFormat: FormatId;
@@ -39,6 +42,7 @@ interface ToolbarProps {
   onToggleSidebar: () => void;
   onOpenFile: () => void;
   onSave: () => void;
+  onCloseFile: () => void;
   onExport: (format: ExportFormat) => void;
   onOpenSearch: () => void;
   onShowShortcuts: () => void;
@@ -65,6 +69,7 @@ export function Toolbar({
   canSave,
   canSearch,
   canChangeFontSize,
+  canClose,
   isMarkdown,
   isElectron,
   exportFormat,
@@ -75,6 +80,7 @@ export function Toolbar({
   onToggleSidebar,
   onOpenFile,
   onSave,
+  onCloseFile,
   onExport,
   onOpenSearch,
   onShowShortcuts,
@@ -117,6 +123,17 @@ export function Toolbar({
             {isDirty && <span className="toolbar__dirty" aria-label="Unsaved changes"> ●</span>}
           </span>
         )}
+
+        {canClose ? (
+          <button
+            className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
+            onClick={onCloseFile}
+            title="Close file (Ctrl+W)"
+            aria-label="Close file"
+          >
+            <X size={16} />
+          </button>
+        ) : null}
       </div>
 
       <div className="toolbar__center">

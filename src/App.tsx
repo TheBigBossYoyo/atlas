@@ -6,8 +6,10 @@ import { useSearch } from './hooks/useSearch';
 import { useToc } from './hooks/useToc';
 import { useRecentFiles } from './hooks/useRecentFiles';
 import { useFontSize } from './hooks/useFontSize';
-import { useAutosave } from './hooks/useAutosave';
+import { useAutosave, loadDraft, clearDraft, type Draft } from './hooks/useAutosave';
 import { useUniversalShortcuts } from './hooks/useUniversalShortcuts';
+import { ShortcutManagerProvider } from './hooks/ShortcutManagerProvider';
+import { DraftRecoveryBanner } from './components/DraftRecoveryBanner';
 import { Toolbar } from './components/Toolbar';
 import { Sidebar } from './components/Sidebar';
 import { MarkdownRenderer } from './components/MarkdownRenderer';
@@ -22,7 +24,7 @@ import { ShortcutsModal } from './components/ShortcutsModal';
 import { SAMPLE_MARKDOWN } from './constants';
 import { THEMES, type ViewMode, type ExportFormat, type RecentFile } from './types';
 import { exportMarkdown, exportHtml, exportPdf, exportDocx, exportCsv } from './utils/export';
-import type { LoadedFile, NavItem } from './formats/types';
+import type { FormatId, LoadedFile, NavItem } from './formats/types';
 import { resolveDroppedFilePath } from './utils/dragDropPath';
 import { ViewerProvider } from './viewers/shared/ViewerContext';
 import {
@@ -39,6 +41,15 @@ import { useToast } from './hooks/useToast';
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
 const ENABLE_VIEWER_ROUTER = true;
+
+// P2.1/X4/DAT-15/RUN-08 — non-markdown formats whose viewer renders into the
+// DOM as real text (not a canvas or a virtualized grid), so the existing
+// TreeWalker-based `useSearch` can walk it. PDF/spreadsheets/slide decks are
+// deliberately excluded — see `useSearch`'s own doc comment. Known limit:
+// TextViewer virtualizes very large files (`react-window`), so a search can
+// only find matches in currently-mounted rows near the viewport, the same
+// inherent limitation any DOM-walking search has against a virtualized list.
+const SEARCHABLE_VIEWER_FORMATS = new Set<FormatId>(['text', 'code', 'rtf', 'odt']);
 
 interface MarkdownChromeBridgeProps {
   navItems: readonly NavItem[];
@@ -125,6 +136,15 @@ function triggerBinaryDownload(content: ArrayBuffer, fileName: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/**
+ * P2.1 — the actual app shell. Split out from the default-exported `App`
+ * below purely so it can sit *inside* `<ShortcutManagerProvider>`: every
+ * `useShellShortcut`/`useViewerShortcuts` call (here, in child hooks like
+ * `useUniversalShortcuts`/`useFontSize`/`useSearch`, and in components like
+ * `ThemeMenu`/`ExportMenu`/`ShortcutsModal`/`UnsavedChangesDialog`/
+ * `DocxViewer`) needs to be a descendant of the provider, and a component
+ * cannot consume the context it itself creates in its own returned JSX.
+ */
 function AppShell() {
   const { theme, setTheme, cycleTheme } = useTheme();
   const { recent, addRecent, removeRecent } = useRecentFiles();
@@ -152,6 +172,11 @@ function AppShell() {
   const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false);
   const [unsavedDialogSaving, setUnsavedDialogSaving] = useState(false);
   const [unsavedDialogError, setUnsavedDialogError] = useState<string | null>(null);
+  // Surfaces a friendly reason via FileStatusBanner when a standalone
+  // Save/Save As (Toolbar button, Ctrl+S, Ctrl+Shift+S — as opposed to the
+  // one already shown inline in UnsavedChangesDialog) fails, instead of the
+  // save silently doing nothing.
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const confirmDiscardChanges = useCallback((): Promise<boolean> => {
     const { isMarkdownDocument, isDirty, viewerDirty } = dirtyGuardStateRef.current;
@@ -187,6 +212,7 @@ function AppShell() {
     loadGeneration,
     openDialog: openFile,
     loadFromPath: openFileFromPath,
+    clear,
     clearError,
   } = useFileHandler({ addRecent, confirmDiscardChanges });
 
@@ -196,6 +222,15 @@ function AppShell() {
   const [localMarkdown, setLocalMarkdown] = useState<string>(() => markdown ?? '');
   const [isDirty, setIsDirty] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+
+  // P2.6/SHELL-11/LOAD-20 — a leftover markdown draft from a crash/force-quit
+  // (autosave writes one every 800ms but nothing ever read it back). Checked
+  // once on mount; the user decides to restore it into an untitled markdown
+  // session or discard it. Declared here (ahead of the file-identity reset
+  // block just below, which dismisses it once a real file loads) rather than
+  // its more natural home near the other draft-recovery handlers further
+  // down, to avoid a temporal-dead-zone reference to `setPendingDraft`.
+  const [pendingDraft, setPendingDraft] = useState<Draft | null>(() => loadDraft());
 
   // P2.10/SHELL-05/LOAD-07 — reset keyed on file *identity* (path + a
   // load-generation token bumped by every successful load), not on comparing
@@ -212,6 +247,15 @@ function AppShell() {
     setLastSyncedFileKey(fileIdentityKey);
     setLocalMarkdown(markdown);
     setIsDirty(false);
+    setSaveError(null);
+    // A real file just loaded (not the initial mount, since fileIdentityKey
+    // and lastSyncedFileKey both start `null` and this branch never runs for
+    // that first render) — dismiss any pending draft-recovery prompt rather
+    // than showing it alongside newly-opened content; the draft itself stays
+    // in storage in case the user wants it back another time.
+    if (fileIdentityKey !== null) {
+      setPendingDraft(null);
+    }
   }
 
   const setMarkdown = useCallback((value: string) => {
@@ -251,12 +295,29 @@ function AppShell() {
       return viewerSaveRef.current();
     }
     if (!window.electronAPI) return false;
+    // No `existingPath` means `save-file` shows a native Save dialog — a
+    // `{ saved: false }` result with no `error` there is an ordinary user
+    // Cancel, not a failure worth surfacing. With an `existingPath`, no
+    // dialog is shown at all, so the same result always means a genuine
+    // write failure (surfaced with a generic fallback when main didn't
+    // supply a more specific reason).
+    const hadExistingPath = Boolean(filePath);
     const result = await window.electronAPI.saveFile({
       content: localMarkdown,
       suggestedName: fileName ?? 'document.md',
       existingPath: filePath || undefined,
     });
-    if (result.saved) { setIsDirty(false); return true; }
+    if (result.saved) {
+      setIsDirty(false);
+      setSaveError(null);
+      clearDraft();
+      return true;
+    }
+    if (result.error) {
+      setSaveError(result.error);
+    } else if (hadExistingPath) {
+      setSaveError('Failed to save the file. Please try again.');
+    }
     return false;
   }, [fileName, filePath, isMarkdownDocument, localMarkdown]);
 
@@ -267,7 +328,17 @@ function AppShell() {
       content: localMarkdown,
       suggestedName: fileName ?? 'document.md',
     });
-    if (result.saved) { setIsDirty(false); return true; }
+    if (result.saved) {
+      setIsDirty(false);
+      setSaveError(null);
+      clearDraft();
+      return true;
+    }
+    // A dialog-based save with no specific `error` is an ordinary user
+    // Cancel — only a specifically-reported reason is worth surfacing here.
+    if (result.error) {
+      setSaveError(result.error);
+    }
     return false;
   }, [fileName, isMarkdownDocument, localMarkdown]);
 
@@ -308,6 +379,26 @@ function AppShell() {
     }
   }, [isMarkdownDocument, saveFile]);
 
+  // P2.8/SHELL-16 — `clear()` was already fully implemented but never wired
+  // to anything. Gated behind the same unsaved-changes guard every other
+  // open/close path uses.
+  const closeFile = useCallback(async (): Promise<void> => {
+    const canProceed = await confirmDiscardChanges();
+    if (!canProceed) return;
+    clear();
+  }, [clear, confirmDiscardChanges]);
+
+  const handleRestoreDraft = useCallback(() => {
+    if (!pendingDraft) return;
+    setMarkdown(pendingDraft.markdown);
+    setPendingDraft(null);
+  }, [pendingDraft, setMarkdown]);
+
+  const handleDiscardDraft = useCallback(() => {
+    clearDraft();
+    setPendingDraft(null);
+  }, []);
+
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault(); e.stopPropagation();
     dragCounterRef.current += 1;
@@ -330,7 +421,11 @@ function AppShell() {
     });
   }, [openFileFromPath]);
 
-  useAutosave(localMarkdown, fileName);
+  // P2.6/SHELL-12 — gated on `isMarkdownDocument` so switching to a binary
+  // file can never keep writing markdown drafts under its name (a stale
+  // `localMarkdown`/`fileName` pairing was possible for one render during a
+  // file-identity transition before this gate existed).
+  useAutosave(isMarkdownDocument ? localMarkdown : '', fileName, isMarkdownDocument);
 
   const [viewMode, setViewMode] = useState<ViewMode>('preview');
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -379,6 +474,17 @@ function AppShell() {
     [currentFormat, exportableContentFormat]
   );
 
+  // P2.1/X4/DAT-15/RUN-08 — in-app search now also covers Text/Code/RTF/ODT
+  // (fully-rendered DOM, compatible with the existing TreeWalker search),
+  // not just markdown. PDF/spreadsheets/slide decks are deliberately left
+  // out (canvas/virtualized-grid content the TreeWalker can't see) — Ctrl+F
+  // simply isn't registered for them, so it's never swallowed with no
+  // feature behind it.
+  const canSearchFormat = useMemo(
+    () => isMarkdownDocument || (file !== null && SEARCHABLE_VIEWER_FORMATS.has(file.format)),
+    [file, isMarkdownDocument],
+  );
+
   const {
     isOpen: searchOpen,
     query: searchQuery,
@@ -388,11 +494,21 @@ function AppShell() {
     goToMatch,
     open: openSearch,
     close: closeSearch,
-  } = useSearch(contentRef, isMarkdownDocument);
+  } = useSearch(contentRef, canSearchFormat);
 
   const loadSample = useCallback(() => {
     setMarkdown(SAMPLE_MARKDOWN);
-  }, [setMarkdown]);
+    // P2.6 — dismiss any pending draft-recovery prompt the same way opening a
+    // real file already does. Without this, loading the sample while the
+    // banner is still showing would let autosave (now enabled, since
+    // localMarkdown is non-empty) start overwriting the crashed session's
+    // draft under the same storage key within its 800ms debounce — while the
+    // banner still offers a now-stale "Restore" for content already evicted
+    // underneath it. The in-memory pendingDraft snapshot still restores
+    // correctly if the user clicks it in that narrow window, but a second
+    // crash before they do would then lose the original draft for good.
+    setPendingDraft(null);
+  }, [setMarkdown]); // setPendingDraft is a stable state setter, omitted per convention elsewhere in this file
 
   const handleOpenRecent = useCallback(
     (file: RecentFile) => {
@@ -497,10 +613,40 @@ function AppShell() {
     toggleSidebar: () => setSidebarOpen(prev => !prev),
     setViewMode,
     toggleShortcuts: () => setShortcutsOpen(prev => !prev),
+    closeFile: () => void closeFile(),
     isMarkdown: isMarkdownDocument,
   });
 
-  // Warn before unloading with unsaved changes
+  // P2.8/SHELL-18 — the title bar never reflected the open file or its dirty
+  // state, unlike every comparable desktop editor.
+  useEffect(() => {
+    document.title = fileName ? `${combinedDirty ? '● ' : ''}${fileName} — Atlas` : 'Atlas';
+  }, [combinedDirty, fileName]);
+
+  // P2.5/SHELL-02/ELEC-06 — push the combined dirty signal to main so its
+  // window `close` handler knows whether to block the close behind a native
+  // Save/Discard/Cancel prompt (Electron shows no visible confirmation for a
+  // renderer-only `beforeunload` handler, kept below only as a browser-tab-mode
+  // fallback).
+  useEffect(() => {
+    window.electronAPI?.notifyDirtyState?.(combinedDirty);
+  }, [combinedDirty]);
+
+  // Main asks the renderer to save (the user chose "Save" in that native
+  // prompt) and waits for the result before deciding whether to actually
+  // close the window.
+  useEffect(() => {
+    return window.electronAPI?.onRequestSaveBeforeClose?.(() => {
+      void saveFile().then((saved) => {
+        window.electronAPI?.reportSaveBeforeCloseResult?.({ saved });
+      });
+    });
+  }, [saveFile]);
+
+  // Warn before unloading with unsaved changes (browser-tab-mode fallback —
+  // the packaged Electron app is guarded by the main-process `close` handler
+  // above instead, since Chromium/Electron never surfaces a visible prompt
+  // for this handler alone).
   useEffect(() => {
     if (!combinedDirty) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -510,6 +656,14 @@ function AppShell() {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [combinedDirty]);
+
+  const handleDismissStatusError = useCallback(() => {
+    if (error) {
+      clearError();
+      return;
+    }
+    setSaveError(null);
+  }, [clearError, error]);
 
   return (
     <div
@@ -528,8 +682,9 @@ function AppShell() {
         isDirty={combinedDirty}
         hasContent={hasContent}
         canSave={canSave}
-        canSearch={isMarkdownDocument}
+        canSearch={canSearchFormat}
         canChangeFontSize={isMarkdownDocument}
+        canClose={hasContent}
         isMarkdown={isMarkdownDocument}
         isElectron={isElectron}
         exportFormat={currentFormat}
@@ -540,6 +695,7 @@ function AppShell() {
         onToggleSidebar={() => setSidebarOpen(prev => !prev)}
         onOpenFile={openFile}
         onSave={() => void saveFile()}
+        onCloseFile={() => void closeFile()}
         onExport={(fmt) => void handleExport(fmt)}
         onOpenSearch={openSearch}
         onShowShortcuts={() => setShortcutsOpen(true)}
@@ -549,9 +705,11 @@ function AppShell() {
         onExportMenuOpenChange={setExportMenuOpen}
       />
 
-      <FileStatusBanner loading={loading} error={error} onDismissError={clearError} />
+      <FileStatusBanner loading={loading} error={error ?? saveError} onDismissError={handleDismissStatusError} />
 
-      {isMarkdownDocument ? (
+      <DraftRecoveryBanner draft={pendingDraft} onRestore={handleRestoreDraft} onDiscard={handleDiscardDraft} />
+
+      {canSearchFormat ? (
         <SearchOverlay
           isOpen={searchOpen}
           query={searchQuery}
@@ -607,7 +765,11 @@ function AppShell() {
             </>
           ) : viewerFile && ENABLE_VIEWER_ROUTER ? (
             <main className="content content--viewer">
-              <div className="preview-panel" id="viewer-content">
+              {/* P2.1/X4 — the same `contentRef` the markdown preview uses for
+                  its TreeWalker search is attached here too (only the branch
+                  that's actually mounted ever owns it) so Text/Code/RTF/ODT
+                  get the identical search behavior markdown already has. */}
+              <div className="preview-panel" id="viewer-content" ref={canSearchFormat ? contentRef : undefined}>
                 <ViewerRouter file={viewerFile} />
               </div>
             </main>
@@ -640,11 +802,17 @@ function AppShell() {
  * UX-18 — wraps the shell in its own <ToastProvider> so `<App />` is a
  * complete, self-contained tree (usable as-is from main.tsx or a test's
  * `render(<App />)`) without every caller needing to remember to supply one.
+ *
+ * P2.1 — also wraps `AppShell` in the centralized shortcut dispatcher's
+ * provider. See `AppShell`'s own doc comment for why this can't just be one
+ * component.
  */
 function App() {
   return (
     <ToastProvider>
-      <AppShell />
+      <ShortcutManagerProvider>
+        <AppShell />
+      </ShortcutManagerProvider>
     </ToastProvider>
   );
 }

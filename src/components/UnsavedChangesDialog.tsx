@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
+import { useCallback } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { useShellShortcut } from '../hooks/useShortcutManager';
 
 interface UnsavedChangesDialogProps {
   isOpen: boolean;
@@ -24,16 +25,19 @@ export function UnsavedChangesDialog({
   onDiscard,
   onCancel,
 }: UnsavedChangesDialogProps) {
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isSaving) {
+  // P2.1 — Escape-close registered with the shared dispatcher instead of its
+  // own ad hoc `window` listener; only listens while the dialog is open.
+  useShellShortcut(
+    useCallback(
+      (e) => {
+        if (e.key !== 'Escape' || isSaving) return false;
         onCancel();
-      }
-    };
-    window.addEventListener('keydown', handleEsc);
-    return () => window.removeEventListener('keydown', handleEsc);
-  }, [isOpen, isSaving, onCancel]);
+        return true;
+      },
+      [isSaving, onCancel],
+    ),
+    isOpen,
+  );
 
   if (!isOpen) return null;
 

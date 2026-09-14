@@ -12,6 +12,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('file-opened', handler);
   },
   setTheme: (theme) => ipcRenderer.send('set-theme', theme),
+  // P2.5/SHELL-02/ELEC-06 — pushes the renderer's combined dirty state to
+  // main so its window `close` handler knows whether to block the close
+  // behind a Save/Discard/Cancel prompt (Electron surfaces no visible
+  // confirmation for a renderer-only `beforeunload` handler).
+  notifyDirtyState: (dirty) => ipcRenderer.send('renderer:dirty-state', dirty),
+  onRequestSaveBeforeClose: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('request-save-before-close', handler);
+    return () => ipcRenderer.removeListener('request-save-before-close', handler);
+  },
+  reportSaveBeforeCloseResult: (result) => ipcRenderer.send('save-before-close-result', result),
   openFileBinary: () => ipcRenderer.invoke('dialog:openFileBinary'),
   readBinaryByPath: (path) => ipcRenderer.invoke('file:readBinaryByPath', path),
   onFileOpenedPath: (callback) => {
