@@ -135,6 +135,13 @@ function resolveBullet(listStyleName: string | null, level: number, index: OdpSt
   return undefined
 }
 
+/**
+ * Walks a paragraph's descendants in document order, genuinely recursing into
+ * every nesting level (a `text:span` inside a `text:span`, a `text:span`
+ * inside a `text:a` hyperlink, ...) instead of only unwrapping one level.
+ * `text:a` carries no formatting of its own here — it renders inline as if
+ * its children were direct children of its parent.
+ */
 function parseParagraphRuns(paragraph: Element, defaultFormatting: RunFormatting, index: OdpStyleIndex): {
   readonly runs: ReadonlyArray<SlideTextRun>
   readonly text: string
@@ -142,20 +149,19 @@ function parseParagraphRuns(paragraph: Element, defaultFormatting: RunFormatting
   const runs: SlideTextRun[] = []
   let text = ''
 
-  const appendText = (value: string, styleName: string | null) => {
+  const appendText = (value: string, formatting: RunFormatting) => {
     if (!value) {
       return
     }
 
-    const formatting = styleName ? mergeGaps(resolveTextFormatting(styleName, index), defaultFormatting) : defaultFormatting
     runs.push({ text: value, ...formatting })
     text += value
   }
 
-  const walk = (node: Element) => {
+  const walk = (node: Element, formatting: RunFormatting) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === Node.TEXT_NODE) {
-        appendText(child.textContent ?? '', null)
+        appendText(child.textContent ?? '', formatting)
       } else if (child.nodeType === Node.ELEMENT_NODE) {
         const element = child as Element
         if (element.localName === 'line-break') {
@@ -163,29 +169,19 @@ function parseParagraphRuns(paragraph: Element, defaultFormatting: RunFormatting
           text += '\n'
         } else if (element.localName === 'span') {
           const styleName = element.getAttribute('text:style-name')
-          const before = text
-          const nestedRuns: SlideTextRun[] = []
-          const nestedFormatting = styleName ? mergeGaps(resolveTextFormatting(styleName, index), defaultFormatting) : defaultFormatting
-          for (const spanChild of Array.from(element.childNodes)) {
-            if (spanChild.nodeType === Node.TEXT_NODE) {
-              const value = spanChild.textContent ?? ''
-              if (value) {
-                nestedRuns.push({ text: value, ...nestedFormatting })
-              }
-            } else if (spanChild.nodeType === Node.ELEMENT_NODE && (spanChild as Element).localName === 'line-break') {
-              nestedRuns.push({ text: '\n' })
-            }
-          }
-          runs.push(...nestedRuns)
-          text = before + nestedRuns.map(run => run.text).join('')
+          const nestedFormatting = styleName ? mergeGaps(resolveTextFormatting(styleName, index), formatting) : formatting
+          walk(element, nestedFormatting)
+        } else if (element.localName === 'a') {
+          // Hyperlink wrapper (`text:a`) — recurse so its text isn't dropped.
+          walk(element, formatting)
         } else if (element.localName === 's' || element.localName === 'tab') {
-          appendText(element.localName === 'tab' ? '\t' : ' ', null)
+          appendText(element.localName === 'tab' ? '\t' : ' ', formatting)
         }
       }
     }
   }
 
-  walk(paragraph)
+  walk(paragraph, defaultFormatting)
   return { runs, text }
 }
 
