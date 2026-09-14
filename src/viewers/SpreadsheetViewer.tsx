@@ -64,6 +64,16 @@ function workbookTargetFor(formatId: string): SpreadsheetSaveTarget {
   }
 }
 
+/**
+ * Legacy/flat formats scoped as "view + save-as-xlsx only" (owner's plan):
+ * SheetJS can technically write `.xls`/`.xlsb`/`.fods` back out (verified
+ * directly against the library — see `spreadsheetWrite.ts`'s header), but
+ * the plan deliberately doesn't offer silently re-encoding the user's
+ * original legacy file in place. Save always defaults to `.xlsx` and never
+ * seeds the original path as an overwrite target for these three.
+ */
+const LEGACY_SAVE_AS_XLSX_ONLY: ReadonlySet<string> = new Set(['xls', 'xlsb', 'fods'])
+
 function SpreadsheetViewerBase({ file }: ViewerProps) {
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
@@ -88,12 +98,17 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   )
 
   const fileExtension = useMemo(() => extensionOf(file.path) || 'xlsx', [file.path])
-  // Plain Save always keeps the file's OWN original extension/format —
-  // Save As is the only place a *different* format is offered (see the
-  // toolbar's format <select>).
-  const defaultSaveTarget = useMemo<SpreadsheetSaveTarget>(() => workbookTargetFor(fileExtension), [fileExtension])
+  const isLegacySaveAsOnly = LEGACY_SAVE_AS_XLSX_ONLY.has(fileExtension)
+  // Plain Save keeps the file's OWN original extension/format — UNLESS it's
+  // one of the "view + save-as-xlsx only" legacy/flat formats above, which
+  // default to .xlsx instead. Save As always lets the user pick a different
+  // format either way (see the toolbar's format <select>).
+  const defaultSaveTarget = useMemo<SpreadsheetSaveTarget>(
+    () => workbookTargetFor(isLegacySaveAsOnly ? 'xlsx' : fileExtension),
+    [fileExtension, isLegacySaveAsOnly],
+  )
 
-  const editor = useSpreadsheetEditor(initialDocument, file.path, defaultSaveTarget)
+  const editor = useSpreadsheetEditor(initialDocument, file.path, defaultSaveTarget, !isLegacySaveAsOnly)
   const sheets = editor.document.sheets
 
   const hasHiddenSheets = useMemo(() => sheets.some((s) => s.hidden), [sheets])

@@ -115,13 +115,23 @@ export function useSpreadsheetEditor(
   initialDocument: SpreadsheetDocument | null,
   filePath: string,
   target: SpreadsheetSaveTarget,
+  // .xls/.xlsb/.fods: "view + save-as-xlsx only" (plan scope) — SheetJS CAN
+  // technically round-trip these in place (verified directly against the
+  // library), but the plan deliberately doesn't offer that: pass `false` so
+  // the very first Save always goes through the format-choice dialog
+  // (effectively a forced Save As) instead of silently overwriting the
+  // original legacy/flat file with re-encoded bytes. Once the user has
+  // saved once, the *new* path they chose becomes the seed for subsequent
+  // plain saves, same as any other format.
+  seedExistingPath: boolean = true,
 ): UseSpreadsheetEditorResult {
   const history = useUndoableState<SpreadsheetDocument>(EMPTY_DOCUMENT)
   const hydratedRef = useRef(false)
   // Seeded from the loaded file's own path (mirrors DocxViewer's identical
   // `useState(file.path)`) so the very first Save silently overwrites the
-  // file in place instead of behaving like an unwanted Save As.
-  const [savePath, setSavePath] = useState<string | undefined>(filePath)
+  // file in place instead of behaving like an unwanted Save As — except for
+  // the legacy-format case above, where that's the opposite of what's wanted.
+  const [savePath, setSavePath] = useState<string | undefined>(seedExistingPath ? filePath : undefined)
   const [saveError, setSaveError] = useState<string | null>(null)
   // The document reference at the last successful save (or at load) — a
   // plain reference compare against the current `history.present` is

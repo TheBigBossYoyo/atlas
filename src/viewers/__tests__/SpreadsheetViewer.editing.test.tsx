@@ -239,6 +239,63 @@ describe('SpreadsheetViewer — save', () => {
   })
 })
 
+describe('SpreadsheetViewer — legacy formats are "view + save-as-xlsx only" (plan scope)', () => {
+  it('defaults Save to .xlsx (not the original .xls) and forces the dialog on the first save', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a']]), 'Sheet1')
+    }, '/tmp/legacy.xls')
+    // format:'xlsx' matches how extensionManifest.ts routes a real .xls
+    // file — SpreadsheetViewer itself derives the *actual* extension from
+    // file.path, not file.format (see extensionOf/fileExtension).
+    const legacyFile: LoadedFile = { ...file, path: '/tmp/legacy.xls' }
+
+    render(
+      <ViewerProvider filePath={legacyFile.path}>
+        <SpreadsheetViewer file={legacyFile} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    act(() => editCell(0, 0, 'changed'))
+    const saveButton = await screen.findByRole('button', { name: 'Save' })
+    await act(async () => {
+      fireEvent.click(saveButton)
+    })
+
+    const call = (window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    // No existingPath: main process shows the save dialog rather than
+    // silently overwriting legacy.xls with re-encoded (xlsx-shaped) bytes.
+    expect(call.existingPath).toBeUndefined()
+    expect(call.suggestedName).toBe('legacy.xlsx')
+    expect(call.filters).toEqual([{ name: 'Excel Workbook', extensions: ['xlsx'] }])
+  })
+
+  it('once saved, a second plain Save overwrites the NEW path (not legacy.xls) in place', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a']]), 'Sheet1')
+    })
+    const legacyFile: LoadedFile = { ...file, path: '/tmp/legacy.xls' }
+
+    render(
+      <ViewerProvider filePath={legacyFile.path}>
+        <SpreadsheetViewer file={legacyFile} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    const saveButton = await screen.findByRole('button', { name: 'Save' })
+    await act(async () => {
+      fireEvent.click(saveButton) // first save -> dialog resolves to /tmp/saved.xlsx (mocked)
+    })
+    await act(async () => {
+      fireEvent.click(saveButton) // second save -> should now overwrite the chosen path
+    })
+
+    const calls = (window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls[1][0].existingPath).toBe('/tmp/saved.xlsx')
+  })
+})
+
 describe('SpreadsheetViewer — row/column insert and delete', () => {
   it('inserts a row above the selected cell', async () => {
     const file = buildWorkbookFile((wb) => {
