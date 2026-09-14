@@ -1,4 +1,4 @@
-import type { BorderSet, Table } from '../model'
+import type { BorderSet, Style, Table } from '../model'
 import type { Theme } from '../parser/theme'
 
 import type { FontResolver, LineBox } from './types'
@@ -64,4 +64,14 @@ export type TableLayoutInput = {
   availableWidthPt: number
   fontResolver: FontResolver
   theme?: Theme
+  /**
+   * The document's style map (D7 / DXP-06, DXL-08, DXS-05) — when supplied,
+   * `layoutTable` resolves the table's `tblStyle` (basedOn chain +
+   * conditional formatting gated by `tblLook`, via `parser/cascadeTable.ts`)
+   * and uses it as a fallback under the table/row/cell's own direct
+   * formatting, so a built-in banded/colored Word table style actually
+   * renders. Omitted (as existing callers that predate this feature do),
+   * layout behaves exactly as before — direct formatting only.
+   */
+  styles?: ReadonlyMap<string, Style>
 }

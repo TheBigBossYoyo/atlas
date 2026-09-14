@@ -5,6 +5,9 @@ import type {
   Paragraph,
   ParagraphChild,
   Shading,
+  Style,
+  TableCellProps,
+  TableLook,
   TabAlignment,
   TabLeader,
   Table,
@@ -12,11 +15,25 @@ import type {
   TableRow,
   Width,
 } from '../model'
+import { resolveTableCellStyle, resolveTableStyle } from '../parser/cascadeTable'
 
 import { breakLines } from './breakLines'
 import { itemizeRuns } from './itemize'
 import type { LaidOutCell, LaidOutRow, LaidOutTable, TableLayoutInput } from './tableTypes'
 import type { LineBreakInput, LineItem, TabStop } from './types'
+
+/**
+ * Per-table context `layoutRow`/the per-cell loop need to resolve D7's
+ * table-style conditional formatting for a given cell position — computed
+ * once in `layoutTable` and threaded down rather than re-derived per row.
+ */
+type TableStyleCascadeContext = {
+  tblStyleId: string | undefined
+  styles: ReadonlyMap<string, Style> | undefined
+  tblLook: TableLook | undefined
+  rowCount: number
+  columnCount: number
+}
 
 type BoxEdges = {
   top: number
@@ -40,39 +57,59 @@ export async function layoutTable(input: TableLayoutInput): Promise<LaidOutTable
   const rows = input.table.rows.filter(isTableRow)
   const repeatHeaderRowCount = countRepeatHeaderRows(rows)
   const columnCount = resolveColumnCount(input.table, rows)
+  // D7 / DXP-06, DXL-08, DXS-05: the table's own direct `w:tblPr` always
+  // wins; the resolved table style is only a fallback for whatever the
+  // table instance doesn't set directly (`?? resolvedTableStyle?.field`
+  // below), exactly mirroring how a cell's own direct `w:tcPr` wins over
+  // its cell-level conditional formatting further down.
+  const resolvedTableStyle = resolveTableStyle(input.table.props?.tblStyle, input.styles)
   const preferredTableWidthPt =
-    resolveWidthToPoints(input.table.props?.tblW, input.availableWidthPt) ?? clampNonNegative(input.availableWidthPt)
+    resolveWidthToPoints(input.table.props?.tblW ?? resolvedTableStyle?.width, input.availableWidthPt)
+    ?? clampNonNegative(input.availableWidthPt)
   const fixedColumnWidthsPt = resolveFixedColumnWidths(input.table, columnCount)
+  const isFixedLayout = (input.table.props?.tblLayout ?? resolvedTableStyle?.layout) === 'fixed'
 
   const columnWidthsPt =
-    input.table.props?.tblLayout === 'fixed' && fixedColumnWidthsPt.length > 0
+    isFixedLayout && fixedColumnWidthsPt.length > 0
       ? fixedColumnWidthsPt
       : await resolveAutofitColumnWidths(rows, columnCount, preferredTableWidthPt, input.fontResolver, input.theme)
+
+  const cascadeContext: TableStyleCascadeContext = {
+    tblStyleId: input.table.props?.tblStyle,
+    styles: input.styles,
+    tblLook: input.table.props?.tblLook,
+    rowCount: rows.length,
+    columnCount,
+  }
 
   const laidOutRows = await Promise.all(
     rows.map((row, rowIndex) =>
       layoutRow(
         row,
+        rowIndex,
         rowIndex < repeatHeaderRowCount,
         columnWidthsPt,
         input.table.props?.tblCellMar,
         input.fontResolver,
         input.theme,
+        cascadeContext,
       ),
     ),
   )
 
   const resolvedRows = resolveVerticalMerges(laidOutRows)
 
+  const effectiveBorders = input.table.props?.tblBorders ?? resolvedTableStyle?.borders
+  const effectiveShadingFill =
+    resolveShadingFill(input.table.props?.shd) ?? resolveShadingFill(resolvedTableStyle?.shading)
+
   return {
     widthPt: sumNumbers(columnWidthsPt),
     columnWidthsPt,
     rows: resolvedRows,
     repeatHeaderRowCount,
-    ...(input.table.props?.tblBorders !== undefined ? { borders: input.table.props.tblBorders } : {}),
-    ...(resolveShadingFill(input.table.props?.shd) !== undefined
-      ? { shadingFill: resolveShadingFill(input.table.props?.shd) as string }
-      : {}),
+    ...(effectiveBorders !== undefined ? { borders: effectiveBorders } : {}),
+    ...(effectiveShadingFill !== undefined ? { shadingFill: effectiveShadingFill } : {}),
   }
 }
 
@@ -310,47 +347,35 @@ function distributeColumnWidths(
 
 async function layoutRow(
   row: TableRow,
+  rowIndex: number,
   isHeader: boolean,
   columnWidthsPt: ReadonlyArray<number>,
   defaultCellMargins: InsetSet | undefined,
   fontResolver: TableLayoutInput['fontResolver'],
   theme: TableLayoutInput['theme'],
+  cascadeContext: TableStyleCascadeContext,
 ): Promise<LaidOutRow> {
   const drafts: CellLayoutDraft[] = []
   let columnIndex = 0
 
-  for (const child of row.cells) {
-    if (!isTableCell(child)) {
+  for (const rawChild of row.cells) {
+    if (!isTableCell(rawChild)) {
       continue
     }
 
-    const gridSpan = normalizeGridSpan(child.props?.gridSpan, columnWidthsPt.length - columnIndex)
+    const gridSpan = normalizeGridSpan(rawChild.props?.gridSpan, columnWidthsPt.length - columnIndex)
     const widthPt = sumNumbers(columnWidthsPt.slice(columnIndex, columnIndex + gridSpan))
-    const paddingPt = resolveCellPadding(child, defaultCellMargins, widthPt)
-    const contentLines = await layoutCellLines(child, widthPt, paddingPt, fontResolver, theme)
-    const naturalHeightPt = paddingPt.top + paddingPt.bottom + sumNumbers(contentLines.map((line) => line.lineHeight))
-    const vMergeStart = child.props?.vMerge === 'restart'
-    const vMergeContinue = child.props?.vMerge === 'continue'
-    const cellShadingFill = resolveShadingFill(child.props?.shd)
 
-    drafts.push({
-      naturalHeightPt,
-      laidOutCell: {
-        widthPt,
-        gridSpan,
-        rowSpan: 1,
-        columnStart: columnIndex,
-        shouldRender: true,
-        vMergeStart,
-        vMergeContinue,
-        contentLines,
-        paddingPt,
-        vAlign: resolveVerticalAlign(child),
-        ...(child.props?.tcBorders !== undefined ? { borders: child.props.tcBorders } : {}),
-        ...(cellShadingFill !== undefined ? { shadingFill: cellShadingFill } : {}),
-      },
-      contributesToRowHeight: !vMergeContinue,
-    })
+    drafts.push(
+      await layoutTableCellDraft(
+        rawChild,
+        { rowIndex, columnIndex, gridSpan, widthPt },
+        defaultCellMargins,
+        fontResolver,
+        theme,
+        cascadeContext,
+      ),
+    )
 
     columnIndex += gridSpan
   }
@@ -369,6 +394,67 @@ async function layoutRow(
       heightPt,
     })),
     isHeader,
+  }
+}
+
+type CellPosition = {
+  rowIndex: number
+  columnIndex: number
+  gridSpan: number
+  widthPt: number
+}
+
+/**
+ * Lays out one cell, first resolving D7's table-style conditional
+ * formatting (header shading, row/column banding, corner cells) for this
+ * cell's position and layering it under the cell's own direct `w:tcPr` —
+ * direct formatting always wins, exactly like every other style cascade in
+ * this codebase. The resulting merged, "effective" cell is used for every
+ * property lookup below; its content (`blocks`) is untouched.
+ */
+async function layoutTableCellDraft(
+  rawChild: TableCell,
+  position: CellPosition,
+  defaultCellMargins: InsetSet | undefined,
+  fontResolver: TableLayoutInput['fontResolver'],
+  theme: TableLayoutInput['theme'],
+  cascadeContext: TableStyleCascadeContext,
+): Promise<CellLayoutDraft> {
+  const conditional = resolveTableCellStyle(cascadeContext.tblStyleId, cascadeContext.styles, cascadeContext.tblLook, {
+    rowIndex: position.rowIndex,
+    rowCount: cascadeContext.rowCount,
+    columnStart: position.columnIndex,
+    gridSpan: position.gridSpan,
+    columnCount: cascadeContext.columnCount,
+  })
+  const child: TableCell = conditional.cell === undefined
+    ? rawChild
+    : { ...rawChild, props: mergeCellPropsWithConditional(conditional.cell, rawChild.props) }
+
+  const paddingPt = resolveCellPadding(child, defaultCellMargins, position.widthPt)
+  const contentLines = await layoutCellLines(child, position.widthPt, paddingPt, fontResolver, theme)
+  const naturalHeightPt = paddingPt.top + paddingPt.bottom + sumNumbers(contentLines.map((line) => line.lineHeight))
+  const vMergeStart = child.props?.vMerge === 'restart'
+  const vMergeContinue = child.props?.vMerge === 'continue'
+  const cellShadingFill = resolveShadingFill(child.props?.shd)
+
+  return {
+    naturalHeightPt,
+    laidOutCell: {
+      widthPt: position.widthPt,
+      gridSpan: position.gridSpan,
+      rowSpan: 1,
+      columnStart: position.columnIndex,
+      shouldRender: true,
+      vMergeStart,
+      vMergeContinue,
+      contentLines,
+      paddingPt,
+      vAlign: resolveVerticalAlign(child),
+      ...(child.props?.tcBorders !== undefined ? { borders: child.props.tcBorders } : {}),
+      ...(cellShadingFill !== undefined ? { shadingFill: cellShadingFill } : {}),
+    },
+    contributesToRowHeight: !vMergeContinue,
   }
 }
 
@@ -476,6 +562,22 @@ function resolveTabLeader(leader: TabLeader | undefined): TabStop['leader'] {
     default:
       return 'none'
   }
+}
+
+/**
+ * D7 / DXP-06, DXL-08, DXS-05: layers a cell's resolved table-style
+ * conditional formatting under its own direct `w:tcPr` — a flat,
+ * field-level merge (a direct `shd`/`tcBorders`/etc. entirely replaces the
+ * conditional one rather than merging their sub-fields), matching how a
+ * real table's direct formatting is understood to fully override its
+ * style's conditional formatting for whichever properties it actually
+ * sets.
+ */
+function mergeCellPropsWithConditional(
+  conditional: TableCellProps,
+  direct: TableCellProps | undefined,
+): TableCellProps {
+  return { ...conditional, ...(direct ?? {}) }
 }
 
 function resolveCellPadding(cell: TableCell, defaultCellMargins: InsetSet | undefined, cellWidthPt: number): BoxEdges {
