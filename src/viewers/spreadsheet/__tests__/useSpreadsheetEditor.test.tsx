@@ -157,7 +157,9 @@ describe('useSpreadsheetEditor — save (workbook target)', () => {
     )
     const call = (window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(call.content).toBeInstanceOf(Uint8Array)
-    expect(call.existingPath).toBeUndefined()
+    // Seeded from the loaded file's own path (mirrors DocxViewer) — the very
+    // first Save overwrites in place rather than acting like a Save As.
+    expect(call.existingPath).toBe('/tmp/sample.xlsx')
   })
 
   it('handleSaveAs omits existingPath even after a prior save (forces the dialog)', async () => {

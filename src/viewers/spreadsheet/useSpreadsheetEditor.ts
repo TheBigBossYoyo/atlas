@@ -118,7 +118,10 @@ export function useSpreadsheetEditor(
 ): UseSpreadsheetEditorResult {
   const history = useUndoableState<SpreadsheetDocument>(EMPTY_DOCUMENT)
   const hydratedRef = useRef(false)
-  const [savePath, setSavePath] = useState<string | undefined>(undefined)
+  // Seeded from the loaded file's own path (mirrors DocxViewer's identical
+  // `useState(file.path)`) so the very first Save silently overwrites the
+  // file in place instead of behaving like an unwanted Save As.
+  const [savePath, setSavePath] = useState<string | undefined>(filePath)
   const [saveError, setSaveError] = useState<string | null>(null)
   // The document reference at the last successful save (or at load) — a
   // plain reference compare against the current `history.present` is
