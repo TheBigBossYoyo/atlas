@@ -216,7 +216,10 @@ export function parseOdpTextBody(
       const { runs, text } = parseParagraphRuns(child, styleProps.defaultTextFormatting, index)
       const effectiveListStyleName = styleProps.listStyleName ?? ownListStyleName
       const outlineLevelAttr = child.getAttribute('text:outline-level')
-      const effectiveLevel = outlineLevelAttr ? Number(outlineLevelAttr) : level + 1
+      // `level` already counts the enclosing text:list nesting (incremented on recursion
+      // below), so a paragraph directly inside the first list is already at level 1 —
+      // only a paragraph with no enclosing list at all (level 0) needs bumping to 1.
+      const effectiveLevel = outlineLevelAttr ? Number(outlineLevelAttr) : Math.max(level, 1)
 
       paragraphs.push({
         runs,

@@ -1,0 +1,166 @@
+import { describe, expect, it } from 'vitest'
+
+import type { SlideImage, SlideShapeOnly, SlideTable, SlideTextBox, SlideUnsupported } from '../../../shared/SlideDeck.types'
+import type { CancelSignal, ZipArchive } from '../../shared/xmlUtils'
+import { parsePptxSlides } from '../parser'
+import { buildPptxFixtureZip } from './pptxFixture'
+
+async function parseFixture() {
+  const zip = buildPptxFixtureZip()
+  const signal: CancelSignal = { cancelled: false }
+  return parsePptxSlides(zip as unknown as ZipArchive, signal)
+}
+
+describe('parsePptxSlides', () => {
+  it('resolves the deck slide size from p:sldSz', async () => {
+    const slides = await parseFixture()
+    expect(slides[0]?.width).toBe(1280)
+    expect(slides[0]?.height).toBe(720)
+  })
+
+  it('returns one SlideData per <p:sldId>, in order', async () => {
+    const slides = await parseFixture()
+    expect(slides).toHaveLength(3)
+    expect(slides.map(slide => slide.index)).toEqual([0, 1, 2])
+  })
+
+  it('S1 — inherits a placeholder position down slide -> layout -> master when the slide omits its own xfrm', async () => {
+    const [slide1] = await parseFixture()
+    const title = slide1?.shapes.find(shape => shape.kind === 'text' && shape.placeholderType === 'title') as
+      | SlideTextBox
+      | undefined
+
+    expect(title?.transform).toEqual({ x: 48, y: 30, w: 864, h: 120 })
+  })
+
+  it('S3 — resolves run formatting via the master txStyles fallback and theme accent colors', async () => {
+    const [slide1] = await parseFixture()
+    const title = slide1?.shapes.find(shape => shape.kind === 'text' && shape.placeholderType === 'title') as
+      | SlideTextBox
+      | undefined
+    const runs = title?.paragraphs[0]?.runs ?? []
+    const firstRun = runs.find(run => run.text === 'Quarterly Report')
+    const secondRun = runs.find(run => run.text === 'Q3 2024')
+
+    // Own run rPr wins for color; master titleStyle's bold+size fall through for both runs.
+    expect(firstRun).toMatchObject({ color: '#4472C4', bold: true })
+    expect(firstRun?.fontSizePx).toBeCloseTo(44 * (96 / 72), 3)
+    expect(secondRun).toMatchObject({ color: '#000000', bold: true })
+  })
+
+  it('S4 — resolves buChar bullets at their own paragraph level', async () => {
+    const [slide1] = await parseFixture()
+    const body = slide1?.shapes.find(shape => shape.kind === 'text' && shape.placeholderType === 'body') as
+      | SlideTextBox
+      | undefined
+
+    expect(body?.paragraphs[0]?.bullet).toEqual({ level: 0, char: '-', numbered: undefined })
+    expect(body?.paragraphs[1]?.bullet).toEqual({ level: 1, char: '-', numbered: undefined })
+    // Master bodyStyle's per-level size fallback (lvl1pPr vs lvl2pPr).
+    expect(body?.paragraphs[0]?.runs[0]?.fontSizePx).toBeCloseTo(24 * (96 / 72), 3)
+    expect(body?.paragraphs[1]?.runs[0]?.fontSizePx).toBeCloseTo(20 * (96 / 72), 3)
+  })
+
+  it('S5 — a soft <a:br> line break becomes a real line, not "Quarterly ReportQ3 2024"', async () => {
+    const [slide1] = await parseFixture()
+    const title = slide1?.shapes.find(shape => shape.kind === 'text' && shape.placeholderType === 'title') as
+      | SlideTextBox
+      | undefined
+
+    expect(title?.text).toBe('Quarterly Report\nQ3 2024')
+    expect(title?.paragraphs[0]?.runs.map(run => run.text)).toEqual(['Quarterly Report', '\n', 'Q3 2024'])
+  })
+
+  it('S6 — renders a:tbl as a real row/cell grid, positioned at the graphicFrame box', async () => {
+    const [slide1] = await parseFixture()
+    const table = slide1?.shapes.find(shape => shape.kind === 'table') as SlideTable | undefined
+
+    expect(table?.transform).toEqual({ x: 48, y: 450, w: 400, h: 100, rotationDeg: undefined, flipH: false, flipV: false })
+    expect(table?.rows).toEqual([
+      [{ text: 'Region', runs: [expect.objectContaining({ text: 'Region' })] }, { text: 'Growth', runs: [expect.objectContaining({ text: 'Growth' })] }],
+      [{ text: 'EMEA', runs: [expect.objectContaining({ text: 'EMEA' })] }, { text: '18%', runs: [expect.objectContaining({ text: '18%' })] }],
+    ])
+  })
+
+  it('S7 — composes a grouped shape\'s transform through the group\'s off/ext -> chOff/chExt scale', async () => {
+    const [slide1] = await parseFixture()
+    const grouped = slide1?.shapes.find(
+      shape => shape.kind === 'shape' && shape.fill?.kind === 'solid' && shape.fill.color === '#00FF00',
+    ) as SlideShapeOnly | undefined
+
+    // group off=(100,600) ext=(200,200) chOff=(0,0) chExt=(400,400); child off=(0,0) ext=(200,200)
+    // -> scale 0.5 -> absolute (100, 600, 100, 100).
+    expect(grouped?.transform).toEqual({ x: 100, y: 600, w: 100, h: 100, rotationDeg: undefined, flipH: false, flipV: false })
+  })
+
+  it('S8 — resolves shape fill/geometry and the master\'s background', async () => {
+    const [slide1] = await parseFixture()
+    const banner = slide1?.shapes.find(
+      shape => shape.kind === 'shape' && shape.fill?.kind === 'solid' && shape.fill.color === '#FF0000',
+    ) as SlideShapeOnly | undefined
+
+    expect(banner?.geometry).toBe('roundRect')
+    expect(slide1?.background).toEqual({ kind: 'solid', color: '#FFFFFF' })
+  })
+
+  it('S9 — isolates one slide\'s parse failure instead of discarding the whole deck', async () => {
+    const slides = await parseFixture()
+
+    expect(slides[2]?.error).toBeTruthy()
+    expect(slides[2]?.shapes).toEqual([])
+    // The other, unrelated slides are unaffected.
+    expect(slides[0]?.error).toBeUndefined()
+    expect(slides[1]?.error).toBeUndefined()
+  })
+
+  it('S10/S19 — resolves image crop fractions, rotation, and alt text', async () => {
+    const [slide1] = await parseFixture()
+    const image = slide1?.shapes.find(shape => shape.kind === 'image') as SlideImage | undefined
+
+    expect(image?.transform).toEqual({ x: 700, y: 100, w: 150, h: 150, rotationDeg: 45, flipH: false, flipV: false })
+    expect(image?.crop).toEqual({ top: 0.2, right: 0.05, bottom: 0.15, left: 0.1 })
+    expect(image?.alt).toBe('A quarterly chart')
+    expect(image?.src.startsWith('data:image/png;base64,')).toBe(true)
+  })
+
+  it('S11 — a chart graphicFrame becomes a labeled "not supported" placeholder', async () => {
+    const [slide1] = await parseFixture()
+    const chart = slide1?.shapes.find(shape => shape.kind === 'unsupported') as SlideUnsupported | undefined
+
+    expect(chart?.label).toBe('Chart not supported')
+  })
+
+  it('S12 — extracts the notesSlide relationship\'s body text', async () => {
+    const [slide1] = await parseFixture()
+    expect(slide1?.notes).toBe('Remember to mention EMEA growth drivers.')
+  })
+
+  it('S14 — a slide with show="0" is flagged hidden', async () => {
+    const slides = await parseFixture()
+    expect(slides[0]?.hidden).toBe(false)
+    expect(slides[1]?.hidden).toBe(true)
+  })
+
+  it('S17 — extracts the title placeholder\'s text for nav labels', async () => {
+    const [slide1] = await parseFixture()
+    expect(slide1?.title).toBe('Quarterly Report Q3 2024')
+  })
+
+  it('S20 — carries normAutofit\'s fontScale through to the text box', async () => {
+    const [slide1] = await parseFixture()
+    const title = slide1?.shapes.find(shape => shape.kind === 'text' && shape.placeholderType === 'title') as
+      | SlideTextBox
+      | undefined
+
+    expect(title?.fontScale).toBeCloseTo(0.925, 5)
+  })
+
+  it('S21 — resolves spcBef paragraph spacing in pixels', async () => {
+    const [slide1] = await parseFixture()
+    const body = slide1?.shapes.find(shape => shape.kind === 'text' && shape.placeholderType === 'body') as
+      | SlideTextBox
+      | undefined
+
+    expect(body?.paragraphs[0]?.spaceBeforePx).toBeCloseTo(6 * (96 / 72), 3)
+  })
+})
