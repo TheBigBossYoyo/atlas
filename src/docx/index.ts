@@ -31,6 +31,7 @@ import {
   addRelationship,
   addOverride,
   validateDocxPackage,
+  updateCorePropsXml,
 } from './serializer';
 import type { DocxPart } from './serializer';
 
@@ -50,6 +51,10 @@ const COMMENTS_EXTENDED_RELATIONSHIP_TYPE =
 const COMMENTS_EXTENDED_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml';
 
+// D19 / DXS-13
+const CORE_PROPS_PART_PATH = 'docProps/core.xml';
+const ATLAS_LAST_MODIFIED_BY = 'Atlas';
+
 export type DocxBundle = {
   document: Document;
   theme?: Theme;
@@ -66,6 +71,13 @@ function getXml(files: ReadonlyMap<string, Uint8Array>, path: string): string | 
   const buf = files.get(path);
   if (!buf) return undefined;
   return new TextDecoder().decode(buf);
+}
+
+/** Reads a part already staged in `saveDocx`'s output map as text, decoding it if it's still raw bytes (untouched passthrough). */
+function textPart(parts: ReadonlyMap<string, string | Uint8Array>, path: string): string | undefined {
+  const value = parts.get(path);
+  if (value === undefined) return undefined;
+  return typeof value === 'string' ? value : new TextDecoder().decode(value);
 }
 
 export async function loadDocx(buffer: ArrayBuffer): Promise<DocxBundle> {
@@ -337,6 +349,17 @@ export async function saveDocx(bundle: DocxBundle): Promise<Uint8Array> {
   if (contentTypes) {
     parts.set('[Content_Types].xml', writeContentTypesXml(contentTypes));
   }
+
+  // 9b. docProps/core.xml — regenerate the modified date + last-modified-by
+  // on every save (D19 / DXS-13) instead of letting step 1's raw-archive
+  // passthrough carry through whatever the document's original author's
+  // last Word save wrote. `existingCorePropsXml` reads from `parts` (not
+  // `bundle.rawArchive` directly) so this also works for a bundle that
+  // never had one at all (`updateCorePropsXml` builds a minimal valid one).
+  parts.set(
+    CORE_PROPS_PART_PATH,
+    updateCorePropsXml(textPart(parts, CORE_PROPS_PART_PATH), ATLAS_LAST_MODIFIED_BY),
+  );
 
   // 10. Post-serialization validation (D20 / DXS-19) — catch a broken
   // package here, with a clear, specific error, rather than silently
