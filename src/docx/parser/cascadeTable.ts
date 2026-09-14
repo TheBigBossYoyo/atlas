@@ -192,6 +192,17 @@ function resolveTableStyleChain(
  * `context`'s position, in Word's documented cascade precedence (each
  * pushed entry overrides everything pushed before it once merged).
  *
+ * The precedence order below is Word's actual applied order, NOT the order
+ * literally printed in ECMA-376 §17.7.6.6 (whole table, banded columns,
+ * banded rows, first/last row, first/last column, corners): MS-OI29500
+ * §2.1.250 documents that Word deviates from its own published spec and
+ * applies row banding *before* column banding (so column banding overrides
+ * row banding on a conflicting field, not the other way around) — verified
+ * against Microsoft's own worked example ("OpenXML Styles 101") showing
+ * column banding visibly winning over row banding in real Word output.
+ * Getting this order backward silently swaps which stripe color wins
+ * wherever a table style bands both rows and columns with different fills.
+ *
  * `resolvedTableProps`'s `rowBandSize`/`colBandSize` set how many
  * consecutive rows/columns each stripe covers (Word defaults both to 1 —
  * alternate every single row/column — when unset). Banding doesn't exclude
@@ -222,13 +233,15 @@ function resolveActiveConditionalTypes(
   const rowBandSize = normalizeBandSize(resolvedTableProps?.rowBandSize)
   const colBandSize = normalizeBandSize(resolvedTableProps?.colBandSize)
 
-  if (bandColsOn) {
-    const stripeIndex = Math.floor(context.columnStart / colBandSize)
-    active.push(stripeIndex % 2 === 0 ? 'band1Vert' : 'band2Vert')
-  }
+  // Row banding first, then column banding — column banding wins ties
+  // (Word's actual behavior; see this function's doc comment).
   if (bandRowsOn) {
     const stripeIndex = Math.floor(context.rowIndex / rowBandSize)
     active.push(stripeIndex % 2 === 0 ? 'band1Horz' : 'band2Horz')
+  }
+  if (bandColsOn) {
+    const stripeIndex = Math.floor(context.columnStart / colBandSize)
+    active.push(stripeIndex % 2 === 0 ? 'band1Vert' : 'band2Vert')
   }
   if (lastColOn && isLastCol) active.push('lastCol')
   if (firstColOn && isFirstCol) active.push('firstCol')

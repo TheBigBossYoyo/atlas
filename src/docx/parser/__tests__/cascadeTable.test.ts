@@ -109,6 +109,35 @@ describe('resolveTableCellStyle', () => {
     expect(row2.cell?.shd).toBeUndefined()
   })
 
+  it(
+    'lets column banding override row banding on a conflicting field when both are active '
+      + "(Word's actual applied order per MS-OI29500 2.1.250, not ECMA-376's literal text)",
+    () => {
+      const styles = makeStyles([
+        {
+          id: 'DoubleBanded',
+          type: 'table',
+          table: { rowBandSize: 1, colBandSize: 1 },
+          conditionalFormats: new Map([
+            ['band1Horz', { cell: { shd: { fill: hexColor('AAAAAA') } } }],
+            ['band1Vert', { cell: { shd: { fill: hexColor('CCCCCC') } } }],
+          ]),
+        },
+      ])
+      const look = { noHBand: false, noVBand: false }
+
+      // Row 0 / column 0: both band1Horz (row stripe 0) and band1Vert
+      // (column stripe 0) are active. Column banding must win.
+      const resolved = resolveTableCellStyle(
+        'DoubleBanded',
+        styles,
+        look,
+        { rowIndex: 0, rowCount: 2, columnStart: 0, gridSpan: 1, columnCount: 2 },
+      )
+      expect(resolved.cell?.shd?.fill).toBe('CCCCCC')
+    },
+  )
+
   it('lets a corner-cell format (nwCell) override firstRow/firstCol when all three are defined', () => {
     const styles = makeStyles([
       {
