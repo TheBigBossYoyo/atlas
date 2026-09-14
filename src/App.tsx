@@ -182,6 +182,13 @@ function App() {
     [file, localMarkdown.length]
   );
 
+  // S16 — PptxViewer/OdpViewer's SlideDeck already renders its own thumbnail
+  // rail; showing the app-level Sidebar too would duplicate slide navigation.
+  const isSlidesDocument = useMemo(
+    () => file?.format === 'pptx' || file?.format === 'odp',
+    [file]
+  );
+
   // P1.1 — the combined dirty signal Toolbar/StatusBar render and the
   // unsaved-changes guard checks: markdown's own isDirty when a markdown
   // document is active, otherwise whatever the active viewer has reported
@@ -483,7 +490,7 @@ function App() {
       <ViewerProvider filePath={filePath || null}>
         <ViewerSessionBridge onDirtyChange={setViewerDirty} saveRef={viewerSaveRef} />
         <div className="app__body">
-          {hasContent && <Sidebar isOpen={sidebarOpen} />}
+          {hasContent && !isSlidesDocument && <Sidebar isOpen={sidebarOpen} />}
 
           {!hasContent ? (
             <WelcomeScreen
