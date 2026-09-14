@@ -262,6 +262,8 @@ const ReviewTab: React.FC<TabProps> = ({ onCommand, state }) => {
         <FormatButton kind="toggle-track-changes" label="Toggle track changes" payload={{ kind: 'toggle-track-changes' }} icon={<Eye />} active={state?.trackChanges} onCommand={onCommand} />
         <IconButton label="Accept" onClick={() => onCommand({ kind: 'accept-change' })}><Check /></IconButton>
         <IconButton label="Reject" onClick={() => onCommand({ kind: 'reject-change' })}><X /></IconButton>
+        <IconButton label="Accept All" onClick={() => onCommand({ kind: 'accept-all-changes' })}><Check /></IconButton>
+        <IconButton label="Reject All" onClick={() => onCommand({ kind: 'reject-all-changes' })}><X /></IconButton>
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">

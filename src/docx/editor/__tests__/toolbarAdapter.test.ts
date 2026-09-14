@@ -98,6 +98,20 @@ describe('toolbarToCommand', () => {
     expect(toolbarToCommand({ kind: 'reject-change' }, collapsed(pos([9], 0, 0)), document)).toBeNull()
   })
 
+  it('accept-all-changes builds an accept-all-revisions command regardless of selection', () => {
+    const document = createDocument([createRevisionParagraph('ins-revision')])
+    expect(toolbarToCommand({ kind: 'accept-all-changes' }, null, document)).toEqual({
+      kind: 'accept-all-revisions',
+    })
+  })
+
+  it('reject-all-changes builds a reject-all-revisions command regardless of selection', () => {
+    const document = createDocument([createRevisionParagraph('del-revision')])
+    expect(toolbarToCommand({ kind: 'reject-all-changes' }, collapsed(pos([0], 0, 0)), document)).toEqual({
+      kind: 'reject-all-revisions',
+    })
+  })
+
   // ---------------------------------------------------------------------------
   // Existing wiring stays intact after the signature change
   // ---------------------------------------------------------------------------

@@ -332,6 +332,10 @@ export function toolbarToCommand(
       const target = findRevisionAtSelection(document, selection)
       return target === null ? null : { kind: 'reject-revision', ...target }
     }
+    case 'accept-all-changes':
+      return { kind: 'accept-all-revisions' }
+    case 'reject-all-changes':
+      return { kind: 'reject-all-revisions' }
     case 'open-comments-pane':
       return null
     case 'undo':

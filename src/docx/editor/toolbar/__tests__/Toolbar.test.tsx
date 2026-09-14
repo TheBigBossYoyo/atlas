@@ -222,4 +222,27 @@ describe('Toolbar', () => {
     fireEvent.click(cells[7]);
     expect(onCommand).toHaveBeenCalledWith({ kind: 'insert-table', rows: 1, cols: 8 });
   });
+
+  // ---------------------------------------------------------------------------
+  // D17/DXE-11 — Review tab's Accept/Reject (single + all) buttons
+  // ---------------------------------------------------------------------------
+
+  it('the Review tab exposes Accept/Reject and Accept All/Reject All, each firing its own command', () => {
+    const onCommand = vi.fn();
+    const { getByLabelText } = render(
+      <Toolbar state={defaultState} onCommand={onCommand} activeTab="review" />,
+    );
+
+    fireEvent.click(getByLabelText('Accept'));
+    expect(onCommand).toHaveBeenLastCalledWith({ kind: 'accept-change' });
+
+    fireEvent.click(getByLabelText('Reject'));
+    expect(onCommand).toHaveBeenLastCalledWith({ kind: 'reject-change' });
+
+    fireEvent.click(getByLabelText('Accept All'));
+    expect(onCommand).toHaveBeenLastCalledWith({ kind: 'accept-all-changes' });
+
+    fireEvent.click(getByLabelText('Reject All'));
+    expect(onCommand).toHaveBeenLastCalledWith({ kind: 'reject-all-changes' });
+  });
 });
