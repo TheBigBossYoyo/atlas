@@ -14,6 +14,15 @@ export type LineItem =
       charStart: number
       charEnd: number
       runProps: EffectiveRunProps
+      /**
+       * Present only for a synthesized footnote/endnote reference mark
+       * (D11/DXL-09) — lets `paginate.ts`'s placement pass recognize which
+       * placed words are note markers (to track "which footnotes are
+       * referenced on this page") without re-deriving that from raw text.
+       * Absent for every ordinary word, including a literal digit typed by
+       * the document author.
+       */
+      noteRef?: { readonly kind: 'footnote' | 'endnote'; readonly id: string }
     }
   | {
       kind: 'space'
@@ -27,6 +36,14 @@ export type LineItem =
       width: number
       runIndex: number
       charOffset: number
+      /**
+       * The matched tab stop's leader glyph (D24/DXL-16), resolved once the
+       * tab's width is known (see `breakLines.ts`'s `resolveTabItem`).
+       * `'none'` (the default — no visible fill) when the item hasn't been
+       * through tab-stop resolution yet, or the paragraph has no tab stops
+       * at all (falls back to Word's default un-leadered tab stops).
+       */
+      leader: 'none' | 'dot' | 'hyphen' | 'underscore'
     }
   | {
       kind: 'break'
@@ -127,4 +144,18 @@ export type LineBreakInput = {
    * collide with, or shift, real content's run indices.
    */
   leadingItems?: ReadonlyArray<LineItem>
+  /**
+   * Resolved display marks for footnote/endnote references appearing in
+   * this paragraph (D11 milestone 2), keyed by note id. `itemizeRuns` looks
+   * up a `footnote-reference`/`endnote-reference` run child's id here to
+   * render its superscripted marker; an id with no entry (nested note
+   * references inside a footnote/endnote body are not resolved — see
+   * `noteNumbering.ts`'s module doc) renders as an empty marker.
+   */
+  noteMarks?: NoteMarks
+}
+
+export type NoteMarks = {
+  readonly footnote: ReadonlyMap<string, string>
+  readonly endnote: ReadonlyMap<string, string>
 }

@@ -30,12 +30,12 @@ type BreakOpportunity = {
 }
 
 export async function breakLines(input: LineBreakInput): Promise<ReadonlyArray<LineBox>> {
-  const runItems = await itemizeRuns(input.runs, input.fontResolver, input.theme)
+  const runItems = await itemizeRuns(input.runs, input.fontResolver, input.theme, input.noteMarks)
   const items =
     input.leadingItems !== undefined && input.leadingItems.length > 0
       ? [...input.leadingItems, ...runItems]
       : runItems
-  const rawLines = buildRawLines(items, input)
+  const rawLines = buildRawLines(resolveTabStopWidths(items, input.tabStops), input)
   const metricsCache = new Map<string, Promise<FontMetrics>>()
 
   return Promise.all(
@@ -56,7 +56,7 @@ function buildRawLines(items: ReadonlyArray<LineItem>, input: LineBreakInput): R
 
   while (itemIndex < items.length) {
     const lineLimit = getLineLimit(input.paraProps, input.availableWidth, lineIndex)
-    const item = resolveTabItem(items[itemIndex], currentWidth, input.tabStops)
+    const item = items[itemIndex]
 
     if (item.kind === 'break') {
       currentItems.push(item)
@@ -316,31 +316,114 @@ async function resolveRunFontMetrics(
   }
 }
 
-function resolveTabItem(
-  item: LineItem,
-  currentWidth: number,
+/**
+ * Resolves every tab item's width (and leader glyph) in one forward pass
+ * over the WHOLE item list, before line-breaking runs (D24/DXL-16). Center/
+ * right/decimal tab stops need to know how wide the content following the
+ * tab is — Word positions that content so its center/end/decimal-point
+ * lands exactly at the stop, rather than starting the content flush at the
+ * stop the way a left tab does — which means looking ahead past the tab to
+ * the next hard stop (another tab, an explicit line break, or the end of
+ * the paragraph).
+ *
+ * This look-ahead deliberately does NOT know where an ordinary (unforced)
+ * line wrap will land — that's exactly what line-breaking, running right
+ * after this pass, still has to figure out — so it assumes the tab and its
+ * following content stay on one line. That holds for the dominant
+ * real-world use of non-left tab stops (a single-line TOC/header/footer
+ * entry like "Chapter 1........42" or a right-aligned page number); a
+ * center/right/decimal tab stop whose content is long enough to wrap onto a
+ * second line is a rare combination where this pass's width may end up
+ * very slightly off (an accepted, documented approximation).
+ */
+function resolveTabStopWidths(
+  items: ReadonlyArray<LineItem>,
   tabStops: ReadonlyArray<TabStop>,
-): LineItem {
-  if (item.kind !== 'tab') {
-    return item
-  }
+): ReadonlyArray<LineItem> {
+  let currentWidth = 0
+  let sawTab = false
 
-  return {
-    ...item,
-    width: resolveTabWidth(currentWidth, tabStops),
-  }
+  const resolved = items.map((item, index) => {
+    if (item.kind === 'break') {
+      currentWidth = 0
+      return item
+    }
+
+    if (item.kind !== 'tab') {
+      currentWidth += getItemWidth(item)
+      return item
+    }
+
+    sawTab = true
+    const matchedStop = tabStops.find((tabStop) => tabStop.positionPt > currentWidth)
+    const width = resolveTabStopWidth(currentWidth, matchedStop, () => lookaheadTabContent(items, index + 1))
+    currentWidth += width
+    return { ...item, width, leader: matchedStop?.leader ?? 'none' }
+  })
+
+  return sawTab ? resolved : items
 }
 
-function resolveTabWidth(currentWidth: number, tabStops: ReadonlyArray<TabStop>): number {
-  const nextExplicitStop = tabStops.find((tabStop) => tabStop.positionPt > currentWidth)
+type TabContentLookahead = {
+  readonly totalWidthPt: number
+  /** Width of the content up to (not including) its first `.` character, or `undefined` when none is found before the next hard stop. */
+  readonly preDecimalWidthPt: number | undefined
+}
 
-  if (nextExplicitStop) {
-    // TODO(B.2.1): Honor center/right/decimal alignment and leaders during render/layout integration.
-    return nextExplicitStop.positionPt - currentWidth
+function lookaheadTabContent(items: ReadonlyArray<LineItem>, startIndex: number): TabContentLookahead {
+  let totalWidthPt = 0
+  let preDecimalWidthPt: number | undefined
+
+  for (let index = startIndex; index < items.length; index += 1) {
+    const item = items[index]
+    if (item.kind === 'tab' || item.kind === 'break') {
+      break
+    }
+
+    const width = getItemWidth(item)
+    if (preDecimalWidthPt === undefined && (item.kind === 'word' || item.kind === 'glyph-cluster')) {
+      const dotIndex = item.text.indexOf('.')
+      if (dotIndex !== -1) {
+        const fraction = item.text.length > 0 ? dotIndex / item.text.length : 0
+        preDecimalWidthPt = totalWidthPt + width * fraction
+      }
+    }
+
+    totalWidthPt += width
   }
 
-  const nextDefaultStop = (Math.floor(currentWidth / DEFAULT_TAB_STOP_PT) + 1) * DEFAULT_TAB_STOP_PT
-  return nextDefaultStop - currentWidth
+  return { totalWidthPt, preDecimalWidthPt }
+}
+
+function resolveTabStopWidth(
+  currentWidth: number,
+  matchedStop: TabStop | undefined,
+  lookahead: () => TabContentLookahead,
+): number {
+  if (matchedStop === undefined) {
+    const nextDefaultStop = (Math.floor(currentWidth / DEFAULT_TAB_STOP_PT) + 1) * DEFAULT_TAB_STOP_PT
+    return Math.max(0, nextDefaultStop - currentWidth)
+  }
+
+  if (matchedStop.alignment === 'left') {
+    return Math.max(0, matchedStop.positionPt - currentWidth)
+  }
+
+  const content = lookahead()
+
+  if (matchedStop.alignment === 'center') {
+    return Math.max(0, matchedStop.positionPt - content.totalWidthPt / 2 - currentWidth)
+  }
+
+  if (matchedStop.alignment === 'right') {
+    return Math.max(0, matchedStop.positionPt - content.totalWidthPt - currentWidth)
+  }
+
+  // decimal — falls back to right-alignment (whole content ends at the
+  // stop) when no decimal point precedes the next hard stop, matching
+  // Word's own documented fallback for a decimal tab with no decimal.
+  const anchorWidthPt = content.preDecimalWidthPt ?? content.totalWidthPt
+  return Math.max(0, matchedStop.positionPt - anchorWidthPt - currentWidth)
 }
 
 function getBreakOpportunity(item: LineItem, splitIndex: number): BreakOpportunity | undefined {

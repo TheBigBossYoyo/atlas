@@ -3,7 +3,7 @@ import type { BreakType } from '../model'
 import type { Theme } from '../parser/theme'
 
 import { effectiveFontFamily } from './fontResolution'
-import type { EffectiveRunProps, FontResolver, LineBreakInput, LineItem } from './types'
+import type { EffectiveRunProps, FontResolver, LineBreakInput, LineItem, NoteMarks } from './types'
 
 const DEFAULT_DRAWING_SIZE_PT = 96
 const DEFAULT_FONT_SIZE_PT = 11
@@ -24,6 +24,7 @@ export async function itemizeRuns(
   runs: LineBreakInput['runs'],
   fontResolver: FontResolver,
   theme?: Theme,
+  noteMarks?: NoteMarks,
 ): Promise<ReadonlyArray<LineItem>> {
   const items: LineItem[] = []
   const metricsCache = new Map<string, Promise<FontMetrics>>()
@@ -54,6 +55,7 @@ export async function itemizeRuns(
           width: 0,
           runIndex,
           charOffset: childOffset,
+          leader: 'none',
         })
         childOffset += 1
         continue
@@ -83,11 +85,54 @@ export async function itemizeRuns(
           runProps: wrappedRun.runProps,
         })
         childOffset += 1
+        continue
+      }
+
+      if (child.kind === 'footnote-reference' || child.kind === 'endnote-reference') {
+        items.push(
+          await itemizeNoteReference(child.kind, child.id, runIndex, childOffset, wrappedRun.runProps, fontResolver, metricsCache, theme, noteMarks),
+        )
+        childOffset += 1
       }
     }
   }
 
   return items
+}
+
+/**
+ * A footnote/endnote reference renders as its resolved sequence number
+ * (`noteMarks`, assigned in document order by `paginate.ts` /
+ * `noteNumbering.ts`) forced to superscript — matching Word's own built-in
+ * "FootnoteReference"/"EndnoteReference" character style, which always
+ * superscripts the mark regardless of the surrounding run's own formatting
+ * (D11 milestone 2/DXL-09).
+ */
+async function itemizeNoteReference(
+  kind: 'footnote-reference' | 'endnote-reference',
+  id: string,
+  runIndex: number,
+  charOffset: number,
+  runProps: EffectiveRunProps,
+  fontResolver: FontResolver,
+  metricsCache: Map<string, Promise<FontMetrics>>,
+  theme: Theme | undefined,
+  noteMarks: NoteMarks | undefined,
+): Promise<LineItem> {
+  const marks = kind === 'footnote-reference' ? noteMarks?.footnote : noteMarks?.endnote
+  const text = marks?.get(id) ?? ''
+  const markRunProps: EffectiveRunProps = { ...runProps, vertAlign: 'superscript' }
+
+  return {
+    kind: 'word',
+    text,
+    width: text === '' ? 0 : await measureText(text, markRunProps, text, fontResolver, metricsCache, theme),
+    runIndex,
+    charStart: charOffset,
+    charEnd: charOffset + 1,
+    runProps: markRunProps,
+    noteRef: { kind: kind === 'footnote-reference' ? 'footnote' : 'endnote', id },
+  }
 }
 
 async function itemizeText(

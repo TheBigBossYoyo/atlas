@@ -144,6 +144,101 @@ describe('breakLines', () => {
     expect(lines[0]?.width).toBe(41)
   })
 
+  it('centers the following content on a center tab stop (D24/DXL-16)', async () => {
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'aa' },
+            { kind: 'tab' },
+            { kind: 'text', value: 'bb' },
+          ]),
+        ],
+        {},
+        100,
+        [{ positionPt: 40, alignment: 'center', leader: 'none' }],
+      ),
+    )
+
+    // "aa" = 10pt, "bb" = 10pt; centering 10pt of content on 40 starts it at
+    // 35, so the tab (starting right after "aa" at 10) must be 25pt wide.
+    expect(findTab(lines[0]?.items)?.width).toBe(25)
+  })
+
+  it('ends the following content flush at a right tab stop', async () => {
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'aa' },
+            { kind: 'tab' },
+            { kind: 'text', value: 'bb' },
+          ]),
+        ],
+        {},
+        100,
+        [{ positionPt: 40, alignment: 'right', leader: 'dot' }],
+      ),
+    )
+
+    expect(findTab(lines[0]?.items)?.width).toBe(20)
+    expect(lines[0]?.width).toBe(40)
+  })
+
+  it('aligns the decimal point of the following content on a decimal tab stop', async () => {
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'aa' },
+            { kind: 'tab' },
+            { kind: 'text', value: '3.5' },
+          ]),
+        ],
+        {},
+        100,
+        [{ positionPt: 40, alignment: 'decimal', leader: 'none' }],
+      ),
+    )
+
+    // "3.5" is one 15pt-wide word item; its '.' sits 1/3 of the way through
+    // (5pt in). Landing that 5pt mark on the 40pt stop needs the tab (after
+    // "aa" at 10) to be 25pt wide.
+    expect(findTab(lines[0]?.items)?.width).toBe(25)
+  })
+
+  it('falls back to right-alignment for a decimal tab stop with no decimal point', async () => {
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'aa' },
+            { kind: 'tab' },
+            { kind: 'text', value: 'bb' },
+          ]),
+        ],
+        {},
+        100,
+        [{ positionPt: 40, alignment: 'decimal', leader: 'none' }],
+      ),
+    )
+
+    expect(findTab(lines[0]?.items)?.width).toBe(20)
+  })
+
+  it('carries the matched tab stop leader onto the tab item', async () => {
+    const lines = await breakLines(
+      createInput(
+        [wrapRun([{ kind: 'text', value: 'a' }, { kind: 'tab' }])],
+        {},
+        100,
+        [{ positionPt: 30, alignment: 'left', leader: 'dot' }],
+      ),
+    )
+
+    expect(findTab(lines[0]?.items)?.leader).toBe('dot')
+  })
+
   it('reduces first-line width by the first-line indent', async () => {
     const lines = await breakLines(
       createInput([wrapTextRun('aa aa aa')], { ind: { firstLine: twip(300) } }, 50),
