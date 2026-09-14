@@ -121,7 +121,13 @@ function composeWithParent(parent: SlideTransform, parentGroup: RawGroupBox, own
 
 export type PositionedShape = {
   readonly element: Element
-  readonly transform: SlideTransform
+  /**
+   * `null` when the shape has no `xfrm` of its own and nothing to inherit
+   * (no placeholder match) — the shape is NOT dropped; the parser assigns a
+   * generic stacking position instead, per S1's "falling back to generic
+   * stacking only when nothing is inherited" acceptance criterion.
+   */
+  readonly transform: SlideTransform | null
 }
 
 /**
@@ -151,6 +157,12 @@ export function traverseShapeTree(
       } else if (LEAF_TAGS.has(child.localName)) {
         const own = resolveLeafOwnBox(child, chain)
         if (!own) {
+          // A shape nested in a group with no xfrm of its own has no coordinate
+          // space to fall back into (invalid OOXML in practice) — skip it. A
+          // top-level shape still gets a place in the deck via generic stacking.
+          if (!parent) {
+            results.push({ element: child, transform: null })
+          }
           continue
         }
 

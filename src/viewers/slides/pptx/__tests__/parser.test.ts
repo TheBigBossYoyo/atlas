@@ -1,3 +1,4 @@
+import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 
 import type { SlideImage, SlideShapeOnly, SlideTable, SlideTextBox, SlideUnsupported } from '../../../shared/SlideDeck.types'
@@ -9,6 +10,24 @@ async function parseFixture() {
   const zip = buildPptxFixtureZip()
   const signal: CancelSignal = { cancelled: false }
   return parsePptxSlides(zip as unknown as ZipArchive, signal)
+}
+
+/** A minimal, real-world-shaped slide: a text shape with no spPr/xfrm and no placeholder at all. */
+function buildMinimalPptxZip(): JSZip {
+  const zip = new JSZip()
+  zip.file('ppt/presentation.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+</p:presentation>`)
+  zip.file('ppt/_rels/presentation.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+</Relationships>`)
+  zip.file('ppt/slides/slide1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:sp><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Atlas PPTX fixture</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>
+</p:sld>`)
+  return zip
 }
 
 describe('parsePptxSlides', () => {
@@ -31,6 +50,18 @@ describe('parsePptxSlides', () => {
       | undefined
 
     expect(title?.transform).toEqual({ x: 48, y: 30, w: 864, h: 120 })
+  })
+
+  it('S1 — a shape with no xfrm and no placeholder to inherit from still renders via generic stacking', async () => {
+    const zip = buildMinimalPptxZip()
+    const signal: CancelSignal = { cancelled: false }
+    const [slide1] = await parsePptxSlides(zip as unknown as ZipArchive, signal)
+
+    // Regression: previously such a shape was silently dropped rather than
+    // falling back to a generic stacked position.
+    const shape = slide1?.shapes.find(candidate => candidate.kind === 'text') as SlideTextBox | undefined
+    expect(shape?.text).toBe('Atlas PPTX fixture')
+    expect(shape?.transform).toEqual({ x: 24, y: 24, w: expect.any(Number), h: 24 })
   })
 
   it('S3 — resolves run formatting via the master txStyles fallback and theme accent colors', async () => {

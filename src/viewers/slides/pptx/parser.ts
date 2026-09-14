@@ -119,13 +119,25 @@ async function buildSlideShapes(
   const positioned = traverseShapeTree(spTree, chain)
   const consumedTextNodes = new Set<Element>()
   const shapes: SlideShape[] = []
+  let genericStackIndex = 0
 
-  for (const { element, transform } of positioned) {
+  for (const { element, transform: resolvedTransform } of positioned) {
     if (signal.cancelled) {
       break
     }
 
     const id = `${slidePath}-shape-${shapes.length}`
+    // S1 — a shape with no xfrm and no placeholder to inherit from still gets a
+    // place in the deck, generically stacked, instead of being dropped.
+    const transform = resolvedTransform ?? {
+      x: 24,
+      y: 24 + genericStackIndex * 28,
+      w: Math.max(size.width - 48, 120),
+      h: 24,
+    }
+    if (!resolvedTransform) {
+      genericStackIndex += 1
+    }
 
     try {
       if (element.localName === 'sp' || element.localName === 'cxnSp') {
