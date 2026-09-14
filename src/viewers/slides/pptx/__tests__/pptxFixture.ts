@@ -86,6 +86,11 @@ const SLIDE_LAYOUT_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?
     <p:spTree>
       <p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p/></p:txBody></p:sp>
       <p:sp><p:nvSpPr><p:nvPr><p:ph type="body"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:p/></p:txBody></p:sp>
+      <p:sp>
+        <p:nvSpPr><p:nvPr><p:ph type="body" idx="7"/></p:nvPr></p:nvSpPr>
+        <p:spPr><a:xfrm><a:off x="476250" y="476250"/><a:ext cx="952500" cy="952500"/></a:xfrm></p:spPr>
+        <p:txBody><a:p/></p:txBody>
+      </p:sp>
     </p:spTree>
   </p:cSld>
 </p:sldLayout>`
@@ -96,12 +101,16 @@ const SLIDE_LAYOUT_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"
 </Relationships>`
 
 // Slide 1 exercises: S1 (title has no own xfrm -> inherits master's, since the
-// layout's own placeholder also has none), S3 (accent1 theme color + master
-// txStyles size/bold fallback), S4 (buChar bullets at two levels), S5 (a:br
-// soft break inside the title), S6 (a table), S7 (a group's off/ext ->
-// chOff/chExt composition), S8 (solid fill + roundRect geometry, plus the
-// master's own background), S10 (srcRect crop + rotation), S11 (a chart
-// graphicFrame), S19 (alt text), S20 (normAutofit), S21 (spcBef).
+// layout's own placeholder also has none; the idx=7 placeholder's own xfrm
+// sets only rotation, regression-testing that its position/size still merge
+// in from the layout's box field-by-field instead of collapsing to zero),
+// S3 (accent1 theme color + master txStyles size/bold fallback), S4 (buChar
+// bullets at two levels), S5 (a:br soft break inside the title), S6 (a
+// table), S7 (a group's off/ext -> chOff/chExt composition), S8 (solid fill
+// + roundRect geometry with a "no line" border that must not shadow the
+// shape's own fill, plus the master's own background), S10 (srcRect crop +
+// rotation), S11 (a chart graphicFrame), S19 (alt text), S20 (normAutofit),
+// S21 (spcBef).
 const SLIDE1_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
@@ -138,8 +147,14 @@ const SLIDE1_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
           <a:xfrm><a:off x="457200" y="3810000"/><a:ext cx="1905000" cy="476250"/></a:xfrm>
           <a:prstGeom prst="roundRect"><a:avLst/></a:prstGeom>
           <a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>
+          <a:ln><a:noFill/></a:ln>
         </p:spPr>
         <p:txBody><a:p/></p:txBody>
+      </p:sp>
+      <p:sp>
+        <p:nvSpPr><p:nvPr><p:ph type="body" idx="7"/></p:nvPr></p:nvSpPr>
+        <p:spPr><a:xfrm rot="5400000"/></p:spPr>
+        <p:txBody><a:p><a:r><a:t>Rotated placeholder</a:t></a:r></a:p></p:txBody>
       </p:sp>
       <p:graphicFrame>
         <p:nvGraphicFramePr><p:cNvPr id="10" name="Table1"/></p:nvGraphicFramePr>
@@ -209,7 +224,7 @@ const NOTES_SLIDE1_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?
     <p:spTree>
       <p:sp>
         <p:nvSpPr><p:nvPr><p:ph type="body"/></p:nvPr></p:nvSpPr>
-        <p:txBody><a:p><a:r><a:t>Remember to mention EMEA growth drivers.</a:t></a:r></a:p></p:txBody>
+        <p:txBody><a:p><a:r><a:t>Remember to mention EMEA growth drivers.</a:t></a:r><a:br/><a:r><a:t>Follow up with APAC next.</a:t></a:r></a:p></p:txBody>
       </p:sp>
     </p:spTree>
   </p:cSld>

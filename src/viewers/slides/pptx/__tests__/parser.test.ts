@@ -134,6 +134,35 @@ describe('parsePptxSlides', () => {
     expect(slide1?.background).toEqual({ kind: 'solid', color: '#FFFFFF' })
   })
 
+  it('S8 — a shape\'s own solid fill is not shadowed by its <a:ln>\'s <a:noFill> (no border)', async () => {
+    const [slide1] = await parseFixture()
+    const banner = slide1?.shapes.find(shape => shape.kind === 'shape' && shape.geometry === 'roundRect') as
+      | SlideShapeOnly
+      | undefined
+
+    // Regression: resolveFill previously searched the whole spPr subtree for
+    // noFill/solidFill/gradFill, so the Banner's <a:ln><a:noFill/></a:ln>
+    // (its border, not its fill) was found first and the shape's own
+    // <a:solidFill> was never reached — the banner resolved as transparent
+    // (and, having no text/border/non-rect geometry, was dropped entirely).
+    expect(banner?.fill).toEqual({ kind: 'solid', color: '#FF0000' })
+    expect(banner?.border).toBeUndefined()
+  })
+
+  it('S1 — a placeholder\'s own partial xfrm (rotation only) still merges in the layout\'s position/size', async () => {
+    const [slide1] = await parseFixture()
+    const rotated = slide1?.shapes.find(shape => shape.kind === 'text' && shape.text === 'Rotated placeholder') as
+      | SlideTextBox
+      | undefined
+
+    // Regression: resolvePlaceholderPosition merged boxes via `{ ...layoutBox,
+    // ...ownBox }`; since readXfrmBox always returns all four keys (even as
+    // `undefined`), a shape whose own <a:xfrm> sets only `rot` (no off/ext)
+    // had its spread wipe out the fully-specified layout box instead of
+    // falling back to it, collapsing the shape to zero size.
+    expect(rotated?.transform).toEqual({ x: 50, y: 50, w: 100, h: 100, rotationDeg: 90, flipH: false, flipV: false })
+  })
+
   it('S9 — isolates one slide\'s parse failure instead of discarding the whole deck', async () => {
     const slides = await parseFixture()
 
@@ -161,9 +190,9 @@ describe('parsePptxSlides', () => {
     expect(chart?.label).toBe('Chart not supported')
   })
 
-  it('S12 — extracts the notesSlide relationship\'s body text', async () => {
+  it('S12 — extracts the notesSlide relationship\'s body text, including a soft <a:br> line break', async () => {
     const [slide1] = await parseFixture()
-    expect(slide1?.notes).toBe('Remember to mention EMEA growth drivers.')
+    expect(slide1?.notes).toBe('Remember to mention EMEA growth drivers.\nFollow up with APAC next.')
   })
 
   it('S14 — a slide with show="0" is flagged hidden', async () => {

@@ -6,6 +6,21 @@ import { findRelationshipTarget, parseRelationships } from './relationships'
 
 const SKIPPED_PLACEHOLDER_TYPES = new Set(['sldImg', 'sldNum', 'dt', 'ftr'])
 
+/** Mirrors S5's document-order walk so a manual line break in notes text becomes a real `\n`. */
+function extractParagraphText(paragraph: Element): string {
+  let text = ''
+
+  for (const child of getDirectChildren(paragraph)) {
+    if (child.localName === 'r' || child.localName === 'fld') {
+      text += getFirstByLocalName(child, 't')?.textContent ?? ''
+    } else if (child.localName === 'br') {
+      text += '\n'
+    }
+  }
+
+  return text
+}
+
 function extractShapeNotesText(shape: Element): string {
   const txBody = getFirstByLocalName(shape, 'txBody')
   if (!txBody) {
@@ -13,11 +28,7 @@ function extractShapeNotesText(shape: Element): string {
   }
 
   return getDirectChildren(txBody, 'p')
-    .map(paragraph =>
-      getElementsByLocalName(paragraph, 't')
-        .map(node => node.textContent ?? '')
-        .join(''),
-    )
+    .map(extractParagraphText)
     .join('\n')
     .trim()
 }

@@ -149,6 +149,24 @@ function readXfrmBox(shape: Element): ResolvedPosition {
 }
 
 /**
+ * Fills gaps in `own` from `fallback`, field by field. `own` always carries
+ * all four keys (`readXfrmBox` returns them even when unset, as `undefined`),
+ * so a plain `{ ...fallback, ...own }` object spread would overwrite a
+ * defined fallback field with `own`'s explicit `undefined` — losing the
+ * inherited value instead of falling back to it (e.g. a placeholder whose own
+ * `a:xfrm` sets only `rot`, with no `a:off`/`a:ext`, would resolve to a
+ * zero-sized box instead of the layout/master's box).
+ */
+function mergePositions(own: ResolvedPosition, fallback: ResolvedPosition): ResolvedPosition {
+  return {
+    x: own.x ?? fallback.x,
+    y: own.y ?? fallback.y,
+    w: own.w ?? fallback.w,
+    h: own.h ?? fallback.h,
+  }
+}
+
+/**
  * Resolves a placeholder's position/size by walking slide -> layout -> master,
  * taking the first fully-specified box found (OOXML never partially merges
  * x/y/w/h across levels for a single placeholder in practice).
@@ -167,14 +185,14 @@ export function resolvePlaceholderPosition(
   if (layoutMatch) {
     const layoutBox = readXfrmBox(layoutMatch)
     if (layoutBox.x !== undefined) {
-      return { ...layoutBox, ...ownBox }
+      return mergePositions(ownBox, layoutBox)
     }
   }
 
   const masterMatch = findMatchingPlaceholder(chain.masterDocument, ref)
   if (masterMatch) {
     const masterBox = readXfrmBox(masterMatch)
-    return { ...masterBox, ...ownBox }
+    return mergePositions(ownBox, masterBox)
   }
 
   return ownBox

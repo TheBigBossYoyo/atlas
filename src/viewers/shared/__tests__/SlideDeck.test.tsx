@@ -51,13 +51,15 @@ describe('SlideDeck', () => {
       <SlideDeck slides={slides} activeIndex={0} onSelect={vi.fn()} />,
     )
 
-    expect(queryByText('Remember to mention EMEA growth drivers.')).not.toBeInTheDocument()
+    const notesText = /Remember to mention EMEA growth drivers\./
+
+    expect(queryByText(notesText)).not.toBeInTheDocument()
 
     fireEvent.click(getByTitle('Speaker notes'))
-    expect(getByText('Remember to mention EMEA growth drivers.')).toBeInTheDocument()
+    expect(getByText(notesText)).toBeInTheDocument()
 
     fireEvent.click(getByTitle('Close notes'))
-    expect(queryByText('Remember to mention EMEA growth drivers.')).not.toBeInTheDocument()
+    expect(queryByText(notesText)).not.toBeInTheDocument()
     expect(container).toBeTruthy()
   })
 

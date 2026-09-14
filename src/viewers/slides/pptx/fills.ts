@@ -1,6 +1,6 @@
 /** S8 — shape fill, border, and preset-geometry resolution, plus background inheritance. */
 
-import { getFirstByLocalName } from '../shared/xmlUtils'
+import { getDirectChildren, getFirstByLocalName } from '../shared/xmlUtils'
 import { emuToPx } from '../shared/units'
 import type { SlideBorder, SlideFill, SlideGeometry } from '../../shared/SlideDeck.types'
 import { findColorElement, resolveColorElement, type ColorMap, type ThemeColors } from './theme'
@@ -35,7 +35,16 @@ export function resolveGeometry(spPr: Element | null): SlideGeometry | undefined
   return GEOMETRY_MAP[prst] ?? 'other'
 }
 
-/** `a:solidFill`/`a:gradFill`/`a:noFill` on `spPr` (or any container element that holds one directly). */
+/**
+ * `a:solidFill`/`a:gradFill`/`a:noFill` on `spPr` (or any container element that
+ * holds one directly). Deliberately scoped to `container`'s DIRECT children —
+ * `spPr` also carries an `a:ln` sibling (the shape's border/line), which can
+ * carry its own `a:noFill`/`a:solidFill` for the *border*. A subtree search
+ * (`getFirstByLocalName`) would find those too and mis-resolve the shape's own
+ * fill from its border's fill (e.g. a solid-filled shape with "no line" would
+ * wrongly resolve as `{ kind: 'none' }`, since `a:ln`'s `a:noFill` matches
+ * first regardless of the shape's own `a:solidFill`).
+ */
 export function resolveFill(
   container: Element | null,
   themeColors: ThemeColors,
@@ -45,11 +54,14 @@ export function resolveFill(
     return undefined
   }
 
-  if (getFirstByLocalName(container, 'noFill')) {
+  const children = getDirectChildren(container)
+  const findChild = (localName: string) => children.find(child => child.localName === localName) ?? null
+
+  if (findChild('noFill')) {
     return { kind: 'none' }
   }
 
-  const solidFill = getFirstByLocalName(container, 'solidFill')
+  const solidFill = findChild('solidFill')
   if (solidFill) {
     const colorElement = findColorElement(solidFill)
     if (colorElement) {
@@ -57,7 +69,7 @@ export function resolveFill(
     }
   }
 
-  const gradFill = getFirstByLocalName(container, 'gradFill')
+  const gradFill = findChild('gradFill')
   if (gradFill) {
     const gsLst = getFirstByLocalName(gradFill, 'gsLst')
     const stops = gsLst ? Array.from(gsLst.children).filter(child => child.localName === 'gs') : []
