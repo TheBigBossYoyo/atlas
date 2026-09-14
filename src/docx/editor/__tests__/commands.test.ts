@@ -708,6 +708,30 @@ describe('docx editor commands', () => {
     const reverted = applyCommand(result.document, result.inverse)
     expect(reverted.document).toEqual(original)
   })
+
+  it('InsertHyperlink over a selection straddling an inline break preserves the break', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([
+        createRun('Hello'),
+        Object.freeze({ kind: 'run', children: Object.freeze([{ kind: 'break', breakType: 'page' }]) }) as Run,
+        createRun('World'),
+      ]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'insert-hyperlink',
+      range: { anchor: position([0], 0, 0), focus: position([0], 2, 5) },
+      url: 'https://example.com',
+      relationshipId: 'rId3',
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(
+      nextParagraph.children.some((child) => child.kind === 'run' && child.children[0]?.kind === 'break'),
+    ).toBe(true)
+  })
 })
 
 function createParagraphWithRevisionRaw(
