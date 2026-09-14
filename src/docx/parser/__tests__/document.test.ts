@@ -1,3 +1,4 @@
+import { XMLParser } from 'fast-xml-parser'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -513,6 +514,95 @@ describe('parseDocument', () => {
     expect(document.sections[0].blocks[0]).toEqual({
       kind: 'unknown',
       xml: '<w:customBlock w:foo="bar"><w:customChild w:val="1"/></w:customBlock>',
+    })
+  })
+
+  // D19 / DXS-16
+  describe('unknown-node raw substring preservation (D19 / DXS-16)', () => {
+    it('captures the exact source text of an unknown element that declares its own namespace locally, byte-for-byte', () => {
+      const document = parseBody(
+        '<ext:widget xmlns:ext="urn:example:ext" ext:mode="live"><ext:payload>data &amp; more</ext:payload></ext:widget>',
+      )
+
+      expect(document.sections[0].blocks[0]).toEqual({
+        kind: 'unknown',
+        xml: '<ext:widget xmlns:ext="urn:example:ext" ext:mode="live"><ext:payload>data &amp; more</ext:payload></ext:widget>',
+      })
+    })
+
+    it('preserves single-quoted attribute values and other exact source formatting a tree-rebuild would normalize away', () => {
+      // fast-xml-parser's XMLBuilder always re-emits double-quoted attributes
+      // regardless of how the source quoted them — a tree-rebuild (the old
+      // `xmlBuilder.build([element])` approach) silently normalizes this,
+      // which is not byte-for-byte preservation even though it's harmless
+      // XML. Slicing the raw source substring keeps the original quoting.
+      const document = parseBody("<w:customBlock w:foo='bar'/>")
+
+      expect(document.sections[0].blocks[0]).toEqual({
+        kind: 'unknown',
+        xml: "<w:customBlock w:foo='bar'/>",
+      })
+    })
+
+    it(
+      're-declares, on the unknown element itself, a namespace prefix it uses that only a '
+        + 'non-root ancestor (not the unknown element itself) declared — otherwise lost entirely '
+        + 'since neither the raw substring nor a tree-rebuild of the unknown element alone '
+        + 'includes an ancestor\'s own attributes',
+      () => {
+        const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body xmlns:ext="urn:example:ext">
+    <w:p><w:r><w:t>Hi</w:t></w:r></w:p>
+    <ext:widget ext:mode="live"><ext:payload>data</ext:payload></ext:widget>
+  </w:body>
+</w:document>`
+
+        const document = parseDocument(xml)
+        const unknownBlock = document.sections[0].blocks[document.sections[0].blocks.length - 1]
+
+        expect(unknownBlock).toEqual({
+          kind: 'unknown',
+          xml: '<ext:widget ext:mode="live" xmlns:ext="urn:example:ext"><ext:payload>data</ext:payload></ext:widget>',
+        })
+
+        // The re-declaration must actually make the captured fragment valid,
+        // standalone XML — not just look plausible.
+        expect(() => new XMLParser({ ignoreAttributes: false }).parse(
+          `<root xmlns:ext="should-be-overridden">${(unknownBlock as { xml: string }).xml}</root>`,
+        )).not.toThrow()
+      },
+    )
+
+    it('does not re-declare a namespace the unknown element already declares itself, even if an ancestor also declares it', () => {
+      const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body xmlns:ext="urn:example:ext">
+    <ext:widget xmlns:ext="urn:example:ext-local"><ext:payload>data</ext:payload></ext:widget>
+  </w:body>
+</w:document>`
+
+      const document = parseDocument(xml)
+
+      expect(document.sections[0].blocks[0]).toEqual({
+        kind: 'unknown',
+        xml: '<ext:widget xmlns:ext="urn:example:ext-local"><ext:payload>data</ext:payload></ext:widget>',
+      })
+    })
+
+    it('does not re-declare a namespace the document root itself already declares (DXS-15 already re-emits those)', () => {
+      // `w:` is declared on the root `w:document`, not on some intermediate
+      // ancestor — `rootNamespaces`/`mcIgnorable` already guarantee it
+      // survives at the root, so injecting it again here would be redundant
+      // clutter and would break byte-identical preservation for the
+      // overwhelmingly common case (this is exactly the existing
+      // "preserves unsupported block XML as UnknownNode" test's shape).
+      const document = parseBody('<w:customBlock><w:customChild w:val="1"/></w:customBlock>')
+
+      expect(document.sections[0].blocks[0]).toEqual({
+        kind: 'unknown',
+        xml: '<w:customBlock><w:customChild w:val="1"/></w:customBlock>',
+      })
     })
   })
 

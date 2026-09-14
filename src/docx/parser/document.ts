@@ -108,6 +108,26 @@ const xmlBuilder = new XMLBuilder({
   suppressEmptyNode: true,
 })
 
+/**
+ * D19 / DXS-16 — raw-substring context for the document XML currently being
+ * parsed, consulted by `parseUnknownNode` so an unsupported element's
+ * captured `xml` is the exact source text (byte-faithful, including exotic
+ * formatting fast-xml-parser's builder wouldn't reproduce) rather than a
+ * tree-rebuilt approximation, with any namespace prefix it relies on that's
+ * declared by a non-root ancestor re-declared locally so the fragment stays
+ * valid wherever the serializer splices it back in (see `computeRawNodeInfo`'s
+ * doc comment for why that specific gap is the one worth closing here).
+ *
+ * Module-level rather than threaded as a parameter through every one of
+ * `parseUnknownNode`'s ~10 call sites: `parseDocument` is this module's only
+ * export and is never reentered mid-parse (no `await`, and nothing else in
+ * this file calls back into it), so there is exactly one active parse at a
+ * time — set at entry, read throughout, cleared in `finally` so a thrown
+ * parse error never leaves a stale context (holding a potentially large
+ * string) for a later call to accidentally reuse.
+ */
+let sourceRangeContext: SourceRangeContext | undefined
+
 export function parseDocument(xml: string): DocxDocument {
   assertXmlPartSizeWithinLimit(xml, 'word/document.xml')
   let raw: OrderedXmlNode[]
@@ -118,6 +138,15 @@ export function parseDocument(xml: string): DocxDocument {
     throw new DocxParseError(`Failed to parse document XML: ${msg}`)
   }
 
+  sourceRangeContext = computeSourceRangeContext(xml, raw)
+  try {
+    return parseDocumentTree(raw)
+  } finally {
+    sourceRangeContext = undefined
+  }
+}
+
+function parseDocumentTree(raw: ReadonlyArray<OrderedXmlNode>): DocxDocument {
   const documentElement = findElement(raw, 'w:document')
   const bodyElement = child(documentElement, 'w:body')
   const body = parseBody(bodyElement)
@@ -1608,11 +1637,296 @@ function parseLineNumberType(element: OrderedXmlNode | undefined): LineNumberTyp
   return hasProps(lineNumberType) ? lineNumberType : undefined
 }
 
+/**
+ * D19 / DXS-16 — reconstructing an unsupported element from the parsed tree
+ * (`xmlBuilder.build([element])`) only re-emits attributes that element
+ * itself (or one of its own descendants) carries. A namespace prefix the
+ * element or a descendant USES but that a non-root ANCESTOR declared — most
+ * commonly `w:sdt`/`mc:AlternateContent`/`mc:Choice` unwrapping (see
+ * `expandWrapperNodes`) discarding a wrapper that declared the extension
+ * namespace its unwrapped content still refers to — never appears anywhere
+ * in the rebuild, producing schema-invalid XML (an undeclared prefix) on
+ * save. Slicing the exact source substring instead fixes formatting fidelity
+ * (attribute order, self-closing style, entity spelling, etc.) but not this
+ * specific gap by itself, since the substring doesn't include the ancestor's
+ * declaration either — so `sourceRangeContext` additionally tracks, per
+ * node, which namespaces a non-root ancestor made available, and
+ * `injectMissingNamespaces` re-declares locally whichever of those the
+ * captured fragment actually references and doesn't already redeclare
+ * itself. A prefix declared on the document root itself is deliberately
+ * excluded from this tracking: `rootNamespaces`/`mcIgnorable` (DXS-15)
+ * already re-emit the source root's full namespace set unconditionally, so
+ * every root-declared prefix is already in scope everywhere in the output
+ * without any per-node help, and re-injecting it here on top would just be
+ * redundant (and break byte-identical round-trip for the overwhelmingly
+ * common case where an unknown node only ever uses namespaces the root
+ * itself already declares, e.g. plain `w:*`).
+ */
 function parseUnknownNode(element: OrderedXmlNode): UnknownNode {
+  const info = sourceRangeContext?.info.get(element)
+  if (info === undefined) {
+    // No raw range available (lookup miss — e.g. the source tag couldn't be
+    // relocated in the text, or this ran outside a `parseDocument` call, as
+    // every unit test that calls the file's other parse helpers directly
+    // does): fall back to the previous tree-rebuild behavior rather than
+    // producing no output at all.
+    return {
+      kind: 'unknown',
+      xml: xmlBuilder.build([element]),
+    }
+  }
+
+  const rawXml = sourceRangeContext!.xml.slice(info.start, info.end)
   return {
     kind: 'unknown',
-    xml: xmlBuilder.build([element]),
+    xml: injectMissingNamespaces(rawXml, info.inheritedNamespaces),
   }
+}
+
+// ---------------------------------------------------------------------------
+// D19 / DXS-16 — raw source-substring range tracking for unknown nodes
+// ---------------------------------------------------------------------------
+
+interface RawNodeInfo {
+  readonly start: number
+  readonly end: number
+  /** xmlns:prefix -> uri available from a non-root ancestor at this node's position. */
+  readonly inheritedNamespaces: ReadonlyMap<string, string>
+}
+
+interface SourceRangeContext {
+  readonly xml: string
+  readonly info: WeakMap<OrderedXmlNode, RawNodeInfo>
+}
+
+const EMPTY_NAMESPACE_SCOPE: ReadonlyMap<string, string> = new Map()
+
+/**
+ * Builds the raw-range/namespace-scope index for one `parseDocument` call.
+ * Walks `raw` (the exact tree `xmlParser.parse(xml)` produced) depth-first
+ * in document order, alongside a forward-only cursor into `xml` — the same
+ * order the semantic parse functions below (`parseBody`, `parseParagraph`,
+ * `parseRun`, ...) independently traverse this same tree in, so a node's
+ * entry lands in `info` before anything in this file ever needs to look it
+ * up. A tag that can't be relocated (should not happen for well-formed XML
+ * fast-xml-parser itself just parsed, but never trusted to be impossible)
+ * simply gets no entry — `parseUnknownNode` degrades to tree-rebuild for
+ * that one node rather than the whole parse failing.
+ */
+function computeSourceRangeContext(
+  xml: string,
+  raw: ReadonlyArray<OrderedXmlNode>,
+): SourceRangeContext {
+  const info = new WeakMap<OrderedXmlNode, RawNodeInfo>()
+  // The root level's own namespace declarations are intentionally excluded
+  // from what gets tracked as "inherited" (see `parseUnknownNode`'s doc
+  // comment) — `mergeOwnNamespaces: false` only for this outermost call.
+  computeRawNodeInfo(raw, xml, 0, EMPTY_NAMESPACE_SCOPE, info, false)
+  return { xml, info }
+}
+
+function computeRawNodeInfo(
+  nodes: ReadonlyArray<OrderedXmlNode>,
+  xml: string,
+  cursor: number,
+  inheritedScope: ReadonlyMap<string, string>,
+  info: WeakMap<OrderedXmlNode, RawNodeInfo>,
+  mergeOwnNamespaces: boolean,
+): number {
+  let position = cursor
+
+  for (const node of nodes) {
+    const name = nodeName(node)
+    // Text/comment/processing-instruction pseudo-nodes ('#text', '#comment',
+    // '?xml', ...) have no tag to relocate and are never individually passed
+    // to `parseUnknownNode` — skip without advancing the cursor; the next
+    // real element's own forward search naturally skips over them.
+    if (name === undefined || name.startsWith('#') || name.startsWith('?')) {
+      continue
+    }
+
+    const tagStart = findRawTagStart(xml, position, name)
+    if (tagStart === -1) {
+      continue
+    }
+
+    const openTag = findRawTagOpenEnd(xml, tagStart)
+    if (openTag === undefined) {
+      continue
+    }
+
+    if (openTag.selfClosing) {
+      info.set(node, { start: tagStart, end: openTag.end, inheritedNamespaces: inheritedScope })
+      position = openTag.end
+      continue
+    }
+
+    const childScope = mergeOwnNamespaces
+      ? mergeNamespaceScopes(inheritedScope, collectLocalNamespaces(node))
+      : inheritedScope
+
+    const childrenEnd = computeRawNodeInfo(nodeChildren(node), xml, openTag.end, childScope, info, true)
+    const closeEnd = findRawTagCloseEnd(xml, childrenEnd, name)
+    if (closeEnd === undefined) {
+      position = childrenEnd
+      continue
+    }
+
+    info.set(node, { start: tagStart, end: closeEnd, inheritedNamespaces: inheritedScope })
+    position = closeEnd
+  }
+
+  return position
+}
+
+/** Finds the next `<name` at or after `fromIndex` whose name isn't a longer identifier's prefix (e.g. searching `w:p` must not match `w:pPr`). */
+function findRawTagStart(xml: string, fromIndex: number, name: string): number {
+  const needle = `<${name}`
+  let index = fromIndex
+
+  for (;;) {
+    index = xml.indexOf(needle, index)
+    if (index === -1) {
+      return -1
+    }
+
+    const after = xml.charAt(index + needle.length)
+    if (after === '' || /[\s/>]/.test(after)) {
+      return index
+    }
+
+    index += needle.length
+  }
+}
+
+/** From a tag's `<` at `tagStart`, finds the unquoted `>` that closes the start tag. */
+function findRawTagOpenEnd(
+  xml: string,
+  tagStart: number,
+): { readonly end: number; readonly selfClosing: boolean } | undefined {
+  let quote: string | undefined
+  for (let i = tagStart; i < xml.length; i += 1) {
+    const c = xml.charAt(i)
+    if (quote !== undefined) {
+      if (c === quote) {
+        quote = undefined
+      }
+      continue
+    }
+    if (c === '"' || c === "'") {
+      quote = c
+      continue
+    }
+    if (c === '>') {
+      return { end: i + 1, selfClosing: xml.charAt(i - 1) === '/' }
+    }
+  }
+  return undefined
+}
+
+function findRawTagCloseEnd(xml: string, fromIndex: number, name: string): number | undefined {
+  const needle = `</${name}>`
+  const index = xml.indexOf(needle, fromIndex)
+  return index === -1 ? undefined : index + needle.length
+}
+
+const XMLNS_ATTR_PREFIX = '@_xmlns:'
+
+function collectLocalNamespaces(node: OrderedXmlNode): ReadonlyMap<string, string> {
+  const attributes = node[':@']
+  if (attributes === undefined) {
+    return EMPTY_NAMESPACE_SCOPE
+  }
+
+  let namespaces: Map<string, string> | undefined
+  for (const [key, value] of Object.entries(attributes)) {
+    if (key.startsWith(XMLNS_ATTR_PREFIX) && value !== undefined) {
+      namespaces ??= new Map()
+      namespaces.set(key.slice(XMLNS_ATTR_PREFIX.length), value)
+    }
+  }
+
+  return namespaces ?? EMPTY_NAMESPACE_SCOPE
+}
+
+function mergeNamespaceScopes(
+  base: ReadonlyMap<string, string>,
+  overrides: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  if (overrides.size === 0) {
+    return base
+  }
+  return new Map([...base, ...overrides])
+}
+
+/**
+ * Referenced-prefix detection is a plain substring scan across the whole
+ * fragment (tag names, attribute names, AND ordinary text content) rather
+ * than a full tokenizer: a false positive — plain text that happens to
+ * contain a `word:word` pattern (e.g. "Ratio a:b") — only ever causes a
+ * harmless redundant `xmlns:` re-declaration (still valid XML), never a
+ * missed one, so erring toward over-matching here is the safe direction.
+ */
+const PREFIX_REFERENCE_RE = /[<\s/]([A-Za-z_][\w.-]*):[A-Za-z_]/g
+const NAMESPACE_DECLARATION_RE = /\bxmlns:([A-Za-z_][\w.-]*)\s*=/g
+
+function collectMatches(xml: string, pattern: RegExp): ReadonlySet<string> {
+  const matches = new Set<string>()
+  pattern.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(xml)) !== null) {
+    matches.add(match[1])
+  }
+  return matches
+}
+
+/**
+ * Re-declares, on `fragment`'s own outermost tag, whichever namespace
+ * prefixes it references but doesn't already declare itself, out of the
+ * ones `inheritedNamespaces` says a (non-root) ancestor made available —
+ * see `parseUnknownNode`'s doc comment for why this is needed at all.
+ */
+function injectMissingNamespaces(
+  fragment: string,
+  inheritedNamespaces: ReadonlyMap<string, string>,
+): string {
+  if (inheritedNamespaces.size === 0) {
+    return fragment
+  }
+
+  const referenced = collectMatches(fragment, PREFIX_REFERENCE_RE)
+  const declared = collectMatches(fragment, NAMESPACE_DECLARATION_RE)
+
+  const missing: Array<readonly [string, string]> = []
+  for (const prefix of referenced) {
+    if (declared.has(prefix)) {
+      continue
+    }
+    const uri = inheritedNamespaces.get(prefix)
+    if (uri !== undefined) {
+      missing.push([prefix, uri])
+    }
+  }
+
+  if (missing.length === 0) {
+    return fragment
+  }
+
+  const openTag = findRawTagOpenEnd(fragment, 0)
+  if (openTag === undefined) {
+    return fragment
+  }
+
+  const insertPos = openTag.selfClosing ? openTag.end - 2 : openTag.end - 1
+  const declarations = missing
+    .map(([prefix, uri]) => ` xmlns:${prefix}="${escapeXmlAttributeValue(uri)}"`)
+    .join('')
+
+  return fragment.slice(0, insertPos) + declarations + fragment.slice(insertPos)
+}
+
+function escapeXmlAttributeValue(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
 }
 
 function attr(element: OrderedXmlNode | undefined, name: string): string | undefined {
