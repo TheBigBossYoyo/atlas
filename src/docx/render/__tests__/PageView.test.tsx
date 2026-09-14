@@ -261,6 +261,56 @@ describe('PageView', () => {
     expect(container.querySelector('a.docx-hyperlink')).toBeNull();
   });
 
+  it('does not render a hyperlink for an External relationship with an unsafe URL scheme (security)', async () => {
+    // A crafted .docx could set an External relationship's target to a
+    // javascript:/vbscript:/data: URI. Even though Chromium and Electron's
+    // own window-open handler independently refuse to execute those for a
+    // target=_blank navigation, this viewer must not render them as a
+    // literal, clickable href in the first place.
+    const relationships: Relationship[] = [
+      { id: 'rId1', type: 'hyperlink', target: 'javascript:alert(1)', targetMode: 'External' },
+      { id: 'rId2', type: 'hyperlink', target: 'data:text/html,<script>alert(1)</script>', targetMode: 'External' },
+      { id: 'rId3', type: 'hyperlink', target: 'mailto:someone@example.com', targetMode: 'External' },
+    ];
+    const doc = createDocument([
+      createSection([
+        {
+          kind: 'paragraph' as const,
+          props: {},
+          children: [
+            {
+              kind: 'hyperlink' as const,
+              relationshipId: 'rId1',
+              children: [{ kind: 'run' as const, children: [{ kind: 'text' as const, value: 'jslink' }] }],
+            },
+            {
+              kind: 'hyperlink' as const,
+              relationshipId: 'rId2',
+              children: [{ kind: 'run' as const, children: [{ kind: 'text' as const, value: 'datalink' }] }],
+            },
+            {
+              kind: 'hyperlink' as const,
+              relationshipId: 'rId3',
+              children: [{ kind: 'run' as const, children: [{ kind: 'text' as const, value: 'mailtolink' }] }],
+            },
+          ],
+        },
+      ]),
+    ]);
+    const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+
+    const { container } = render(
+      <PageView page={pages[0]} zoom={1} document={doc} relationships={relationships} />,
+    );
+    const links = Array.from(container.querySelectorAll('a.docx-hyperlink'));
+    // Only the safe mailto: link should render as a hyperlink; the
+    // javascript:/data: ones must fall back to plain, unlinked text.
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(['mailto:someone@example.com']);
+    expect(links.map((link) => link.textContent)).toEqual(['mailtolink']);
+    expect(container.textContent).toContain('jslink');
+    expect(container.textContent).toContain('datalink');
+  });
+
   it('stretches a justified line flush to the column width (D5/DXL-11)', async () => {
     const doc = createDocument([
       createSection([createParagraph(4, { jc: 'both' })], { pageWidthPt: 100 }),

@@ -611,6 +611,33 @@ function getRevisionChildren(child: Extract<ParagraphChild, { kind: 'ins-revisio
 }
 
 /**
+ * External hyperlink targets come straight from the (untrusted) document's
+ * own relationship parts — a crafted `.docx` could set one to
+ * `javascript:`/`vbscript:`/`data:` etc. Chromium already refuses to
+ * execute a `javascript:` URI opened via `target="_blank"`, and Electron's
+ * own `setWindowOpenHandler` additionally allow-lists http/https before
+ * calling `shell.openExternal` (see `electron/main.cjs`'s
+ * `isAllowedExternalScheme`) — but this renders the raw string as a
+ * literal `href` regardless, so it's still worth validating at the source
+ * rather than depending solely on those other layers. Mirrors this
+ * codebase's existing convention (`OdtViewer.tsx`'s DOMPurify sanitization,
+ * `main.cjs`'s own scheme allow-list) of never trusting a URL scheme from
+ * file content.
+ */
+const SAFE_HYPERLINK_SCHEMES: ReadonlySet<string> = new Set(['http:', 'https:', 'mailto:']);
+
+function isSafeHyperlinkHref(href: string): boolean {
+  try {
+    // A base is required for a protocol-relative or bare host string; a
+    // genuinely relative (schemeless) target is not a scheme we allow, so
+    // this intentionally has no fallback base that would let one through.
+    return SAFE_HYPERLINK_SCHEMES.has(new URL(href).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolves a `Hyperlink` node to a renderable target: an external URL via
  * the document's relationships (only when the relationship is genuinely
  * marked `TargetMode="External"`, matching how DOCX generators — including
@@ -619,7 +646,8 @@ function getRevisionChildren(child: Extract<ParagraphChild, { kind: 'ins-revisio
  * (resolved against a bookmark's rendered `id`, see
  * `BOOKMARK_ANCHOR_ID_PREFIX`). Returns `undefined` for a hyperlink this
  * viewer can't safely resolve (e.g. a relationship id with no matching
- * External relationship).
+ * External relationship, or an unsafe URL scheme — see
+ * `isSafeHyperlinkHref`).
  */
 function resolveHyperlinkMeta(
   hyperlink: Hyperlink,
@@ -627,7 +655,11 @@ function resolveHyperlinkMeta(
 ): HyperlinkRunMeta | undefined {
   if (hyperlink.relationshipId !== undefined) {
     const relationship = relationships.find((candidate) => candidate.id === hyperlink.relationshipId);
-    if (relationship === undefined || relationship.targetMode !== 'External') {
+    if (
+      relationship === undefined ||
+      relationship.targetMode !== 'External' ||
+      !isSafeHyperlinkHref(relationship.target)
+    ) {
       return undefined;
     }
     return {
