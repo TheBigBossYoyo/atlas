@@ -143,6 +143,17 @@ export function writeWorkbookBytes(doc: SpreadsheetDocument, bookType: XLSX.Book
  * text via Papa Parse's own writer, so quoting/escaping matches exactly what
  * `csvParse.ts` already reads back. `doc.sheets[0]` is used unconditionally
  * — CSV/TSV have no multi-sheet concept.
+ *
+ * Encoding/BOM (documented limitation): the delimiter is genuinely
+ * preserved (the caller passes the same one the file was parsed with — see
+ * `CsvViewer`'s `defaultSaveTarget`), but the *original file's byte-level*
+ * encoding and BOM presence are not — `electron/lib/textDecoding.cjs`
+ * normalizes every text-class file to a plain UTF-8 JS string at load time
+ * (stripping any BOM in the process) with no metadata carried forward
+ * recording what the original encoding/BOM actually was, so there's nothing
+ * for this function to preserve even in principle. The renderer's own save
+ * path (`window.electronAPI.saveFile`) always writes this string back as
+ * plain UTF-8 with no BOM.
  */
 export function documentToDelimitedText(doc: SpreadsheetDocument, delimiter: string): string {
   const sheet = doc.sheets[0]
