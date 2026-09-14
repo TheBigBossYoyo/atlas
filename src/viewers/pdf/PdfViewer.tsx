@@ -7,7 +7,7 @@ import '../__styles__/viewer-pdf.css'
 
 import { buildFallbackNavItems, buildOutlineNavItems } from './outline'
 import { DEFAULT_ZOOM, FIT_PADDING_PX, clampZoom, zoomIn as computeZoomIn, zoomOut as computeZoomOut } from './geometry'
-import { rotateClockwise } from './rotation'
+import { applyRotationToDimensions, rotateClockwise } from './rotation'
 import {
   DEFAULT_OVERSCAN,
   clampPageNumber,
@@ -516,9 +516,7 @@ function PdfViewerBase({ file }: ViewerProps) {
       ? clampZoom(zoomMode)
       : (() => {
           const geom = pageGeometry.get(currentPage) ?? DEFAULT_PAGE_GEOMETRY
-          const isLandscape = rotation === 90 || rotation === 270
-          const width = isLandscape ? geom.height : geom.width
-          const height = isLandscape ? geom.width : geom.height
+          const { width, height } = applyRotationToDimensions(geom.width, geom.height, rotation)
           return zoomMode === 'fit-width'
             ? clampZoom(containerSize.width / Math.max(1, width))
             : clampZoom(

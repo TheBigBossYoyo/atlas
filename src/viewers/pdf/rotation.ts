@@ -25,3 +25,19 @@ export function rotateClockwise(current: PageRotation): PageRotation {
 export function rotateCounterClockwise(current: PageRotation): PageRotation {
   return normalizeRotation(current - 90)
 }
+
+/**
+ * Swaps width/height for a sideways (90°/270°) rotation. pdf.js's own
+ * `getViewport({ scale, rotation })` reports its rendered `width`/`height`
+ * already swapped this way for sideways rotations — so a fit-width/fit-page
+ * scale must be computed against these EFFECTIVE dimensions, not the page's
+ * raw (unrotated) geometry, or a rotated page in fit mode renders at the
+ * wrong scale (it fits against the dimension the rotation just replaced).
+ */
+export function applyRotationToDimensions(
+  width: number,
+  height: number,
+  rotation: PageRotation,
+): { readonly width: number; readonly height: number } {
+  return rotation === 90 || rotation === 270 ? { width: height, height: width } : { width, height }
+}

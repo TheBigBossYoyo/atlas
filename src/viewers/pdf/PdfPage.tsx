@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react'
 import type { RenderTask } from 'pdfjs-dist'
 
 import { resolveScaleForPage } from './geometry'
+import { applyRotationToDimensions } from './rotation'
 import { renderAnnotationOverlay } from './annotationOverlay'
 import type { RawPdfAnnotation } from './annotations'
 import type { PageGeometry, PageRotation, PdfDocument, PdfjsRuntime, TextLayerInstance, ZoomMode } from './types'
@@ -128,16 +129,18 @@ function PdfPageBase({
   const [isTextLayerReady, setIsTextLayerReady] = useState(false)
 
   const knownGeometry = geometry ?? FALLBACK_GEOMETRY
-  const scale = resolveScaleForPage(
-    zoomMode,
+  // Fit-width/fit-page must fit against the ROTATED dimensions (PDF-09 x
+  // PDF-12 interaction) — pdf.js's own rendered viewport swaps width/height
+  // for a sideways rotation, so the scale has to be computed the same way or
+  // a rotated page in fit mode won't actually fit the container.
+  const { width: effectiveWidth, height: effectiveHeight } = applyRotationToDimensions(
     knownGeometry.width,
     knownGeometry.height,
-    containerWidth,
-    containerHeight,
+    rotation,
   )
-  const isLandscapeAfterRotation = rotation === 90 || rotation === 270
-  const displayWidth = Math.ceil((isLandscapeAfterRotation ? knownGeometry.height : knownGeometry.width) * scale)
-  const displayHeight = Math.ceil((isLandscapeAfterRotation ? knownGeometry.width : knownGeometry.height) * scale)
+  const scale = resolveScaleForPage(zoomMode, effectiveWidth, effectiveHeight, containerWidth, containerHeight)
+  const displayWidth = Math.ceil(effectiveWidth * scale)
+  const displayHeight = Math.ceil(effectiveHeight * scale)
 
   const setWrapperNode = (node: HTMLDivElement | null) => {
     wrapperRef.current = node
@@ -174,10 +177,15 @@ function PdfPageBase({
           onGeometryResolved(pageNumber, resolvedGeometry)
         }
 
-        const pageScale = resolveScaleForPage(
-          zoomMode,
+        const effectiveGeometry = applyRotationToDimensions(
           resolvedGeometry.width,
           resolvedGeometry.height,
+          rotation,
+        )
+        const pageScale = resolveScaleForPage(
+          zoomMode,
+          effectiveGeometry.width,
+          effectiveGeometry.height,
           containerWidth,
           containerHeight,
         )
