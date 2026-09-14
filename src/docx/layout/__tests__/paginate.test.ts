@@ -19,7 +19,7 @@ import { halfPoint, hexColor, twip } from '../../model'
 
 import { MARKER_RUN_INDEX } from '../listMarkers'
 import { paginate } from '../paginate'
-import type { Page, PageLineRef } from '../pageTypes'
+import type { Page, PageLineRef, PageTableRef } from '../pageTypes'
 import type { FontResolver, LineBox, LineItem } from '../types'
 
 describe('paginate', () => {
@@ -944,6 +944,106 @@ describe('paginate — footnotes (D11 milestones 2-3, 5)', () => {
     expect(bodyMarks).toEqual(['1', '1'])
   })
 })
+
+describe('paginate — table row splitting across page breaks (D24b/DXL-15)', () => {
+  it("splits a row's content across page breaks when it doesn't fit even on an empty page", async () => {
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        {
+          kind: 'table-row',
+          cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(20)] }],
+        },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages.length).toBeGreaterThan(1)
+
+    const allTableRefs = allPageTableRefs(pages)
+    expect(allTableRefs.length).toBeGreaterThan(1)
+
+    // No content lost or duplicated across the split.
+    const totalContentLines = allTableRefs.reduce(
+      (total, tableRef) =>
+        total + tableRef.rows.reduce((sum, rowRef) => sum + rowRef.row.cells[0].contentLines.length, 0),
+      0,
+    )
+    expect(totalContentLines).toBe(20)
+
+    expect(allTableRefs[0]?.isContinuation).toBe(false)
+    expect(allTableRefs.slice(1).every((tableRef) => tableRef.isContinuation)).toBe(true)
+  })
+
+  it('does not split a row explicitly marked cantSplit — keeps the old clip-on-empty-page behavior', async () => {
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        {
+          kind: 'table-row',
+          props: { cantSplit: true },
+          cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(20)] }],
+        },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    const tableRef = allPageTableRefs(pages)[0]
+    expect(tableRef?.rows[0]?.row.cells[0].contentLines).toHaveLength(20)
+  })
+
+  it('never splits a repeated header row, but still splits and repeats it above a later giant body row', async () => {
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        {
+          kind: 'table-row',
+          props: { tblHeader: true },
+          cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(1)] }],
+        },
+        {
+          kind: 'table-row',
+          cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(20)] }],
+        },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages.length).toBeGreaterThan(1)
+    const allTableRefs = allPageTableRefs(pages)
+    for (const tableRef of allTableRefs.slice(1)) {
+      expect(tableRef.rows.some((rowRef) => rowRef.isRepeatedHeader)).toBe(true)
+    }
+  })
+})
+
+function allPageTableRefs(pages: ReadonlyArray<Page>): ReadonlyArray<PageTableRef> {
+  return pages.flatMap((page) => page.columns.flatMap((column) => column.tables))
+}
+
+function createTallCellParagraph(lineCount: number): Paragraph {
+  return {
+    kind: 'paragraph',
+    props: {},
+    children:
+      lineCount > 1
+        ? [{ kind: 'run', children: Array.from({ length: lineCount - 1 }, () => ({ kind: 'break' as const })) }]
+        : [],
+  }
+}
 
 describe('paginate — endnotes (D11 milestone 4)', () => {
   it('renders endnote content once at the end of the document, not per page', async () => {

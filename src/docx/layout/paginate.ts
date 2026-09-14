@@ -47,7 +47,7 @@ import type {
   PaginatorInput,
 } from './pageTypes'
 import { PaginationCancelledError } from './pageTypes'
-import type { LaidOutTable } from './tableTypes'
+import type { LaidOutCell, LaidOutRow, LaidOutTable } from './tableTypes'
 import type { EffectiveParaProps, EffectiveRunProps, LineBox, LineItem, TabStop } from './types'
 
 /**
@@ -990,6 +990,19 @@ function placeUnit(
 
     if (fitCount === 0) {
       if (isPageEmpty(currentPage)) {
+        // D24b/DXL-15 — before force-placing (and visually clipping) a row
+        // too tall for even a completely empty page, see if it can be
+        // split across the page boundary instead. On success this mutates
+        // `unit.lines`/`unit.laidOutTable` in place (inserting a
+        // continuation piece right after the original row) and re-runs
+        // this iteration — `continue` — so the loop measures the now-
+        // shorter first piece fresh; on failure (cantSplit, a merged cell,
+        // or nothing fits at all) it falls through to the original
+        // clip-on-empty-page behavior, unchanged.
+        if (unit.kind === 'table' && trySplitTableRowAtOffset(unit, lineOffset, currentPage)) {
+          continue
+        }
+
         placeLineSlice(unit, lineOffset, 1, currentPage)
         lineOffset += 1
       } else {
@@ -1031,6 +1044,154 @@ function placeUnit(
 function findForcedBreakLineOffset(lines: ReadonlyArray<LineBox>): number | undefined {
   const index = lines.findIndex((line) => line.endsWithPageBreak === true || line.endsWithColumnBreak === true)
   return index === -1 ? undefined : index
+}
+
+/**
+ * D24b/DXL-15 — attempts to split the table row backing `unit.lines[rowLineIndex]`
+ * across the page boundary. On success, mutates `unit.lines` and
+ * `unit.laidOutTable.rows` in place, replacing that one entry with two
+ * (first piece, continuation) so every later index in both arrays shifts by
+ * one but STAYS 1:1 aligned with each other — the exact invariant
+ * `attachPageTables`'s `buildPageTableRefFromSlice` already relies on to
+ * map a placed synthetic line back to its row content, so nothing downstream
+ * needs to know a split happened at all: the continuation is just another
+ * ordinary row to that code.
+ *
+ * Returns `false` (no mutation) when there's nothing backing this unit to
+ * split (`laidOutTable` absent — the legacy injected-`tableLayout` path),
+ * the row is one of the table's repeated header rows (splitting would shift
+ * every later index and corrupt `repeatHeaderRowCount`'s "first N rows"
+ * assumption — a rare enough case to just keep the old force-place
+ * behavior for), or `splitTableRowForPage` itself declines (see its own
+ * doc comment).
+ */
+function trySplitTableRowAtOffset(unit: TableUnit, rowLineIndex: number, currentPage: ActivePage): boolean {
+  const laidOutTable = unit.laidOutTable
+  if (laidOutTable === undefined || rowLineIndex < laidOutTable.repeatHeaderRowCount) {
+    return false
+  }
+
+  const row = laidOutTable.rows[rowLineIndex]
+  if (row === undefined) {
+    return false
+  }
+
+  const column = currentPage.columns[currentPage.currentColumnIndex]
+  const availableHeightPt = effectiveContentHeightPt(currentPage) - column.usedHeightPt
+  const split = splitTableRowForPage(row, availableHeightPt)
+  if (split === undefined) {
+    return false
+  }
+
+  // Mutates the SAME `LaidOutTable` object in place (rather than replacing
+  // `unit.laidOutTable` with a new object) because `paginate()`'s main loop
+  // already captured a reference to this exact object in `tableMetaByPath`
+  // (keyed by paragraphPath, right after `buildSectionUnits` returns —
+  // before any placement/splitting happens). `attachPageTables`'s later
+  // post-pass reads through that captured reference, so replacing it here
+  // would leave that map pointing at a stale, unsplit table.
+  const nextRows = laidOutTable.rows.slice()
+  nextRows.splice(rowLineIndex, 1, split.firstPiece, split.continuation)
+  laidOutTable.rows = nextRows
+
+  const nextLines = unit.lines.slice()
+  nextLines.splice(
+    rowLineIndex,
+    1,
+    createSyntheticLineBox(split.firstPiece.heightPt),
+    createSyntheticLineBox(split.continuation.heightPt),
+  )
+  unit.lines = nextLines
+
+  return true
+}
+
+/**
+ * D24b/DXL-15 — divides `row`'s cell content into a `firstPiece` whose
+ * height fits within `availableHeightPt` and a `continuation` carrying
+ * every cell's remaining content, cut only at each cell's own line
+ * boundaries (never mid-line — see `splitCellLinesForHeight`). A cell
+ * shorter than the split point contributes nothing to the continuation
+ * (its content already fully appeared in the first piece), matching how a
+ * short cell in an unsplit row simply leaves blank space below its text.
+ *
+ * Returns `undefined` when splitting can't help or doesn't apply:
+ * `row.cantSplit` is set; any cell spans multiple source rows (`rowSpan > 1`
+ * or a `vMerge` continuation — dividing a vertically-merged cell's content
+ * between two physically separate table fragments is out of scope here,
+ * an accepted limitation given this task's effort budget); no cell can fit
+ * even one line within `availableHeightPt` (splitting would make zero
+ * progress, and the caller would loop forever re-attempting it); or every
+ * cell's content already fits (the row's nominal height exceeding
+ * `availableHeightPt` in that case comes from a fixed `w:trHeight` taller
+ * than its actual content, which trimming text can't shrink).
+ */
+function splitTableRowForPage(
+  row: LaidOutRow,
+  availableHeightPt: number,
+): { firstPiece: LaidOutRow; continuation: LaidOutRow } | undefined {
+  if (row.cantSplit || availableHeightPt <= 0) {
+    return undefined
+  }
+
+  if (row.cells.some((cell) => cell.rowSpan > 1 || cell.vMergeContinue)) {
+    return undefined
+  }
+
+  const splits = row.cells.map((cell) =>
+    splitCellLinesForHeight(
+      cell.contentLines,
+      Math.max(0, availableHeightPt - cell.paddingPt.top - cell.paddingPt.bottom),
+    ),
+  )
+
+  if (!splits.some((split) => split.continuationLines.length > 0)) {
+    return undefined
+  }
+
+  const firstCells = row.cells.map((cell, index) => buildSplitCell(cell, splits[index].firstLines))
+  const firstPieceHeightPt = firstCells.reduce((tallest, cell) => Math.max(tallest, cell.heightPt), 0)
+
+  if (firstPieceHeightPt <= 0 || firstPieceHeightPt > availableHeightPt) {
+    return undefined
+  }
+
+  const continuationCells = row.cells.map((cell, index) => buildSplitCell(cell, splits[index].continuationLines))
+  const continuationHeightPt = continuationCells.reduce((tallest, cell) => Math.max(tallest, cell.heightPt), 0)
+
+  return {
+    firstPiece: { ...row, heightPt: firstPieceHeightPt, cells: firstCells },
+    continuation: { ...row, heightPt: continuationHeightPt, cells: continuationCells },
+  }
+}
+
+type CellLineSplit = {
+  readonly firstLines: ReadonlyArray<LineBox>
+  readonly continuationLines: ReadonlyArray<LineBox>
+}
+
+/** Where within `lines` to cut so `firstLines`'s total height fits `availableHeightPt` — always between two lines, never through one. */
+function splitCellLinesForHeight(lines: ReadonlyArray<LineBox>, availableHeightPt: number): CellLineSplit {
+  let usedHeightPt = 0
+  let cutIndex = lines.length
+
+  for (const [index, line] of lines.entries()) {
+    if (usedHeightPt + line.lineHeight > availableHeightPt) {
+      cutIndex = index
+      break
+    }
+    usedHeightPt += line.lineHeight
+  }
+
+  return { firstLines: lines.slice(0, cutIndex), continuationLines: lines.slice(cutIndex) }
+}
+
+function buildSplitCell(cell: LaidOutCell, contentLines: ReadonlyArray<LineBox>): LaidOutCell {
+  return {
+    ...cell,
+    contentLines,
+    heightPt: sumLineHeights(contentLines) + cell.paddingPt.top + cell.paddingPt.bottom,
+  }
 }
 
 function forcePageBreak(currentPage: ActivePage, pages: Page[], openNewPage: () => ActivePage): ActivePage {
