@@ -13,6 +13,7 @@ import {
   insertColumnAt,
   insertRowAt,
   pasteRange,
+  recalculateSheet,
   renameSheet,
   setCellValue,
   type SpreadsheetDocument,
@@ -137,6 +138,21 @@ describe('createDocument — formula hydration on load', () => {
       }),
     ])
     expect(doc.sheets[0].rows[0][0]).toBe('=VLOOKUP(A1,B:C,2,FALSE)')
+  })
+})
+
+describe('recalculateSheet — perf fast path (T2/DAT-07)', () => {
+  it('returns the exact same sheet reference when it has no formulas at all (no row copy)', () => {
+    const sheet = basicDoc().sheets[0]
+    expect(recalculateSheet(sheet)).toBe(sheet)
+  })
+
+  it('still copies (and never mutates) rows when a formula is present', () => {
+    const sheet = setCellValue(basicDoc(), 0, 0, 0, '=1+1').sheets[0]
+    const originalRows = sheet.rows
+    const result = recalculateSheet(sheet)
+    expect(result).not.toBe(sheet)
+    expect(sheet.rows).toBe(originalRows)
   })
 })
 

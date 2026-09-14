@@ -127,17 +127,25 @@ function replaceSheet(doc: SpreadsheetDocument, sheetIndex: number, sheet: Edita
  * text at all (a brand-new formula, or one loaded from a file Atlas itself
  * saved with the cached value intentionally left empty — see
  * `spreadsheetWrite.ts`).
+ *
+ * Performance: `createDocument` calls this once per sheet on EVERY load,
+ * including the 100k-row perf-guarantee fixtures (T2/DAT-07) that have no
+ * formulas at all — so the common "no formulas in this sheet" case must not
+ * pay for an O(rows) copy of every row it never needed. `rows` therefore
+ * stays `null` (and the original `sheet` is returned unchanged) until a
+ * formula cell is actually found; only then is the copy-on-write triggered.
  */
 export function recalculateSheet(sheet: EditableSheet): EditableSheet {
-  const rows = sheet.rows.map((row) => [...row])
-
-  const lookup: CellLookup = (row, col) => rows[row]?.[col] ?? ''
+  let rows: string[][] | null = null
+  const lookup: CellLookup = (row, col) => (rows ?? sheet.rows)[row]?.[col] ?? ''
 
   for (let r = 0; r < sheet.formulas.length; r++) {
     const formulaRow = sheet.formulas[r]
     for (let c = 0; c < formulaRow.length; c++) {
       const formula = formulaRow[c]
       if (formula === undefined) continue
+      if (rows === null) rows = sheet.rows.map((row) => [...row])
+
       const result = evaluateFormula(formula, lookup)
       if (result.ok) {
         rows[r][c] = result.text
@@ -147,7 +155,7 @@ export function recalculateSheet(sheet: EditableSheet): EditableSheet {
     }
   }
 
-  return { ...sheet, rows }
+  return rows === null ? sheet : { ...sheet, rows }
 }
 
 /**
