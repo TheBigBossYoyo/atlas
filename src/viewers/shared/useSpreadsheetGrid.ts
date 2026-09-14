@@ -6,9 +6,18 @@
  * backfill, column widths) live in one place: both viewers hand this hook
  * already-formatted `rows` and get back the same `getCellContent`/`columns`/
  * `onColumnResize`/`onItemHovered` glide-data-grid needs.
+ *
+ * Editing (wave 3, DAT-06 closed for real): passing `onCellEdited` makes
+ * every cell editable (`allowOverlay:true`) and returns a ready-to-spread
+ * `onCellEdited` handler that translates glide-data-grid's `Item`/
+ * `EditableGridCell` shape into the plain `(row, col, rawText)` the caller's
+ * callback wants — the caller (SpreadsheetViewer/CsvViewer, via
+ * `useSpreadsheetEditor`) owns turning that into an actual document edit.
+ * Omitting `onCellEdited` keeps the grid honestly read-only, exactly like
+ * before wave 3.
  */
 import { useCallback, useMemo, useState } from 'react'
-import type { GridCell, GridColumn, GridMouseEventArgs } from '@glideapps/glide-data-grid'
+import type { EditableGridCell, GridCell, GridColumn, Item, GridMouseEventArgs } from '@glideapps/glide-data-grid'
 
 import { useGridTheme, type CustomGridTheme } from './useGridTheme'
 
@@ -29,6 +38,14 @@ export type UseSpreadsheetGridOptions = {
    * `colWidthsPx` again instead of the previous sheet's drag state.
    */
   readonly resetKey?: string
+  /**
+   * When provided, cells render with `allowOverlay:true` (editable) and a
+   * committed edit calls this with the raw text the user typed — including a
+   * leading `=` for a formula, unmodified, so the caller's document layer
+   * (not this rendering hook) decides what that means. Omit to keep the
+   * grid read-only.
+   */
+  readonly onCellEdited?: (row: number, col: number, rawText: string) => void
 }
 
 export type UseSpreadsheetGridResult = {
@@ -38,6 +55,8 @@ export type UseSpreadsheetGridResult = {
   readonly onItemHovered: (args: GridMouseEventArgs) => void
   readonly hoveredRow: number | undefined
   readonly theme: CustomGridTheme
+  /** Ready to pass straight to `DataEditor`'s `onCellEdited` prop; `undefined` when the caller didn't ask for editing. */
+  readonly onCellEdited: ((cell: Item, newValue: EditableGridCell) => void) | undefined
 }
 
 function columnTitle(index: number): string {
@@ -71,6 +90,7 @@ export function useSpreadsheetGrid({
   colCount,
   colWidthsPx,
   resetKey,
+  onCellEdited: onCellEditedOption,
 }: UseSpreadsheetGridOptions): UseSpreadsheetGridResult {
   const theme = useGridTheme()
   const [hoveredRow, setHoveredRow] = useState<number | undefined>()
@@ -98,15 +118,28 @@ export function useSpreadsheetGrid({
         kind: 'text' as const,
         data: cellValue,
         displayData: cellValue,
-        // Spreadsheet editing is out of scope (DAT-06) — allowOverlay:true
-        // opened an edit box whose typed input was silently discarded, since
-        // no onCellEdited was ever wired up. Keep the grid read-only and honest.
-        allowOverlay: false,
+        // DAT-06, closed for real (wave 3): an overlay is only opened when
+        // the caller actually wired up `onCellEdited` below — otherwise the
+        // grid stays honestly read-only exactly as before.
+        allowOverlay: onCellEditedOption !== undefined,
         themeOverride: { bgCell },
       } as GridCell
     },
-    [rows, theme, hoveredRow],
+    [rows, theme, hoveredRow, onCellEditedOption],
   )
+
+  const onCellEdited = useMemo(() => {
+    if (!onCellEditedOption) return undefined
+    return (cell: Item, newValue: EditableGridCell): void => {
+      // Every cell this hook renders is `kind: 'text'` (see getCellContent
+      // above), so the overlay glide-data-grid opens for it is always the
+      // plain text editor — `newValue` is only ever a `TextCell` in
+      // practice, but the guard keeps this correct if that ever changes.
+      if (newValue.kind !== 'text') return
+      const [col, row] = cell
+      onCellEditedOption(row, col, newValue.data)
+    }
+  }, [onCellEditedOption])
 
   const columns = useMemo<GridColumn[]>(() => {
     return Array.from({ length: colCount }, (_, i) => {
@@ -131,5 +164,5 @@ export function useSpreadsheetGrid({
     setHoveredRow(args.location[1] >= 0 ? args.location[1] : undefined)
   }, [])
 
-  return { columns, getCellContent, onColumnResize, onItemHovered, hoveredRow, theme }
+  return { columns, getCellContent, onColumnResize, onItemHovered, hoveredRow, theme, onCellEdited }
 }
