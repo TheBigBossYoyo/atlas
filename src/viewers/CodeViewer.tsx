@@ -5,12 +5,22 @@ import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
 import { getShikiThemeForAppTheme } from './shared/shikiTheme'
 import { useTheme } from '../hooks/useTheme'
 import { getLangForExt } from './extToLang'
+import { VirtualizedPlainText } from './shared/VirtualizedPlainText'
+import { CODE_VIRTUALIZE_BYTE_THRESHOLD, CODE_VIRTUALIZE_LINE_THRESHOLD } from './shared/sizeThresholds'
 import './__styles__/viewer-code.css'
 
 function CodeViewerBase({ file }: ViewerProps) {
   const content = file.kind === 'text' ? file.content : ''
-  const linesCount = useMemo(() => content.split('\n').length, [content])
-  
+  const lines = useMemo(() => content.split('\n'), [content])
+  const linesCount = lines.length
+
+  // DAT-13 — shiki's tokenizer runs synchronously over the *entire* file on
+  // the main thread; above this size it is a genuine multi-hundred-ms freeze
+  // risk, so large files skip highlighting entirely rather than attempt it
+  // (there is no async/worker-friendly shiki API to fall back to instead).
+  const shouldVirtualize =
+    linesCount > CODE_VIRTUALIZE_LINE_THRESHOLD || content.length > CODE_VIRTUALIZE_BYTE_THRESHOLD
+
   const { theme: appTheme } = useTheme()
   const shikiTheme = getShikiThemeForAppTheme(appTheme)
   
@@ -73,6 +83,10 @@ function CodeViewerBase({ file }: ViewerProps) {
   }, [setStats, lang, linesCount])
 
   useEffect(() => {
+    if (shouldVirtualize) {
+      return
+    }
+
     let cancelled = false
 
     const load = async () => {
@@ -112,12 +126,27 @@ function CodeViewerBase({ file }: ViewerProps) {
     return () => {
       cancelled = true
     }
-  }, [content, lang, shikiTheme])
+  }, [content, lang, shikiTheme, shouldVirtualize])
+
+  if (shouldVirtualize) {
+    return (
+      <div className="code-viewer code-viewer--virtualized">
+        <div className="code-viewer__virtualized-notice" role="status">
+          Large file — syntax highlighting is disabled for performance.
+        </div>
+        <VirtualizedPlainText
+          lines={lines}
+          className="code-viewer__virtualized-body"
+          lineClassName="code-viewer__virtualized-line"
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="code-viewer">
       {html ? (
-        <div 
+        <div
           className="code-viewer__pre"
           dangerouslySetInnerHTML={{ __html: html }}
         />
