@@ -83,14 +83,20 @@ function UnknownViewerBase({ file }: UnknownViewerProps) {
   }
 
   return (
-    <div className="unknown-viewer">
+    // UX-17 — `.unknown-viewer` is kept (not replaced) — it owns this
+    // viewer's own required scroll-container behavior (DAT-02/UX-04,
+    // viewerScrollContainers test) and its full empty-state content
+    // (P2.11/LOAD-18: icon, filename/size, explanation, actions); the shared
+    // `.viewer-fallback` class layers the app-wide crash/loading/unknown
+    // theming (padding/background/color tokens) on top of it.
+    <div className="unknown-viewer viewer-fallback">
       {legacyKind !== null ? (
-        <FileWarning size={48} strokeWidth={1.5} aria-hidden="true" />
+        <FileWarning size={48} strokeWidth={1.5} className="viewer-fallback__icon" aria-hidden="true" />
       ) : (
-        <FileQuestion size={48} strokeWidth={1.5} aria-hidden="true" />
+        <FileQuestion size={48} strokeWidth={1.5} className="viewer-fallback__icon" aria-hidden="true" />
       )}
 
-      <h2 className="unknown-viewer__filename">{fileName}</h2>
+      <h2 className="unknown-viewer__filename viewer-fallback__title">{fileName}</h2>
       {sizeLabel && <p className="unknown-viewer__size">{sizeLabel}</p>}
 
       <p className="unknown-viewer__explanation">

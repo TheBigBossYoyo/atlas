@@ -1,27 +1,28 @@
 /**
- * LOAD-22 — DropZone's copy used to say "Drop your Markdown file" / ".md,
- * .markdown, or .txt" despite the app supporting 14 formats. Regression
- * test pinning the corrected, format-agnostic copy.
+ * DropZone — accurate multi-format copy (UX-16/LOAD-22).
+ *
+ * Used to claim "Drop your Markdown file" / ".md, .markdown, or .txt" despite
+ * full multi-format detection (src/formats/detect.ts) having landed.
  */
-import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { DropZone } from '../DropZone';
 
-import { DropZone } from '../DropZone'
-
-describe('DropZone', () => {
+describe('DropZone (UX-16/LOAD-22)', () => {
   it('renders nothing when not visible', () => {
-    const { container } = render(<DropZone isVisible={false} />)
-    expect(container).toBeEmptyDOMElement()
-  })
+    const { container } = render(<DropZone isVisible={false} />);
+    expect(container).toBeEmptyDOMElement();
+  });
 
-  it('does not claim Atlas only supports Markdown (LOAD-22)', () => {
-    render(<DropZone isVisible />)
-    expect(screen.queryByText(/drop your markdown file/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/\.md, \.markdown, or \.txt/i)).not.toBeInTheDocument()
-  })
+  it('no longer claims markdown-only support', () => {
+    render(<DropZone isVisible={true} />);
+    expect(screen.queryByText(/drop your markdown file/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\.md, \.markdown, or \.txt/i)).not.toBeInTheDocument();
+  });
 
-  it('shows format-agnostic copy when visible', () => {
-    render(<DropZone isVisible />)
-    expect(screen.getByText(/drop a file to open it/i)).toBeInTheDocument()
-  })
-})
+  it('describes real multi-format support when visible', () => {
+    render(<DropZone isVisible={true} />);
+    expect(screen.getByText('Drop your document')).toBeInTheDocument();
+    expect(screen.getByText(/Word, Excel, PowerPoint/)).toBeInTheDocument();
+  });
+});

@@ -40,6 +40,7 @@ function renderToolbar(overrides: ToolbarOverrides = {}) {
       isElectron={false}
       exportFormat="text"
       exportMenuOpen={false}
+      canExportCsv={false}
       onSelectTheme={noop}
       onViewModeChange={noop}
       onToggleSidebar={noop}

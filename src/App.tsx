@@ -21,11 +21,20 @@ import { StatusBar } from './components/StatusBar';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { SAMPLE_MARKDOWN } from './constants';
 import { THEMES, type ViewMode, type ExportFormat, type RecentFile } from './types';
-import { exportMarkdown, exportHtml, exportPdf, exportDocx } from './utils/export';
+import { exportMarkdown, exportHtml, exportPdf, exportDocx, exportCsv } from './utils/export';
 import type { LoadedFile, NavItem } from './formats/types';
 import { resolveDroppedFilePath } from './utils/dragDropPath';
 import { ViewerProvider } from './viewers/shared/ViewerContext';
-import { useSetNavItems, useSetViewerStats, useViewerIsDirty, useViewerSave } from './viewers/shared/useViewerContext';
+import {
+  useSetNavItems,
+  useSetViewerStats,
+  useViewerIsDirty,
+  useViewerSave,
+  useGetExportableContent,
+} from './viewers/shared/useViewerContext';
+import type { ExportableContent } from './viewers/shared/viewerContextValue';
+import { ToastProvider } from './components/ToastProvider';
+import { useToast } from './hooks/useToast';
 
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
@@ -55,18 +64,33 @@ function MarkdownChromeBridge({ navItems, words, headings }: MarkdownChromeBridg
 interface ViewerSessionBridgeProps {
   onDirtyChange: (dirty: boolean) => void;
   saveRef: React.MutableRefObject<() => Promise<boolean>>;
+  exportContentRef: React.MutableRefObject<() => ExportableContent | null>;
+  /** Re-derive the exportable-content format whenever the active file
+   * changes — see the effect below for why this can't just key off
+   * `getExportableContent`'s own identity. */
+  filePath: string | null;
+  onExportableFormatChange: (format: string | null) => void;
 }
 
 /**
  * P1.1 — lifts the active viewer's document-session state (from ViewerContext,
  * only reachable inside <ViewerProvider>) up to App.tsx: `viewerDirty` state
- * for Toolbar/StatusBar and the unsaved-changes guard, and a stable ref to the
+ * for Toolbar/StatusBar and the unsaved-changes guard, a stable ref to the
  * registered `save()` so App's global Ctrl+S/Save and the guard's own "Save"
- * button can reach whichever viewer is actually active.
+ * button can reach whichever viewer is actually active, and (UX-12) the same
+ * for `getExportableContent` so a real per-format CSV export can be offered
+ * once a viewer registers one.
  */
-function ViewerSessionBridge({ onDirtyChange, saveRef }: ViewerSessionBridgeProps) {
+function ViewerSessionBridge({
+  onDirtyChange,
+  saveRef,
+  exportContentRef,
+  filePath,
+  onExportableFormatChange,
+}: ViewerSessionBridgeProps) {
   const dirty = useViewerIsDirty();
   const save = useViewerSave();
+  const getExportableContent = useGetExportableContent();
 
   useEffect(() => {
     onDirtyChange(dirty);
@@ -75,6 +99,16 @@ function ViewerSessionBridge({ onDirtyChange, saveRef }: ViewerSessionBridgeProp
   useEffect(() => {
     saveRef.current = save;
   }, [save, saveRef]);
+
+  useEffect(() => {
+    exportContentRef.current = getExportableContent;
+    // `getExportableContent`'s own identity is stable even when a newly
+    // mounted viewer's registration changes what it would return (mirroring
+    // how `save` above reads a ref rather than changing identity itself), so
+    // this also re-derives whenever the open file changes — the point at
+    // which a different viewer would actually be registering something new.
+    onExportableFormatChange(getExportableContent()?.format ?? null);
+  }, [exportContentRef, filePath, getExportableContent, onExportableFormatChange]);
 
   return null;
 }
@@ -91,10 +125,11 @@ function triggerBinaryDownload(content: ArrayBuffer, fileName: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-function App() {
+function AppShell() {
   const { theme, setTheme, cycleTheme } = useTheme();
   const { recent, addRecent, removeRecent } = useRecentFiles();
   const { increase, decrease, reset } = useFontSize();
+  const showToast = useToast();
 
   // P1.1 — document-session guard state. `confirmDiscardChanges` must exist
   // before `useFileHandler()` is called (it's passed in as an option), but
@@ -106,6 +141,13 @@ function App() {
   const dirtyGuardStateRef = useRef({ isMarkdownDocument: false, isDirty: false, viewerDirty: false });
   const pendingConfirmResolveRef = useRef<((proceed: boolean) => void) | null>(null);
   const viewerSaveRef = useRef<() => Promise<boolean>>(async () => false);
+  // UX-12 — the active viewer's registered `getExportableContent` (a
+  // Phase-3 placeholder today; see viewerContextValue.ts), lifted the same
+  // way `viewerSaveRef` lifts `save`. `exportableContentFormat` mirrors just
+  // its `format` field into reactive state so the Export menu can decide
+  // whether to offer a real "Export to CSV" item.
+  const exportContentRef = useRef<() => ExportableContent | null>(() => null);
+  const [exportableContentFormat, setExportableContentFormat] = useState<string | null>(null);
   const [viewerDirty, setViewerDirty] = useState(false);
   const [unsavedDialogOpen, setUnsavedDialogOpen] = useState(false);
   const [unsavedDialogSaving, setUnsavedDialogSaving] = useState(false);
@@ -329,6 +371,13 @@ function App() {
     [file, isMarkdownDocument]
   );
   const canSave = useMemo(() => isMarkdownDocument && hasContent, [hasContent, isMarkdownDocument]);
+  // UX-12 — csv/tsv files always carry real delimited-text content directly;
+  // any other format only gets a real CSV export once its viewer registers
+  // one via getExportableContent (a Phase-3 placeholder today).
+  const canExportCsv = useMemo(
+    () => currentFormat === 'csv' || currentFormat === 'tsv' || exportableContentFormat === 'csv',
+    [currentFormat, exportableContentFormat]
+  );
 
   const {
     isOpen: searchOpen,
@@ -385,6 +434,22 @@ function App() {
         }
 
         if (!isMarkdownDocument) {
+          if (format === 'csv') {
+            // UX-12 — prefer a viewer-registered real export payload
+            // (getExportableContent is a Phase-3 placeholder today — see
+            // viewerContextValue.ts); csv/tsv files already carry their own
+            // real delimited-text content directly, with no viewer needed.
+            const exportable = exportContentRef.current();
+            if (exportable && exportable.format === 'csv' && typeof exportable.data === 'string') {
+              await exportCsv(exportable.data, exportable.suggestedName || baseName, 'csv');
+              return;
+            }
+            if (file?.kind === 'text' && (file.format === 'csv' || file.format === 'tsv')) {
+              await exportCsv(file.content, baseName, file.format);
+            }
+            return;
+          }
+
           await exportPdf('viewer-content', baseName);
           return;
         }
@@ -394,7 +459,10 @@ function App() {
             await exportMarkdown(localMarkdown, baseName);
             break;
           case 'html':
-            await exportHtml(localMarkdown, baseName, theme);
+            // X2 — serializes the live-rendered #markdown-content DOM
+            // (KaTeX/Mermaid/highlighted code) instead of re-parsing the raw
+            // markdown source.
+            await exportHtml('markdown-content', baseName, theme);
             break;
           case 'pdf':
             await exportPdf('markdown-content', baseName);
@@ -402,13 +470,21 @@ function App() {
           case 'docx':
             await exportDocx(localMarkdown, baseName);
             break;
+          case 'csv':
+            // Never offered for markdown documents — ExportMenu gates its
+            // CSV item on the active (non-markdown) format.
+            break;
         }
       } catch (err) {
+        // UX-18 — a themed, non-blocking toast instead of a blocking,
+        // theme-ignoring native alert(). Each exportX() already wraps its own
+        // thrown errors in a friendly, format-specific message (RUN-14), so
+        // this only needs to surface it, not wrap it again.
         console.error('Export failed:', err);
-        alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+        showToast(err instanceof Error ? err.message : String(err), 'error');
       }
     },
-    [file, fileName, isMarkdownDocument, localMarkdown, theme]
+    [file, fileName, isMarkdownDocument, localMarkdown, showToast, theme]
   );
 
   useUniversalShortcuts({
@@ -458,6 +534,7 @@ function App() {
         isElectron={isElectron}
         exportFormat={currentFormat}
         exportMenuOpen={exportMenuOpen}
+        canExportCsv={canExportCsv}
         onSelectTheme={setTheme}
         onViewModeChange={setViewMode}
         onToggleSidebar={() => setSidebarOpen(prev => !prev)}
@@ -488,7 +565,13 @@ function App() {
       ) : null}
 
       <ViewerProvider filePath={filePath || null}>
-        <ViewerSessionBridge onDirtyChange={setViewerDirty} saveRef={viewerSaveRef} />
+        <ViewerSessionBridge
+          onDirtyChange={setViewerDirty}
+          saveRef={viewerSaveRef}
+          exportContentRef={exportContentRef}
+          filePath={filePath || null}
+          onExportableFormatChange={setExportableContentFormat}
+        />
         <div className="app__body">
           {hasContent && !isSlidesDocument && <Sidebar isOpen={sidebarOpen} />}
 
@@ -550,6 +633,19 @@ function App() {
       {/* Suppress unused-var warnings for filePath while keeping it part of the contract */}
       {filePath && <span style={{ display: 'none' }} aria-hidden="true">{filePath}</span>}
     </div>
+  );
+}
+
+/**
+ * UX-18 — wraps the shell in its own <ToastProvider> so `<App />` is a
+ * complete, self-contained tree (usable as-is from main.tsx or a test's
+ * `render(<App />)`) without every caller needing to remember to supply one.
+ */
+function App() {
+  return (
+    <ToastProvider>
+      <AppShell />
+    </ToastProvider>
   );
 }
 

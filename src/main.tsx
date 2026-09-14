@@ -7,6 +7,8 @@ import { runMigration } from './lib/migrateLocalStorage';
 
 runMigration();
 
+// UX-18 — <App /> wraps itself in <ToastProvider> (see App.tsx) so it stays a
+// complete, self-contained tree for every caller, this entry point included.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />

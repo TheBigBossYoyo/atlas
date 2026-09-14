@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
 interface ShortcutsModalProps {
@@ -6,7 +6,12 @@ interface ShortcutsModalProps {
   onClose: () => void;
 }
 
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
+  const modalRef = useRef<HTMLDivElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -20,6 +25,39 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
       window.removeEventListener('keydown', handleEsc);
     };
   }, [isOpen, onClose]);
+
+  // UX-13 — focus trap: move focus into the modal on open, keep Tab/Shift+Tab
+  // cycling within it while it's open, and restore focus to whatever
+  // triggered it once it closes (a separate effect/listener from the Escape
+  // handler above — this is Tab containment, not the close shortcut).
+  useEffect(() => {
+    if (!isOpen) return;
+
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    const modal = modalRef.current;
+    modal?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus();
+
+    const handleTab = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || !modal) return;
+      const focusables = Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+      if (focusables.length === 0) return;
+      const first = focusables[0]!;
+      const last = focusables[focusables.length - 1]!;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    window.addEventListener('keydown', handleTab);
+    return () => {
+      window.removeEventListener('keydown', handleTab);
+      previouslyFocusedRef.current?.focus();
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -35,7 +73,7 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onClick={e => e.stopPropagation()}>
+      <div ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onClick={e => e.stopPropagation()}>
         <div className="modal__header">
           <h2 id="shortcuts-title" className="modal__title">Keyboard Shortcuts</h2>
           <button className="modal__close" aria-label="Close" onClick={onClose}>

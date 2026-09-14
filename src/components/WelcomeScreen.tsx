@@ -97,7 +97,10 @@ export function WelcomeScreen({
             { emoji: '📐', text: 'Math + Mermaid diagrams' },
             { emoji: '🎨', text: '5 beautiful themes' },
             { emoji: '🔍', text: 'In-document search' },
-            { emoji: '💾', text: 'PDF / DOCX / HTML export' },
+            // RUN-13 — scoped to what's actually true today: every format
+            // exports to PDF, but DOCX/HTML export is Markdown-only until
+            // per-format export (Task X1) ships.
+            { emoji: '💾', text: 'PDF export, plus DOCX/HTML for Markdown' },
           ].map((f) => (
             <div key={f.text} className="welcome__feature">
               <span>{f.emoji}</span>
