@@ -4,6 +4,7 @@ export { writeHeaderXml } from './headerWriter'
 export { writeFooterXml } from './footerWriter'
 export { writeFootnotesXml, writeEndnotesXml } from './footnotesWriter'
 export { writeCommentsXml } from './commentsWriter'
+export { writeCommentsExtendedXml, resolveCommentExtendedKey } from './commentsExtendedWriter'
 export {
   writeDocumentXml,
   buildParagraph,
@@ -36,3 +37,6 @@ export type { DocxPart } from './zipPackager'
 
 // D20 — post-serialization validation
 export { validateDocxPackage, DocxSaveError } from './validateDocxPackage'
+
+// D19 / DXS-13 — docProps/core.xml modified date + lastModifiedBy
+export { updateCorePropsXml } from './docPropsWriter'

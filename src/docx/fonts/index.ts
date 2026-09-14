@@ -1,6 +1,7 @@
 export {
   FONT_FAMILIES,
   resolveFontFamily,
+  getUnmappedFontNames,
   type FontFamily,
   type FontFiles,
   type FontVariant,
@@ -22,3 +23,8 @@ export {
   type CanvasLineMetricsPt,
   type CanvasTextTransform,
 } from './canvasMetrics'
+export {
+  collectReferencedFontFamilies,
+  resolveReferencedFontFamilies,
+  resolveUnreferencedFontFamilies,
+} from './referencedFamilies'

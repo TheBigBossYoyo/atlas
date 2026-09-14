@@ -166,6 +166,15 @@ export interface Run {
   readonly kind: 'run'
   readonly props?: RunProps
   readonly children: ReadonlyArray<RunChild>
+  /**
+   * Revision-save-ID bookkeeping attributes (`w:rsidR`/`w:rsidRPr`/`w:rsidDel`)
+   * captured verbatim from a Word-authored `<w:r>` so a save doesn't strip
+   * them (DXS-10). Word uses these to correlate edits across a document's
+   * revision-save history; Atlas never generates or interprets them itself.
+   */
+  readonly rsidR?: string
+  readonly rsidRPr?: string
+  readonly rsidDel?: string
 }
 
 export type HyperlinkChild =
@@ -318,6 +327,22 @@ export interface Paragraph {
   readonly kind: 'paragraph'
   readonly props?: ParaProps
   readonly children: ReadonlyArray<ParagraphChild>
+  /**
+   * `w14:paraId`/`w14:textId` and `w:rsid*` bookkeeping attributes captured
+   * verbatim from a Word-authored `<w:p>` so a save doesn't strip them
+   * (DXS-10). `paraId` in particular is the join key `word/commentsExtended.xml`
+   * uses to correlate a comment with its resolved/done state (D16/DXS-11) —
+   * losing it on save would silently detach that state from the comment.
+   * Atlas never generates these for a paragraph that already has them;
+   * genuinely new paragraphs are left without them, matching how Word
+   * itself only assigns them lazily.
+   */
+  readonly paraId?: string
+  readonly textId?: string
+  readonly rsidR?: string
+  readonly rsidRDefault?: string
+  readonly rsidP?: string
+  readonly rsidRPr?: string
 }
 
 export interface TableProps {
@@ -399,8 +424,22 @@ export interface Comment {
   readonly author?: string
   readonly initials?: string
   readonly date?: string
-  readonly body: ReadonlyArray<Paragraph>
+  /**
+   * Comment body blocks in source order. Paragraphs are overwhelmingly the
+   * common case, but a comment can legitimately contain a table too — see
+   * the wave 1 follow-up that stopped `parser/comments.ts` from silently
+   * discarding one.
+   */
+  readonly body: ReadonlyArray<Block>
   readonly parentId?: string
+  /**
+   * Whether the comment thread is marked resolved, sourced from
+   * `word/commentsExtended.xml`'s `w15:done` attribute (D16/DXS-11).
+   * `undefined` when the document has no `commentsExtended.xml` part at
+   * all (most comment-bearing documents don't) — treat as "not resolved"
+   * for display purposes, distinct from an explicit `false`.
+   */
+  readonly resolved?: boolean
 }
 
 export type NoteType = 'normal' | 'separator' | 'continuationSeparator' | 'continuationNotice'
@@ -442,4 +481,22 @@ export interface Document {
   readonly endnotes: ReadonlyMap<string, Endnote>
   readonly headers: ReadonlyMap<string, Header>
   readonly footers: ReadonlyMap<string, Footer>
+  /**
+   * `{prefix: uri}` namespace declarations the source `<w:document>` root
+   * element itself carried (D19 / DXS-15). `undefined` when the document
+   * was constructed in memory rather than parsed from a source file.
+   * `documentWriter.ts` unions this with Atlas's own required baseline
+   * namespace set when re-emitting the root, instead of emitting a fixed
+   * hardcoded set regardless of what the source actually declared — this
+   * preserves any namespace prefix a source document declares that Atlas's
+   * own serializer doesn't otherwise know about (most relevantly one used
+   * only by unknown-node passthrough content).
+   */
+  readonly rootNamespaces?: ReadonlyMap<string, string>
+  /**
+   * The source `<w:document>` root's `mc:Ignorable` attribute value
+   * (space-separated namespace prefixes), unioned with Atlas's own
+   * baseline token list on save for the same reason as `rootNamespaces`.
+   */
+  readonly mcIgnorable?: string
 }

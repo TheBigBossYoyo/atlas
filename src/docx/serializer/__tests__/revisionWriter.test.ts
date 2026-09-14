@@ -30,6 +30,12 @@ function normalizeAst(value: unknown): unknown {
         continue
       }
 
+      // Source-only capture (D19 / DXS-15) — see documentWriter.test.ts's
+      // identical exclusion for why a round-trip legitimately gains these.
+      if (record.kind === 'document' && (key === 'rootNamespaces' || key === 'mcIgnorable')) {
+        continue
+      }
+
       normalized[key] = normalizeAst(entry)
     }
 

@@ -30,6 +30,9 @@ export type { AbstractNum, NumberingPart, NumInstance } from './numbering'
 
 export { resolveParaProps, resolveRunProps } from './cascade'
 
+export { resolveTableStyle, resolveTableCellStyle } from './cascadeTable'
+export type { TableCellStyleContext, ResolvedTableCellStyle } from './cascadeTable'
+
 // Wave A.5 — part parsers
 
 export { parseHeader } from './headers'
@@ -41,6 +44,8 @@ export { parseFootnotes } from './footnotes'
 export { parseEndnotes } from './endnotes'
 
 export { parseComments } from './comments'
+
+export { parseCommentsExtended } from './commentsExtended'
 
 export { parseTheme, resolveThemeFont } from './theme'
 export type { Theme, FontScheme, FontSet } from './theme'

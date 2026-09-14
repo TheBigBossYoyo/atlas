@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseComments } from '../comments'
 import { DocxParseError } from '../unzip'
+import { writeCommentsXml } from '../../serializer/commentsWriter'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -56,6 +57,17 @@ const SELF_CLOSING_EMPTY_COMMENT = `<?xml version="1.0" encoding="UTF-8"?>
   <w:comment w:id="6" w:author="Frank"/>
   <w:comment w:id="7" w:author="Grace">
     <w:p><w:r><w:t>After the self-closed one.</w:t></w:r></w:p>
+  </w:comment>
+</w:comments>`
+
+// wave 1 follow-up: a comment containing a table (e.g. a pasted data
+// snippet) must keep the table instead of it being silently discarded.
+const COMMENT_WITH_TABLE = `<?xml version="1.0" encoding="UTF-8"?>
+<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:comment w:id="8" w:author="Henry">
+    <w:tbl>
+      <w:tr><w:tc><w:p><w:r><w:t>Comment table cell</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
   </w:comment>
 </w:comments>`
 
@@ -164,5 +176,23 @@ describe('parseComments', () => {
     expect(map.get('6')?.body).toEqual([])
     expect(map.get('7')?.body).toHaveLength(1)
     expect(map.get('7')?.body[0]?.kind).toBe('paragraph')
+  })
+
+  describe('table blocks (wave 1 follow-up)', () => {
+    it('parses a table block instead of silently dropping it', () => {
+      const map = parseComments(COMMENT_WITH_TABLE)
+      expect(map.get('8')?.body[0]?.kind).toBe('table')
+    })
+
+    it('round-trips a table through the serializer without throwing', () => {
+      const map = parseComments(COMMENT_WITH_TABLE)
+      const xml = writeCommentsXml([...map.values()])
+
+      expect(xml).toContain('<w:tbl>')
+      expect(xml).toContain('Comment table cell')
+
+      const reparsed = parseComments(xml)
+      expect(reparsed.get('8')?.body[0]?.kind).toBe('table')
+    })
   })
 })

@@ -28,6 +28,16 @@ const EMPTY_FOOTER = `<?xml version="1.0" encoding="UTF-8"?>
 <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 </w:ftr>`
 
+// wave 1 follow-up: a footer built around a table (e.g. a multi-column
+// page-number/date layout) must keep the table instead of dropping it.
+const FOOTER_WITH_TABLE = `<?xml version="1.0" encoding="UTF-8"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:p><w:r><w:t>Draft</w:t></w:r></w:p>
+  <w:tbl>
+    <w:tr><w:tc><w:p><w:r><w:t>Page 1</w:t></w:r></w:p></w:tc></w:tr>
+  </w:tbl>
+</w:ftr>`
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -89,5 +99,26 @@ describe('parseFooter', () => {
     const footer = parseFooter(SIMPLE_FOOTER, 'rId4')
     const xml = writeFooterXml(footer)
     expect(xml).toContain('Page Footer')
+  })
+
+  describe('table blocks (wave 1 follow-up)', () => {
+    it('parses a table block in source order alongside a paragraph', () => {
+      const footer = parseFooter(FOOTER_WITH_TABLE, 'rId4')
+
+      expect(footer.blocks).toHaveLength(2)
+      expect(footer.blocks[0].kind).toBe('paragraph')
+      expect(footer.blocks[1].kind).toBe('table')
+    })
+
+    it('round-trips a table through the serializer without throwing', () => {
+      const footer = parseFooter(FOOTER_WITH_TABLE, 'rId4')
+      const xml = writeFooterXml(footer)
+
+      expect(xml).toContain('<w:tbl>')
+      expect(xml).toContain('Page 1')
+
+      const reparsed = parseFooter(xml, 'rId4')
+      expect(reparsed.blocks[1].kind).toBe('table')
+    })
   })
 })

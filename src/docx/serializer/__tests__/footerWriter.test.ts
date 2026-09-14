@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { parseFooter } from '../../parser/footers'
 import type { Footer, Paragraph } from '../../model'
 import { writeFooterXml } from '../footerWriter'
 
@@ -46,4 +47,22 @@ describe('writeFooterXml', () => {
     expect(xml).toContain('Left')
     expect(xml).toContain('Right')
   })
+
+  it(
+    'substitutes real XML back in for a nested unrecognized node (e.g. w:proofErr) instead of '
+      + 'leaking an unrestored atlas-raw-unknown placeholder',
+    () => {
+      const sourceXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        + '<w:p><w:r><w:proofErr w:type="spellStart"/><w:t>Helo</w:t><w:proofErr w:type="spellEnd"/></w:r></w:p>'
+        + '</w:ftr>'
+
+      const footer = parseFooter(sourceXml, 'rId2')
+      const written = writeFooterXml(footer)
+
+      expect(written).not.toContain('atlas-raw-unknown')
+      expect(written).toContain('<w:proofErr w:type="spellStart"/>')
+      expect(written).toContain('<w:proofErr w:type="spellEnd"/>')
+    },
+  )
 })

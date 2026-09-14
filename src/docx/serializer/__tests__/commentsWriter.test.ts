@@ -78,4 +78,45 @@ describe('writeCommentsXml', () => {
     expect(xml).toContain('xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"')
     expect(xml).toContain('<w:comment w:id="4" w15:parentId="1">')
   })
+
+  it('declares the full standard namespace set even without a threaded reply (D19 / DXS-08)', () => {
+    const xml = writeCommentsXml([makeComment('1', ['Plain comment, no reply'])])
+
+    // Previously only xmlns:w (+ a conditional xmlns:w15) was declared, so
+    // a table/drawing/hyperlink inside a comment body emitted an
+    // undeclared namespace prefix.
+    for (const prefix of ['w', 'r', 'wp', 'a', 'pic', 'v', 'mc', 'w14', 'w15']) {
+      expect(xml).toContain(`xmlns:${prefix}=`)
+    }
+  })
+
+  it(
+    'substitutes real XML back in for a nested unrecognized node instead of leaking an '
+      + 'unrestored atlas-raw-unknown placeholder',
+    () => {
+      const comment: Comment = {
+        kind: 'comment',
+        id: '1',
+        body: [
+          {
+            kind: 'paragraph',
+            children: [
+              {
+                kind: 'run',
+                children: [
+                  { kind: 'unknown', xml: '<w:proofErr w:type="spellStart"/>' },
+                  { kind: 'text', value: 'Helo' },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+
+      const xml = writeCommentsXml([comment])
+
+      expect(xml).not.toContain('atlas-raw-unknown')
+      expect(xml).toContain('<w:proofErr w:type="spellStart"/>')
+    },
+  )
 })

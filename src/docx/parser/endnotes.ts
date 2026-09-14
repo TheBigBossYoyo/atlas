@@ -1,20 +1,23 @@
 /**
- * Atlas — DOCX endnotes parser (Wave A.5, hardened in P1.3)
+ * Atlas — DOCX endnotes parser (Wave A.5, hardened in P1.3, extended for
+ * table support in the wave 1 follow-up)
  *
  * Parses `word/endnotes.xml`.  Each `<w:endnote w:id="...">` becomes an
  * `Endnote` entry in the returned map (keyed by id string), whose body is
- * now real `Paragraph[]` blocks — ported from `comments.ts`'s
- * synthetic-wrapper technique (see `partBody.ts`) — replacing the earlier
- * "Option B" stub that stored each note's body as a single opaque
- * `UnknownNode` and made the serializer throw on every save that included an
- * endnote (DXP-03/DXS-01).
+ * now real `Block[]` blocks — paragraphs AND tables — using `partBody.ts`'s
+ * shared synthetic-wrapper technique (ported from `comments.ts`),
+ * replacing the earlier "Option B" stub that stored each note's body as a
+ * single opaque `UnknownNode` and made the serializer throw on every save
+ * that included an endnote (DXP-03/DXS-01), and later a paragraph-only
+ * extraction that silently dropped any table an endnote contained instead
+ * of throwing.
  *
  * Special separator types are included with their noteType set accordingly.
  */
 
 import { XMLParser } from 'fast-xml-parser'
 
-import { parseParagraphsFromRawNodes } from './partBody'
+import { extractElementInnerXmlsById, parseBlocksFromXmlFragment } from './partBody'
 import { DocxParseError } from './unzip'
 import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 import type { Endnote, NoteType } from '../model/document'
@@ -32,7 +35,6 @@ const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: 
 interface RawEndnote {
   '@_w:id'?: string | number
   '@_w:type'?: string
-  'w:p'?: unknown
   [key: string]: unknown
 }
 
@@ -81,6 +83,7 @@ export function parseEndnotes(xml: string): ReadonlyMap<string, Endnote> {
   }
 
   const items: RawEndnote[] = Array.isArray(rawNotes) ? rawNotes : [rawNotes]
+  const innerXmlById = extractElementInnerXmlsById(xml, 'w:endnote')
   const result = new Map<string, Endnote>()
 
   for (const item of items) {
@@ -90,7 +93,7 @@ export function parseEndnotes(xml: string): ReadonlyMap<string, Endnote> {
     }
     const id = String(rawId)
     const noteType = toNoteType(item['@_w:type'])
-    const blocks = parseParagraphsFromRawNodes(item['w:p'])
+    const blocks = parseBlocksFromXmlFragment(innerXmlById.get(id))
 
     const endnote: Endnote = {
       kind: 'endnote',

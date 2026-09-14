@@ -9,6 +9,7 @@ vi.mock('../../fonts', () => ({
 import type {
   Block,
   Paragraph,
+  Style,
   Table,
   TableCell,
   TableProps,
@@ -17,7 +18,7 @@ import type {
   Twip,
   Width,
 } from '../../model'
-import { pct, twip } from '../../model'
+import { hexColor, pct, twip } from '../../model'
 
 import { layoutTable } from '../layoutTable'
 import type { FontResolver } from '../types'
@@ -324,6 +325,94 @@ describe('layoutTable', () => {
     })
 
     expect(result.rows[0].cells[0].vAlign).toBe('top')
+  })
+
+  describe('table style conditional formatting (D7 / DXP-06, DXL-08, DXS-05)', () => {
+    const bandedStyles: ReadonlyMap<string, Style> = new Map([
+      [
+        'AtlasBandedTable',
+        {
+          id: 'AtlasBandedTable',
+          type: 'table',
+          conditionalFormats: new Map([
+            ['firstRow', { cell: { shd: { fill: hexColor('4472C4') } } }],
+            ['band1Horz', { cell: { shd: { fill: hexColor('D9E2F3') } } }],
+          ]),
+        },
+      ],
+    ])
+
+    function bandedTable(rowCount: number, cellProps?: TableCell['props']): Table {
+      return createTable({
+        props: {
+          tblStyle: 'AtlasBandedTable',
+          tblLook: { firstRow: true, noHBand: false, noVBand: true },
+        },
+        rows: Array.from({ length: rowCount }, () => createRow([createCell('x', cellProps)])),
+      })
+    }
+
+    it('does nothing when no styles map is supplied (backward compatible)', async () => {
+      const result = await layoutTable({ table: bandedTable(1), availableWidthPt: 100, fontResolver })
+      expect(result.rows[0].cells[0].shadingFill).toBeUndefined()
+    })
+
+    it('shades the header row from the firstRow conditional format', async () => {
+      const result = await layoutTable({
+        table: bandedTable(1),
+        availableWidthPt: 100,
+        fontResolver,
+        styles: bandedStyles,
+      })
+      expect(result.rows[0].cells[0].shadingFill).toBe('#4472C4')
+    })
+
+    it('bands alternating data rows from band1Horz, leaving band2Horz rows unshaded', async () => {
+      const result = await layoutTable({
+        table: bandedTable(4),
+        availableWidthPt: 100,
+        fontResolver,
+        styles: bandedStyles,
+      })
+
+      expect(result.rows[0].cells[0].shadingFill).toBe('#4472C4') // firstRow
+      expect(result.rows[1].cells[0].shadingFill).toBeUndefined() // band2Horz (no block)
+      expect(result.rows[2].cells[0].shadingFill).toBe('#D9E2F3') // band1Horz
+      expect(result.rows[3].cells[0].shadingFill).toBeUndefined() // band2Horz (no block)
+    })
+
+    it('lets the cell\'s own direct shading override the conditional format', async () => {
+      const result = await layoutTable({
+        table: bandedTable(1, { shd: { fill: hexColor('FF0000') } }),
+        availableWidthPt: 100,
+        fontResolver,
+        styles: bandedStyles,
+      })
+      expect(result.rows[0].cells[0].shadingFill).toBe('#FF0000')
+    })
+
+    it('falls back to the resolved table style for table-level borders/shading when the table sets none directly', async () => {
+      const stylesWithTableLevel: ReadonlyMap<string, Style> = new Map([
+        [
+          'Shaded',
+          {
+            id: 'Shaded',
+            type: 'table',
+            table: { shading: { fill: hexColor('EEEEEE') } },
+          },
+        ],
+      ])
+      const result = await layoutTable({
+        table: createTable({
+          props: { tblStyle: 'Shaded' },
+          rows: [createRow([createCell('x')])],
+        }),
+        availableWidthPt: 100,
+        fontResolver,
+        styles: stylesWithTableLevel,
+      })
+      expect(result.shadingFill).toBe('#EEEEEE')
+    })
   })
 })
 

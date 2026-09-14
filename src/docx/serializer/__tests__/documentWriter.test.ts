@@ -69,6 +69,17 @@ function normalizeAst(value: unknown): unknown {
         continue
       }
 
+      // `rootNamespaces`/`mcIgnorable` (D19 / DXS-15) are a source-only
+      // capture that `writeDocumentXml` deliberately unions with Atlas's
+      // own required baseline namespace set rather than reproducing
+      // byte-for-byte — a fixture that declares only a handful of
+      // namespaces legitimately re-parses with the full baseline added on
+      // top after a round-trip. That's the point of the fix, not a
+      // regression, so it's excluded from this structural-equality check.
+      if (record.kind === 'document' && (key === 'rootNamespaces' || key === 'mcIgnorable')) {
+        continue
+      }
+
       normalized[key] = normalizeAst(entry)
     }
 
@@ -443,6 +454,34 @@ describe('writeDocumentXml', () => {
     expectRoundTrip(xml)
   })
 
+  it(
+    'declares a custom namespace prefix used only by unknown-node passthrough content (D19 / DXS-15, DXS-16)',
+    () => {
+      // Previously the document root always emitted a fixed, hardcoded
+      // namespace set (DXS-15) — a source document's own custom prefix
+      // (used only inside content Atlas doesn't otherwise model) had no
+      // declaration anywhere in the saved output, an XML well-formedness
+      // violation. DXS-15's `rootNamespaces` capture closes the gap for
+      // the common real-world case (Word always declares every namespace
+      // it uses on the document root, not on some inner ancestor), which
+      // is also DXS-16's primary practical concern.
+      const xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        + 'xmlns:ext123="http://example.com/custom-extension">'
+        + '<w:body><w:customBlock ext123:feature="on"><ext123:payload>value</ext123:payload></w:customBlock></w:body>'
+        + '</w:document>'
+
+      const parsed = parseDocument(xml)
+      expect(parsed.rootNamespaces?.get('ext123')).toBe('http://example.com/custom-extension')
+
+      const written = writeDocumentXml(parsed)
+      expect(written).toContain('xmlns:ext123="http://example.com/custom-extension"')
+      expect(written).toContain(
+        '<w:customBlock ext123:feature="on"><ext123:payload>value</ext123:payload></w:customBlock>',
+      )
+    },
+  )
+
   it('escapes special characters and preserves unicode text', () => {
     const text = '5 < 7 & 9 > 2 "quoted" \'single\' café Ω'
     const document = createDocument([
@@ -491,7 +530,51 @@ describe('writeDocumentXml', () => {
     ['formatting fixture with sections', documentXml('<w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:i/><w:sz w:val="24"/></w:rPr><w:t>Fixture</w:t></w:r></w:p><w:p><w:pPr><w:sectPr><w:type w:val="evenPage"/></w:sectPr></w:pPr><w:r><w:t>Break</w:t></w:r></w:p>')],
     ['ins revision', documentXml('<w:p><w:ins w:id="1" w:author="Alice" w:date="2024-01-02T03:04:05Z"><w:r><w:t>added</w:t></w:r></w:ins></w:p><w:sectPr/>')],
     ['del revision', documentXml('<w:p><w:del w:id="2" w:author="Bob" w:date="2024-02-03T04:05:06Z"><w:r><w:delText>removed</w:delText></w:r></w:del></w:p><w:sectPr/>')],
+    [
+      'paraId/textId/rsid bookkeeping attributes (D19 / DXS-10)',
+      documentXml(
+        '<w:p w14:paraId="12AB34CD" w14:textId="56EF78AB" w:rsidR="00112233" w:rsidRDefault="00112233" w:rsidP="00445566" w:rsidRPr="00778899">'
+          + '<w:r w:rsidR="00AA0011" w:rsidRPr="00AA0022" w:rsidDel="00AA0033"><w:t>Hello</w:t></w:r>'
+          + '</w:p><w:sectPr/>',
+      ),
+    ],
+    [
+      'w:sdt-wrapped paragraph, content unwrapped (D8 / DXP-08)',
+      documentXml(
+        '<w:sdt><w:sdtContent><w:p><w:r><w:t>Content control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/>',
+      ),
+    ],
   ])('round-trips parsed ASTs for %s', (_label, xml) => {
     expectRoundTrip(xml)
+  })
+
+  it('re-emits w14:paraId/w14:textId and w:rsid* attributes on save (D19 / DXS-10)', () => {
+    const xml = documentXml(
+      '<w:p w14:paraId="12AB34CD" w14:textId="56EF78AB" w:rsidR="00112233" w:rsidRDefault="00112233" w:rsidP="00445566" w:rsidRPr="00778899">'
+        + '<w:r w:rsidR="00AA0011" w:rsidRPr="00AA0022" w:rsidDel="00AA0033"><w:t>Hello</w:t></w:r>'
+        + '</w:p><w:sectPr/>',
+    )
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('w14:paraId="12AB34CD"')
+    expect(written).toContain('w14:textId="56EF78AB"')
+    expect(written).toContain('w:rsidR="00112233"')
+    expect(written).toContain('w:rsidRDefault="00112233"')
+    expect(written).toContain('w:rsidP="00445566"')
+    expect(written).toContain('w:rsidRPr="00778899"')
+    expect(written).toContain('w:rsidR="00AA0011"')
+    expect(written).toContain('w:rsidRPr="00AA0022"')
+    expect(written).toContain('w:rsidDel="00AA0033"')
+  })
+
+  it('does not invent w14:paraId/w:rsid attributes for a paragraph that never had them', () => {
+    const document = createDocument([
+      { kind: 'section', props: {}, blocks: [createParagraph('Fresh paragraph')] },
+    ])
+
+    const xml = writeDocumentXml(document)
+
+    expect(xml).not.toContain('w14:paraId')
+    expect(xml).not.toContain('w:rsid')
   })
 })

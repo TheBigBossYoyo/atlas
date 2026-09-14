@@ -55,7 +55,7 @@ export async function loadRawPackage(buffer: ArrayBuffer | Buffer | Uint8Array):
   return files
 }
 
-function textOf(pkg: RawPackage, partPath: string): string | undefined {
+export function textOf(pkg: RawPackage, partPath: string): string | undefined {
   const bytes = pkg.get(partPath)
   return bytes === undefined ? undefined : bytes.toString('utf-8')
 }
@@ -238,6 +238,10 @@ const ALWAYS_OWNED_PARTS: ReadonlySet<string> = new Set([
   'word/_rels/document.xml.rels',
   '_rels/.rels',
   '[Content_Types].xml',
+  // D19 / DXS-13: saveDocx now regenerates dcterms:modified/cp:lastModifiedBy
+  // on every save, so this part legitimately changes even for a "no-op"
+  // round trip.
+  'docProps/core.xml',
 ])
 
 /**

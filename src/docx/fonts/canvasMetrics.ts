@@ -28,13 +28,71 @@ import type { FontVariant } from './families'
 const REFERENCE_SIZE_PX = 100
 const MAX_FRAGMENT_CACHE_ENTRIES = 20_000
 
+/**
+ * Approximate size ratio browsers use when synthesizing `font-variant:
+ * small-caps` for a font with no true small-caps OpenType feature (our
+ * bundled substitutes have none) — the originally-lowercase letters are
+ * upper-cased and painted at a reduced size relative to genuine capitals.
+ * Real browsers vary (roughly 0.7-0.85 depending on engine); 0.8 is a
+ * reasonable mid-range approximation. This is documented as an
+ * approximation, not an exact match (DXP-17) — closing the gap completely
+ * would require reading the live DOM's actual rendered small-caps metrics,
+ * which is out of scope for this measurement-only module.
+ */
+const SMALL_CAPS_SYNTHETIC_SCALE = 0.8
+
 type CanvasContext = CanvasRenderingContext2D
 
 let sharedContext: CanvasContext | null | undefined
 const fragmentWidthCache = new Map<string, number>()
 const lineMetricsCache = new Map<string, CanvasLineMetricsPt | null>()
 
+/**
+ * Tracks the `devicePixelRatio` in effect when the caches above were last
+ * populated (DXP-21). `measureText` itself is specified to return widths in
+ * CSS-pixel/user-space units independent of a canvas's backing-store
+ * resolution, so this deliberately does NOT rescale measured widths by
+ * `devicePixelRatio` — doing so would be a guess dressed up as a fix, and
+ * could silently corrupt every measurement the paginator depends on.
+ *
+ * What genuinely is a DPI-dependent hazard: Windows laptops routinely run
+ * at 125%/150%/200% OS display scaling, and Electron windows are commonly
+ * dragged between monitors with different scale factors while the app is
+ * open. Some rasterizer backends apply DPI-aware hinting that can shift
+ * sub-pixel glyph advances at the effective device resolution. Caching
+ * measurements keyed only by family/variant/size (as before) means a
+ * measurement taken under one display's DPI keeps being served, unchanged,
+ * after the window moves to a display with a different DPI. Invalidating
+ * the caches whenever `devicePixelRatio` changes ensures every measurement
+ * reflects the DPI Atlas is actually painting under right now.
+ */
+let lastKnownDevicePixelRatio: number | undefined
+
+function getDevicePixelRatio(): number {
+  return typeof window !== 'undefined'
+    && typeof window.devicePixelRatio === 'number'
+    && Number.isFinite(window.devicePixelRatio)
+    && window.devicePixelRatio > 0
+    ? window.devicePixelRatio
+    : 1
+}
+
+function invalidateCachesIfDevicePixelRatioChanged(): void {
+  const currentDpr = getDevicePixelRatio()
+  if (lastKnownDevicePixelRatio === undefined) {
+    lastKnownDevicePixelRatio = currentDpr
+    return
+  }
+  if (currentDpr !== lastKnownDevicePixelRatio) {
+    fragmentWidthCache.clear()
+    lineMetricsCache.clear()
+    lastKnownDevicePixelRatio = currentDpr
+  }
+}
+
 function getCanvasContext(): CanvasContext | null {
+  invalidateCachesIfDevicePixelRatioChanged()
+
   if (sharedContext !== undefined) {
     return sharedContext
   }
@@ -47,11 +105,56 @@ function getCanvasContext(): CanvasContext | null {
   return sharedContext
 }
 
-function buildFontShorthand(family: string, variant: FontVariant): string {
+function buildFontShorthand(family: string, variant: FontVariant, sizeScale: number = 1): string {
   const weight = variant === 'bold' || variant === 'boldItalic' ? 'bold' : 'normal'
   const style = variant === 'italic' || variant === 'boldItalic' ? 'italic' : 'normal'
   const quoted = /\s/.test(family) ? `"${family}"` : family
-  return `${style} ${weight} ${REFERENCE_SIZE_PX}px ${quoted}`
+  const sizePx = REFERENCE_SIZE_PX * sizeScale
+  return `${style} ${weight} ${sizePx}px ${quoted}`
+}
+
+/**
+ * Whether `ch` is a cased letter that renders lowercase in normal text (and
+ * therefore gets synthesized down to a reduced-size capital under
+ * `font-variant: small-caps`). Digits, punctuation, spaces, and already-
+ * uppercase letters are unaffected by the small-caps size reduction.
+ */
+function isLowerCaseLetter(ch: string): boolean {
+  return ch !== ch.toUpperCase()
+}
+
+/**
+ * Measure small-caps text the way the browser actually paints it: split
+ * into contiguous originally-lowercase / originally-not-lowercase segments,
+ * upper-case each, and measure the lowercase-derived segments at the
+ * reduced synthetic small-caps size while the rest stays full-size (DXP-17).
+ * A single flat `ctx.measureText(text.toUpperCase())` call — the previous
+ * behaviour — always measures at full size, overstating the width of any
+ * text that mixes cases.
+ */
+function measureSmallCapsWidthPx(
+  ctx: CanvasContext,
+  text: string,
+  fullSizeFontShorthand: string,
+  reducedSizeFontShorthand: string,
+): number {
+  let width = 0
+  let index = 0
+
+  while (index < text.length) {
+    const segmentIsLowerDerived = isLowerCaseLetter(text[index])
+    let end = index + 1
+    while (end < text.length && isLowerCaseLetter(text[end]) === segmentIsLowerDerived) {
+      end += 1
+    }
+
+    ctx.font = segmentIsLowerDerived ? reducedSizeFontShorthand : fullSizeFontShorthand
+    width += ctx.measureText(text.slice(index, end).toUpperCase()).width
+
+    index = end
+  }
+
+  return width
 }
 
 function cacheFragmentWidth(key: string, value: number): number {
@@ -70,6 +173,7 @@ export function __resetCanvasMetricsCachesForTests(): void {
   fragmentWidthCache.clear()
   lineMetricsCache.clear()
   sharedContext = undefined
+  lastKnownDevicePixelRatio = undefined
 }
 
 /**
@@ -227,10 +331,17 @@ export function measureFragmentPt(
     return cached
   }
 
-  ctx.font = buildFontShorthand(family, variant)
+  const fullSizeFontShorthand = buildFontShorthand(family, variant)
+  let widthRefPx: number
 
-  const transformed = applyTransform(text, transform)
-  const widthRefPx = ctx.measureText(transformed).width
+  if (transform === 'smallCaps') {
+    const reducedSizeFontShorthand = buildFontShorthand(family, variant, SMALL_CAPS_SYNTHETIC_SCALE)
+    widthRefPx = measureSmallCapsWidthPx(ctx, text, fullSizeFontShorthand, reducedSizeFontShorthand)
+  } else {
+    ctx.font = fullSizeFontShorthand
+    const transformed = applyTransform(text, transform)
+    widthRefPx = ctx.measureText(transformed).width
+  }
 
   if (!Number.isFinite(widthRefPx)) {
     return null
@@ -245,13 +356,20 @@ export function measureFragmentPt(
   // letter-spacing inserts inter-glyph spacing per *grapheme*; approximate
   // with codepoint count which matches CSS behaviour for Latin / accented
   // text. Cluster-script callers already segment to graphemes upstream.
-  const codepointCount = Array.from(transformed).length
+  // Counted against the original `text`, not a transformed copy — none of
+  // uppercase/lowercase/smallCaps change codepoint count.
+  const codepointCount = Array.from(text).length
 
   return cacheFragmentWidth(cacheKey, widthPt + letterSpacingPt * codepointCount)
 }
 
-function applyTransform(text: string, transform: CanvasTextTransform): string {
-  if (transform === 'uppercase' || transform === 'smallCaps') {
+/**
+ * Applies `uppercase`/`lowercase`/`none`. `smallCaps` is handled separately
+ * by {@link measureSmallCapsWidthPx} — it needs per-segment sizing, not a
+ * single whole-string case transform (DXP-17).
+ */
+function applyTransform(text: string, transform: 'none' | 'uppercase' | 'lowercase'): string {
+  if (transform === 'uppercase') {
     return text.toUpperCase()
   }
   if (transform === 'lowercase') {
