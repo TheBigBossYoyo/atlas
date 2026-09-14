@@ -21,7 +21,7 @@ describe('useComposition', () => {
   it('starts inactive with beforeinput swallowing disabled', () => {
     const { result } = renderHook(() => useComposition())
 
-    expect(result.current.state).toEqual({ active: false, text: '', startedAt: 0 })
+    expect(result.current.state).toEqual({ active: false, text: '', startedAt: 0, appliedText: null })
     expect(result.current.shouldSwallow(makeInputEvent('insertCompositionText', 'é'))).toBe(false)
   })
 
@@ -50,7 +50,7 @@ describe('useComposition', () => {
     })
 
     expect(commitText).toBe('ç')
-    expect(result.current.state).toEqual({ active: false, text: '', startedAt: 0 })
+    expect(result.current.state).toEqual({ active: false, text: '', startedAt: 0, appliedText: null })
     expect(result.current.shouldSwallow(makeInputEvent('insertText', 'ç'))).toBe(false)
   })
 
@@ -64,6 +64,23 @@ describe('useComposition', () => {
     })
 
     expect(commitText).toBeNull()
-    expect(result.current.state).toEqual({ active: false, text: '', startedAt: 0 })
+    expect(result.current.state).toEqual({ active: false, text: '', startedAt: 0, appliedText: null })
+  })
+
+  it('markApplied records the applied text so compositionend does not double-insert it (DXE-20)', () => {
+    const { result } = renderHook(() => useComposition())
+    let commitText: string | null = 'pending'
+
+    act(() => {
+      result.current.handlers.onCompositionStart(makeCompositionEvent('compositionstart', ''))
+      result.current.handlers.onCompositionUpdate(makeCompositionEvent('compositionupdate', '漢字'))
+      // Simulates a beforeinput(insertText) firing with the final composed
+      // text before compositionend — the caller applies it to the model and
+      // marks it applied.
+      result.current.markApplied('漢字')
+      commitText = result.current.handlers.onCompositionEnd(makeCompositionEvent('compositionend', '漢字'))
+    })
+
+    expect(commitText).toBeNull()
   })
 })

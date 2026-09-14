@@ -12,6 +12,7 @@ import {
   parseEndnotes,
   parseComments,
   parseCommentsExtended,
+  parseSettings,
 } from './parser';
 
 import {
@@ -27,6 +28,7 @@ import {
   resolveCommentExtendedKey,
   writeRelationshipsXml,
   writeContentTypesXml,
+  writeSettingsXml,
   packDocx,
   addRelationship,
   addOverride,
@@ -37,7 +39,9 @@ import type { DocxPart } from './serializer';
 
 import type { Comment, Document } from './model/document';
 import type { Theme } from './parser';
-import type { Relationship, ContentTypes, NumberingPart, StylesPart } from './parser';
+import type { Relationship, ContentTypes, NumberingPart, StylesPart, SettingsPart } from './parser';
+
+const SETTINGS_PART_PATH = 'word/settings.xml';
 
 const COMMENTS_PART_PATH = 'word/comments.xml';
 const COMMENTS_RELATIONSHIP_TYPE =
@@ -63,6 +67,14 @@ export type DocxBundle = {
   contentTypes?: ContentTypes;
   numberingPart?: NumberingPart;
   stylesPart?: StylesPart;
+  /**
+   * D17/DXE-11 — the one `word/settings.xml` value Atlas's editor reads back
+   * (Track Changes). Everything else in that part still passes through via
+   * `rawArchive` untouched; this only overrides the single element
+   * `writeSettingsXml` targets. `undefined` means "use whatever the loaded
+   * archive already had" (no explicit toggle since load).
+   */
+  settings?: SettingsPart;
   /** Raw archive bytes for passthrough of unhandled parts (theme, settings, fontTable, media, customXml, etc.). */
   rawArchive?: ReadonlyMap<string, Uint8Array>;
 };
@@ -164,6 +176,9 @@ export async function loadDocx(buffer: ArrayBuffer): Promise<DocxBundle> {
   const resolvedStateByKey = commentsExtendedXml ? parseCommentsExtended(commentsExtendedXml) : new Map();
   const commentsWithResolvedState = applyResolvedState(commentsMap, resolvedStateByKey);
 
+  const settingsXml = getXml(archive.files, SETTINGS_PART_PATH);
+  const settings = settingsXml ? parseSettings(settingsXml) : undefined;
+
   const fullDoc: Document = {
     ...baseDoc,
     styles: stylesPart.styles,
@@ -189,6 +204,7 @@ export async function loadDocx(buffer: ArrayBuffer): Promise<DocxBundle> {
     contentTypes,
     numberingPart,
     stylesPart,
+    settings,
     rawArchive: archive.files,
   };
 }
@@ -204,6 +220,7 @@ export async function loadDocx(buffer: ArrayBuffer): Promise<DocxBundle> {
  *   - word/comments.xml (if any)
  *   - word/footnotes.xml / word/endnotes.xml (if any)
  *   - word/header*.xml / word/footer*.xml (resolved via relationships)
+ *   - word/settings.xml (only the Track Changes element, if `settings` was set)
  *   - word/_rels/document.xml.rels (if relationships present)
  *   - [Content_Types].xml (if contentTypes present)
  */
@@ -228,6 +245,22 @@ export async function saveDocx(bundle: DocxBundle): Promise<Uint8Array> {
   // 4. Numbering.
   if (bundle.numberingPart) {
     parts.set('word/numbering.xml', writeNumberingXml(bundle.numberingPart));
+  }
+
+  // 4b. Settings — D17/DXE-11: only touched when the caller explicitly set
+  // `bundle.settings` (i.e. the user actually flipped the Track Changes
+  // toggle since load); otherwise the passthrough copy from step 1 stands
+  // untouched, same as every other setting in this part.
+  if (bundle.settings) {
+    const originalSettingsXml = bundle.rawArchive
+      ? getXml(bundle.rawArchive, SETTINGS_PART_PATH)
+      : undefined;
+    const nextSettingsXml = writeSettingsXml(originalSettingsXml, bundle.settings.trackChanges);
+    if (nextSettingsXml !== undefined) {
+      parts.set(SETTINGS_PART_PATH, nextSettingsXml);
+    } else {
+      parts.delete(SETTINGS_PART_PATH);
+    }
   }
 
   // Tracked locally (rather than read straight off `bundle`) so a newly

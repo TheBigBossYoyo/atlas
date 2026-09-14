@@ -41,12 +41,16 @@ describe('Toolbar', () => {
 
   it('respects controlled tab mode', () => {
     const onTabChange = vi.fn();
-    const { getByTitle } = render(
+    const { getByLabelText } = render(
       <Toolbar state={defaultState} onCommand={vi.fn()} activeTab="layout" onTabChange={onTabChange} />
     );
-    
-    // Check Layout tab content
-    expect(getByTitle('Columns')).toBeInTheDocument();
+
+    // Check Layout tab content — Columns is genuinely unimplemented (D18) so
+    // it renders disabled with an explanatory tooltip rather than "Columns".
+    const columnsButton = getByLabelText('Columns');
+    expect(columnsButton).toBeInTheDocument();
+    expect(columnsButton).toBeDisabled();
+    expect(columnsButton).toHaveAttribute('title', 'Not yet supported');
   });
 
   it('calls onTabChange when clicked in controlled mode', () => {
@@ -132,7 +136,113 @@ describe('Toolbar', () => {
     
     // Click it
     fireEvent.click(cells[23]);
-    
+
     expect(onCommand).toHaveBeenCalledWith({ kind: 'insert-table', rows: 3, cols: 4 });
+  });
+
+  // ---------------------------------------------------------------------------
+  // X3/UX-09 — icon-only buttons carry an aria-label mirroring their tooltip
+  // ---------------------------------------------------------------------------
+
+  it.each(['home', 'insert', 'layout', 'review'] as const)(
+    'every icon-only button on the %s tab has an aria-label',
+    (tab) => {
+      const { container } = render(<Toolbar state={defaultState} onCommand={vi.fn()} activeTab={tab} />);
+      const buttons = Array.from(container.querySelectorAll('button')).filter(
+        (button) => button.getAttribute('role') !== 'tab',
+      );
+      expect(buttons.length).toBeGreaterThan(0);
+      for (const button of buttons) {
+        expect(button.getAttribute('aria-label')).toBeTruthy();
+      }
+    },
+  );
+
+  it('the font and size selects are labeled for screen readers', () => {
+    const { getByLabelText } = render(<Toolbar state={defaultState} onCommand={vi.fn()} />);
+    expect(getByLabelText('Font')).toBeInTheDocument();
+    expect(getByLabelText('Font size')).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // D18/DXE-12 — genuinely unimplemented controls are disabled with a tooltip
+  // ---------------------------------------------------------------------------
+
+  it('disables Header/Footer insertion with a "not yet supported" tooltip', () => {
+    const { getByLabelText } = render(<Toolbar state={defaultState} onCommand={vi.fn()} activeTab="insert" />);
+    expect(getByLabelText('Header')).toBeDisabled();
+    expect(getByLabelText('Footer')).toBeDisabled();
+  });
+
+  it('does not disable the now-implemented Hyperlink/Page Break/Table controls', () => {
+    const { getByLabelText } = render(<Toolbar state={defaultState} onCommand={vi.fn()} activeTab="insert" />);
+    expect(getByLabelText('Hyperlink')).not.toBeDisabled();
+    expect(getByLabelText('Page Break')).not.toBeDisabled();
+    expect(getByLabelText('Insert Table')).not.toBeDisabled();
+  });
+
+  it('a disabled button never fires its command when clicked', () => {
+    const onCommand = vi.fn();
+    const { getByLabelText } = render(<Toolbar state={defaultState} onCommand={onCommand} activeTab="insert" />);
+    fireEvent.click(getByLabelText('Header'));
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // DXE-23 — color picker and table-size picker are keyboard-operable
+  // ---------------------------------------------------------------------------
+
+  it('color swatches are real buttons reachable by keyboard and labeled', () => {
+    const onCommand = vi.fn();
+    const { getByTitle } = render(<Toolbar state={defaultState} onCommand={onCommand} />);
+
+    fireEvent.click(getByTitle('Font Color'));
+    const swatch = document.querySelector('.docx-toolbar__color-swatch') as HTMLButtonElement;
+    expect(swatch.tagName).toBe('BUTTON');
+    expect(swatch.getAttribute('aria-label')).toBeTruthy();
+
+    swatch.focus();
+    expect(document.activeElement).toBe(swatch);
+    fireEvent.click(swatch);
+    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({ kind: 'set-font-color' }));
+  });
+
+  it('table-size cells are real buttons that can be focused and activated with Enter/Space semantics', () => {
+    const onCommand = vi.fn();
+    const { getByTitle } = render(<Toolbar state={defaultState} onCommand={onCommand} activeTab="insert" />);
+
+    fireEvent.click(getByTitle('Insert Table'));
+    const cells = document.querySelectorAll<HTMLButtonElement>('.docx-toolbar__table-cell');
+    expect(cells[0].tagName).toBe('BUTTON');
+
+    cells[7].focus();
+    fireEvent.focus(cells[7]);
+    expect(document.querySelector('.docx-toolbar__table-label')?.textContent).toBe('1x8 Table');
+
+    fireEvent.click(cells[7]);
+    expect(onCommand).toHaveBeenCalledWith({ kind: 'insert-table', rows: 1, cols: 8 });
+  });
+
+  // ---------------------------------------------------------------------------
+  // D17/DXE-11 — Review tab's Accept/Reject (single + all) buttons
+  // ---------------------------------------------------------------------------
+
+  it('the Review tab exposes Accept/Reject and Accept All/Reject All, each firing its own command', () => {
+    const onCommand = vi.fn();
+    const { getByLabelText } = render(
+      <Toolbar state={defaultState} onCommand={onCommand} activeTab="review" />,
+    );
+
+    fireEvent.click(getByLabelText('Accept'));
+    expect(onCommand).toHaveBeenLastCalledWith({ kind: 'accept-change' });
+
+    fireEvent.click(getByLabelText('Reject'));
+    expect(onCommand).toHaveBeenLastCalledWith({ kind: 'reject-change' });
+
+    fireEvent.click(getByLabelText('Accept All'));
+    expect(onCommand).toHaveBeenLastCalledWith({ kind: 'accept-all-changes' });
+
+    fireEvent.click(getByLabelText('Reject All'));
+    expect(onCommand).toHaveBeenLastCalledWith({ kind: 'reject-all-changes' });
   });
 });

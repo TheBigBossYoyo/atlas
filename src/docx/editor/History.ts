@@ -1,7 +1,7 @@
 import type { Document } from '../model'
 
 import { applyCommand } from './commands'
-import type { Command, DeleteRangeCommand, InsertTextCommand, Position } from './commandTypes'
+import type { Command, DeleteRangeCommand, InsertTextCommand, Position, Range } from './commandTypes'
 
 const COALESCE_WINDOW_MS = 1000
 
@@ -20,11 +20,21 @@ export class History {
     this.redoStack.length = 0
   }
 
+  /**
+   * DXE-16 — undo applies the stored inverse and returns not just the
+   * resulting document but the selection to restore: `applyCommand` already
+   * computes the natural resulting position/range for whatever command it
+   * just ran (e.g. a delete-range's own inverse collapses to its anchor), so
+   * forwarding it here is what lets the caller (Input.ts) put the caret back
+   * where the user was before the edit being undone, instead of leaving
+   * whatever selection happened to be active beforehand.
+   */
   undo(
     doc: Document,
   ): {
     document: Document
     redoCommand: Command
+    range: Range | null
   } | null {
     const inverse = this.undoStack.pop()
     if (inverse === undefined) {
@@ -38,6 +48,7 @@ export class History {
     return {
       document: result.document,
       redoCommand: result.inverse,
+      range: result.range ?? null,
     }
   }
 
@@ -46,6 +57,7 @@ export class History {
   ): {
     document: Document
     undoCommand: Command
+    range: Range | null
   } | null {
     const command = this.redoStack.pop()
     if (command === undefined) {
@@ -59,6 +71,7 @@ export class History {
     return {
       document: result.document,
       undoCommand: result.inverse,
+      range: result.range ?? null,
     }
   }
 

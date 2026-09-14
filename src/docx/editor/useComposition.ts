@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 
 import {
   createCompositionState,
+  markCompositionTextApplied,
   onCompositionEnd as endComposition,
   onCompositionStart as startComposition,
   onCompositionUpdate as updateComposition,
@@ -19,6 +20,10 @@ export type UseCompositionResult = Readonly<{
   state: CompositionState
   handlers: CompositionHandlers
   shouldSwallow: (event: InputEvent) => boolean
+  /** DXE-20 — call after applying a non-swallowed insertText beforeinput
+   * while composition is active, so the eventual compositionend doesn't
+   * re-apply the same text a second time. */
+  markApplied: (text: string) => void
 }>
 
 export function useComposition(): UseCompositionResult {
@@ -49,6 +54,12 @@ export function useComposition(): UseCompositionResult {
     return shouldSwallowBeforeInput(stateRef.current, event)
   }, [])
 
+  const markApplied = useCallback((text: string) => {
+    const nextState = markCompositionTextApplied(stateRef.current, text)
+    stateRef.current = nextState
+    setState(nextState)
+  }, [])
+
   return {
     state,
     handlers: {
@@ -57,5 +68,6 @@ export function useComposition(): UseCompositionResult {
       onCompositionEnd,
     },
     shouldSwallow,
+    markApplied,
   }
 }

@@ -17,6 +17,8 @@ import type {
   RunProps,
   Section,
   Style,
+  Table,
+  TableRow,
 } from '../../model'
 import { twip } from '../../model'
 
@@ -81,11 +83,116 @@ describe('docx editor commands', () => {
     })
 
     expect(paragraphTexts(result.document)).toEqual([['As']])
-    expect(result.inverse).toEqual({
-      kind: 'insert-text',
-      at: position([0], 0, 1),
-      text: 'tla',
+    // DXE-04/DXE-05 — delete now uses the general replace-blocks primitive
+    // (the same one cross-paragraph delete needs) so its inverse is an exact
+    // paragraph snapshot rather than a single insert-text; what matters is
+    // that applying it round-trips back to the original document.
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('DeleteRange spanning two paragraphs merges them and round-trips through its inverse', () => {
+    const original = createDocument([
+      createParagraph(['Alpha']),
+      createParagraph(['Beta']),
+    ])
+
+    const result = applyCommand(original, {
+      kind: 'delete-range',
+      range: {
+        anchor: position([0], 0, 3),
+        focus: position([1], 0, 2),
+      },
     })
+
+    expect(result.document.sections[0].blocks.length).toBe(1)
+    expect(paragraphTexts(result.document)).toEqual([['Alpta']])
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('DeleteRange spanning three paragraphs drops the fully-enclosed middle one', () => {
+    const original = createDocument([
+      createParagraph(['One']),
+      createParagraph(['Two']),
+      createParagraph(['Three']),
+    ])
+
+    const result = applyCommand(original, {
+      kind: 'delete-range',
+      range: {
+        anchor: position([0], 0, 1),
+        focus: position([2], 0, 2),
+      },
+    })
+
+    expect(paragraphTexts(result.document)).toEqual([['Oree']])
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('DeleteRange across a multi-run selection within one paragraph slices every intersected run', () => {
+    const original = createDocument([
+      createParagraph(['Al', 'pha', 'Bet'], undefined, [undefined, { bold: true }, undefined]),
+    ])
+
+    const result = applyCommand(original, {
+      kind: 'delete-range',
+      range: {
+        anchor: position([0], 0, 1),
+        focus: position([0], 2, 2),
+      },
+    })
+
+    expect(paragraphTexts(result.document)).toEqual([['At']])
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('DeleteRange at an out-of-range paragraph path throws rather than silently no-opping', () => {
+    // Callers (Input.ts/DocxViewer) rely on a thrown error — not a silent
+    // no-op — to decide whether to preventDefault() so the DOM never diverges
+    // from the model (DXE-03).
+    const document = createDocument([createParagraph(['Alpha'])])
+    expect(() =>
+      applyCommand(document, {
+        kind: 'delete-range',
+        range: { anchor: position([5], 0, 0), focus: position([5], 0, 1) },
+      }),
+    ).toThrow()
+  })
+
+  it('typing/deleting inside a hyperlink works via the flattened run list (DXE-03)', () => {
+    const hyperlinkRun: Run = Object.freeze({
+      kind: 'run',
+      children: Object.freeze([Object.freeze({ kind: 'text', value: 'link text' })]),
+    }) as Run
+    const hyperlink = Object.freeze({
+      kind: 'hyperlink' as const,
+      relationshipId: 'rId5',
+      children: Object.freeze([hyperlinkRun]),
+    })
+    const paragraph: Paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Before '), hyperlink, createRun(' after')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'insert-text',
+      at: position([0], 1, 4),
+      text: 'XX',
+    })
+
+    const updatedParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(updatedParagraph.children[1]).toMatchObject({ kind: 'hyperlink', relationshipId: 'rId5' })
+    expect(flattenedRunTexts(updatedParagraph)).toEqual(['Before ', 'linkXX text', ' after'])
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
   })
 
   it('DeleteRange round-trips a paragraph-break delete returned by InsertParagraphBreak', () => {
@@ -260,6 +367,371 @@ describe('docx editor commands', () => {
     const result = applyCommand(original, { kind: 'accept-all-revisions' })
     expect(paragraphTexts(result.document)).toEqual([['A'], []])
   })
+
+  // ---------------------------------------------------------------------------
+  // D13 — composite commands + replace-blocks (atomic batches, exact undo)
+  // ---------------------------------------------------------------------------
+
+  it('Composite applies every sub-command atomically and undoes as one step', () => {
+    const original = createDocument([createParagraph(['Atlas'])])
+
+    const result = applyCommand(original, {
+      kind: 'composite',
+      commands: [
+        { kind: 'insert-text', at: position([0], 0, 5), text: '!' },
+        { kind: 'insert-text', at: position([0], 0, 0), text: '>' },
+      ],
+    })
+
+    expect(paragraphTexts(result.document)).toEqual([['>Atlas!']])
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('Composite rolls back cleanly (throws) when a later sub-command fails', () => {
+    const original = createDocument([createParagraph(['Atlas'])])
+
+    expect(() =>
+      applyCommand(original, {
+        kind: 'composite',
+        commands: [
+          { kind: 'insert-text', at: position([0], 0, 0), text: 'X' },
+          { kind: 'insert-text', at: position([9], 0, 0), text: 'Y' },
+        ],
+      }),
+    ).toThrow()
+
+    // Nothing was mutated in place — `original` is a fresh document each
+    // call, but this asserts the thrown call never returned a partially
+    // applied document for the caller to accidentally commit.
+    expect(paragraphTexts(original)).toEqual([['Atlas']])
+  })
+
+  it('ReplaceBlocks swaps N sibling blocks for a new set and inverts exactly', () => {
+    const original = createDocument([createParagraph(['One']), createParagraph(['Two'])])
+    const replacement = createParagraph(['Merged'])
+
+    const result = applyCommand(original, {
+      kind: 'replace-blocks',
+      at: [0, 0],
+      count: 2,
+      blocks: [replacement],
+    })
+
+    expect(result.document.sections[0].blocks.length).toBe(1)
+    expect(paragraphTexts(result.document)).toEqual([['Merged']])
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  // ---------------------------------------------------------------------------
+  // D18 — lists, indent/outdent, hyperlink, page break, table
+  // ---------------------------------------------------------------------------
+
+  it('InsertList sets numPr on every targeted paragraph and undoes per-paragraph', () => {
+    const original = createDocument([createParagraph(['One']), createParagraph(['Two'])])
+
+    const result = applyCommand(original, {
+      kind: 'insert-list',
+      paragraphPaths: [[0], [1]],
+      numId: 1,
+      level: 0,
+    })
+
+    const first = result.document.sections[0].blocks[0] as Paragraph
+    const second = result.document.sections[0].blocks[1] as Paragraph
+    expect(first.props?.numPr).toEqual({ numId: '1', ilvl: 0 })
+    expect(second.props?.numPr).toEqual({ numId: '1', ilvl: 0 })
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('InsertList toggles the list back off when every target already has it', () => {
+    const original = createDocument([
+      createParagraph(['One'], { numPr: { numId: '1', ilvl: 0 } }),
+    ])
+
+    const result = applyCommand(original, {
+      kind: 'insert-list',
+      paragraphPaths: [[0]],
+      numId: 1,
+      level: 0,
+    })
+
+    expect((result.document.sections[0].blocks[0] as Paragraph).props?.numPr).toBeUndefined()
+  })
+
+  it('ChangeListLevel increases ilvl on a list paragraph and inverts', () => {
+    const original = createDocument([
+      createParagraph(['Item'], { numPr: { numId: '1', ilvl: 0 } }),
+    ])
+
+    const result = applyCommand(original, {
+      kind: 'change-list-level',
+      paragraphPath: [0],
+      delta: 1,
+    })
+
+    expect((result.document.sections[0].blocks[0] as Paragraph).props?.numPr).toEqual({ numId: '1', ilvl: 1 })
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('ChangeListLevel adjusts left indent for a non-list paragraph and inverts', () => {
+    const original = createDocument([createParagraph(['Body'])])
+
+    const result = applyCommand(original, {
+      kind: 'change-list-level',
+      paragraphPath: [0],
+      delta: 1,
+    })
+
+    expect((result.document.sections[0].blocks[0] as Paragraph).props?.ind?.left).toBe(720)
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('ChangeListLevel is a true no-op at the outdent boundary (does not go negative)', () => {
+    const original = createDocument([createParagraph(['Body'])])
+
+    const result = applyCommand(original, {
+      kind: 'change-list-level',
+      paragraphPath: [0],
+      delta: -1,
+    })
+
+    expect(result.document).toBe(original)
+  })
+
+  it('InsertInline (page break) splits the run and is undoable', () => {
+    const original = createDocument([createParagraph(['Atlas'])])
+
+    const result = applyCommand(original, {
+      kind: 'insert-inline',
+      at: position([0], 0, 2),
+      child: { kind: 'break', breakType: 'page' },
+    })
+
+    const paragraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(paragraph.children.length).toBe(3)
+    expect((paragraph.children[1] as Run).children[0]).toEqual({ kind: 'break', breakType: 'page' })
+    expect(result.range?.anchor).toEqual(position([0], 2, 0))
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  // ---------------------------------------------------------------------------
+  // D14/D18 hygiene — a paragraph stays editable after gaining an inline
+  // atomic leaf (image/page-break/tab). Before this fix, `getEditableRuns`
+  // rejected the *whole paragraph* the instant it contained any run with a
+  // non-text child, so every command below threw (and, via DocxViewer's
+  // always-preventDefault handling, silently no-opped) the moment a
+  // paragraph gained an inserted image or page break — including simply
+  // continuing to type right after it, the single most common thing a user
+  // does next.
+  // ---------------------------------------------------------------------------
+
+  function createAtomicRun(child: Run['children'][number]): Run {
+    return Object.freeze({ kind: 'run', children: Object.freeze([child]) }) as Run
+  }
+
+  const PAGE_BREAK_CHILD = Object.freeze({ kind: 'break', breakType: 'page' }) as Run['children'][number]
+
+  it('typing right after a page break at the end of a paragraph inserts text instead of throwing', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD)]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    // Mirrors applyInsertInline's own returned cursor convention for "the
+    // break is the last thing in the paragraph": one past its own index.
+    const result = applyCommand(original, {
+      kind: 'insert-text',
+      at: position([0], 2, 0),
+      text: 'World',
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(nextParagraph.children.length).toBe(3)
+    expect(getRunText(nextParagraph.children[0] as Run)).toBe('Hello')
+    expect((nextParagraph.children[1] as Run).children[0]).toEqual(PAGE_BREAK_CHILD)
+    expect(getRunText(nextParagraph.children[2] as Run)).toBe('World')
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('typing right before a page break (mid-paragraph) inserts text without disturbing it', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD), createRun('World')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'insert-text',
+      at: position([0], 0, 5),
+      text: '!',
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(getRunText(nextParagraph.children[0] as Run)).toBe('Hello!')
+    expect((nextParagraph.children[1] as Run).children[0]).toEqual(PAGE_BREAK_CHILD)
+    expect(getRunText(nextParagraph.children[2] as Run)).toBe('World')
+  })
+
+  it('deleting a range that crosses a page break removes both the text and the break', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD), createRun('World')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'delete-range',
+      range: { anchor: position([0], 0, 3), focus: position([0], 2, 2) },
+    })
+
+    expect(runTexts(result.document.sections[0].blocks[0] as Paragraph)).toEqual(['Helrld'])
+  })
+
+  it('bolding a selection that straddles a page break preserves the break instead of dropping it', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD), createRun('World')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'apply-run-format',
+      range: { anchor: position([0], 0, 0), focus: position([0], 2, 5) },
+      format: { bold: true },
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    const breakEntries = nextParagraph.children.filter(
+      (child) => child.kind === 'run' && child.children[0]?.kind === 'break',
+    )
+    expect(breakEntries).toHaveLength(1)
+    expect(runTexts(nextParagraph).join('')).toBe('HelloWorld')
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(runTexts(reverted.document.sections[0].blocks[0] as Paragraph).join('')).toBe('HelloWorld')
+  })
+
+  it('formatting the whole paragraph (bold) preserves an inline break anywhere inside it', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD), createRun('World')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'apply-run-format',
+      range: { anchor: position([0], 0, 0), focus: position([0], 2, 5) },
+      format: { italic: true },
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(nextParagraph.children.some((child) => child.kind === 'run' && child.children[0]?.kind === 'break')).toBe(
+      true,
+    )
+  })
+
+  it('InsertTable splits the paragraph around a new N x M table with a tblGrid', () => {
+    const original = createDocument([createParagraph(['AtlasDoc'])])
+
+    const result = applyCommand(original, {
+      kind: 'insert-table',
+      at: position([0], 0, 5),
+      rows: 2,
+      cols: 3,
+    })
+
+    const blocks = result.document.sections[0].blocks
+    expect(blocks.length).toBe(3)
+    expect(blocks[0]).toMatchObject({ kind: 'paragraph' })
+    expect(runTexts(blocks[0] as Paragraph)).toEqual(['Atlas'])
+    expect(runTexts(blocks[2] as Paragraph)).toEqual(['Doc'])
+
+    const table = blocks[1] as Table
+    expect(table.kind).toBe('table')
+    expect(table.rows.length).toBe(2)
+    expect(table.tblGrid?.length).toBe(3)
+    expect((table.rows[0] as TableRow).cells.length).toBe(3)
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('InsertHyperlink wraps a collapsed cursor with the link text and undoes exactly', () => {
+    const original = createDocument([createParagraph(['Visit  today'])])
+
+    const result = applyCommand(original, {
+      kind: 'insert-hyperlink',
+      range: { anchor: position([0], 0, 6), focus: position([0], 0, 6) },
+      url: 'https://example.com',
+      relationshipId: 'rId9',
+    })
+
+    const paragraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(flattenedRunTexts(paragraph)).toEqual(['Visit ', 'https://example.com', ' today'])
+    expect(paragraph.children[1]).toMatchObject({ kind: 'hyperlink', relationshipId: 'rId9' })
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('InsertHyperlink wraps a non-collapsed selection in place', () => {
+    const original = createDocument([createParagraph(['Read the docs today'])])
+
+    // "Read the docs today" — offset 9 is the 'd' starting "docs", offset 13
+    // is right after its trailing 's'.
+    const result = applyCommand(original, {
+      kind: 'insert-hyperlink',
+      range: { anchor: position([0], 0, 9), focus: position([0], 0, 13) },
+      url: 'https://docs.example.com',
+      relationshipId: 'rId3',
+    })
+
+    const paragraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(flattenedRunTexts(paragraph)).toEqual(['Read the ', 'docs', ' today'])
+    expect(paragraph.children[1]).toMatchObject({ kind: 'hyperlink', relationshipId: 'rId3' })
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('InsertHyperlink over a selection straddling an inline break preserves the break', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([
+        createRun('Hello'),
+        Object.freeze({ kind: 'run', children: Object.freeze([{ kind: 'break', breakType: 'page' }]) }) as Run,
+        createRun('World'),
+      ]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'insert-hyperlink',
+      range: { anchor: position([0], 0, 0), focus: position([0], 2, 5) },
+      url: 'https://example.com',
+      relationshipId: 'rId3',
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(
+      nextParagraph.children.some((child) => child.kind === 'run' && child.children[0]?.kind === 'break'),
+    ).toBe(true)
+  })
 })
 
 function createParagraphWithRevisionRaw(
@@ -298,6 +770,25 @@ function runTexts(paragraph: Paragraph): string[] {
 
 function getRunText(run: Run): string {
   return run.children.map((child) => child.kind === 'text' ? child.value : '').join('')
+}
+
+/** Flattens a paragraph's plain runs AND any runs nested inside hyperlinks
+ * into one ordered list of visible text, for asserting on hyperlink-aware
+ * edits (DXE-03) without depending on the exact child grouping. */
+function flattenedRunTexts(paragraph: Paragraph): string[] {
+  const texts: string[] = []
+  for (const child of paragraph.children) {
+    if (child.kind === 'run') {
+      texts.push(getRunText(child))
+    } else if (child.kind === 'hyperlink') {
+      for (const grandchild of child.children) {
+        if (grandchild.kind === 'run') {
+          texts.push(getRunText(grandchild))
+        }
+      }
+    }
+  }
+  return texts
 }
 
 function position(paragraphPath: ReadonlyArray<number>, runIndex: number, charOffset: number): Position {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createCompositionState,
+  markCompositionTextApplied,
   onCompositionEnd,
   onCompositionStart,
   onCompositionUpdate,
@@ -32,6 +33,7 @@ describe('Composition', () => {
       active: false,
       text: '',
       startedAt: 0,
+      appliedText: null,
     })
   })
 
@@ -39,7 +41,7 @@ describe('Composition', () => {
     vi.spyOn(Date, 'now').mockReturnValue(1234)
 
     const nextState = onCompositionStart(
-      { active: false, text: 'stale', startedAt: 10 },
+      { active: false, text: 'stale', startedAt: 10, appliedText: null },
       makeCompositionEvent('compositionstart', 'é'),
     )
 
@@ -47,26 +49,27 @@ describe('Composition', () => {
       active: true,
       text: '',
       startedAt: 1234,
+      appliedText: null,
     })
   })
 
   it('onCompositionUpdate stores the latest accumulated text from event.data', () => {
-    const started = { active: true, text: '', startedAt: 22 }
+    const started = { active: true, text: '', startedAt: 22, appliedText: null }
     const updated = onCompositionUpdate(started, makeCompositionEvent('compositionupdate', 'é'))
     const accumulated = onCompositionUpdate(updated, makeCompositionEvent('compositionupdate', 'été'))
 
-    expect(updated).toEqual({ active: true, text: 'é', startedAt: 22 })
-    expect(accumulated).toEqual({ active: true, text: 'été', startedAt: 22 })
+    expect(updated).toEqual({ active: true, text: 'é', startedAt: 22, appliedText: null })
+    expect(accumulated).toEqual({ active: true, text: 'été', startedAt: 22, appliedText: null })
   })
 
   it('onCompositionEnd returns commitText and resets state', () => {
     const result = onCompositionEnd(
-      { active: true, text: 'é', startedAt: 77 },
+      { active: true, text: 'é', startedAt: 77, appliedText: null },
       makeCompositionEvent('compositionend', 'été'),
     )
 
     expect(result).toEqual({
-      state: { active: false, text: '', startedAt: 0 },
+      state: { active: false, text: '', startedAt: 0, appliedText: null },
       commitText: 'été',
     })
   })
@@ -74,7 +77,7 @@ describe('Composition', () => {
   it('shouldSwallowBeforeInput returns true for insertCompositionText while active', () => {
     expect(
       shouldSwallowBeforeInput(
-        { active: true, text: 'é', startedAt: 1 },
+        { active: true, text: 'é', startedAt: 1, appliedText: null },
         makeInputEvent('insertCompositionText', 'é'),
       ),
     ).toBe(true)
@@ -83,7 +86,7 @@ describe('Composition', () => {
   it('shouldSwallowBeforeInput returns true for insertCompositionText variants while active', () => {
     expect(
       shouldSwallowBeforeInput(
-        { active: true, text: '漢', startedAt: 1 },
+        { active: true, text: '漢', startedAt: 1, appliedText: null },
         makeInputEvent('insertCompositionTextReplacement', '漢'),
       ),
     ).toBe(true)
@@ -92,7 +95,7 @@ describe('Composition', () => {
   it('shouldSwallowBeforeInput returns true for insertText matching the composition buffer', () => {
     expect(
       shouldSwallowBeforeInput(
-        { active: true, text: 'ç', startedAt: 1 },
+        { active: true, text: 'ç', startedAt: 1, appliedText: null },
         makeInputEvent('insertText', 'ç'),
       ),
     ).toBe(true)
@@ -101,7 +104,7 @@ describe('Composition', () => {
   it('shouldSwallowBeforeInput returns false when composition is inactive', () => {
     expect(
       shouldSwallowBeforeInput(
-        { active: false, text: 'é', startedAt: 1 },
+        { active: false, text: 'é', startedAt: 1, appliedText: null },
         makeInputEvent('insertCompositionText', 'é'),
       ),
     ).toBe(false)
@@ -110,7 +113,7 @@ describe('Composition', () => {
   it('shouldSwallowBeforeInput returns false for non-text input types', () => {
     expect(
       shouldSwallowBeforeInput(
-        { active: true, text: 'é', startedAt: 1 },
+        { active: true, text: 'é', startedAt: 1, appliedText: null },
         makeInputEvent('deleteContentBackward', null),
       ),
     ).toBe(false)
@@ -118,27 +121,55 @@ describe('Composition', () => {
 
   it('onCompositionEnd with empty data returns an empty commit and inactive state', () => {
     const result = onCompositionEnd(
-      { active: true, text: '', startedAt: 55 },
+      { active: true, text: '', startedAt: 55, appliedText: null },
       makeCompositionEvent('compositionend', ''),
     )
 
     expect(result).toEqual({
-      state: { active: false, text: '', startedAt: 0 },
+      state: { active: false, text: '', startedAt: 0, appliedText: null },
       commitText: '',
     })
   })
 
   it('composition helpers do not mutate original state objects', () => {
-    const original = { active: false, text: 'seed', startedAt: 9 }
+    const original = { active: false, text: 'seed', startedAt: 9, appliedText: null }
     const started = onCompositionStart(original, makeCompositionEvent('compositionstart', 'e'))
-    const active = { active: true, text: 'e', startedAt: 10 }
+    const active = { active: true, text: 'e', startedAt: 10, appliedText: null }
     const updated = onCompositionUpdate(active, makeCompositionEvent('compositionupdate', 'é'))
     const ended = onCompositionEnd(active, makeCompositionEvent('compositionend', 'é'))
 
-    expect(original).toEqual({ active: false, text: 'seed', startedAt: 9 })
-    expect(active).toEqual({ active: true, text: 'e', startedAt: 10 })
+    expect(original).toEqual({ active: false, text: 'seed', startedAt: 9, appliedText: null })
+    expect(active).toEqual({ active: true, text: 'e', startedAt: 10, appliedText: null })
     expect(started).not.toBe(original)
     expect(updated).not.toBe(active)
     expect(ended.state).not.toBe(active)
+  })
+
+  // ─── DXE-20 — IME double-insert on candidate cycling ────────────────────────
+
+  it('markCompositionTextApplied records applied text only while composition is active', () => {
+    const active = { active: true, text: '漢字', startedAt: 1, appliedText: null }
+    const marked = markCompositionTextApplied(active, '漢字')
+    expect(marked).toEqual({ active: true, text: '漢字', startedAt: 1, appliedText: '漢字' })
+
+    const inactive = { active: false, text: '', startedAt: 0, appliedText: null }
+    expect(markCompositionTextApplied(inactive, 'x')).toBe(inactive)
+  })
+
+  it('onCompositionEnd skips re-committing text a beforeinput already applied', () => {
+    const state = { active: true, text: '漢字', startedAt: 1, appliedText: '漢字' }
+    const result = onCompositionEnd(state, makeCompositionEvent('compositionend', '漢字'))
+
+    // The text already landed in the model via the earlier beforeinput —
+    // committing it again here would double-insert it.
+    expect(result.commitText).toBe('')
+    expect(result.state).toEqual(createCompositionState())
+  })
+
+  it('onCompositionEnd still commits when the final text differs from what was already applied', () => {
+    const state = { active: true, text: '漢字', startedAt: 1, appliedText: '漢' }
+    const result = onCompositionEnd(state, makeCompositionEvent('compositionend', '漢字'))
+
+    expect(result.commitText).toBe('漢字')
   })
 })

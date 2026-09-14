@@ -14,7 +14,16 @@ export type ToolbarCommand =
   | { kind: 'set-orientation'; orientation: 'portrait' | 'landscape' }
   | { kind: 'set-page-size'; preset: 'letter' | 'a4' | 'legal' }
   | { kind: 'set-columns'; count: 1 | 2 | 3 }
-  | { kind: 'toggle-spell-check' | 'toggle-track-changes' | 'accept-change' | 'reject-change' | 'open-comments-pane' }
+  | {
+      kind:
+        | 'toggle-spell-check'
+        | 'toggle-track-changes'
+        | 'accept-change'
+        | 'reject-change'
+        | 'accept-all-changes'
+        | 'reject-all-changes'
+        | 'open-comments-pane'
+    }
   | { kind: 'undo' | 'redo' }
   | { kind: 'open-find-replace' };
 

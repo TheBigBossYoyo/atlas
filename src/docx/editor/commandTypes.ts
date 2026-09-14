@@ -1,4 +1,4 @@
-import type { ParaProps, RunProps } from '../model'
+import type { Block, ParaProps, RunChild, RunProps } from '../model'
 
 export type Position = {
   readonly paragraphPath: ReadonlyArray<number>
@@ -50,6 +50,52 @@ export type InsertHyperlinkCommand = {
   readonly kind: 'insert-hyperlink'
   readonly range: Range
   readonly url: string
+  /**
+   * Relationship id (e.g. `rId7`) the caller has already allocated in the
+   * bundle's `word/_rels/document.xml.rels` for this external link. Allocation
+   * lives outside the pure Document model (it must avoid colliding with the
+   * bundle's existing relationships), so callers build this via
+   * `insertHyperlinkIntoBundle` rather than constructing the command directly.
+   */
+  readonly relationshipId: string
+}
+
+/**
+ * Inserts a single inline leaf (an image `Drawing`, a page/column `BreakNode`,
+ * etc.) at a caret position, splitting the enclosing run if the caret sits
+ * mid-run. Used for image insertion (DXE-18) and page breaks (DXE-06) so both
+ * go through the same Command/History pipeline and are undoable.
+ */
+export type InsertInlineCommand = {
+  readonly kind: 'insert-inline'
+  readonly at: Position
+  readonly child: RunChild
+}
+
+/** Generic composite: applies each sub-command in order as a single atomic
+ * unit and undoes/redoes as one History step (DXE-02/DXE-17). */
+export type CompositeCommand = {
+  readonly kind: 'composite'
+  readonly commands: ReadonlyArray<Command>
+}
+
+/**
+ * Replaces `count` consecutive sibling blocks starting at `at` (a
+ * paragraphPath-shaped `[sectionIndex, ...blockPath]` addressing the first
+ * replaced block) with `blocks`. This is the general-purpose exact-inverse
+ * primitive for structural edits (cross-paragraph delete, table/hyperlink
+ * insertion): the forward edit is applied directly against the model, and its
+ * inverse is expressed as a `replace-blocks` command carrying the original
+ * blocks verbatim, so undo restores them exactly. `cursor`, when present, is
+ * the selection to restore once this command is applied (used by undo to put
+ * the caret back where the user was before the edit it is undoing).
+ */
+export type ReplaceBlocksCommand = {
+  readonly kind: 'replace-blocks'
+  readonly at: ReadonlyArray<number>
+  readonly count: number
+  readonly blocks: ReadonlyArray<Block>
+  readonly cursor?: Range
 }
 
 export type ApplyStyleCommand = {
@@ -104,6 +150,9 @@ export type Command =
   | ApplyParaFormatCommand
   | InsertTableCommand
   | InsertHyperlinkCommand
+  | InsertInlineCommand
+  | CompositeCommand
+  | ReplaceBlocksCommand
   | ApplyStyleCommand
   | InsertListCommand
   | ChangeListLevelCommand

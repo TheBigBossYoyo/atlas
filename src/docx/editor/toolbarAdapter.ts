@@ -1,42 +1,110 @@
-import { halfPoint, hexColor, twip, type HighlightColor, type JustifyContent } from '../model'
+import { halfPoint, hexColor, twip, type Document, type HighlightColor, type JustifyContent } from '../model'
 
+import { findParagraph } from './commands'
 import type { Command, Range } from './commandTypes'
+import { normalizeRange } from './Selection'
 import type { ToolbarCommand } from './toolbar/toolbarTypes'
 
 function getSelectionRange(selection: Range | null): Range | null {
   return selection
 }
 
-function getFocusRange(_selection: Range | null): Range | null {
-  return _selection
-}
-void getFocusRange
-
 function getPrimaryParagraphPath(selection: Range | null): ReadonlyArray<number> | null {
   return selection?.focus.paragraphPath ?? selection?.anchor.paragraphPath ?? null
 }
 
-function getParagraphPaths(selection: Range | null): ReadonlyArray<ReadonlyArray<number>> {
-  const anchorPath = selection?.anchor.paragraphPath
-  const focusPath = selection?.focus.paragraphPath
+function pathsEqual(a: ReadonlyArray<number>, b: ReadonlyArray<number>): boolean {
+  return a.length === b.length && a.every((segment, index) => segment === b[index])
+}
 
-  if (anchorPath === undefined && focusPath === undefined) {
+function collectTopLevelParagraphPaths(document: Document): ReadonlyArray<ReadonlyArray<number>> {
+  const paths: Array<ReadonlyArray<number>> = []
+
+  document.sections.forEach((section, sectionIndex) => {
+    section.blocks.forEach((block, blockIndex) => {
+      if (block.kind === 'paragraph') {
+        paths.push(Object.freeze([sectionIndex, blockIndex]))
+      }
+    })
+  })
+
+  return paths
+}
+
+/**
+ * Every paragraph a selection touches, not just its two endpoints — a
+ * multi-paragraph bullet/numbered-list toggle or alignment change must apply
+ * to every paragraph in between, not skip them. Falls back to the raw
+ * anchor/focus paragraph paths (deduplicated) when either endpoint isn't
+ * among the document's top-level paragraphs (e.g. one sits inside a table
+ * cell), since that's a case this simple contiguous-range enumeration
+ * doesn't cover.
+ */
+function getParagraphPaths(
+  selection: Range | null,
+  document: Document,
+): ReadonlyArray<ReadonlyArray<number>> {
+  if (selection === null) {
     return []
   }
 
-  if (anchorPath === undefined) {
-    return [focusPath!]
+  const normalized = normalizeRange(selection)
+  const allPaths = collectTopLevelParagraphPaths(document)
+  const startIndex = allPaths.findIndex((path) => pathsEqual(path, normalized.start.paragraphPath))
+  const endIndex = allPaths.findIndex((path) => pathsEqual(path, normalized.end.paragraphPath))
+
+  if (startIndex === -1 || endIndex === -1) {
+    return pathsEqual(normalized.start.paragraphPath, normalized.end.paragraphPath)
+      ? [normalized.start.paragraphPath]
+      : [normalized.start.paragraphPath, normalized.end.paragraphPath]
   }
 
-  if (focusPath === undefined) {
-    return [anchorPath]
+  const [lo, hi] = startIndex <= endIndex ? [startIndex, endIndex] : [endIndex, startIndex]
+  return allPaths.slice(lo, hi + 1)
+}
+
+const LIST_FORMAT_BY_KIND: Readonly<Record<'bullet' | 'number', string>> = {
+  bullet: 'bullet',
+  number: 'decimal',
+}
+
+/**
+ * DXE-06/D18 — picks the `numId` to use for the toolbar's bullet/numbered
+ * list toggle. A real Word document almost always already defines numId "1"
+ * (frequently "2" as well) for its own lists — hardcoding those values here
+ * would mean clicking "Bulleted List" on such a document silently reuses
+ * whatever list style the document already assigned to numId 1 (rarely an
+ * actual bullet format) via `ensureListNumbering`'s "reuse if already
+ * defined" rule, instead of creating Atlas's own bullet definition.
+ *
+ * Reuses an Atlas-created list definition of the matching kind if one
+ * already exists in this document (identified by the `atlas-list-` prefix
+ * `ensureListNumbering` gives its own `abstractNumId`s, plus a matching
+ * level-0 format) so repeated toggles of the same kind keep converging on
+ * one shared definition; otherwise allocates one past every numId already
+ * in use, which can never collide with the source document's own numbering
+ * or with a different-kind list Atlas already created in this session.
+ */
+function pickListNumId(document: Document, kind: 'bullet' | 'number'): number {
+  const wantedFormat = LIST_FORMAT_BY_KIND[kind]
+  let maxNumId = 0
+
+  for (const [numIdStr, def] of document.numbering) {
+    const parsed = Number.parseInt(numIdStr, 10)
+    if (Number.isFinite(parsed) && parsed > maxNumId) {
+      maxNumId = parsed
+    }
+
+    if (
+      Number.isFinite(parsed) &&
+      def.abstractNumId?.startsWith('atlas-list-') === true &&
+      def.levels.get(0)?.format === wantedFormat
+    ) {
+      return parsed
+    }
   }
 
-  const samePath =
-    anchorPath.length === focusPath.length &&
-    anchorPath.every((segment, index) => segment === focusPath[index])
-
-  return samePath ? [anchorPath] : [anchorPath, focusPath]
+  return maxNumId + 1
 }
 
 function toAlignment(align: 'left' | 'center' | 'right' | 'justify'): JustifyContent {
@@ -100,7 +168,44 @@ function toHighlightColor(colorHex: string): HighlightColor | null {
   }
 }
 
-export function toolbarToCommand(toolbarCmd: ToolbarCommand, selection: Range | null): Command | null {
+/**
+ * DXE-11 — finds the nearest tracked-change revision to resolve for
+ * accept/reject-change: the backend (`accept-revision`/`reject-revision`)
+ * already resolves a revision addressed by an exact `{paragraphPath,
+ * childIndex}`, but the toolbar only has the current selection. Since a
+ * paragraph containing an `ins-revision`/`del-revision` child falls outside
+ * the run-index addressing scheme entirely (`getEditableRuns` only flattens
+ * plain runs and hyperlinks), the best a selection-driven Accept/Reject
+ * button can do is resolve to the first revision in the selection's
+ * paragraph — sufficient for the common case of one open revision at a time,
+ * with Accept All/Reject All covering documents with several.
+ */
+function findRevisionAtSelection(
+  document: Document,
+  selection: Range | null,
+): { paragraphPath: ReadonlyArray<number>; childIndex: number } | null {
+  const paragraphPath = getPrimaryParagraphPath(selection)
+  if (paragraphPath === null) {
+    return null
+  }
+
+  const paragraph = findParagraph(document, paragraphPath)
+  if (paragraph === null) {
+    return null
+  }
+
+  const childIndex = paragraph.children.findIndex(
+    (child) => child.kind === 'ins-revision' || child.kind === 'del-revision',
+  )
+
+  return childIndex === -1 ? null : { paragraphPath, childIndex }
+}
+
+export function toolbarToCommand(
+  toolbarCmd: ToolbarCommand,
+  selection: Range | null,
+  document: Document,
+): Command | null {
   switch (toolbarCmd.kind) {
     case 'set-font-family': {
       const range = getSelectionRange(selection)
@@ -181,7 +286,7 @@ export function toolbarToCommand(toolbarCmd: ToolbarCommand, selection: Range | 
         : { kind: 'apply-run-format', range, format: { highlight } }
     }
     case 'set-alignment': {
-      const paragraphPaths = getParagraphPaths(selection)
+      const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
         : {
@@ -191,7 +296,7 @@ export function toolbarToCommand(toolbarCmd: ToolbarCommand, selection: Range | 
           }
     }
     case 'set-line-spacing': {
-      const paragraphPaths = getParagraphPaths(selection)
+      const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
         : {
@@ -206,16 +311,16 @@ export function toolbarToCommand(toolbarCmd: ToolbarCommand, selection: Range | 
           }
     }
     case 'toggle-bullet-list': {
-      const paragraphPaths = getParagraphPaths(selection)
+      const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
-        : { kind: 'insert-list', paragraphPaths, numId: 1, level: 0 }
+        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document, 'bullet'), level: 0 }
     }
     case 'toggle-numbered-list': {
-      const paragraphPaths = getParagraphPaths(selection)
+      const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
-        : { kind: 'insert-list', paragraphPaths, numId: 2, level: 0 }
+        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document, 'number'), level: 0 }
     }
     case 'change-indent': {
       const paragraphPath = getPrimaryParagraphPath(selection)
@@ -243,8 +348,12 @@ export function toolbarToCommand(toolbarCmd: ToolbarCommand, selection: Range | 
       return null
     case 'insert-footer':
       return null
-    case 'insert-page-break':
-      return null
+    case 'insert-page-break': {
+      const focus = selection?.focus ?? selection?.anchor
+      return focus === undefined
+        ? null
+        : { kind: 'insert-inline', at: focus, child: { kind: 'break', breakType: 'page' } }
+    }
     case 'insert-comment':
       return null
     case 'set-margins':
@@ -259,10 +368,18 @@ export function toolbarToCommand(toolbarCmd: ToolbarCommand, selection: Range | 
       return null
     case 'toggle-track-changes':
       return null
-    case 'accept-change':
-      return null
-    case 'reject-change':
-      return null
+    case 'accept-change': {
+      const target = findRevisionAtSelection(document, selection)
+      return target === null ? null : { kind: 'accept-revision', ...target }
+    }
+    case 'reject-change': {
+      const target = findRevisionAtSelection(document, selection)
+      return target === null ? null : { kind: 'reject-revision', ...target }
+    }
+    case 'accept-all-changes':
+      return { kind: 'accept-all-revisions' }
+    case 'reject-all-changes':
+      return { kind: 'reject-all-revisions' }
     case 'open-comments-pane':
       return null
     case 'undo':

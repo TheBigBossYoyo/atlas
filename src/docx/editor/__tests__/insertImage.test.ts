@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { DocxBundle } from '../../index'
-import type { Document, Paragraph, Section } from '../../model/document'
+import type { Document, Paragraph, Run, Section } from '../../model/document'
+import { applyCommand } from '../commands'
 import type { Position } from '../commandTypes'
-import { insertImageIntoBundle, type InsertImageInput } from '../insertImage'
+import { decodeImageNaturalSizePt, insertImageIntoBundle, type InsertImageInput } from '../insertImage'
 
 function emptyMaps() {
   return {
@@ -17,10 +18,10 @@ function emptyMaps() {
   }
 }
 
-function makeBundle(): DocxBundle {
+function makeBundle(text = 'Hello'): DocxBundle {
   const paragraph: Paragraph = {
     kind: 'paragraph',
-    children: [{ kind: 'run', children: [{ kind: 'text', value: 'Hello' }] }],
+    children: [{ kind: 'run', children: [{ kind: 'text', value: text }] }],
   }
   const section: Section = { kind: 'section', props: {}, blocks: [paragraph] }
   const document: Document = {
@@ -52,22 +53,19 @@ const IMAGE: InsertImageInput = {
   description: 'a screenshot',
 }
 
-const POSITION: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
-
 describe('insertImageIntoBundle', () => {
-  it('appends a new run with a Drawing child to the target paragraph', () => {
+  it('inserts a run with a Drawing child at the caret position', () => {
     const bundle = makeBundle()
-    const result = insertImageIntoBundle(bundle, POSITION, IMAGE)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    const result = insertImageIntoBundle(bundle, position, IMAGE)
 
     const section = result.document.sections[0]
-    expect(section).toBeDefined()
     const paragraph = section!.blocks[0] as Paragraph
     expect(paragraph.children.length).toBe(2)
 
-    const newRun = paragraph.children[1]
+    const newRun = paragraph.children[0]
     expect(newRun?.kind).toBe('run')
     if (newRun?.kind !== 'run') return
-    expect(newRun.children.length).toBe(1)
     const drawing = newRun.children[0]
     expect(drawing?.kind).toBe('drawing')
     if (drawing?.kind !== 'drawing') return
@@ -77,9 +75,24 @@ describe('insertImageIntoBundle', () => {
     expect(drawing.description).toBe('a screenshot')
   })
 
+  it('DXE-18: inserts at the actual cursor, splitting the run so surrounding text is preserved', () => {
+    const bundle = makeBundle('HelloWorld')
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 5 }
+    const result = insertImageIntoBundle(bundle, position, IMAGE)
+
+    const paragraph = result.document.sections[0]!.blocks[0] as Paragraph
+    expect(paragraph.children.length).toBe(3)
+    const before = paragraph.children[0] as Run
+    const after = paragraph.children[2] as Run
+    expect(before.children).toEqual([{ kind: 'text', value: 'Hello' }])
+    expect(after.children).toEqual([{ kind: 'text', value: 'World' }])
+    expect(paragraph.children[1]).toMatchObject({ kind: 'run' })
+  })
+
   it('allocates a fresh relationship id and registers the image type', () => {
     const bundle = makeBundle()
-    const result = insertImageIntoBundle(bundle, POSITION, IMAGE)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    const result = insertImageIntoBundle(bundle, position, IMAGE)
 
     expect(result.bundle.relationships).toBeDefined()
     const rels = result.bundle.relationships!
@@ -92,7 +105,8 @@ describe('insertImageIntoBundle', () => {
 
   it('writes the image bytes into rawArchive at word/media/image1.png', () => {
     const bundle = makeBundle()
-    const result = insertImageIntoBundle(bundle, POSITION, IMAGE)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    const result = insertImageIntoBundle(bundle, position, IMAGE)
 
     expect(result.bundle.rawArchive).toBeDefined()
     const archive = result.bundle.rawArchive!
@@ -107,16 +121,18 @@ describe('insertImageIntoBundle', () => {
     archive.set('word/media/image1.png', new Uint8Array([1]))
     archive.set('word/media/image2.png', new Uint8Array([2]))
     const seeded: DocxBundle = { ...bundle, rawArchive: archive }
-    const result = insertImageIntoBundle(seeded, POSITION, IMAGE)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    const result = insertImageIntoBundle(seeded, position, IMAGE)
     expect(result.bundle.rawArchive!.has('word/media/image3.png')).toBe(true)
   })
 
-  it('positions the cursor immediately after the inserted run', () => {
+  it('positions the cursor immediately after the inserted image', () => {
     const bundle = makeBundle()
-    const result = insertImageIntoBundle(bundle, POSITION, IMAGE)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    const result = insertImageIntoBundle(bundle, position, IMAGE)
     expect(result.range.anchor).toEqual({
       paragraphPath: [0, 0],
-      runIndex: 2,
+      runIndex: 1,
       charOffset: 0,
     })
     expect(result.range.focus).toEqual(result.range.anchor)
@@ -129,7 +145,8 @@ describe('insertImageIntoBundle', () => {
     const originalParagraphChildren = (bundle.document.sections[0]!.blocks[0] as Paragraph).children
       .length
 
-    insertImageIntoBundle(bundle, POSITION, IMAGE)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    insertImageIntoBundle(bundle, position, IMAGE)
 
     expect(bundle.relationships!.length).toBe(originalRelsLen)
     expect(bundle.rawArchive!.size).toBe(originalArchiveSize)
@@ -147,7 +164,8 @@ describe('insertImageIntoBundle', () => {
   it('handles JPEG mime', () => {
     const bundle = makeBundle()
     const jpeg: InsertImageInput = { ...IMAGE, mime: 'image/jpeg', suggestedName: 'p.jpg' }
-    const result = insertImageIntoBundle(bundle, POSITION, jpeg)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    const result = insertImageIntoBundle(bundle, position, jpeg)
     expect(result.bundle.rawArchive!.has('word/media/image1.jpeg')).toBe(true)
   })
 
@@ -155,7 +173,8 @@ describe('insertImageIntoBundle', () => {
     const bundle = makeBundle()
     expect(bundle.contentTypes).toBeUndefined()
 
-    const result = insertImageIntoBundle(bundle, POSITION, IMAGE)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    const result = insertImageIntoBundle(bundle, position, IMAGE)
 
     expect(result.bundle.contentTypes).toBeDefined()
     const defaults = result.bundle.contentTypes!.defaults
@@ -171,9 +190,83 @@ describe('insertImageIntoBundle', () => {
       },
     }
 
-    const result = insertImageIntoBundle(bundle, POSITION, IMAGE)
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 }
+    const result = insertImageIntoBundle(bundle, position, IMAGE)
 
     const defaults = result.bundle.contentTypes!.defaults
     expect(defaults.filter((entry) => entry.extension === 'png')).toHaveLength(1)
+  })
+
+  // ---------------------------------------------------------------------------
+  // DXE-18 — routed through Command/History so it is undoable
+  // ---------------------------------------------------------------------------
+
+  it('returns an inverse command that removes the image and restores the original paragraph exactly', () => {
+    const bundle = makeBundle('HelloWorld')
+    const position: Position = { paragraphPath: [0, 0], runIndex: 0, charOffset: 5 }
+    const result = insertImageIntoBundle(bundle, position, IMAGE)
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(bundle.document)
+  })
+})
+
+describe('decodeImageNaturalSizePt', () => {
+  const originalCreateImageBitmap = globalThis.createImageBitmap
+
+  afterEach(() => {
+    if (originalCreateImageBitmap === undefined) {
+      Reflect.deleteProperty(globalThis, 'createImageBitmap')
+    } else {
+      globalThis.createImageBitmap = originalCreateImageBitmap
+    }
+    vi.restoreAllMocks()
+  })
+
+  beforeEach(() => {
+    Reflect.deleteProperty(globalThis, 'createImageBitmap')
+  })
+
+  it('falls back to a fixed 200x150pt box when createImageBitmap is unavailable', async () => {
+    const size = await decodeImageNaturalSizePt(PNG_BYTES, 'image/png')
+    expect(size).toEqual({ widthPt: 200, heightPt: 150 })
+  })
+
+  it('converts decoded pixel dimensions to points at 96dpi', async () => {
+    globalThis.createImageBitmap = vi.fn().mockResolvedValue({ width: 96, height: 48, close: vi.fn() })
+
+    const size = await decodeImageNaturalSizePt(PNG_BYTES, 'image/png')
+
+    expect(size.widthPt).toBeCloseTo(72)
+    expect(size.heightPt).toBeCloseTo(36)
+  })
+
+  it('scales down a wider-than-page image, preserving its aspect ratio', async () => {
+    // 1200x600px at 96dpi is 900x450pt — wider than the 468pt content-width
+    // cap, and 2:1 aspect ratio (portrait/landscape must be preserved, not
+    // forced into a 4:3 box).
+    globalThis.createImageBitmap = vi.fn().mockResolvedValue({ width: 1200, height: 600, close: vi.fn() })
+
+    const size = await decodeImageNaturalSizePt(PNG_BYTES, 'image/png')
+
+    expect(size.widthPt).toBeCloseTo(468)
+    expect(size.heightPt).toBeCloseTo(234)
+    expect(size.widthPt / size.heightPt).toBeCloseTo(2)
+  })
+
+  it('preserves a portrait aspect ratio instead of forcing 4:3', async () => {
+    globalThis.createImageBitmap = vi.fn().mockResolvedValue({ width: 400, height: 800, close: vi.fn() })
+
+    const size = await decodeImageNaturalSizePt(PNG_BYTES, 'image/png')
+
+    expect(size.widthPt / size.heightPt).toBeCloseTo(0.5)
+  })
+
+  it('falls back to the fixed box when decoding throws', async () => {
+    globalThis.createImageBitmap = vi.fn().mockRejectedValue(new Error('unsupported image'))
+
+    const size = await decodeImageNaturalSizePt(PNG_BYTES, 'image/png')
+
+    expect(size).toEqual({ widthPt: 200, heightPt: 150 })
   })
 })
