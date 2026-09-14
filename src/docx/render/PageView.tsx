@@ -538,6 +538,36 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
           ),
         )}
 
+        {/* Footnote area (D11 milestone 3/DXL-09) — sits just above the
+            footer, sized to exactly the space `paginate.ts`'s
+            `reserveFootnotesForLine` reserved for it (the last line's
+            `topPt + lineHeight`, which already includes the leading
+            separator gap — see `buildPageFootnoteLines`'s doc comment). */}
+        {page.hasFootnoteSeparator && page.footnoteLines.length > 0 && (() => {
+          const lastFootnoteLine = page.footnoteLines[page.footnoteLines.length - 1];
+          const footnoteAreaHeight = lastFootnoteLine.topPt + lastFootnoteLine.line.lineHeight;
+          return (
+            <div
+              className="docx-page__footnotes"
+              style={{
+                position: 'absolute',
+                top: `${page.sizePt.height - page.marginsPt.bottom - footnoteAreaHeight}px`,
+                left: `${page.marginsPt.left}px`,
+                width: `${page.sizePt.width - page.marginsPt.left - page.marginsPt.right}px`,
+                height: `${footnoteAreaHeight}px`,
+              }}
+            >
+              <div
+                className="docx-page__footnote-separator"
+                style={{ position: 'absolute', top: 0, left: 0, width: '144px', borderTop: '1px solid currentColor' }}
+              />
+              {page.footnoteLines.map((footnoteLine, idx) =>
+                renderLine(footnoteLine.line, footnoteLine.topPt, footnoteLine.leftPt, `footnote-${idx}`),
+              )}
+            </div>
+          );
+        })()}
+
         {/* Footer */}
         {page.footerLines.length > 0 && (
           <div

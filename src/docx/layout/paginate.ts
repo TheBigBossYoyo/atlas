@@ -1,5 +1,7 @@
 import type {
+  Block,
   Document,
+  Footnote,
   FooterReference,
   HeaderReference,
   HyperlinkChild,
@@ -11,6 +13,7 @@ import type {
   RunProps,
   Section,
   SectionProps,
+  SectionVerticalAlign,
   Table,
   Tab,
 } from '../model'
@@ -25,9 +28,19 @@ import {
   resolveListMarker,
   type NumberingCounterState,
 } from './listMarkers'
+import {
+  assignEndnoteMark,
+  assignFootnoteMark,
+  collectNoteReferences,
+  createNoteNumberingState,
+  renumberFootnotesEachPage,
+  resetFootnoteCounter,
+  type NoteNumberingState,
+} from './noteNumbering'
 import type {
   ColumnBox,
   Page,
+  PageFootnoteLineRef,
   PageLineRef,
   PageTableRef,
   PageTableRowRef,
@@ -88,6 +101,11 @@ const EMPTY_TABS: ReadonlyArray<Tab> = []
 const EMPTY_HEADER_REFERENCES: ReadonlyArray<HeaderReference> = []
 const EMPTY_FOOTER_REFERENCES: ReadonlyArray<FooterReference> = []
 const EMPTY_PARAGRAPH_PATH: ReadonlyArray<number> = []
+const EMPTY_FOOTNOTE_CONTENT: ReadonlyMap<string, ReadonlyArray<LineBox>> = new Map()
+/** Fixed reservation (in points) for the short rule Word draws above a page's footnote area, added once per page the first time a footnote is reserved on it. */
+const FOOTNOTE_SEPARATOR_RESERVE_PT = 14
+/** Vertical gap between two different footnotes' text within the same page's footnote area. */
+const FOOTNOTE_INTER_NOTE_GAP_PT = 4
 
 type ResolvedPageSize = {
   width: number
@@ -114,6 +132,7 @@ type ResolvedSectionLayout = {
   titlePage: boolean
   headerReferences: ReadonlyArray<HeaderReference>
   footerReferences: ReadonlyArray<FooterReference>
+  vAlign: SectionVerticalAlign | undefined
 }
 
 type ParagraphUnit = {
@@ -177,11 +196,29 @@ type ActivePage = {
   contentTopPt: number
   contentHeightPt: number
   currentColumnIndex: number
+  /** D24/DXL-17 — the owning section's `w:vAlign`, applied as a post-placement offset in `finalizePage`. */
+  vAlign: SectionVerticalAlign | undefined
+  /**
+   * D11 milestone 3 — running total of bottom-of-page space reserved for
+   * this page's footnote area (including the separator), grown as a
+   * footnote-referencing line is committed via `placeLine`. Body content
+   * fit-checks subtract this from `contentHeightPt` (see
+   * `effectiveContentHeightPt`) so later lines naturally leave room for it.
+   */
+  footnoteAreaHeightPt: number
+  /** Footnote ids reserved on this page so far, in first-appearance order. */
+  footnoteIds: string[]
+  /** This page's section's referenced footnotes, pre-laid-out once per section (see `buildFootnoteContentLines`). */
+  footnoteContentById: ReadonlyMap<string, ReadonlyArray<LineBox>>
 }
 
 export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Page>> {
   const pages: Page[] = []
-  const headerFooterLines = input.headerFooterLines ?? new Map<string, ReadonlyArray<LineBox>>()
+  const evenAndOddHeaders = input.evenAndOddHeaders === true
+  const headerFooterLines = mergeHeaderFooterLines(
+    await buildDefaultHeaderFooterLines(input),
+    input.headerFooterLines,
+  )
   const totalBlocks = countTotalBlocks(input)
   const progressState = { completedBlocks: 0, tick: 0 }
   /**
@@ -197,15 +234,37 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
   // continue across a section break), so this is created once here rather
   // than per-section.
   const listCounterState = createNumberingCounterState()
+  // Footnote/endnote numbering (D11 milestones 2/5) — same "persists across
+  // the whole document" reasoning as listCounterState; `eachSect` restart
+  // resets the footnote counter at the top of each section's iteration
+  // below rather than replacing this state object.
+  const noteState = createNoteNumberingState()
+  const footnoteRestart = input.footnoteNumbering?.restart ?? 'continuous'
 
   // Carries across the `for` loop below (rather than being section-local)
   // so a 'continuous'/'nextColumn' section break (D9) can keep flowing
   // into the page the PREVIOUS section left in progress instead of always
   // starting a fresh one. `undefined` only before the first section.
   let currentPage: ActivePage | undefined
+  // Captured on every iteration so endnote placement (after the loop) can
+  // reuse the LAST section's page geometry — endnotes render at the end of
+  // the document using that section's layout, not a layout of their own.
+  let lastSectionLayout: ResolvedSectionLayout | undefined
 
   for (const [sectionIndex, section] of input.document.sections.entries()) {
     const sectionLayout = resolveSectionLayout(section)
+    lastSectionLayout = sectionLayout
+
+    if (footnoteRestart === 'eachSect' || footnoteRestart === 'eachPage') {
+      // `eachPage` can't be resolved until pages exist (see
+      // `noteNumbering.ts`'s module doc) — resetting per-section here still
+      // gives it a reasonable placeholder numbering to measure/render
+      // against before the post-layout `applyEachPageFootnoteRestart` pass
+      // relabels the displayed text per page.
+      resetFootnoteCounter(noteState, input.footnoteNumbering?.start ?? 1)
+    }
+
+    const sectionFootnoteIds: string[] = []
     const units = await buildSectionUnits(
       input,
       section,
@@ -215,6 +274,8 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
       progressState,
       styleCache,
       listCounterState,
+      noteState,
+      sectionFootnoteIds,
     )
 
     for (const unit of units) {
@@ -223,10 +284,26 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
       }
     }
 
+    const footnoteContentById = await buildSectionFootnoteContent(
+      input,
+      sectionFootnoteIds,
+      resolveFullContentWidthPt(sectionLayout),
+      styleCache,
+      noteState,
+    )
+
     let pageNumberInSection = 0
     const openNewPage = (): ActivePage => {
       pageNumberInSection += 1
-      return createActivePage(sectionLayout, sectionIndex, pageNumberInSection, pages.length + 1, headerFooterLines)
+      return createActivePage(
+        sectionLayout,
+        sectionIndex,
+        pageNumberInSection,
+        pages.length + 1,
+        headerFooterLines,
+        evenAndOddHeaders,
+        footnoteContentById,
+      )
     }
 
     // A section break's own type decides whether this section continues
@@ -244,9 +321,12 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
 
     if (continuation === 'continuous' && currentPage !== undefined) {
       sectionPage = applyContinuousSectionGeometry(currentPage, sectionLayout, sectionIndex)
+      sectionPage.footnoteContentById = mergeFootnoteContent(sectionPage.footnoteContentById, footnoteContentById)
     } else if (continuation === 'nextColumn' && currentPage !== undefined) {
       sectionPage = forceColumnBreak(currentPage, pages, openNewPage)
       sectionPage.sectionIndex = sectionIndex
+      sectionPage.vAlign = sectionLayout.vAlign
+      sectionPage.footnoteContentById = mergeFootnoteContent(sectionPage.footnoteContentById, footnoteContentById)
     } else {
       if (currentPage !== undefined) {
         pages.push(finalizePage(currentPage, pages.length))
@@ -258,6 +338,7 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
           sectionIndex,
           pageNumberInSection,
           headerFooterLines,
+          evenAndOddHeaders,
         )
       }
       sectionPage = openNewPage()
@@ -286,11 +367,345 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
     currentPage = sectionPage
   }
 
+  // D11 milestone 4 — endnotes render once, at the very end of the whole
+  // document (not per-page/per-section like footnotes), continuing to flow
+  // from wherever the last section's content left off using that section's
+  // own page geometry.
+  if (noteState.endnoteOrder.length > 0 && lastSectionLayout !== undefined) {
+    currentPage = await placeEndnotes(
+      input,
+      noteState,
+      lastSectionLayout,
+      currentPage,
+      pages,
+      headerFooterLines,
+      evenAndOddHeaders,
+      styleCache,
+    )
+  }
+
   if (currentPage !== undefined) {
     pages.push(finalizePage(currentPage, pages.length))
   }
 
-  return attachPageTables(pages, tableMetaByPath)
+  const finishedPages = attachPageTables(pages, tableMetaByPath)
+
+  return footnoteRestart === 'eachPage'
+    ? applyEachPageFootnoteRestart(finishedPages, input.footnoteNumbering?.numFmt, input.footnoteNumbering?.start ?? 1)
+    : finishedPages
+}
+
+/**
+ * D11 milestone 1 — builds header/footer content directly from
+ * `document.headers`/`document.footers` (paragraphs only; a table inside a
+ * header/footer is not laid out here, an accepted scope limit), itemized/
+ * broken the same way body paragraphs are. Every section shares the same
+ * full-page-width measurement (headers/footers don't participate in
+ * multi-column layout), computed per distinct header/footer id actually
+ * referenced by some section so a document with many unused parts (common
+ * after several rounds of Word editing) doesn't pay to lay out all of them.
+ */
+async function buildDefaultHeaderFooterLines(
+  input: PaginatorInput,
+): Promise<ReadonlyMap<string, ReadonlyArray<LineBox>>> {
+  const referencedIds = new Set<string>()
+  for (const section of input.document.sections) {
+    for (const reference of section.props.headerReference ?? EMPTY_HEADER_REFERENCES) {
+      referencedIds.add(reference.id)
+    }
+    for (const reference of section.props.footerReference ?? EMPTY_FOOTER_REFERENCES) {
+      referencedIds.add(reference.id)
+    }
+  }
+
+  if (referencedIds.size === 0) {
+    return EMPTY_FOOTNOTE_CONTENT
+  }
+
+  const styleCache = createStyleResolutionCache()
+  const contentWidthPt = resolveFullContentWidthPt(resolveSectionLayout(input.document.sections[0]))
+  const result = new Map<string, ReadonlyArray<LineBox>>()
+
+  for (const id of referencedIds) {
+    const part = input.document.headers.get(id) ?? input.document.footers.get(id)
+    if (part === undefined) {
+      continue
+    }
+    result.set(id, await buildBlockGroupLines(input, part.blocks, contentWidthPt, styleCache))
+  }
+
+  return result
+}
+
+function mergeHeaderFooterLines(
+  builtIn: ReadonlyMap<string, ReadonlyArray<LineBox>>,
+  override: ReadonlyMap<string, ReadonlyArray<LineBox>> | undefined,
+): ReadonlyMap<string, ReadonlyArray<LineBox>> {
+  if (override === undefined || override.size === 0) {
+    return builtIn
+  }
+  return new Map([...builtIn, ...override])
+}
+
+function mergeFootnoteContent(
+  existing: ReadonlyMap<string, ReadonlyArray<LineBox>>,
+  additional: ReadonlyMap<string, ReadonlyArray<LineBox>>,
+): ReadonlyMap<string, ReadonlyArray<LineBox>> {
+  if (additional.size === 0) {
+    return existing
+  }
+  return new Map([...existing, ...additional])
+}
+
+/** Full page-width content measurement (margins/gutter only — ignores column count), used for headers/footers/footnotes/endnotes, which never participate in multi-column body layout. */
+function resolveFullContentWidthPt(sectionLayout: ResolvedSectionLayout): number {
+  return Math.max(
+    0,
+    sectionLayout.sizePt.width - sectionLayout.marginsPt.left - sectionLayout.marginsPt.right - sectionLayout.marginsPt.gutter,
+  )
+}
+
+/**
+ * Lays out a header/footer's paragraph blocks (tables are skipped — see
+ * `buildDefaultHeaderFooterLines`'s doc comment) into a flat `LineBox[]`,
+ * independent of the page-placement machinery paginate.ts otherwise uses:
+ * a header/footer's content isn't subject to page breaking, so it doesn't
+ * need `ParagraphUnit`'s keep-together/leading-gap bookkeeping, just the
+ * same itemize/measure pipeline body paragraphs go through.
+ */
+async function buildBlockGroupLines(
+  input: PaginatorInput,
+  blocks: ReadonlyArray<Block>,
+  contentWidthPt: number,
+  styleCache: StyleResolutionCache,
+): Promise<ReadonlyArray<LineBox>> {
+  const lines: LineBox[] = []
+
+  for (const block of blocks) {
+    if (block.kind !== 'paragraph') {
+      continue
+    }
+
+    const paraProps = applyNumberingIndentFallback(
+      resolveEffectiveParaProps(block.props, input.document, styleCache),
+      input.document,
+    )
+    const tabStops = buildTabStops(paraProps, false)
+
+    lines.push(
+      ...(await breakLines({
+        paragraph: block,
+        paraProps,
+        runs: collectParagraphRuns(block.children, block.props?.pStyle, input.document, styleCache),
+        availableWidth: contentWidthPt,
+        fontResolver: input.fontResolver,
+        tabStops,
+        theme: input.theme,
+      })),
+    )
+  }
+
+  return lines
+}
+
+/**
+ * D11 milestone 4 — endnotes render once at the very end of the document
+ * (a materially different placement rule from footnotes: not per-page, and
+ * genuinely allowed to split across a page break like ordinary body
+ * content). Reuses the SAME `flushPendingGroup`/`placeUnit` machinery
+ * body content flows through, continuing from `currentPage` when there is
+ * one (appending after the last section's content) or opening a fresh page
+ * using the last section's own geometry otherwise.
+ *
+ * Endnote paragraphs are given a synthetic two-element `paragraphPath`
+ * (`[-1, unitIndex]`) — real body/table paths are always a single-element
+ * `[blockIndex]`, so this can never collide with (and be mistaken for) real
+ * body content by `attachPageTables`'s path-matching or the renderer's
+ * `data-paragraph-path`. In-place endnote editing is out of scope (mirrors
+ * D11's plan note that header/footer in-place editing is a stretch item);
+ * this path exists only to give the renderer somewhere to draw the text.
+ */
+async function placeEndnotes(
+  input: PaginatorInput,
+  noteState: NoteNumberingState,
+  sectionLayout: ResolvedSectionLayout,
+  currentPage: ActivePage | undefined,
+  pages: Page[],
+  headerFooterLines: ReadonlyMap<string, ReadonlyArray<LineBox>>,
+  evenAndOddHeaders: boolean,
+  styleCache: StyleResolutionCache,
+): Promise<ActivePage> {
+  const contentWidthPt = resolveFullContentWidthPt(sectionLayout)
+  const units = await buildEndnoteUnits(input, noteState, contentWidthPt, styleCache)
+
+  let pageNumberInSection = 0
+  const openNewPage = (): ActivePage => {
+    pageNumberInSection += 1
+    return createActivePage(
+      sectionLayout,
+      currentPage?.sectionIndex ?? 0,
+      pageNumberInSection,
+      pages.length + 1,
+      headerFooterLines,
+      evenAndOddHeaders,
+      EMPTY_FOOTNOTE_CONTENT,
+    )
+  }
+
+  let activePage = currentPage ?? openNewPage()
+  let pendingGroup: LayoutUnit[] = []
+
+  for (const unit of units) {
+    pendingGroup.push(unit)
+    if (!unit.keepWithNext) {
+      activePage = flushPendingGroup(pendingGroup, activePage, pages, openNewPage)
+      pendingGroup = []
+    }
+  }
+
+  if (pendingGroup.length > 0) {
+    activePage = flushPendingGroup(pendingGroup, activePage, pages, openNewPage)
+  }
+
+  return activePage
+}
+
+async function buildEndnoteUnits(
+  input: PaginatorInput,
+  noteState: NoteNumberingState,
+  contentWidthPt: number,
+  styleCache: StyleResolutionCache,
+): Promise<ReadonlyArray<ParagraphUnit>> {
+  const units: ParagraphUnit[] = []
+  let unitIndex = 0
+
+  for (const id of noteState.endnoteOrder) {
+    const endnote = input.document.endnotes.get(id)
+    if (endnote === undefined) {
+      continue
+    }
+
+    const paragraphs = endnote.blocks.filter((block): block is Paragraph => block.kind === 'paragraph')
+    const mark = noteState.endnoteMarkById.get(id) ?? ''
+
+    for (const [paragraphIndex, paragraph] of paragraphs.entries()) {
+      const paraProps = applyNumberingIndentFallback(
+        resolveEffectiveParaProps(paragraph.props, input.document, styleCache),
+        input.document,
+      )
+      const leadingItems =
+        paragraphIndex === 0 ? await buildNoteMarkerLeadingItems(input, 'endnote', id, mark) : []
+      const tabStops = buildTabStops(paraProps, leadingItems.length > 0)
+
+      const lines = await breakLines({
+        paragraph,
+        paraProps,
+        runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, input.document, styleCache),
+        availableWidth: contentWidthPt,
+        fontResolver: input.fontResolver,
+        tabStops,
+        theme: input.theme,
+        ...(leadingItems.length > 0 ? { leadingItems } : {}),
+      })
+
+      units.push({
+        kind: 'paragraph',
+        paragraphPath: [-1, unitIndex],
+        lines,
+        keepWithNext: paraProps.keepNext === true,
+        keepLines: paraProps.keepLines === true,
+        widowControl: paraProps.widowControl !== false,
+        pageBreakBefore: false,
+        paraProps,
+        columnWidthPt: contentWidthPt,
+        leadingGapPt:
+          paragraphIndex === 0
+            ? Math.max(twipToPt(paraProps.spacing?.before), FOOTNOTE_INTER_NOTE_GAP_PT)
+            : twipToPt(paraProps.spacing?.before),
+      })
+      unitIndex += 1
+    }
+  }
+
+  return units
+}
+
+/**
+ * D11 milestone 5 — `eachPage` footnote restart. Layout already ran with
+ * placeholder continuous numbers (needed to itemize/measure marker text at
+ * all — see `noteNumbering.ts`'s module doc); this pass relabels the
+ * DISPLAYED marker text only, restarting at `start` on every page using
+ * that page's own footnote order (`Page.footnoteLines` is already in
+ * first-reference order, courtesy of `reserveFootnotesForLine`).
+ */
+function applyEachPageFootnoteRestart(
+  pages: ReadonlyArray<Page>,
+  numFmt: string | undefined,
+  start: number,
+): ReadonlyArray<Page> {
+  const idsByPage = pages.map(collectPageFootnoteIdOrder)
+  const marksById = renumberFootnotesEachPage(idsByPage, numFmt, start)
+
+  return pages.map((page) => ({
+    ...page,
+    columns: page.columns.map((column) => ({
+      ...column,
+      lines: column.lines.map((lineRef) => ({ ...lineRef, line: relabelBodyNoteMarks(lineRef.line, marksById) })),
+    })),
+    footnoteLines: relabelFootnoteAreaMarks(page.footnoteLines, marksById),
+  }))
+}
+
+function collectPageFootnoteIdOrder(page: Page): ReadonlyArray<string> {
+  const order: string[] = []
+  const seen = new Set<string>()
+  for (const footnoteLine of page.footnoteLines) {
+    if (!seen.has(footnoteLine.noteId)) {
+      seen.add(footnoteLine.noteId)
+      order.push(footnoteLine.noteId)
+    }
+  }
+  return order
+}
+
+function relabelBodyNoteMarks(line: LineBox, marksById: ReadonlyMap<string, string>): LineBox {
+  let changed = false
+  const items = line.items.map((item) => {
+    if (item.kind !== 'word' || item.noteRef?.kind !== 'footnote') {
+      return item
+    }
+    const mark = marksById.get(item.noteRef.id)
+    if (mark === undefined || mark === item.text) {
+      return item
+    }
+    changed = true
+    return { ...item, text: mark }
+  })
+  return changed ? { ...line, items } : line
+}
+
+function relabelFootnoteAreaMarks(
+  footnoteLines: ReadonlyArray<PageFootnoteLineRef>,
+  marksById: ReadonlyMap<string, string>,
+): ReadonlyArray<PageFootnoteLineRef> {
+  const relabeledForNote = new Set<string>()
+
+  return footnoteLines.map((footnoteLine) => {
+    if (relabeledForNote.has(footnoteLine.noteId)) {
+      return footnoteLine
+    }
+    relabeledForNote.add(footnoteLine.noteId)
+
+    const mark = marksById.get(footnoteLine.noteId)
+    if (mark === undefined) {
+      return footnoteLine
+    }
+
+    const items = footnoteLine.line.items.map((item) =>
+      item.kind === 'word' && item.runIndex === MARKER_RUN_INDEX ? { ...item, text: mark } : item,
+    )
+    return { ...footnoteLine, line: { ...footnoteLine.line, items } }
+  })
 }
 
 function paragraphPathKey(path: ReadonlyArray<number>): string {
@@ -470,6 +885,7 @@ function addParityPaddingPages(
   sectionIndex: number,
   pageNumberInSection: number,
   headerFooterLines: ReadonlyMap<string, ReadonlyArray<LineBox>>,
+  evenAndOddHeaders: boolean,
 ): number {
   if (sectionLayout.sectionType !== 'evenPage' && sectionLayout.sectionType !== 'oddPage') {
     return pageNumberInSection
@@ -482,12 +898,16 @@ function addParityPaddingPages(
     return pageNumberInSection
   }
 
+  // A blank filler page carries no body content, so it never references a
+  // footnote — an empty map is correct here, not a placeholder.
   const paddingPage = createActivePage(
     sectionLayout,
     sectionIndex,
     pageNumberInSection + 1,
     nextPhysicalPageNumber,
     headerFooterLines,
+    evenAndOddHeaders,
+    EMPTY_FOOTNOTE_CONTENT,
   )
 
   pages.push(finalizePage(paddingPage, pages.length))
@@ -679,6 +1099,7 @@ function applyContinuousSectionGeometry(
   )
 
   currentPage.sectionIndex = sectionIndex
+  currentPage.vAlign = sectionLayout.vAlign
   currentPage.columns = sectionLayout.columnLeftsPt.map((leftPt, columnIndex) => ({
     widthPt: sectionLayout.columnWidthPt,
     leftPt,
@@ -763,9 +1184,20 @@ function placeLine(
   leftOffsetPt: number = 0,
   leadingGapPt: number = 0,
 ): void {
+  // D11 milestone 3 — grow this page's footnote reservation BEFORE deciding
+  // where this line fits, so a line that newly introduces a footnote
+  // reference already sees the reduced effective content height (see
+  // `effectiveContentHeightPt`). Look-ahead fit-checks elsewhere
+  // (`countLinesThatFitOnPage` called from `groupFitsOnPage`/
+  // `linesFitOnPage`) run against whatever reservation already exists at
+  // the time they're called, not one that anticipates a footnote the
+  // lines being tested would themselves introduce — an accepted,
+  // documented approximation (see `reserveFootnotesForLine`).
+  reserveFootnotesForLine(currentPage, line)
+
   let column = currentPage.columns[currentPage.currentColumnIndex]
 
-  while (!lineFitsInColumn(line, column.usedHeightPt, currentPage.contentHeightPt)) {
+  while (!lineFitsInColumn(line, column.usedHeightPt, effectiveContentHeightPt(currentPage))) {
     if (column.usedHeightPt <= 0 || currentPage.currentColumnIndex >= currentPage.columns.length - 1) {
       break
     }
@@ -808,13 +1240,14 @@ function linesFitOnPage(lines: ReadonlyArray<LineBox>, currentPage: ActivePage):
 }
 
 function countLinesThatFitOnPage(lines: ReadonlyArray<LineBox>, currentPage: ActivePage): number {
+  const contentHeightPt = effectiveContentHeightPt(currentPage)
   let columnIndex = currentPage.currentColumnIndex
   let usedHeightPt = currentPage.columns[columnIndex].usedHeightPt
   let count = 0
 
   for (const line of lines) {
-    while (!lineFitsInColumn(line, usedHeightPt, currentPage.contentHeightPt)) {
-      if (line.lineHeight > currentPage.contentHeightPt || columnIndex >= currentPage.columns.length - 1) {
+    while (!lineFitsInColumn(line, usedHeightPt, contentHeightPt)) {
+      if (line.lineHeight > contentHeightPt || columnIndex >= currentPage.columns.length - 1) {
         return count
       }
 
@@ -846,11 +1279,53 @@ function clonePage(currentPage: ActivePage): ActivePage {
       ...column,
       lines: column.lines.slice(),
     })),
+    footnoteIds: currentPage.footnoteIds.slice(),
   }
 }
 
 function lineFitsInColumn(line: LineBox, usedHeightPt: number, contentHeightPt: number): boolean {
   return line.lineHeight <= Math.max(contentHeightPt - usedHeightPt, 0)
+}
+
+/** `contentHeightPt` (header/footer already excluded) minus whatever footnote area this page has reserved so far — see `placeLine`'s `reserveFootnotesForLine` call. */
+function effectiveContentHeightPt(currentPage: ActivePage): number {
+  return Math.max(0, currentPage.contentHeightPt - currentPage.footnoteAreaHeightPt)
+}
+
+/**
+ * D11 milestone 3 — grows `currentPage.footnoteAreaHeightPt` the first time
+ * a given footnote id is seen on this page (via a placed line's
+ * `noteRef`-tagged word item — see `itemize.ts`), reserving that footnote's
+ * pre-laid-out content height (`currentPage.footnoteContentById`, built
+ * once per section by `buildFootnoteContentLines`) plus either the
+ * separator's fixed height (the page's first footnote) or a small
+ * inter-note gap (every subsequent one). A footnote id with no precomputed
+ * content (shouldn't normally happen — every id `buildSectionUnits`
+ * collects gets content built before placement starts) is silently
+ * skipped rather than reserving nothing but still rendering it: it simply
+ * won't appear in this page's footnote area, which fails safe under an
+ * inconsistency rather than corrupting layout.
+ */
+function reserveFootnotesForLine(currentPage: ActivePage, line: LineBox): void {
+  for (const item of line.items) {
+    if (item.kind !== 'word' || item.noteRef === undefined || item.noteRef.kind !== 'footnote') {
+      continue
+    }
+
+    const id = item.noteRef.id
+    if (currentPage.footnoteIds.includes(id)) {
+      continue
+    }
+
+    const content = currentPage.footnoteContentById.get(id)
+    if (content === undefined) {
+      continue
+    }
+
+    const gapPt = currentPage.footnoteIds.length === 0 ? FOOTNOTE_SEPARATOR_RESERVE_PT : FOOTNOTE_INTER_NOTE_GAP_PT
+    currentPage.footnoteIds.push(id)
+    currentPage.footnoteAreaHeightPt += gapPt + sumLineHeights(content)
+  }
 }
 
 function isPageEmpty(currentPage: ActivePage): boolean {
@@ -866,6 +1341,8 @@ async function buildSectionUnits(
   progressState: { completedBlocks: number; tick: number },
   styleCache: StyleResolutionCache,
   listCounterState: NumberingCounterState,
+  noteState: NoteNumberingState,
+  referencedFootnoteIds: string[],
 ): Promise<ReadonlyArray<LayoutUnit>> {
   const units: LayoutUnit[] = []
   let previousParagraphSpacing: PreviousParagraphSpacing | undefined
@@ -881,6 +1358,8 @@ async function buildSectionUnits(
         styleCache,
         previousParagraphSpacing,
         listCounterState,
+        noteState,
+        referencedFootnoteIds,
       )
       units.push(unit)
       previousParagraphSpacing = {
@@ -921,6 +1400,8 @@ async function buildParagraphUnit(
   styleCache: StyleResolutionCache,
   previousParagraphSpacing: PreviousParagraphSpacing | undefined,
   listCounterState: NumberingCounterState,
+  noteState: NoteNumberingState,
+  referencedFootnoteIds: string[],
 ): Promise<ParagraphUnit> {
   void sectionIndex
 
@@ -929,6 +1410,21 @@ async function buildParagraphUnit(
   const paraProps = applyNumberingIndentFallback(resolvedParaProps, document)
   const leadingItems = await buildMarkerLeadingItems(input, paraProps, styleCache, listCounterState)
   const tabStops = buildTabStops(paraProps, leadingItems.length > 0)
+
+  // D11 milestones 2/5 — assign display marks for any footnote/endnote
+  // reference in THIS paragraph before itemizing it, in document order, so
+  // `noteState`'s maps already contain them by the time `breakLines`/
+  // `itemizeRuns` looks them up. Passing the full accumulated maps (rather
+  // than a per-paragraph slice) is harmless — a paragraph only ever looks
+  // up its own reference ids — and avoids building a new Map per paragraph.
+  for (const ref of collectNoteReferences(paragraph.children)) {
+    if (ref.kind === 'footnote') {
+      assignFootnoteMark(noteState, ref.id, input.footnoteNumbering?.numFmt)
+      referencedFootnoteIds.push(ref.id)
+    } else {
+      assignEndnoteMark(noteState, ref.id, input.endnoteNumbering?.numFmt)
+    }
+  }
 
   const lines = await breakLines({
     paragraph,
@@ -939,6 +1435,7 @@ async function buildParagraphUnit(
     tabStops,
     theme: input.theme,
     ...(leadingItems.length > 0 ? { leadingItems } : {}),
+    noteMarks: { footnote: noteState.footnoteMarkById, endnote: noteState.endnoteMarkById },
   })
 
   return {
@@ -1020,6 +1517,116 @@ async function buildMarkerLeadingItems(
   )
 
   return markerItems.map((item) => ({ ...item, runIndex: MARKER_RUN_INDEX }))
+}
+
+/**
+ * D11 milestones 2-4 — the leading marker (mark text + tab, forced
+ * superscript) prepended to a footnote/endnote body's FIRST paragraph only,
+ * built through the same itemize pipeline as real content so it
+ * participates in measurement exactly like a list marker does (see
+ * `buildMarkerLeadingItems`, which this mirrors). Tagged with `noteRef` on
+ * the mark word itself (not the trailing tab) so `applyEachPageFootnoteRestart`
+ * can find and relabel it after layout without re-deriving which line is
+ * "the marker line" from scratch.
+ */
+async function buildNoteMarkerLeadingItems(
+  input: PaginatorInput,
+  kind: 'footnote' | 'endnote',
+  id: string,
+  mark: string,
+): Promise<ReadonlyArray<LineItem>> {
+  if (mark === '') {
+    return []
+  }
+
+  const markerRun: Run = {
+    kind: 'run',
+    children: [{ kind: 'text', value: mark }, { kind: 'tab' }],
+  }
+  const markerRunProps: EffectiveRunProps = { vertAlign: 'superscript' }
+
+  const markerItems = await itemizeRuns([{ run: markerRun, runProps: markerRunProps }], input.fontResolver, input.theme)
+
+  return markerItems.map((item) =>
+    item.kind === 'word'
+      ? { ...item, runIndex: MARKER_RUN_INDEX, noteRef: { kind, id } }
+      : { ...item, runIndex: MARKER_RUN_INDEX },
+  )
+}
+
+/**
+ * D11 milestone 3 — lays out one footnote's body (paragraphs only; a table
+ * inside a footnote is skipped, mirroring `buildDefaultHeaderFooterLines`'s
+ * header/footer scope limit) into a flat `LineBox[]`, with the resolved
+ * mark prepended to the first paragraph. Footnote content is never itself
+ * split across a page break in this implementation (see `paginate.ts`'s
+ * module-level notes referenced from the plan) — its whole `LineBox[]` is
+ * reserved as one unit by `reserveFootnotesForLine`.
+ *
+ * Note references NESTED inside a footnote's own text (a footnote citing
+ * another footnote) are not resolved: `noteMarks` is intentionally omitted
+ * from the `breakLines` call, so any such reference itemizes with an empty
+ * mark (see `noteNumbering.ts`'s module doc and `itemize.ts`'s fallback).
+ */
+async function buildFootnoteContentLines(
+  input: PaginatorInput,
+  footnote: Footnote,
+  contentWidthPt: number,
+  styleCache: StyleResolutionCache,
+  noteState: NoteNumberingState,
+): Promise<ReadonlyArray<LineBox>> {
+  const paragraphs = footnote.blocks.filter((block): block is Paragraph => block.kind === 'paragraph')
+  const mark = noteState.footnoteMarkById.get(footnote.id) ?? ''
+  const lines: LineBox[] = []
+
+  for (const [paragraphIndex, paragraph] of paragraphs.entries()) {
+    const paraProps = applyNumberingIndentFallback(
+      resolveEffectiveParaProps(paragraph.props, input.document, styleCache),
+      input.document,
+    )
+    const leadingItems =
+      paragraphIndex === 0 ? await buildNoteMarkerLeadingItems(input, 'footnote', footnote.id, mark) : []
+    const tabStops = buildTabStops(paraProps, leadingItems.length > 0)
+
+    lines.push(
+      ...(await breakLines({
+        paragraph,
+        paraProps,
+        runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, input.document, styleCache),
+        availableWidth: contentWidthPt,
+        fontResolver: input.fontResolver,
+        tabStops,
+        theme: input.theme,
+        ...(leadingItems.length > 0 ? { leadingItems } : {}),
+      })),
+    )
+  }
+
+  return lines
+}
+
+/** Builds (and caches by id) the referenced footnotes' content for one section — see `buildFootnoteContentLines`. */
+async function buildSectionFootnoteContent(
+  input: PaginatorInput,
+  referencedFootnoteIds: ReadonlyArray<string>,
+  contentWidthPt: number,
+  styleCache: StyleResolutionCache,
+  noteState: NoteNumberingState,
+): Promise<ReadonlyMap<string, ReadonlyArray<LineBox>>> {
+  const result = new Map<string, ReadonlyArray<LineBox>>()
+
+  for (const id of referencedFootnoteIds) {
+    if (result.has(id)) {
+      continue
+    }
+    const footnote = input.document.footnotes.get(id)
+    if (footnote === undefined) {
+      continue
+    }
+    result.set(id, await buildFootnoteContentLines(input, footnote, contentWidthPt, styleCache, noteState))
+  }
+
+  return result
 }
 
 /**
@@ -1344,6 +1951,7 @@ function resolveSectionLayout(section: Section): ResolvedSectionLayout {
     titlePage: section.props.titlePg === true,
     headerReferences: section.props.headerReference ?? EMPTY_HEADER_REFERENCES,
     footerReferences: section.props.footerReference ?? EMPTY_FOOTER_REFERENCES,
+    vAlign: section.props.vAlign,
   }
 }
 
@@ -1384,6 +1992,8 @@ function createActivePage(
   pageNumberInSection: number,
   physicalPageNumber: number,
   headerFooterLines: ReadonlyMap<string, ReadonlyArray<LineBox>>,
+  evenAndOddHeaders: boolean,
+  footnoteContentById: ReadonlyMap<string, ReadonlyArray<LineBox>>,
 ): ActivePage {
   const headerLines = resolveHeaderFooterLines(
     sectionLayout.headerReferences,
@@ -1391,6 +2001,7 @@ function createActivePage(
     pageNumberInSection,
     physicalPageNumber,
     headerFooterLines,
+    evenAndOddHeaders,
   )
   const footerLines = resolveHeaderFooterLines(
     sectionLayout.footerReferences,
@@ -1398,6 +2009,7 @@ function createActivePage(
     pageNumberInSection,
     physicalPageNumber,
     headerFooterLines,
+    evenAndOddHeaders,
   )
   const headerReservedPt = sumLineHeights(headerLines)
   const footerReservedPt = sumLineHeights(footerLines)
@@ -1424,10 +2036,17 @@ function createActivePage(
         footerReservedPt,
     ),
     currentColumnIndex: 0,
+    vAlign: sectionLayout.vAlign,
+    footnoteAreaHeightPt: 0,
+    footnoteIds: [],
+    footnoteContentById,
   }
 }
 
 function finalizePage(currentPage: ActivePage, pageIndex: number): Page {
+  const verticalOffsetPt = resolveVerticalAlignOffsetPt(currentPage)
+  const footnoteLines = buildPageFootnoteLines(currentPage)
+
   return {
     sectionIndex: currentPage.sectionIndex,
     pageIndex,
@@ -1436,12 +2055,80 @@ function finalizePage(currentPage: ActivePage, pageIndex: number): Page {
     columns: currentPage.columns.map<ColumnBox>((column) => ({
       widthPt: column.widthPt,
       leftPt: column.leftPt,
-      lines: column.lines,
+      lines:
+        verticalOffsetPt > 0
+          ? column.lines.map((lineRef) => ({ ...lineRef, topPt: lineRef.topPt + verticalOffsetPt }))
+          : column.lines,
       tables: [],
     })),
     headerLines: currentPage.headerLines,
     footerLines: currentPage.footerLines,
+    footnoteLines,
+    hasFootnoteSeparator: footnoteLines.length > 0,
   }
+}
+
+/**
+ * D11 milestone 3 — flattens this page's reserved footnotes (in the order
+ * `reserveFootnotesForLine` recorded them) into one list of lines, each
+ * positioned relative to the footnote area's own top edge. A gap
+ * (`FOOTNOTE_SEPARATOR_RESERVE_PT` before the first note, matching the
+ * separator `reserveFootnotesForLine` already reserved space for;
+ * `FOOTNOTE_INTER_NOTE_GAP_PT` between subsequent ones) precedes every
+ * note's own lines, mirroring exactly what was reserved so the rendered
+ * content never exceeds the space `placeLine` accounted for.
+ */
+function buildPageFootnoteLines(currentPage: ActivePage): ReadonlyArray<PageFootnoteLineRef> {
+  const result: PageFootnoteLineRef[] = []
+  let topPt = 0
+
+  currentPage.footnoteIds.forEach((noteId, noteIndex) => {
+    const content = currentPage.footnoteContentById.get(noteId)
+    if (content === undefined) {
+      return
+    }
+
+    topPt += noteIndex === 0 ? FOOTNOTE_SEPARATOR_RESERVE_PT : FOOTNOTE_INTER_NOTE_GAP_PT
+
+    for (const line of content) {
+      result.push({ noteId, line, topPt, leftPt: 0 })
+      topPt += line.lineHeight
+    }
+  })
+
+  return result
+}
+
+/**
+ * D24/DXL-17 — `w:vAlign` offsets the page's body content by the leftover
+ * ("slack") space between what was actually placed and the page's full
+ * content height. Naturally a no-op on any page that's already full (slack
+ * <= 0), which is what makes this correct for a multi-page section too:
+ * only the section's last (partially filled) page ever has slack to
+ * distribute; every earlier page is full and gets offset 0.
+ *
+ * `both` (OOXML's vertical "justify", which is meant to stretch inter-
+ * paragraph spacing so content spans the full height) is approximated as
+ * `center` — implementing genuine space redistribution would mean re-
+ * deriving every placed line's `leadingGapPt` after the fact, which this
+ * single top-down placement pass doesn't support. Documented limitation.
+ */
+function resolveVerticalAlignOffsetPt(currentPage: ActivePage): number {
+  if (currentPage.vAlign === undefined || currentPage.vAlign === 'top') {
+    return 0
+  }
+
+  const maxUsedHeightPt = currentPage.columns.reduce(
+    (tallest, column) => Math.max(tallest, column.usedHeightPt),
+    0,
+  )
+  const slackPt = currentPage.contentHeightPt - currentPage.footnoteAreaHeightPt - maxUsedHeightPt
+
+  if (slackPt <= 0) {
+    return 0
+  }
+
+  return currentPage.vAlign === 'bottom' ? slackPt : slackPt / 2
 }
 
 function resolveHeaderFooterLines(
@@ -1450,6 +2137,7 @@ function resolveHeaderFooterLines(
   pageNumberInSection: number,
   physicalPageNumber: number,
   headerFooterLines: ReadonlyMap<string, ReadonlyArray<LineBox>>,
+  evenAndOddHeaders: boolean,
 ): ReadonlyArray<LineBox> {
   if (references.length === 0) {
     return EMPTY_LINES
@@ -1457,7 +2145,14 @@ function resolveHeaderFooterLines(
 
   const preferredReference =
     (titlePage && pageNumberInSection === 1 ? references.find((reference) => reference.type === 'first') : undefined) ??
-    (physicalPageNumber % 2 === 0 ? references.find((reference) => reference.type === 'even') : undefined) ??
+    // D11 milestone 1/DXL-09: an `even`-typed reference is only honored when
+    // the document actually turned on `w:evenAndOddHeaders` — otherwise
+    // Word ignores it and every page (odd or even) uses `default`, even if
+    // the source document happens to still define an `even` part (common
+    // after converting a doc that once had the setting on).
+    (evenAndOddHeaders && physicalPageNumber % 2 === 0
+      ? references.find((reference) => reference.type === 'even')
+      : undefined) ??
     references.find((reference) => reference.type === 'default') ??
     references[0]
 

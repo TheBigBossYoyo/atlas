@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { FontMetrics } from '../../fonts'
 import type {
   Document,
+  Endnote,
+  Footnote,
   FooterReference,
   HeaderReference,
   NumberingDef,
@@ -738,6 +740,249 @@ describe('paginate', () => {
   })
 })
 
+describe('paginate — headers/footers/vAlign (D11 milestone 1, D24/DXL-17)', () => {
+  it('builds header/footer content directly from document.headers/document.footers', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([createParagraph(1)], {
+            headerReferences: [{ id: 'h1', type: 'default' }],
+          }),
+        ],
+        undefined,
+        undefined,
+        { headers: new Map([['h1', { kind: 'header', id: 'h1', blocks: [createTextParagraph('Header Text')] }]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages[0]?.headerLines).toHaveLength(1)
+    expect(lineText(pages[0]?.headerLines[0])).toBe('Header Text')
+  })
+
+  it('ignores an even-typed header reference when evenAndOddHeaders is off', async () => {
+    const document = createDocument(
+      [
+        createSection(
+          [createParagraph(1), createParagraph(1, { pageBreakBefore: true })],
+          {
+            headerReferences: [
+              { id: 'default', type: 'default' },
+              { id: 'even', type: 'even' },
+            ],
+          },
+        ),
+      ],
+      undefined,
+      undefined,
+      {
+        headers: new Map([
+          ['default', { kind: 'header', id: 'default', blocks: [createTextParagraph('Default')] }],
+          ['even', { kind: 'header', id: 'even', blocks: [createTextParagraph('Even')] }],
+        ]),
+      },
+    )
+
+    const withoutSetting = await paginate({ document, fontResolver: createFontResolver() })
+    expect(lineText(withoutSetting[1]?.headerLines[0])).toBe('Default')
+
+    const withSetting = await paginate({ document, fontResolver: createFontResolver(), evenAndOddHeaders: true })
+    expect(lineText(withSetting[1]?.headerLines[0])).toBe('Even')
+  })
+
+  it('centers page content vertically when the section is vAlign=center', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)], { pageHeightPt: 100, vAlign: 'center' }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    // One 20pt line on a 100pt-tall page: 80pt slack, centered = 40pt offset.
+    expect(firstLineRef(pages)?.topPt).toBe(40)
+  })
+
+  it('pushes page content to the bottom when the section is vAlign=bottom', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)], { pageHeightPt: 100, vAlign: 'bottom' }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(firstLineRef(pages)?.topPt).toBe(80)
+  })
+
+  it('does not offset a page vAlign=top (or the default) content', async () => {
+    const pages = await paginate({
+      document: createDocument([createSection([createParagraph(1)], { pageHeightPt: 100 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(firstLineRef(pages)?.topPt).toBe(0)
+  })
+})
+
+describe('paginate — footnotes (D11 milestones 2-3, 5)', () => {
+  it('renders a footnote reference as a numbered, superscripted marker', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([createFootnoteRefParagraph('See note', 'fn1')])],
+        undefined,
+        undefined,
+        { footnotes: new Map([['fn1', createFootnote('fn1', 'Footnote body text')]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    const marker = findNoteRefItem(pages)
+    expect(marker?.text).toBe('1')
+    expect(marker?.runProps.vertAlign).toBe('superscript')
+    expect(marker?.noteRef).toEqual({ kind: 'footnote', id: 'fn1' })
+  })
+
+  it('reserves bottom-of-page space and renders the footnote body with a separator', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([createFootnoteRefParagraph('See note', 'fn1')], { pageHeightPt: 200 })],
+        undefined,
+        undefined,
+        { footnotes: new Map([['fn1', createFootnote('fn1', 'Footnote body text')]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages[0]?.hasFootnoteSeparator).toBe(true)
+    expect(footnoteAreaText(pages, 0)).toContain('Footnote')
+    // The footnote's own marker (mark + tab) precedes its body text.
+    expect(findFootnoteAreaLines(pages, 0)[0]?.line.items[0]).toMatchObject({ text: '1' })
+  })
+
+  it('numbers two footnotes continuously in document order (default restart)', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([
+            createFootnoteRefParagraph('First', 'fn1'),
+            createFootnoteRefParagraph('Second', 'fn2'),
+          ], { pageHeightPt: 200 }),
+        ],
+        undefined,
+        undefined,
+        {
+          footnotes: new Map([
+            ['fn1', createFootnote('fn1', 'One')],
+            ['fn2', createFootnote('fn2', 'Two')],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    const marks = pages[0]?.footnoteLines
+      .filter((line) => line.line.items[0]?.kind === 'word')
+      .map((line) => (line.line.items[0] as Extract<LineItem, { kind: 'word' }>).text)
+    expect(marks).toEqual(['1', '2'])
+  })
+
+  it('resets footnote numbering at the start of each section (eachSect restart)', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([createFootnoteRefParagraph('First', 'fn1')], { pageHeightPt: 200 }),
+          createSection([createFootnoteRefParagraph('Second', 'fn2')], { pageHeightPt: 200, type: 'nextPage' }),
+        ],
+        undefined,
+        undefined,
+        {
+          footnotes: new Map([
+            ['fn1', createFootnote('fn1', 'One')],
+            ['fn2', createFootnote('fn2', 'Two')],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+      footnoteNumbering: { restart: 'eachSect' },
+    })
+
+    expect((findFootnoteAreaLines(pages, 0)[0]?.line.items[0] as Extract<LineItem, { kind: 'word' }>)?.text).toBe('1')
+    expect((findFootnoteAreaLines(pages, 1)[0]?.line.items[0] as Extract<LineItem, { kind: 'word' }>)?.text).toBe('1')
+  })
+
+  it('restarts footnote numbering on every page (eachPage restart)', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection(
+            [
+              createFootnoteRefParagraph('First', 'fn1'),
+              createParagraph(1, { pageBreakBefore: true }),
+              createFootnoteRefParagraph('Second', 'fn2'),
+            ],
+            { pageHeightPt: 200 },
+          ),
+        ],
+        undefined,
+        undefined,
+        {
+          footnotes: new Map([
+            ['fn1', createFootnote('fn1', 'One')],
+            ['fn2', createFootnote('fn2', 'Two')],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+      footnoteNumbering: { restart: 'eachPage' },
+    })
+
+    expect(pages).toHaveLength(2)
+    expect((findFootnoteAreaLines(pages, 0)[0]?.line.items[0] as Extract<LineItem, { kind: 'word' }>)?.text).toBe('1')
+    expect((findFootnoteAreaLines(pages, 1)[0]?.line.items[0] as Extract<LineItem, { kind: 'word' }>)?.text).toBe('1')
+    // The body markers were relabeled to match, not left at their
+    // continuous placeholder values.
+    const bodyMarks = pages.map((page) => findNoteRefItem([page])?.text)
+    expect(bodyMarks).toEqual(['1', '1'])
+  })
+})
+
+describe('paginate — endnotes (D11 milestone 4)', () => {
+  it('renders endnote content once at the end of the document, not per page', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([createEndnoteRefParagraph('See end', 'en1')])],
+        undefined,
+        undefined,
+        { endnotes: new Map([['en1', createEndnote('en1', 'Endnote body text')]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    const marker = findNoteRefItem(pages)
+    expect(marker?.text).toBe('1')
+    expect(marker?.noteRef).toEqual({ kind: 'endnote', id: 'en1' })
+
+    // Endnote content flows as ordinary placed lines (not a footnoteLines
+    // area) at the end of the document.
+    const allWords = pages
+      .flatMap((page) => page.columns.flatMap((column) => column.lines))
+      .flatMap((lineRef) => lineRef.line.items)
+      .filter((item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word')
+      .map((item) => item.text)
+      .join(' ')
+    expect(allWords).toContain('Endnote')
+    expect(allWords).toContain('body')
+  })
+})
+
+function lineText(line: LineBox | undefined): string {
+  if (line === undefined) {
+    return ''
+  }
+  return line.items
+    .map((item) => (item.kind === 'word' || item.kind === 'glyph-cluster' ? item.text : item.kind === 'space' ? ' ' : ''))
+    .join('')
+}
+
 function createFontResolver(): FontResolver {
   const metrics: FontMetrics = {
     unitsPerEm: 1000,
@@ -785,6 +1030,12 @@ function createDocument(
   sections: ReadonlyArray<Section>,
   styles: ReadonlyMap<string, Style> = new Map(),
   numbering: ReadonlyMap<string, NumberingDef> = new Map(),
+  notes: {
+    footnotes?: ReadonlyMap<string, Footnote>
+    endnotes?: ReadonlyMap<string, Endnote>
+    headers?: Document['headers']
+    footers?: Document['footers']
+  } = {},
 ): Document {
   return {
     kind: 'document',
@@ -800,11 +1051,86 @@ function createDocument(
       },
     },
     comments: new Map(),
-    footnotes: new Map(),
-    endnotes: new Map(),
-    headers: new Map(),
-    footers: new Map(),
+    footnotes: notes.footnotes ?? new Map(),
+    endnotes: notes.endnotes ?? new Map(),
+    headers: notes.headers ?? new Map(),
+    footers: notes.footers ?? new Map(),
   }
+}
+
+function createFootnote(id: string, text: string): Footnote {
+  return { kind: 'footnote', id, blocks: [createTextParagraph(text)] }
+}
+
+function createEndnote(id: string, text: string): Endnote {
+  return { kind: 'endnote', id, blocks: [createTextParagraph(text)] }
+}
+
+function createFootnoteRefParagraph(text: string, footnoteId: string): Paragraph {
+  return {
+    kind: 'paragraph',
+    props: {},
+    children: [
+      {
+        kind: 'run',
+        children: [
+          { kind: 'text', value: text },
+          { kind: 'footnote-reference', id: footnoteId },
+        ],
+      },
+    ],
+  }
+}
+
+function createEndnoteRefParagraph(text: string, endnoteId: string): Paragraph {
+  return {
+    kind: 'paragraph',
+    props: {},
+    children: [
+      {
+        kind: 'run',
+        children: [
+          { kind: 'text', value: text },
+          { kind: 'endnote-reference', id: endnoteId },
+        ],
+      },
+    ],
+  }
+}
+
+function findFootnoteAreaLines(pages: ReadonlyArray<Page>, pageIndex: number): Page['footnoteLines'] {
+  return pages[pageIndex]?.footnoteLines ?? []
+}
+
+function footnoteAreaText(pages: ReadonlyArray<Page>, pageIndex: number): string {
+  return findFootnoteAreaLines(pages, pageIndex)
+    .flatMap((footnoteLine) =>
+      footnoteLine.line.items
+        .filter((item): item is Extract<LineItem, { kind: 'word' | 'glyph-cluster' }> =>
+          item.kind === 'word' || item.kind === 'glyph-cluster',
+        )
+        .map((item) => item.text),
+    )
+    .join('')
+}
+
+function findNoteRefItem(
+  pages: ReadonlyArray<Page>,
+): Extract<LineItem, { kind: 'word' }> | undefined {
+  for (const page of pages) {
+    for (const column of page.columns) {
+      for (const lineRef of column.lines) {
+        const item = lineRef.line.items.find(
+          (candidate): candidate is Extract<LineItem, { kind: 'word' }> =>
+            candidate.kind === 'word' && candidate.noteRef !== undefined,
+        )
+        if (item !== undefined) {
+          return item
+        }
+      }
+    }
+  }
+  return undefined
 }
 
 function createSection(
@@ -824,6 +1150,7 @@ function createSection(
     type?: SectionProps['type']
     headerReferences?: ReadonlyArray<HeaderReference>
     footerReferences?: ReadonlyArray<FooterReference>
+    vAlign?: SectionProps['vAlign']
   } = {},
 ): Section {
   return {
@@ -850,6 +1177,7 @@ function createSection(
       type: options.type,
       headerReference: options.headerReferences,
       footerReference: options.footerReferences,
+      vAlign: options.vAlign,
     },
     blocks,
   }
