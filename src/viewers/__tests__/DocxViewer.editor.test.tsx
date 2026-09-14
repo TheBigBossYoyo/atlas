@@ -837,4 +837,33 @@ describe('DocxViewer editor', () => {
 
     expect(editor).toHaveAttribute('spellcheck', 'false')
   })
+
+  // ---------------------------------------------------------------------------
+  // D17/DXE-11 track-changes setting persistence
+  // ---------------------------------------------------------------------------
+
+  it('toggling track changes persists bundle.settings.trackChanges into the saved document', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Review' }))
+    fireEvent.click(screen.getByLabelText('Toggle track changes'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedBundle = saveDocxMock.mock.calls[0][0] as { settings?: { trackChanges: boolean } }
+    expect(savedBundle.settings?.trackChanges).toBe(true)
+  })
 })

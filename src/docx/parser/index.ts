@@ -44,3 +44,6 @@ export { parseComments } from './comments'
 
 export { parseTheme, resolveThemeFont } from './theme'
 export type { Theme, FontScheme, FontSet } from './theme'
+
+export { parseSettings } from './settings'
+export type { SettingsPart } from './settings'

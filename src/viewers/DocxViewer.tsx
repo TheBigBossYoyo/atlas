@@ -499,12 +499,13 @@ function DocxEditor({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [commentsPaneOpen, setCommentsPaneOpen] = useState(bundle.document.comments.size > 0)
   const [resolvedCommentIds, setResolvedCommentIds] = useState<ReadonlySet<string>>(new Set())
-  // DXE-11/D17 — a local, in-session toggle: the document model has no
-  // parsed/persisted `w:trackChanges` setting to read from (that would need
-  // settings.xml support in the parser/serializer, out of scope for this
-  // wave), so this reflects only what the user has flipped since opening the
-  // file, not a value round-tripped from the saved document.
-  const [trackChangesEnabled, setTrackChangesEnabled] = useState(false)
+  // DXE-11/D17 — seeded from the source document's real `word/settings.xml`
+  // `<w:trackChanges/>` setting (parsed by `docx/parser/settings.ts`) rather
+  // than always starting `false`, and every toggle writes back into
+  // `bundle.settings` (see the `toggle-track-changes` handler below) so
+  // `saveDocx` persists it via `writeSettingsXml` instead of losing it to
+  // the passthrough copy of the original part.
+  const [trackChangesEnabled, setTrackChangesEnabled] = useState(bundle.settings?.trackChanges ?? false)
   const [spellCheckEnabled, setSpellCheckEnabled] = useState(true)
   const composition = useComposition()
   const spellCheck = useSpellCheck()
@@ -1161,7 +1162,15 @@ function DocxEditor({
       }
 
       if (toolbarCommand.kind === 'toggle-track-changes') {
-        setTrackChangesEnabled((enabled) => !enabled)
+        setTrackChangesEnabled((enabled) => {
+          const next = !enabled
+          // DXE-11/D17 — persist into the bundle so saveDocx (which reads
+          // `bundle.settings`, not this component's local state) writes the
+          // change into word/settings.xml instead of it only ever affecting
+          // this session's toolbar display.
+          onBundleChange({ ...bundle, settings: { trackChanges: next } })
+          return next
+        })
         return
       }
 
@@ -1203,11 +1212,13 @@ function DocxEditor({
     [
       applyEditorCommand,
       applyResult,
+      bundle,
       documentModel,
       handleAddComment,
       handleInsertHyperlink,
       handleInsertImage,
       handleToggleList,
+      onBundleChange,
       range,
     ],
   )
