@@ -262,4 +262,39 @@ describe('looksLikeText (P2.11/LOAD-10)', () => {
   it('returns false for an empty buffer', () => {
     expect(looksLikeText(new ArrayBuffer(0))).toBe(false)
   })
+
+  // A large text file's 8192-byte sniff sample can end mid-character rather
+  // than on a clean boundary. Without trimming the dangling partial
+  // sequence, that would read as invalid UTF-8 and misclassify an
+  // otherwise-plain-text file as binary.
+  it('returns true when a valid multi-byte character straddles the sample-size boundary', () => {
+    const ascii = new Uint8Array(8191).fill(0x61) // 'a' x 8191 -> fills indices 0..8190
+    const emoji = new TextEncoder().encode('\u{1F389}') // 4-byte UTF-8 sequence (party popper)
+    const suffix = new TextEncoder().encode(' more text after the boundary\n')
+    const buffer = bytesToBuffer([...ascii, ...emoji, ...suffix])
+
+    // The 8192-byte sample ends exactly on the emoji's lead byte, with its
+    // three continuation bytes falling just past the sniff window.
+    expect(buffer.byteLength).toBeGreaterThan(8192)
+    expect(looksLikeText(buffer)).toBe(true)
+  })
+
+  it('returns true when a 3-byte character straddles the sample-size boundary', () => {
+    const ascii = new Uint8Array(8191).fill(0x61)
+    const euroSign = new TextEncoder().encode('€') // 3-byte UTF-8 sequence
+    const suffix = new TextEncoder().encode(' trailing text\n')
+    const buffer = bytesToBuffer([...ascii, ...euroSign, ...suffix])
+
+    expect(looksLikeText(buffer)).toBe(true)
+  })
+
+  it('still returns false when the sample is genuinely invalid UTF-8, not merely truncated', () => {
+    // The invalid byte sits well before the sample boundary, so boundary
+    // trimming must not mask it.
+    const invalidLead = [0xff, 0xfe]
+    const ascii = new Uint8Array(8300).fill(0x61)
+    const buffer = bytesToBuffer([...invalidLead, ...ascii])
+
+    expect(looksLikeText(buffer)).toBe(false)
+  })
 })

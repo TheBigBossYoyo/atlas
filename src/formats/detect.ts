@@ -124,18 +124,57 @@ export function detectFormat(path: string, buffer?: ArrayBuffer): FormatId {
 // small enough to never decode a huge file just to answer a yes/no question.
 const TEXT_SNIFF_SAMPLE_BYTES = 8192
 
+/**
+ * When the sample is a truncated prefix of a larger buffer, its very last
+ * byte(s) may be the lead byte of a multi-byte UTF-8 sequence whose
+ * continuation bytes fall just past the cutoff — which would otherwise read
+ * as invalid UTF-8 and misclassify an otherwise-plain-text file as binary.
+ * Trims that dangling partial sequence (at most 3 bytes) before validation.
+ */
+function trimIncompleteUtf8Tail(bytes: Uint8Array): Uint8Array {
+  const len = bytes.length
+  const maxLookback = Math.min(4, len)
+
+  for (let back = 1; back <= maxLookback; back += 1) {
+    const byte = bytes[len - back]
+    if ((byte & 0xc0) === 0x80) {
+      continue // continuation byte — keep walking backwards
+    }
+
+    const sequenceLength =
+      byte <= 0x7f ? 1
+      : (byte & 0xe0) === 0xc0 ? 2
+      : (byte & 0xf0) === 0xe0 ? 3
+      : (byte & 0xf8) === 0xf0 ? 4
+      : -1 // not a valid UTF-8 lead byte — leave as-is, isValidUtf8 rejects it anyway
+
+    if (sequenceLength !== -1 && back < sequenceLength) {
+      // A multi-byte sequence starts here but the sample was cut off before
+      // its continuation bytes arrived — drop the dangling partial sequence.
+      return bytes.subarray(0, len - back)
+    }
+    return bytes
+  }
+
+  return bytes
+}
+
 export function looksLikeText(buffer: ArrayBuffer): boolean {
   if (buffer.byteLength === 0) {
     return false
   }
 
-  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, TEXT_SNIFF_SAMPLE_BYTES))
+  const sampleLength = Math.min(buffer.byteLength, TEXT_SNIFF_SAMPLE_BYTES)
+  const rawSample = new Uint8Array(buffer, 0, sampleLength)
 
-  for (const byte of bytes) {
+  for (const byte of rawSample) {
     if (byte === 0x00) {
       return false
     }
   }
+
+  const isTruncatedSample = sampleLength < buffer.byteLength
+  const bytes = isTruncatedSample ? trimIncompleteUtf8Tail(rawSample) : rawSample
 
   return isValidUtf8(bytes)
 }
