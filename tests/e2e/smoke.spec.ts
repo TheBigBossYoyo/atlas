@@ -97,11 +97,38 @@ test('PDF viewer: page count, zoom, navigation, and find on a multi-page documen
     })
     await expect(page.locator('.pdf-viewer__page-wrapper')).toHaveCount(5)
 
+    // Per-page fit scale (PDF-09/P8): page 1 is portrait (300x500pt), page 2
+    // is landscape (500x300pt) — at the same 100% zoom, page 2 must render
+    // wider than page 1, proving each page uses its own geometry rather than
+    // page 1's scale reused for the whole document.
+    const page1Box = await page.locator('.pdf-viewer__page-wrapper[data-page="1"]').boundingBox()
+    const page2Box = await page.locator('.pdf-viewer__page-wrapper[data-page="2"]').boundingBox()
+    expect(page1Box, 'page 1 bounding box').not.toBeNull()
+    expect(page2Box, 'page 2 bounding box').not.toBeNull()
+    expect(page2Box!.width).toBeGreaterThan(page1Box!.width)
+    expect(page2Box!.height).toBeLessThan(page1Box!.height)
+
     // Zoom: default 100%, Zoom In steps to 125%.
     const zoomButton = page.locator('.pdf-viewer__zoom-button')
     await expect(zoomButton).toContainText('100%')
     await page.locator('[title="Zoom In (Ctrl++)"]').click()
     await expect(zoomButton).toContainText('125%')
+
+    // Rotation (PDF-12/P10): rotating page 1 (portrait) 90 degrees should
+    // swap its rendered aspect ratio to landscape.
+    await page.locator('[title="Rotate page"]').click()
+    await expect(async () => {
+      const rotatedBox = await page.locator('.pdf-viewer__page-wrapper[data-page="1"]').boundingBox()
+      expect(rotatedBox, 'rotated page 1 bounding box').not.toBeNull()
+      expect(rotatedBox!.width).toBeGreaterThan(rotatedBox!.height)
+    }).toPass({ timeout: 15_000 })
+    await page.locator('[title="Rotate page"]').click() // back to 0 for the rest of the test
+
+    // Thumbnails (PDF-13/P10): toggling the rail renders one thumbnail per page.
+    await page.locator('[title="Toggle page thumbnails"]').click()
+    await expect(page.locator('.pdf-viewer__thumbnail')).toHaveCount(5)
+    await page.locator('[title="Toggle page thumbnails"]').click()
+    await expect(page.locator('.pdf-viewer__thumbnail-rail')).toHaveCount(0)
 
     // Navigation: jump to page 3 via the page-number input.
     const pageInput = page.getByLabel('Page number')
@@ -117,6 +144,27 @@ test('PDF viewer: page count, zoom, navigation, and find on a multi-page documen
     await expect(findInput).toBeVisible()
     await findInput.fill('Findable needle')
     await expect(page.locator('.pdf-viewer__find-count')).toHaveText('1 of 1', { timeout: 15_000 })
+    await page.keyboard.press('Escape')
+
+    // Print (PDF-10/P9): the app clears the print-only DOM again immediately
+    // after window.print() returns, so a stub that snapshots the rendered
+    // page count *at* that call (rather than polling the DOM afterwards,
+    // which would race the cleanup) is what actually proves every page got
+    // rendered before printing — and avoids blocking on a real OS dialog.
+    type WindowWithPrintProbe = typeof window & { __printedPageCount: number }
+    await page.evaluate(() => {
+      const win = window as WindowWithPrintProbe
+      win.__printedPageCount = -1
+      window.print = () => {
+        win.__printedPageCount = document.querySelectorAll('.pdf-viewer__print-page-canvas').length
+      }
+    })
+    await page.locator('[title="Print (Ctrl+P)"]').click()
+    await expect
+      .poll(() => page.evaluate(() => (window as WindowWithPrintProbe).__printedPageCount), {
+        timeout: 15_000,
+      })
+      .toBe(5)
 
     expect(consoleErrors, consoleErrors.join('\n')).toEqual([])
   } finally {
