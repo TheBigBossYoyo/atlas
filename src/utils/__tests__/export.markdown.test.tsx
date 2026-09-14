@@ -471,7 +471,7 @@ describe('exportPdf', () => {
 
   it('rejects with a friendly, id-specific error when the target element does not exist', async () => {
     await expect(exportPdf('does-not-exist', 'doc.md')).rejects.toThrow(
-      '[export] exportPdf: element #does-not-exist not found',
+      'PDF export failed: element #does-not-exist not found',
     );
     expect(anchorClicks).toHaveLength(0);
   });
@@ -490,5 +490,14 @@ describe('exportPdf', () => {
       }),
     );
     expect(createObjectURLMock).not.toHaveBeenCalled();
+  });
+
+  it('wraps a thrown library error in a friendly, format-specific message (RUN-14)', async () => {
+    mountTarget('markdown-content');
+    html2canvasMock.mockRejectedValueOnce(new Error('out of memory'));
+
+    await expect(exportPdf('markdown-content', 'report.md')).rejects.toThrow(
+      'PDF export failed: the document is too large to process',
+    );
   });
 });

@@ -4,11 +4,17 @@
  *
  * UX-11 — now routes the finished PDF through Electron's save dialog via
  * `saveBinaryOutput` instead of always dropping into the OS Downloads folder.
+ *
+ * RUN-14 — every thrown error (missing element, or a raw html2canvas/jsPDF
+ * failure such as a tainted-canvas SecurityError or an out-of-memory error on
+ * a huge document) is wrapped in a friendly, format-specific message via
+ * `toFriendlyError`, matching every other exportX() function.
  */
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas-pro';
 
 import { sanitizeFileName, saveBinaryOutput, type SaveFilter } from './download';
+import { toFriendlyError } from '../friendlyLibraryError';
 
 const PDF_MIME = 'application/pdf';
 const PDF_FILTERS: readonly SaveFilter[] = [{ name: 'PDF Document', extensions: ['pdf'] }];
@@ -26,7 +32,7 @@ export async function exportPdf(elementId: string, fileName: string): Promise<vo
     const name = sanitizeFileName(fileName, 'pdf');
     const target = document.getElementById(elementId);
     if (!target) {
-      throw new Error(`[export] exportPdf: element #${elementId} not found`);
+      throw new Error(`element #${elementId} not found`);
     }
 
     const bgColor = getComputedStyle(target).backgroundColor;
@@ -76,6 +82,6 @@ export async function exportPdf(elementId: string, fileName: string): Promise<vo
     await saveBinaryOutput(bytes, name, PDF_MIME, PDF_FILTERS);
   } catch (err) {
     console.error('[export] exportPdf failed:', err);
-    throw err;
+    throw toFriendlyError(err, 'PDF export failed');
   }
 }
