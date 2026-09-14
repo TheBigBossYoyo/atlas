@@ -151,4 +151,23 @@ describe('parseWorkbookBuffer', () => {
 
     expect(sheets[0].grid.rows[1][0]).toBe('$1,234.50')
   })
+
+  // Legacy/flat formats (wave 3): SheetJS reads these through the exact
+  // same `XLSX.read` call as xlsx/ods — no format-specific branching exists
+  // anywhere in this module — so routing them here (extensionManifest.ts)
+  // is sufficient on its own; these lock in that the actual PARSE also
+  // genuinely works for each, not just the routing decision.
+  it.each(['xls', 'xlsb', 'fods'] as const)('parses a real .%s buffer', (bookType) => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Name', 'Score'], ['Alice', 10]]), 'Sheet1')
+
+    const buffer = XLSX.write(wb, { type: 'array', bookType }) as ArrayBuffer
+    const sheets = parseWorkbookBuffer(buffer)
+
+    expect(sheets).toHaveLength(1)
+    expect(sheets[0].grid.rows).toEqual([
+      ['Name', 'Score'],
+      ['Alice', '10'],
+    ])
+  })
 })
