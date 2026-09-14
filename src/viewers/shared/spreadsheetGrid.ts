@@ -58,6 +58,14 @@ export type SheetGrid = {
   readonly colWidthsPx: ReadonlyArray<number | undefined>
   /** Pixel height per row index, `undefined` where the file specifies none. */
   readonly rowHeightsPx: ReadonlyArray<number | undefined>
+  /**
+   * The raw formula text (no leading `=`) behind each cell, `undefined` for
+   * a plain-value cell. Carried alongside `rows`' already-formatted display
+   * text (wave 3 editing) so the editable-document model
+   * (`spreadsheet/spreadsheetDocument.ts`) can reconstruct "this cell is a
+   * formula" without re-walking the worksheet a second time.
+   */
+  readonly formulas: ReadonlyArray<ReadonlyArray<string | undefined>>
 }
 
 export type ParsedSheet = {
@@ -72,6 +80,7 @@ const EMPTY_GRID: SheetGrid = {
   merges: [],
   colWidthsPx: [],
   rowHeightsPx: [],
+  formulas: [],
 }
 
 /**
@@ -96,14 +105,18 @@ export function sheetToGrid(ws: XLSX.WorkSheet): SheetGrid {
   const colCount = range.e.c - range.s.c + 1
 
   const rows: string[][] = []
+  const formulas: (string | undefined)[][] = []
   for (let r = 0; r < rowCount; r++) {
     const row: string[] = new Array<string>(colCount).fill('')
+    const formulaRow: (string | undefined)[] = new Array<string | undefined>(colCount).fill(undefined)
     for (let c = 0; c < colCount; c++) {
       const addr = XLSX.utils.encode_cell({ r: range.s.r + r, c: range.s.c + c })
       const cell = ws[addr] as XLSX.CellObject | undefined
       row[c] = formatCellText(cell)
+      formulaRow[c] = cell?.f
     }
     rows.push(row)
+    formulas.push(formulaRow)
   }
 
   const merges: MergeRange[] = []

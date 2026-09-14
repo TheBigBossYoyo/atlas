@@ -81,6 +81,15 @@ const XLSX_ROWS: ReadonlyArray<RawEntry> = [
   ['xlsb', 'xlsx', 'Excel Binary Spreadsheet', 'Excel Binary Spreadsheet', 'Viewer'],
   ['xltx', 'xlsx', 'Excel Template', 'Excel Template', 'Viewer'],
   ['xltm', 'xlsx', 'Excel Macro-Enabled Template', 'Excel Macro-Enabled Template', 'Viewer'],
+  // Wave 3 — legacy binary BIFF8 workbook. Unlike `.doc`/`.ppt`, SheetJS's
+  // `XLSX.read` genuinely parses this OLE2/CFB-container format (it has
+  // first-class BIFF8 support), so it is routed to the same spreadsheet
+  // viewer rather than `legacyOffice.ts`'s honest-unsupported message. Save
+  // is view/edit + "Save As" only — this build's writer never targets `.xls`
+  // (`bookType: 'biff8'` is not among its write formats), so round-tripping
+  // back to the original file is not offered; see SpreadsheetViewer's
+  // `canSaveInPlace`.
+  ['xls', 'xlsx', 'Excel 97-2003 Workbook', 'Excel 97-2003 Workbook', 'Viewer'],
 ]
 
 const PPTX_ROWS: ReadonlyArray<RawEntry> = [
@@ -103,6 +112,13 @@ const MISC_DOCUMENT_ROWS: ReadonlyArray<RawEntry> = [
   ['ods', 'ods', 'OpenDocument Spreadsheet', 'OpenDocument Spreadsheet', 'Viewer'],
   ['odp', 'odp', 'OpenDocument Presentation', 'OpenDocument Presentation', 'Viewer'],
   ['rtf', 'rtf', 'Rich Text Document', 'Rich Text Document', 'Viewer'],
+  // Wave 3 — "Flat ODS": a single flat-XML file (no ZIP container) holding
+  // the same OpenDocument spreadsheet schema as `.ods`. SheetJS reads and
+  // writes it directly (`bookType: 'fods'`), so it routes to the same
+  // spreadsheet viewer; Save is view/edit + "Save As .xlsx" only (matching
+  // `.xls`/`.xlsb`) to avoid re-encoding a niche flat-file format users
+  // rarely expect Atlas to round-trip losslessly.
+  ['fods', 'ods', 'Flat OpenDocument Spreadsheet', 'Flat OpenDocument Spreadsheet', 'Viewer'],
 ]
 
 // Source-code extensions -> shiki bundled-language id. `getSingletonHighlighter`
