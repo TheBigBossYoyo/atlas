@@ -1,53 +1,67 @@
 /**
- * src/utils/export.ts — characterization tests (P0.4 / QA-07).
+ * src/utils/export/* — characterization tests (P0.4 / QA-07, updated for X2/UX-05).
  *
- * Freezes today's exact export output for the same fixture set used by
- * MarkdownRenderer.characterization.test.tsx and useToc.test.ts. Per the
- * improvement plan's Section 7 guardrail and its X2 (export parser parity)
- * task note: these *export*-output snapshots are expected to change once
- * X2 lands (they already diverge from the live-render snapshots — that
- * divergence is a real, pre-existing bug this suite documents, not
- * something to fix here), while MarkdownRenderer's *live-render* snapshots
- * must stay byte-identical. Two known divergences this file locks in:
+ * X2 replaced the old single `export.ts` (which re-parsed raw markdown with a
+ * separate `marked` pipeline for HTML export) with the small `export/*`
+ * modules: `exportHtml` now serializes the *already-rendered* `#markdown-content`
+ * DOM (the live preview's own KaTeX/Mermaid/highlight.js output) instead of
+ * re-parsing; `exportDocx` still uses `marked`'s token lexer (Word has no
+ * remark/rehype-equivalent renderer to reuse) but now rasterizes math/Mermaid
+ * to images instead of leaking raw source text, fixes the dropped-hyperlink-text
+ * bug, and renders task-list checkboxes as real glyphs. Per the improvement
+ * plan's Section 7 guardrail, these snapshots are intentionally different from
+ * the pre-X2 baseline — this file documents the *new* frozen behavior, not a
+ * regression. `MarkdownRenderer`/`useToc`'s own *live-render* snapshots are a
+ * separate suite and are untouched by this change.
  *
- *   1. `exportHtml` renders markdown through `marked.parse` (not the live
- *      remark/rehype pipeline), so KaTeX math delimiters are NOT rendered —
- *      `marked` treats `$...$`/`$$...$$` as literal text and additionally
- *      strips escape backslashes inside them (`\int` -> `int`).
- *   2. `exportDocx`'s link handling (`inlineTokensToRuns`'s 'link' case)
- *      spreads an already-constructed `TextRun` instance into a new
- *      `TextRun({...})` to apply the Hyperlink style; `TextRun`'s own
- *      properties aren't the plain `{ text }` shape the constructor expects,
- *      so the link's visible text is silently dropped from every exported
- *      hyperlink run (the `w:hyperlink` and its style survive; the `w:t`
- *      inside it does not).
- *
- * exportDocx's hyperlink relationship ids (`r:id="..."`) are generated
- * fresh (effectively random) by the `docx` package on every `Packer.toBlob`
- * call, so they're sanitized to a fixed placeholder before snapshotting —
- * see `stabilizeDocxXml`. Rasterized PDF pixels are out of scope (jsdom has
- * no canvas backend); `exportPdf`'s tests assert its html2canvas/jsPDF
- * pipeline is driven correctly instead of inspecting pixels.
+ * exportDocx's docx-package-generated relationship ids (`r:id="..."` for
+ * hyperlinks, `r:embed="..."` for embedded images) are regenerated fresh on
+ * every `Packer.toBlob` call, so both are sanitized to fixed placeholders
+ * before snapshotting — see `stabilizeDocxXml`. Embedded image *bytes* come
+ * from a mocked `html2canvas-pro` (jsdom has no canvas backend), so they are
+ * deterministic and safe to snapshot as-is.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import JSZip from 'jszip';
+import { render, waitFor, cleanup } from '@testing-library/react';
+import { MarkdownRenderer } from '../../components/MarkdownRenderer';
 
 // ---------------------------------------------------------------------------
-// html2canvas-pro / jsPDF mocks — jsdom has no canvas backend (getContext('2d')
-// returns null, toDataURL() returns null), so exportPdf's real rasterization
-// pipeline cannot run in this environment. Mocked deterministically per the
-// task brief ("assert exportPdf calls its pipeline with the right element id").
+// mermaid mock — jsdom cannot render real Mermaid diagrams (same rationale as
+// MarkdownRenderer.characterization.test.tsx). Both `exportHtml` (via
+// rendering the fixture through the real MarkdownRenderer first) and
+// `exportDocx` (via `docxMedia.ts`'s dynamic `import('mermaid')`) go through
+// this mock.
+// ---------------------------------------------------------------------------
+
+const { mermaidRenderMock, mermaidInitializeMock } = vi.hoisted(() => ({
+  mermaidRenderMock: vi.fn(async (id: string, code: string) => {
+    void id;
+    void code;
+    return { svg: '<svg data-mock-mermaid="true" role="img"><text>MOCKED MERMAID SVG</text></svg>' };
+  }),
+  mermaidInitializeMock: vi.fn(),
+}));
+
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: mermaidInitializeMock,
+    render: mermaidRenderMock,
+  },
+}));
+
+// ---------------------------------------------------------------------------
+// html2canvas-pro / jsPDF mocks — jsdom has no canvas backend, so neither
+// exportPdf's screenshot pipeline nor docxMedia.ts's math/Mermaid
+// rasterization can run for real here. `html2canvasMock` backs both.
 // ---------------------------------------------------------------------------
 
 const { html2canvasMock, jsPdfCtorMock, jsPdfAddImageMock, jsPdfAddPageMock, jsPdfOutputMock } = vi.hoisted(() => {
   const addImageMock = vi.fn();
   const addPageMock = vi.fn();
-  const outputMock = vi.fn(() => new Blob(['%PDF-mock'], { type: 'application/pdf' }));
+  const outputMock = vi.fn(() => new Uint8Array([1, 2, 3]).buffer);
   return {
-    // Typed with html2canvas's real (element, options) signature so the
-    // assertions below can read `.mock.calls[0]` as [HTMLElement, object];
-    // the values themselves are unused in the return, hence the `void`s.
     html2canvasMock: vi.fn(async (element: HTMLElement, options?: Record<string, unknown>) => {
       void element;
       void options;
@@ -124,11 +138,6 @@ beforeEach(() => {
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
     anchorClicks.push({ download: this.download, href: this.href });
   });
-  // jsdom has no canvas backend (no `canvas` npm package installed), so
-  // `HTMLCanvasElement.prototype.toDataURL` returns null instead of a real
-  // data URI. exportPdf's page-slicing loop creates its own <canvas> per
-  // page internally, so this stub keeps that codepath's output realistic.
-  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,SLICE');
 });
 
 afterEach(() => {
@@ -138,7 +147,10 @@ afterEach(() => {
   jsPdfAddImageMock.mockClear();
   jsPdfAddPageMock.mockClear();
   jsPdfOutputMock.mockClear();
+  mermaidRenderMock.mockClear();
+  mermaidInitializeMock.mockClear();
   delete (window as { electronAPI?: unknown }).electronAPI;
+  cleanup();
   document.body.innerHTML = '';
 });
 
@@ -148,8 +160,11 @@ function getDownloadedBlob(callIndex = 0): Blob {
   return call[0];
 }
 
+/** Normalizes docx-package-generated relationship ids (hyperlinks use
+ * `r:id`, embedded images use `r:embed`) so byte-identical fixture content
+ * snapshots the same way across runs despite fresh ids every `Packer.toBlob`. */
 function stabilizeDocxXml(xml: string): string {
-  return xml.replace(/r:id="[^"]+"/g, 'r:id="RID"');
+  return xml.replace(/r:id="[^"]+"/g, 'r:id="RID"').replace(/r:embed="[^"]+"/g, 'r:embed="REMBED"');
 }
 
 async function getDocumentXml(blob: Blob): Promise<string> {
@@ -160,10 +175,34 @@ async function getDocumentXml(blob: Blob): Promise<string> {
   return entry.async('string');
 }
 
+/** Mirrors MarkdownRenderer.characterization.test.tsx's normalization of the
+ * non-deterministic `useId()`-derived tokens (React's `:rN:` ids and the
+ * Mermaid-diagram id built from one) that would otherwise make an
+ * `outerHTML` snapshot flaky across runs/positions in the file. */
+function stabilizeHtml(html: string): string {
+  return html
+    .replace(/:r[0-9a-z]+:/gi, ':rSTABLE:')
+    .replace(/mermaid-[a-zA-Z0-9]+-\d+/g, 'mermaid-STABLE-ID');
+}
+
 function extractMarkdownBodyHtml(fullHtml: string): string {
-  const match = /<div class="markdown-body">\n([\s\S]*?)\n {2}<\/div>/.exec(fullHtml);
-  if (!match) throw new Error('could not locate .markdown-body in exported HTML document');
+  const match = /<body data-theme="[^"]*">\n([\s\S]*?)\n {2}<footer/.exec(fullHtml);
+  if (!match) throw new Error('could not locate <body>...<footer> in exported HTML document');
   return match[1]!;
+}
+
+/** Renders `markdown` through the real (unmodified) `MarkdownRenderer` — the
+ * same live component the app renders — so `exportHtml` has real
+ * `#markdown-content` DOM (KaTeX HTML, mocked Mermaid SVG, rehype-highlight
+ * code, GFM tables, ...) to serialize, exactly like the running app. */
+async function renderMarkdownContent(markdown: string) {
+  const utils = render(<MarkdownRenderer markdown={markdown} />);
+  if (markdown.includes('```mermaid')) {
+    await waitFor(() => {
+      expect(utils.container.querySelector('[data-mock-mermaid]')).toBeTruthy();
+    });
+  }
+  return utils;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,20 +220,43 @@ describe('exportMarkdown', () => {
   });
 
   it(
-    'when window.electronAPI is present, calls saveFile(content, name) POSITIONALLY and skips the browser download ' +
-      '(this does not match ElectronAPI.saveFile\'s real single-request-object signature — a pre-existing export/IPC ' +
-      'mismatch this suite documents rather than fixes)',
+    'when window.electronAPI is present, calls saveFile with the real single-request-object signature ' +
+      '(wave1 follow-up: this used to call saveFile(content, name) POSITIONALLY, silently skipping the ' +
+      "IPC call's actual { content, suggestedName, filters? } shape)",
     async () => {
-      const saveFileMock = vi.fn().mockResolvedValue(undefined);
+      const saveFileMock = vi.fn().mockResolvedValue({ saved: true });
       window.electronAPI = { saveFile: saveFileMock } as unknown as typeof window.electronAPI;
 
       await exportMarkdown(headingsFixture, 'notes.md');
 
-      expect(saveFileMock).toHaveBeenCalledWith(headingsFixture, 'notes.md');
+      expect(saveFileMock).toHaveBeenCalledWith({
+        content: headingsFixture,
+        suggestedName: 'notes.md',
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
       expect(anchorClicks).toHaveLength(0);
       expect(createObjectURLMock).not.toHaveBeenCalled();
     },
   );
+
+  it('throws a friendly error when the Electron save dialog reports a failure', async () => {
+    window.electronAPI = {
+      saveFile: vi.fn().mockResolvedValue({ saved: false, error: 'Disk is full' }),
+    } as unknown as typeof window.electronAPI;
+
+    await expect(exportMarkdown(headingsFixture, 'notes.md')).rejects.toThrow(
+      'Markdown export failed: Disk is full',
+    );
+  });
+
+  it('resolves quietly (no error, no browser fallback) when the user cancels the Electron save dialog', async () => {
+    window.electronAPI = {
+      saveFile: vi.fn().mockResolvedValue({ saved: false }),
+    } as unknown as typeof window.electronAPI;
+
+    await expect(exportMarkdown(headingsFixture, 'notes.md')).resolves.toBeUndefined();
+    expect(anchorClicks).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -202,22 +264,68 @@ describe('exportMarkdown', () => {
 // ---------------------------------------------------------------------------
 
 describe('exportHtml', () => {
-  it.each(FIXTURES)('snapshots the rendered .markdown-body HTML for the "%s" fixture', async (name, markdown) => {
-    await exportHtml(markdown, `${name}.md`, 'light');
+  it.each(FIXTURES)('snapshots the serialized live-DOM body for the "%s" fixture', async (name, markdown) => {
+    await renderMarkdownContent(markdown);
+
+    await exportHtml('markdown-content', `${name}.md`, 'light');
 
     const blob = getDownloadedBlob();
     expect(blob.type).toBe('text/html;charset=utf-8');
     const html = await blob.text();
-    expect(extractMarkdownBodyHtml(html)).toMatchSnapshot(`${name} body`);
+    expect(stabilizeHtml(extractMarkdownBodyHtml(html))).toMatchSnapshot(`${name} body`);
+  });
+
+  it('serializes the exact live #markdown-content element, not a re-parse of the source', async () => {
+    await renderMarkdownContent('# Hello\n\nSome **bold** text.');
+
+    const live = document.getElementById('markdown-content')!;
+    // Mutate the live DOM after render (simulating whatever KaTeX/Mermaid/
+    // highlight.js already did to it) — exportHtml must reflect this exact
+    // markup, proving it reads the rendered DOM rather than re-deriving HTML
+    // from the raw markdown string a second time.
+    const marker = document.createElement('span');
+    marker.className = 'export-dom-identity-probe';
+    marker.textContent = 'proof';
+    live.appendChild(marker);
+
+    await exportHtml('markdown-content', 'doc.md', 'light');
+
+    const html = await getDownloadedBlob().text();
+    expect(html).toContain('export-dom-identity-probe');
   });
 
   it('snapshots the full generated HTML document (theme attribute, title escaping, CSS/CDN boilerplate)', async () => {
-    await exportHtml(headingsFixture, 'My <Notes> & Ideas.md', 'dracula');
+    await renderMarkdownContent(headingsFixture);
+
+    await exportHtml('markdown-content', 'My <Notes> & Ideas.md', 'dracula');
 
     expect(anchorClicks).toEqual([{ download: 'My <Notes> & Ideas.html', href: 'blob:mock-url' }]);
     const blob = getDownloadedBlob();
     const html = await blob.text();
-    expect(html).toMatchSnapshot();
+    expect(stabilizeHtml(html)).toMatchSnapshot();
+  });
+
+  it('rejects with a friendly, id-specific error when the target element does not exist', async () => {
+    await expect(exportHtml('does-not-exist', 'doc.md', 'light')).rejects.toThrow(
+      'HTML export failed: element #does-not-exist not found',
+    );
+    expect(anchorClicks).toHaveLength(0);
+  });
+
+  it('routes through the Electron save dialog (UX-11) with an HTML filter when window.electronAPI is present', async () => {
+    await renderMarkdownContent('# Hi');
+    const saveFileMock = vi.fn().mockResolvedValue({ saved: true });
+    window.electronAPI = { saveFile: saveFileMock } as unknown as typeof window.electronAPI;
+
+    await exportHtml('markdown-content', 'doc.md', 'light');
+
+    expect(saveFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suggestedName: 'doc.html',
+        filters: [{ name: 'HTML Document', extensions: ['html'] }],
+      }),
+    );
+    expect(createObjectURLMock).not.toHaveBeenCalled();
   });
 });
 
@@ -232,6 +340,77 @@ describe('exportDocx', () => {
     expect(anchorClicks).toEqual([{ download: `${name}.docx`, href: 'blob:mock-url' }]);
     const xml = await getDocumentXml(getDownloadedBlob());
     expect(stabilizeDocxXml(xml)).toMatchSnapshot(`${name} document.xml`);
+  });
+
+  it('preserves hyperlink visible text (wave1 follow-up fix — used to spread a built TextRun, silently dropping it)', async () => {
+    await exportDocx(linksImagesFixture, 'doc.md');
+    const xml = await getDocumentXml(getDownloadedBlob());
+
+    expect(xml).toContain('Atlas repository');
+    // The old, buggy shape had an empty run inside every hyperlink:
+    // <w:hyperlink ...><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr></w:r></w:hyperlink>
+    expect(xml).not.toMatch(/<w:hyperlink[^>]*><w:r><w:rPr><w:rStyle w:val="Hyperlink"\/><\/w:rPr><\/w:r><\/w:hyperlink>/);
+  });
+
+  it('renders task-list checkboxes as ☑/☐ glyphs, not raw "[x] "/"[ ] " syntax (UX-06)', async () => {
+    await exportDocx(taskListFixture, 'doc.md');
+    const xml = await getDocumentXml(getDownloadedBlob());
+
+    expect(xml).toContain('☑');
+    expect(xml).toContain('☐');
+    expect(xml).not.toContain('[x] ');
+    expect(xml).not.toContain('[ ] ');
+  });
+
+  it('rasterizes inline and block math to embedded images instead of raw "$..$"/"$$..$$" text', async () => {
+    await exportDocx(mathFixture, 'doc.md');
+    const xml = await getDocumentXml(getDownloadedBlob());
+
+    expect(xml).toContain('<w:drawing>');
+    expect(xml).not.toContain('$E = mc^2$');
+    expect(html2canvasMock).toHaveBeenCalled();
+  });
+
+  it('rasterizes a ```mermaid fence to an embedded image instead of raw diagram source', async () => {
+    await exportDocx(mermaidFixture, 'doc.md');
+    const xml = await getDocumentXml(getDownloadedBlob());
+
+    expect(xml).toContain('<w:drawing>');
+    expect(xml).not.toContain('graph TD;');
+    expect(mermaidRenderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to a visible literal instead of silently dropping math when rasterization fails', async () => {
+    html2canvasMock.mockRejectedValueOnce(new Error('canvas failure'));
+    await exportDocx('Inline math: $E = mc^2$ done.', 'doc.md');
+    const xml = await getDocumentXml(getDownloadedBlob());
+
+    expect(xml).toContain('$E = mc^2$');
+  });
+
+  it('routes through the Electron save dialog (UX-11) with a .docx filter when window.electronAPI is present', async () => {
+    const saveBinaryFileMock = vi.fn().mockResolvedValue({ saved: true });
+    window.electronAPI = { saveBinaryFile: saveBinaryFileMock } as unknown as typeof window.electronAPI;
+
+    await exportDocx(headingsFixture, 'doc.md');
+
+    expect(saveBinaryFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suggestedName: 'doc.docx',
+        filters: [{ name: 'Word Document', extensions: ['docx'] }],
+      }),
+    );
+    expect(createObjectURLMock).not.toHaveBeenCalled();
+  });
+
+  it('wraps a thrown library error in a friendly, format-specific message (RUN-14)', async () => {
+    window.electronAPI = {
+      saveBinaryFile: vi.fn().mockRejectedValue(new Error("Can't find end of central directory")),
+    } as unknown as typeof window.electronAPI;
+
+    await expect(exportDocx(headingsFixture, 'doc.md')).rejects.toThrow(
+      'DOCX export failed: the file could not be read as a valid Office document (it may be corrupted or not a real Office file)',
+    );
   });
 });
 
@@ -248,6 +427,14 @@ describe('exportPdf', () => {
     return el;
   }
 
+  beforeEach(() => {
+    // jsdom has no canvas backend (no `canvas` npm package installed), so
+    // `HTMLCanvasElement.prototype.toDataURL` returns null instead of a real
+    // data URI. exportPdf's page-slicing loop creates its own <canvas> per
+    // page internally, so this stub keeps that codepath's output realistic.
+    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,SLICE');
+  });
+
   it('drives html2canvas with the target element and jsPDF with the resulting image, then downloads a .pdf', async () => {
     const target = mountTarget('markdown-content');
 
@@ -262,7 +449,7 @@ describe('exportPdf', () => {
     expect(jsPdfAddImageMock).toHaveBeenCalledTimes(1);
     expect(jsPdfAddImageMock).toHaveBeenCalledWith(expect.any(String), 'PNG', 0, 0, 210, expect.any(Number));
     expect(jsPdfAddPageMock).not.toHaveBeenCalled();
-    expect(jsPdfOutputMock).toHaveBeenCalledWith('blob');
+    expect(jsPdfOutputMock).toHaveBeenCalledWith('arraybuffer');
 
     expect(anchorClicks).toEqual([{ download: 'report.pdf', href: 'blob:mock-url' }]);
   });
@@ -287,5 +474,21 @@ describe('exportPdf', () => {
       '[export] exportPdf: element #does-not-exist not found',
     );
     expect(anchorClicks).toHaveLength(0);
+  });
+
+  it('routes through the Electron save dialog (UX-11) with a .pdf filter when window.electronAPI is present', async () => {
+    mountTarget('markdown-content');
+    const saveBinaryFileMock = vi.fn().mockResolvedValue({ saved: true });
+    window.electronAPI = { saveBinaryFile: saveBinaryFileMock } as unknown as typeof window.electronAPI;
+
+    await exportPdf('markdown-content', 'report.md');
+
+    expect(saveBinaryFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suggestedName: 'report.pdf',
+        filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
+      }),
+    );
+    expect(createObjectURLMock).not.toHaveBeenCalled();
   });
 });
