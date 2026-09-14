@@ -2204,6 +2204,14 @@ function createActivePage(
   }
 }
 
+// TODO(docx-drawings): this is the natural hook point for floating-image
+// placement — once `./floats.ts` exists, a finalized `Page` here is exactly
+// where an `applyPageFloats(page, ctx)` pass would slot in (after body/
+// footnote content is placed, before the page is pushed). None of this
+// wave's own milestones (headers/footers/footnotes/endnotes/vAlign/tab
+// stops/table row-splitting) needed to reserve space for a float, so no
+// call site was added speculatively — left as a comment per this task's
+// own instructions rather than importing a module that doesn't exist yet.
 function finalizePage(currentPage: ActivePage, pageIndex: number): Page {
   const verticalOffsetPt = resolveVerticalAlignOffsetPt(currentPage)
   const footnoteLines = buildPageFootnoteLines(currentPage)
