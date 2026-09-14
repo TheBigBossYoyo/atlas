@@ -4,6 +4,7 @@ import type { ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
 import { DOCUMENT_RENDER_TIMEOUT_MS, DOCUMENT_SIZE_CAP_BYTES, formatSizeCapMessage, withRenderTimeout } from './shared/documentGuard'
 import { estimatePageCount } from './shared/pageEstimate'
+import { sanitizeDocumentHtml } from './shared/sanitizeDocumentHtml'
 import { countWords } from './shared/textStats'
 import './__styles__/viewer-rtf.css'
 
@@ -13,8 +14,27 @@ function toArrayBuffer(file: ViewerProps['file']): ArrayBuffer {
     : new TextEncoder().encode(file.kind === 'text' ? file.content : '').buffer
 }
 
-async function renderRtf(arrayBuffer: ArrayBuffer): Promise<Node[]> {
-  const { RTFJS, WMFJS, EMFJS } = await import('rtf.js')
+/**
+ * Renders RTF to sanitized HTML (security fix, found during this review).
+ *
+ * rtf.js hands back live DOM `Node`s it builds itself from the file's own
+ * (fully untrusted) content — including, for a `{\field{\*\fldinst
+ * HYPERLINK "..."}}` field, a real `<a>` whose `href` is assigned directly
+ * from the RTF's URL string with zero scheme validation (see rtf.js's
+ * `Renderer.buildHyperlinkElement`: `link.href = url`). A crafted RTF file
+ * can therefore render a clickable `javascript:`-URI link that runs
+ * arbitrary script in this renderer when clicked — the same class of risk
+ * OdtViewer already guards against by sanitizing odf-kit's output with
+ * DOMPurify. Serializing rtf.js's node tree and sanitizing it the same way
+ * closes that gap. rtf.js never produces `<canvas>` (images arrive as
+ * `<img src="data:...">`), so nothing visual is lost by round-tripping
+ * through markup instead of appending the live nodes directly.
+ */
+async function renderRtf(arrayBuffer: ArrayBuffer): Promise<string> {
+  const [{ RTFJS, WMFJS, EMFJS }, { default: DOMPurify }] = await Promise.all([
+    import('rtf.js'),
+    import('dompurify'),
+  ])
 
   try {
     RTFJS.loggingEnabled(false)
@@ -25,7 +45,14 @@ async function renderRtf(arrayBuffer: ArrayBuffer): Promise<Node[]> {
   }
 
   const doc = new RTFJS.Document(arrayBuffer, {})
-  return doc.render()
+  const nodes = await doc.render()
+
+  const wrapper = document.createElement('div')
+  for (const node of nodes) {
+    wrapper.appendChild(node)
+  }
+
+  return sanitizeDocumentHtml(wrapper.innerHTML, DOMPurify)
 }
 
 function RtfViewerBase({ file }: ViewerProps) {
@@ -63,7 +90,7 @@ function RtfViewerBase({ file }: ViewerProps) {
       setError(null)
 
       try {
-        const nodes = await withRenderTimeout(
+        const html = await withRenderTimeout(
           renderRtf(arrayBuffer),
           DOCUMENT_RENDER_TIMEOUT_MS,
           'Rendering this RTF file took too long and was stopped.',
@@ -71,10 +98,7 @@ function RtfViewerBase({ file }: ViewerProps) {
 
         if (cancelled) return
 
-        container.innerHTML = ''
-        for (const node of nodes) {
-          container.appendChild(node)
-        }
+        container.innerHTML = html
 
         const words = countWords(container)
         const pages = estimatePageCount(container.scrollHeight)

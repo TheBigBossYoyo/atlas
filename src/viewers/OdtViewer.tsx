@@ -4,6 +4,7 @@ import type { ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
 import { DOCUMENT_RENDER_TIMEOUT_MS, DOCUMENT_SIZE_CAP_BYTES, formatSizeCapMessage, withRenderTimeout } from './shared/documentGuard'
 import { estimatePageCount, parseLengthToPx } from './shared/pageEstimate'
+import { sanitizeDocumentHtml } from './shared/sanitizeDocumentHtml'
 import { countWords } from './shared/textStats'
 import './__styles__/viewer-odt.css'
 
@@ -56,11 +57,9 @@ function OdtViewerBase({ file }: ViewerProps) {
 
     if (signal.cancelled) return
 
-    const safeHtml = DOMPurify.sanitize(html, {
-      USE_PROFILES: { html: true },
-      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
-      FORBID_ATTR: ['onerror', 'onload', 'onclick'],
-    })
+    // Security fix (found during this review, see sanitizeDocumentHtml.ts):
+    // odf-kit's HTML output must never reach `innerHTML` unsanitized.
+    const safeHtml = sanitizeDocumentHtml(html, DOMPurify)
 
     if (signal.cancelled) return
 
