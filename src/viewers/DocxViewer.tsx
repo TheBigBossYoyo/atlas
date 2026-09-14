@@ -30,6 +30,12 @@ import {
   type FontMetrics,
   type FontVariant,
 } from '../docx/fonts'
+import {
+  parseCoreProps,
+  updateFields,
+  updateTableOfContents,
+  type FieldEvaluationContext,
+} from '../docx/fields'
 import { type Document as DocxDocument, type Paragraph, type ParagraphChild, type Run, type RunChild } from '../docx/model'
 import { resolveParaProps } from '../docx/parser/cascade'
 import { MediaContext, PageStack } from '../docx/render'
@@ -580,6 +586,42 @@ function getReplaceValue(root: HTMLElement | null): string {
   return input?.value ?? ''
 }
 
+/**
+ * DEFER-5 / DXS-20 — builds a `(sectionIndex, blockIndex) -> 1-based page`
+ * lookup from the already-computed pagination result, for PAGE/NUMPAGES
+ * field evaluation and TOC page numbers. Reads only `Page`'s already-public
+ * shape (`PageLineRef.paragraphPath`'s first element is the paragraph's
+ * index among its section's direct blocks, matching the addressing
+ * `updateFields`/`collectTocEntries` use) — this stays a read-only consumer
+ * of pagination's output, not a change to pagination itself (paginate.ts/
+ * breakLines.ts are out of this branch's scope). A paragraph spanning
+ * several pages resolves to the EARLIEST page it appears on.
+ */
+function buildPageOfParagraph(
+  pages: ReadonlyArray<Page>,
+): (sectionIndex: number, blockIndex: number) => number | undefined {
+  const pageByKey = new Map<string, number>()
+
+  for (const page of pages) {
+    const pageNumber = page.pageIndex + 1
+    for (const column of page.columns) {
+      for (const line of column.lines) {
+        const blockIndex = line.paragraphPath[0]
+        if (blockIndex === undefined) {
+          continue
+        }
+        const key = `${page.sectionIndex}:${blockIndex}`
+        const existing = pageByKey.get(key)
+        if (existing === undefined || pageNumber < existing) {
+          pageByKey.set(key, pageNumber)
+        }
+      }
+    }
+  }
+
+  return (sectionIndex, blockIndex) => pageByKey.get(`${sectionIndex}:${blockIndex}`)
+}
+
 function DocxEditor({
   bundle,
   file,
@@ -603,6 +645,13 @@ function DocxEditor({
   // measurement (which reads what the browser has actually registered)
   // never races the registration it depends on.
   const embeddedFontsReadyRef = useRef<Promise<void>>(Promise.resolve())
+  // DEFER-5 / DXS-20 — feedback for "Update Fields"/"Update TOC" below.
+  // Not the shared app-wide toast system (`useToast`): that requires a
+  // `<ToastProvider>` ancestor the isolated viewer-level tests that mount
+  // `DocxEditor`/`DocxViewer` directly don't set up, and this file already
+  // has its own established pattern (see `saveError`) for a dismissible
+  // inline status message instead.
+  const [fieldUpdateMessage, setFieldUpdateMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
   const [range, setRange] = useState<Range | null>(null)
   const [pages, setPages] = useState<ReadonlyArray<Page> | null>(null)
@@ -1478,6 +1527,67 @@ function DocxEditor({
     handlePrintRef.current = handlePrint
   }, [handlePrint])
 
+  /**
+   * DEFER-5 / DXS-20 — "Update field(s)": recalculates every resolvable
+   * field's cached display text (DATE/TIME/AUTHOR/TITLE/REF/PAGEREF/SEQ/
+   * PAGE/NUMPAGES; HYPERLINK/TOC/unknown fields are never touched here —
+   * see `updateFields`'s doc comment). Author/title come from a light
+   * regex read of `docProps/core.xml` (`parseCoreProps`) — Atlas has no
+   * broader docProps model to draw on. Bookmark text/page maps are left
+   * empty for this minimal wiring, so REF/PAGEREF fields specifically are
+   * left unevaluated for now (a known, documented gap — see the branch
+   * report). Applied directly to `documentModel`, bypassing History/undo:
+   * a follow-up could route it through a `replace-blocks`-shaped command
+   * instead, but wiring into the shared editor Command/History system
+   * (`docx/editor/commandTypes.ts`) is left to wave3/docx-editing's scope.
+   */
+  const handleUpdateFields = useCallback(() => {
+    const coreXmlBytes = bundle.rawArchive?.get('docProps/core.xml')
+    const coreXml = coreXmlBytes !== undefined ? new TextDecoder().decode(coreXmlBytes) : undefined
+    const { author, title } = parseCoreProps(coreXml)
+    const pageOfParagraph = pages !== null ? buildPageOfParagraph(pages) : undefined
+
+    const context: FieldEvaluationContext = {
+      ...(author !== undefined ? { author } : {}),
+      ...(title !== undefined ? { title } : {}),
+      bookmarkText: new Map(),
+      ...(pages !== null ? { pageCount: pages.length } : {}),
+      ...(pageOfParagraph !== undefined
+        ? { currentPageOf: (path: ReadonlyArray<number>) => (path[1] !== undefined ? pageOfParagraph(path[0], path[1]) : undefined) }
+        : {}),
+      sequenceCounters: new Map(),
+    }
+
+    const { document: updated, updatedCount } = updateFields(documentModel, context)
+    if (updatedCount === 0) {
+      setFieldUpdateMessage('No fields needed updating.')
+      return
+    }
+
+    setDocumentModel(updated)
+    setFieldUpdateMessage(`Updated ${updatedCount} field${updatedCount === 1 ? '' : 's'}.`)
+  }, [bundle.rawArchive, documentModel, pages])
+
+  /**
+   * DEFER-5 / DXS-20 — "Update table of contents": regenerates a
+   * single-paragraph TOC field's entries from the document's current
+   * headings (see `toc.ts`'s doc comment on that scope). No-ops with a
+   * status message when the document has no such field, matching Word's
+   * own behavior of the command doing nothing without a TOC.
+   */
+  const handleUpdateTableOfContents = useCallback(() => {
+    const pageOfParagraph = pages !== null ? buildPageOfParagraph(pages) : undefined
+    const { document: updated, updated: didUpdate } = updateTableOfContents(documentModel, pageOfParagraph)
+
+    if (!didUpdate) {
+      setFieldUpdateMessage('No table of contents found to update.')
+      return
+    }
+
+    setDocumentModel(updated)
+    setFieldUpdateMessage('Table of contents updated.')
+  }, [documentModel, pages])
+
   useEffect(() => {
     handleToolbarCommandRef.current = handleToolbarCommand
   }, [handleToolbarCommand])
@@ -1597,6 +1707,24 @@ function DocxEditor({
           <Printer size={16} aria-hidden="true" />
           <span>Print</span>
         </button>
+        <button
+          className="docx-viewer__update-fields-button"
+          type="button"
+          onClick={handleUpdateFields}
+          aria-label="Update fields"
+          title="Recalculate DATE/TIME/AUTHOR/TITLE/REF/PAGEREF/SEQ/PAGE/NUMPAGES fields to their current values"
+        >
+          <span>Update Fields</span>
+        </button>
+        <button
+          className="docx-viewer__update-toc-button"
+          type="button"
+          onClick={handleUpdateTableOfContents}
+          aria-label="Update table of contents"
+          title="Regenerate the table of contents from the document's current headings"
+        >
+          <span>Update TOC</span>
+        </button>
       </div>
       <FindReplace
         open={findOpen}
@@ -1697,6 +1825,19 @@ function DocxEditor({
             className="docx-viewer__error-dismiss"
             onClick={() => setSaveError(null)}
             aria-label="Dismiss error"
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      {fieldUpdateMessage !== null ? (
+        <div className="docx-viewer__field-status" role="status">
+          <span>{fieldUpdateMessage}</span>
+          <button
+            type="button"
+            className="docx-viewer__error-dismiss"
+            onClick={() => setFieldUpdateMessage(null)}
+            aria-label="Dismiss message"
           >
             <X size={14} aria-hidden="true" />
           </button>

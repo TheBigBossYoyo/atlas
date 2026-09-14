@@ -25,3 +25,4 @@ export {
   type UpdateTableOfContentsResult,
 } from './toc'
 export { paragraphPlainText } from './paragraphText'
+export { parseCoreProps, type CoreProps } from './docProps'
