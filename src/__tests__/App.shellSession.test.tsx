@@ -310,6 +310,25 @@ describe('App — draft recovery (P2.6/SHELL-11/LOAD-20)', () => {
     render(<App />);
     expect(screen.queryByText(/unsaved draft/i)).not.toBeInTheDocument();
   });
+
+  it('Load Sample dismisses a pending restore prompt instead of leaving a stale offer visible', async () => {
+    // Regression: loadSample() used to leave `pendingDraft` (and thus the
+    // banner) untouched, even though it immediately makes `isMarkdownDocument`
+    // true and re-enables autosave — which would then start overwriting the
+    // crashed session's own draft under the same storage key within 800ms,
+    // while the banner kept advertising a "Restore" for content already
+    // being evicted underneath it.
+    seedDraft('# Should not appear');
+    render(<App />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/unsaved draft/i);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load Sample Document' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
 });
 
 describe('App — main-process close confirmation round-trip (P2.5/SHELL-02/ELEC-06)', () => {

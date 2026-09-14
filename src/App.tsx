@@ -442,7 +442,17 @@ function AppShell() {
 
   const loadSample = useCallback(() => {
     setMarkdown(SAMPLE_MARKDOWN);
-  }, [setMarkdown]);
+    // P2.6 — dismiss any pending draft-recovery prompt the same way opening a
+    // real file already does. Without this, loading the sample while the
+    // banner is still showing would let autosave (now enabled, since
+    // localMarkdown is non-empty) start overwriting the crashed session's
+    // draft under the same storage key within its 800ms debounce — while the
+    // banner still offers a now-stale "Restore" for content already evicted
+    // underneath it. The in-memory pendingDraft snapshot still restores
+    // correctly if the user clicks it in that narrow window, but a second
+    // crash before they do would then lose the original draft for good.
+    setPendingDraft(null);
+  }, [setMarkdown]); // setPendingDraft is a stable state setter, omitted per convention elsewhere in this file
 
   const handleOpenRecent = useCallback(
     (file: RecentFile) => {
