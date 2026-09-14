@@ -526,6 +526,125 @@ describe('docx editor commands', () => {
     expect(reverted.document).toEqual(original)
   })
 
+  // ---------------------------------------------------------------------------
+  // D14/D18 hygiene — a paragraph stays editable after gaining an inline
+  // atomic leaf (image/page-break/tab). Before this fix, `getEditableRuns`
+  // rejected the *whole paragraph* the instant it contained any run with a
+  // non-text child, so every command below threw (and, via DocxViewer's
+  // always-preventDefault handling, silently no-opped) the moment a
+  // paragraph gained an inserted image or page break — including simply
+  // continuing to type right after it, the single most common thing a user
+  // does next.
+  // ---------------------------------------------------------------------------
+
+  function createAtomicRun(child: Run['children'][number]): Run {
+    return Object.freeze({ kind: 'run', children: Object.freeze([child]) }) as Run
+  }
+
+  const PAGE_BREAK_CHILD = Object.freeze({ kind: 'break', breakType: 'page' }) as Run['children'][number]
+
+  it('typing right after a page break at the end of a paragraph inserts text instead of throwing', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD)]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    // Mirrors applyInsertInline's own returned cursor convention for "the
+    // break is the last thing in the paragraph": one past its own index.
+    const result = applyCommand(original, {
+      kind: 'insert-text',
+      at: position([0], 2, 0),
+      text: 'World',
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(nextParagraph.children.length).toBe(3)
+    expect(getRunText(nextParagraph.children[0] as Run)).toBe('Hello')
+    expect((nextParagraph.children[1] as Run).children[0]).toEqual(PAGE_BREAK_CHILD)
+    expect(getRunText(nextParagraph.children[2] as Run)).toBe('World')
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('typing right before a page break (mid-paragraph) inserts text without disturbing it', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD), createRun('World')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'insert-text',
+      at: position([0], 0, 5),
+      text: '!',
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(getRunText(nextParagraph.children[0] as Run)).toBe('Hello!')
+    expect((nextParagraph.children[1] as Run).children[0]).toEqual(PAGE_BREAK_CHILD)
+    expect(getRunText(nextParagraph.children[2] as Run)).toBe('World')
+  })
+
+  it('deleting a range that crosses a page break removes both the text and the break', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD), createRun('World')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'delete-range',
+      range: { anchor: position([0], 0, 3), focus: position([0], 2, 2) },
+    })
+
+    expect(runTexts(result.document.sections[0].blocks[0] as Paragraph)).toEqual(['Helrld'])
+  })
+
+  it('bolding a selection that straddles a page break preserves the break instead of dropping it', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD), createRun('World')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'apply-run-format',
+      range: { anchor: position([0], 0, 0), focus: position([0], 2, 5) },
+      format: { bold: true },
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    const breakEntries = nextParagraph.children.filter(
+      (child) => child.kind === 'run' && child.children[0]?.kind === 'break',
+    )
+    expect(breakEntries).toHaveLength(1)
+    expect(runTexts(nextParagraph).join('')).toBe('HelloWorld')
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(runTexts(reverted.document.sections[0].blocks[0] as Paragraph).join('')).toBe('HelloWorld')
+  })
+
+  it('formatting the whole paragraph (bold) preserves an inline break anywhere inside it', () => {
+    const paragraph = Object.freeze({
+      kind: 'paragraph',
+      children: Object.freeze([createRun('Hello'), createAtomicRun(PAGE_BREAK_CHILD), createRun('World')]),
+    }) as Paragraph
+    const original = createDocument([paragraph])
+
+    const result = applyCommand(original, {
+      kind: 'apply-run-format',
+      range: { anchor: position([0], 0, 0), focus: position([0], 2, 5) },
+      format: { italic: true },
+    })
+
+    const nextParagraph = result.document.sections[0].blocks[0] as Paragraph
+    expect(nextParagraph.children.some((child) => child.kind === 'run' && child.children[0]?.kind === 'break')).toBe(
+      true,
+    )
+  })
+
   it('InsertTable splits the paragraph around a new N x M table with a tblGrid', () => {
     const original = createDocument([createParagraph(['AtlasDoc'])])
 

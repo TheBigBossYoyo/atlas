@@ -529,6 +529,52 @@ describe('DocxViewer editor', () => {
     expect(collectText(savedDocument)).toContain('Howdy')
   })
 
+  it('the paragraph stays editable after inserting an image into it (no getEditableRuns poisoning)', async () => {
+    window.electronAPI!.image!.pick = vi.fn().mockResolvedValue({
+      cancelled: false,
+      bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      mime: 'image/png',
+      suggestedName: 'photo.png',
+    })
+
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello', 'Howdy')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
+    fireEvent.click(screen.getByLabelText('Image'))
+
+    await waitFor(() => {
+      expect(saveDocxMock).not.toHaveBeenCalled()
+    })
+
+    // The image landed inline in the same (only) paragraph. A subsequent,
+    // unrelated edit to that same paragraph must still work — before the
+    // getEditableRuns fix, any run with a non-text child (the inserted
+    // drawing) made the *whole paragraph* reject every later command.
+    replaceFirstMatch('DOCX', 'Editor')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(hasDrawing(savedDocument)).toBe(true)
+    expect(collectText(savedDocument)).toContain('Howdy')
+    expect(collectText(savedDocument)).toContain('Editor')
+  })
+
   it('DXE-24: Save As omits existingPath so a save dialog is shown', async () => {
     render(
       <ViewerProvider filePath="C:/docs/sample.docx">

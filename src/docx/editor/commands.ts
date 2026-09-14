@@ -793,6 +793,36 @@ function applyInsertText(
 
   const target = resolveInsertTarget(editableRuns, cmd.at)
   const current = editableRuns[target.runIndex]
+
+  // DXE-18/D18 — `resolveInsertTarget`'s own end-of-paragraph branch resolves
+  // "insert at the very end" to `{runIndex: lastIndex, charOffset: 0}` when
+  // the last entry is an atomic one (image/break/tab, zero-length "text") —
+  // exactly what happens when a user keeps typing right after inserting an
+  // image at the end of a paragraph. Splicing a new sibling text run in
+  // after it (rather than calling createRunLike on it, which would silently
+  // replace its non-text child with a plain text node — see
+  // toRunEntryOrNull) keeps the image and places the typed text right after
+  // it, matching what the user was actually doing.
+  if (isAtomicRun(current.run)) {
+    const insertedRun = createRunWithText(undefined, cmd.text)
+    const nextEntries: RunEntry[] = [
+      ...editableRuns.slice(0, target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
+      { run: insertedRun, owner: current.owner },
+      ...editableRuns.slice(target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
+    ]
+
+    const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
+    const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
+    const start = createPosition(cmd.at.paragraphPath, target.runIndex + 1, 0)
+    const end = createPosition(cmd.at.paragraphPath, target.runIndex + 1, cmd.text.length)
+
+    return {
+      document: nextDocument,
+      inverse: createDeleteRangeCommand(start, end),
+      range: { anchor: end, focus: end },
+    }
+  }
+
   const nextText =
     current.text.slice(0, target.charOffset) +
     cmd.text +
@@ -1487,12 +1517,12 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> | nul
 
   for (const child of paragraph.children) {
     if (child.kind === 'run') {
-      const text = getRunText(child)
-      if (text === null) {
+      const entry = toRunEntryOrNull(child, DIRECT_OWNER)
+      if (entry === null) {
         return null
       }
 
-      editableRuns.push({ run: child, text, owner: DIRECT_OWNER })
+      editableRuns.push(entry)
       continue
     }
 
@@ -1503,12 +1533,12 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> | nul
           return null
         }
 
-        const text = getRunText(grandchild)
-        if (text === null) {
+        const entry = toRunEntryOrNull(grandchild, owner)
+        if (entry === null) {
           return null
         }
 
-        editableRuns.push({ run: grandchild, text, owner })
+        editableRuns.push(entry)
       }
       continue
     }
@@ -1517,6 +1547,48 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> | nul
   }
 
   return editableRuns
+}
+
+/**
+ * DXE-18/D18 — `insertImage`/page-break insertion (`applyInsertInline`) each
+ * put their inline leaf (a `Drawing`, `BreakNode`, or `TabNode`) into its own
+ * dedicated run, never mixed with text. Before this, `getEditableRuns`
+ * rejected the *entire paragraph* the instant it saw any such run (`getRunText`
+ * returns `null` for a run with a non-text child) — so a paragraph became
+ * permanently uneditable (every later insert/delete/format silently no-opped,
+ * see D12's always-preventDefault behavior) the moment it gained an inline
+ * image or a page break, including from typing immediately after it — by far
+ * the most common thing a user does right after inserting one.
+ *
+ * Recognizing this one specific, self-produced shape (a run with *exactly
+ * one* child that is a known atomic leaf) lets such a run flatten into the
+ * list as a zero-length entry instead: `splitEntriesAtPosition` already
+ * treats a zero-length entry as an all-or-nothing boundary (never slices its
+ * "text"), so cross-run/cross-paragraph delete and insert both work correctly
+ * around it for free. `sliceEntriesByOffsets`/`mergeAdjacentEntries` are
+ * additionally guarded (see below) so a range that merely *touches* an atomic
+ * entry's boundary — formatting or deleting text elsewhere in the same
+ * paragraph — can never silently rewrite or drop it via `createRunLike`
+ * (which would otherwise replace its non-text child with an empty text node,
+ * since `getRunText` returning `null` makes `createRunLike`'s "already
+ * matches, reuse as-is" check never match). A run mixing text with a
+ * non-text child, or containing any other unrecognized non-text shape, still
+ * rejects the whole paragraph exactly as before — this only widens support
+ * for the specific shape Atlas's own editor produces.
+ */
+function toRunEntryOrNull(run: Run, owner: RunOwner): EditableRun | null {
+  if (isAtomicRun(run)) {
+    return { run, text: '', owner }
+  }
+
+  const text = getRunText(run)
+  return text === null ? null : { run, text, owner }
+}
+
+const ATOMIC_LEAF_KINDS: ReadonlySet<string> = new Set(['break', 'tab', 'drawing'])
+
+function isAtomicRun(run: Run): boolean {
+  return run.children.length === 1 && ATOMIC_LEAF_KINDS.has(run.children[0].kind)
 }
 
 function toEditableRunList(entries: ReadonlyArray<RunEntry>): ReadonlyArray<EditableRun> {
@@ -1697,6 +1769,21 @@ function sliceEntriesByOffsets(
 
     if (runStart >= offsets.endOffset) {
       after.push({ run: entry.run, owner: entry.owner })
+      continue
+    }
+
+    // An atomic entry (image/break/tab, `text: ''`) has runStart === runEnd,
+    // so it can only reach here when the range strictly straddles it
+    // (offsets.startOffset < runStart < offsets.endOffset) — e.g. bolding or
+    // linking a selection that happens to span an inline image. Since it has
+    // no text to slice, the code below would otherwise compute
+    // localStart === localEnd === 0 and drop the entry from all three
+    // buckets — silently deleting it. Keep it, untouched, on the boundary
+    // side it started on rather than ever placing it in `within` (which
+    // rewrites entries via `createRunLike`, and `createRunLike` on an atomic
+    // run always rebuilds it as a bare text node — see `toRunEntryOrNull`).
+    if (entry.text.length === 0) {
+      before.push({ run: entry.run, owner: entry.owner })
       continue
     }
 
@@ -1986,6 +2073,15 @@ function mergeAdjacentEntries(entries: ReadonlyArray<RunEntry>): ReadonlyArray<R
   const merged: RunEntry[] = []
 
   for (const entry of entries) {
+    // Atomic entries (image/break/tab) have no text to concatenate with a
+    // neighbor, and createRunLike would otherwise destroy them when asked to
+    // rebuild one with different "text" (see toRunEntryOrNull) — always keep
+    // them standalone rather than attempting to merge into or out of them.
+    if (isAtomicRun(entry.run)) {
+      merged.push(entry)
+      continue
+    }
+
     const text = getRunText(entry.run)
     if (text === null) {
       throw new Error('This command currently supports text-only runs')
@@ -1994,6 +2090,7 @@ function mergeAdjacentEntries(entries: ReadonlyArray<RunEntry>): ReadonlyArray<R
     const previous = merged[merged.length - 1]
     if (
       previous === undefined ||
+      isAtomicRun(previous.run) ||
       !sameOwner(previous.owner, entry.owner) ||
       !sameRunProps(previous.run.props, entry.run.props)
     ) {
