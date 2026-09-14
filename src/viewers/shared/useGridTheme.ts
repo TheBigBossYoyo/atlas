@@ -81,15 +81,15 @@ export function useGridTheme(): CustomGridTheme {
     const update = () => {
       setTheme((prev) => {
         const next = resolveGridTheme()
-        return           prev.bgCell === next.bgCell &&
+        const unchanged =
+          prev.bgCell === next.bgCell &&
           prev.textDark === next.textDark &&
           prev.borderColor === next.borderColor &&
           prev.accentColor === next.accentColor &&
           prev.bgHeader === next.bgHeader &&
           prev.fontFamily === next.fontFamily &&
           prev.bgRowHover === next.bgRowHover
-          ? prev
-          : next
+        return unchanged ? prev : next
       })
     }
 

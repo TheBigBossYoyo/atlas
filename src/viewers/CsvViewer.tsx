@@ -164,6 +164,9 @@ function CsvViewerBase({ file }: ViewerProps) {
               smoothScrollX
               smoothScrollY
               rowMarkers="number"
+              // Fixed UX default — CSV/TSV have no file-level freeze-pane
+              // concept at all (that's an xlsx/ods-only feature); see the
+              // "Frozen panes" note in shared/spreadsheetGrid.ts.
               freezeColumns={1}
               headerHeight={36}
               rowHeight={32}

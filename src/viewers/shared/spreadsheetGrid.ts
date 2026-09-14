@@ -15,6 +15,23 @@
  *  - reports each sheet's `hidden` flag from the workbook's own sheet
  *    visibility state (T4/DAT-11) so the UI can filter/toggle it.
  *
+ * Frozen panes (T4/DAT-10's other sub-item) are a deliberate scope cut, not
+ * an oversight: this `xlsx` build never parses a sheet's `<pane>`/`xSplit`/
+ * `ySplit` XML at all (confirmed by grepping the bundled `xlsx.js` — every
+ * freeze/split/pane-related case in its own settings parser is a no-op
+ * `break`), so there is no `ws['!freeze']`-equivalent field to read; getting
+ * it would mean re-unzipping and regexing each sheet's raw XML ourselves.
+ * Doing that on the *main* thread would re-block it on exactly the huge
+ * sheets T2 exists to protect (a 100k-row sheet's XML has to be fully
+ * inflated to reach its `<sheetViews>` element); doing it correctly for
+ * every file size would mean teaching the Worker path a second, unrelated
+ * parsing format. Given `@glideapps/glide-data-grid` v6 only supports
+ * frozen *columns* anyway (no frozen-rows prop exists), the fidelity this
+ * would buy is partial at a real complexity and performance-risk cost — so
+ * SpreadsheetViewer/CsvViewer keep their fixed `freezeColumns={1}` default
+ * (freeze the row-number column) rather than attempting a from-scratch,
+ * file-driven implementation here.
+ *
  * `XLSX.read`'s `cellStyles:true` is kept even though T3 asks to drop
  * "expensive, immediately-discarded" parse options: in this SheetJS build,
  * `!cols` (column widths) and `!rows` (row heights) are ONLY populated when

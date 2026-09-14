@@ -173,6 +173,8 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
                 smoothScrollX
                 smoothScrollY
                 rowMarkers="number"
+                // Fixed UX default, not derived from the file's own freeze-pane
+                // metadata — see the "Frozen panes" note in spreadsheetGrid.ts.
                 freezeColumns={1}
                 headerHeight={36}
                 rowHeight={32}
