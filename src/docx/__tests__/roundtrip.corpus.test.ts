@@ -34,6 +34,7 @@ import {
   loadRawPackage,
   ownedPartPaths,
   readCorpusFixture,
+  textOf,
 } from './corpusRoundtripHelpers'
 
 // Every fixture's body starts with one paragraph containing one plain run
@@ -137,5 +138,65 @@ describe('DOCX round-trip fidelity corpus (P0.5 / QA-09 / DXS-17)', () => {
         await assertRoundtrip(fixtureId, mode)
       })
     }
+  })
+
+  // D7 / DXP-06, DXL-08, DXS-05: the corpus's generic structural fingerprint
+  // (paragraph/table/drawing/sectPr/tblGrid counts) doesn't inspect
+  // styles.xml at all, so it alone can't catch "table style conditional
+  // formatting silently dropped on save" — styles.xml is always rewritten
+  // from Atlas's model (see index.ts's saveDocx), never passed through
+  // byte-for-byte. This asserts the fixture's real `w:tblStylePr` blocks
+  // (header-row bold+shading, band1Horz shading) survive a save.
+  describe('table-styled-banded preserves w:tblStylePr on save (D7)', () => {
+    it('keeps both conditional-formatting blocks, with their run/cell formatting intact', async () => {
+      const originalBuffer = await readCorpusFixture('table-styled-banded')
+      const bundle = await loadDocx(originalBuffer)
+      const savedBytes = await saveDocx(bundle)
+      const resultPkg = await loadRawPackage(savedBytes)
+
+      const stylesXml = textOf(resultPkg, 'word/styles.xml')
+      expect(stylesXml).toContain('w:tblStylePr')
+      expect((stylesXml?.match(/<w:tblStylePr\b/g) ?? []).length).toBe(2)
+
+      const reparsed = await loadDocx(Uint8Array.from(savedBytes).buffer)
+      const style = reparsed.document.styles.get('AtlasBandedTable')
+
+      expect(style?.conditionalFormats?.get('firstRow')).toMatchObject({
+        run: { bold: true },
+        cell: { shd: { fill: '4472C4' } },
+      })
+      expect(style?.conditionalFormats?.get('band1Horz')).toMatchObject({
+        cell: { shd: { fill: 'D9E2F3' } },
+      })
+    })
+  })
+
+  // D19 / DXS-13: docProps/core.xml previously passed through byte-for-byte
+  // (see `ownedPartPaths`'s D19 note above) — a save now regenerates its
+  // modified date and last-modified-by rather than leaving whatever the
+  // fixture's original author's last save wrote.
+  describe('docProps/core.xml modified date + lastModifiedBy (D19 / DXS-13)', () => {
+    it('regenerates dcterms:modified and cp:lastModifiedBy on every save', async () => {
+      const originalBuffer = await readCorpusFixture('plain-paragraphs-styles')
+      const originalPkg = await loadRawPackage(originalBuffer)
+      const originalCoreXml = textOf(originalPkg, 'docProps/core.xml')
+      expect(originalCoreXml).toContain('Atlas Corpus Generator')
+
+      const bundle = await loadDocx(originalBuffer)
+      const savedBytes = await saveDocx(bundle)
+      const resultPkg = await loadRawPackage(savedBytes)
+      const savedCoreXml = textOf(resultPkg, 'docProps/core.xml')
+
+      expect(savedCoreXml).toBeDefined()
+      expect(savedCoreXml).toContain('<cp:lastModifiedBy>Atlas</cp:lastModifiedBy>')
+      expect(savedCoreXml).not.toContain('<cp:lastModifiedBy>Atlas Corpus Generator</cp:lastModifiedBy>')
+
+      const modifiedMatch = savedCoreXml?.match(/<dcterms:modified[^>]*>([^<]+)<\/dcterms:modified>/)
+      expect(modifiedMatch).not.toBeNull()
+      expect(Date.now() - Date.parse(modifiedMatch![1])).toBeLessThan(60_000)
+
+      // dc:creator (a distinct property from cp:lastModifiedBy) is untouched.
+      expect(savedCoreXml).toContain('Atlas Corpus Generator')
+    })
   })
 })
