@@ -32,7 +32,10 @@ export async function loadOdpDocuments(
   }
 }
 
-/** Every `<style:style>`/`<style:default-style>` in a document's `automatic-styles`/`styles`, keyed by name. */
+/**
+ * Every named `<style:style>` in a document's `automatic-styles`/`styles`, keyed by name.
+ * `<style:default-style>` (family-wide defaults with no name) is out of scope here.
+ */
 function collectNamedStyles(root: XMLDocument | Element | null, target: Map<string, Element>): void {
   if (!root) {
     return
