@@ -62,20 +62,30 @@ function emptyFormulaRow(colCount: number): (string | undefined)[] {
   return new Array<string | undefined>(colCount).fill(undefined)
 }
 
-/** Builds the initial editable document from parsed (read-only) sheets — the load-time entry point. */
+/**
+ * Builds the initial editable document from parsed (read-only) sheets — the
+ * load-time entry point. Runs `recalculateSheet` once up front so a formula
+ * cell our evaluator can't handle but the *file* already cached a value for
+ * (the overwhelmingly common case for anything beyond basic arithmetic —
+ * `VLOOKUP`, `IF`, text functions, ...) still shows that cached value
+ * (DAT-04 fidelity), while a formula our evaluator DOES support starts out
+ * "live" from the first render, matching what happens after any later edit.
+ */
 export function createDocument(parsedSheets: ReadonlyArray<ParsedSheet>): SpreadsheetDocument {
   return {
-    sheets: parsedSheets.map((sheet) => ({
-      name: sheet.name,
-      hidden: sheet.hidden,
-      rows: sheet.grid.rows,
-      formulas: sheet.grid.formulas,
-      colCount: sheet.grid.colCount,
-      merges: sheet.grid.merges,
-      colWidthsPx: sheet.grid.colWidthsPx,
-      rowHeightsPx: sheet.grid.rowHeightsPx,
-      ...(sheet.freeze ? { freeze: sheet.freeze } : {}),
-    })),
+    sheets: parsedSheets.map((sheet) =>
+      recalculateSheet({
+        name: sheet.name,
+        hidden: sheet.hidden,
+        rows: sheet.grid.rows,
+        formulas: sheet.grid.formulas,
+        colCount: sheet.grid.colCount,
+        merges: sheet.grid.merges,
+        colWidthsPx: sheet.grid.colWidthsPx,
+        rowHeightsPx: sheet.grid.rowHeightsPx,
+        ...(sheet.freeze ? { freeze: sheet.freeze } : {}),
+      }),
+    ),
   }
 }
 
@@ -101,7 +111,23 @@ function replaceSheet(doc: SpreadsheetDocument, sheetIndex: number, sheet: Edita
   return { sheets: doc.sheets.map((s, i) => (i === sheetIndex ? sheet : s)) }
 }
 
-/** Recomputes every formula cell's display text in one row-major pass (see module header for the documented limitation). */
+/**
+ * Recomputes every formula cell's display text in one row-major pass (see
+ * module header for the single-pass/no-dependency-graph limitation).
+ *
+ * A formula our evaluator can compute (`result.ok`) always gets the live,
+ * freshly-computed text — including on every subsequent edit, so a `=SUM(...)`
+ * cell stays "live" the way a real spreadsheet's would. A formula our
+ * evaluator can't handle at all (an unsupported function, a malformed
+ * expression) instead KEEPS whatever display text the cell already has
+ * (typically the original file's own cached value, e.g. a `VLOOKUP` result
+ * Excel computed and Atlas's evaluator was never going to reproduce) rather
+ * than clobbering it on every unrelated edit elsewhere in the sheet — it
+ * only falls back to the literal `=<formula>` text when there is no cached
+ * text at all (a brand-new formula, or one loaded from a file Atlas itself
+ * saved with the cached value intentionally left empty — see
+ * `spreadsheetWrite.ts`).
+ */
 export function recalculateSheet(sheet: EditableSheet): EditableSheet {
   const rows = sheet.rows.map((row) => [...row])
 
@@ -113,7 +139,11 @@ export function recalculateSheet(sheet: EditableSheet): EditableSheet {
       const formula = formulaRow[c]
       if (formula === undefined) continue
       const result = evaluateFormula(formula, lookup)
-      rows[r][c] = result.ok ? result.text : `=${formula}`
+      if (result.ok) {
+        rows[r][c] = result.text
+      } else if (rows[r][c] === '') {
+        rows[r][c] = `=${formula}`
+      }
     }
   }
 

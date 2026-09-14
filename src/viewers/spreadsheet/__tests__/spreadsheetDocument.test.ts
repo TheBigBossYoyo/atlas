@@ -78,6 +78,68 @@ describe('createDocument / createDocumentFromRows', () => {
   })
 })
 
+describe('createDocument — formula hydration on load', () => {
+  it('evaluates a formula our evaluator supports even when the file cached a different (or no) value', () => {
+    const doc = createDocument([
+      sheetFixture(
+        [
+          ['1', '2'],
+          ['', ''],
+        ],
+        {
+          grid: {
+            rows: [
+              ['1', '2'],
+              ['', ''],
+            ],
+            colCount: 2,
+            merges: [],
+            colWidthsPx: [],
+            rowHeightsPx: [],
+            formulas: [
+              [undefined, undefined],
+              ['A1+B1', undefined],
+            ],
+          },
+        },
+      ),
+    ])
+    expect(doc.sheets[0].rows[1][0]).toBe('3')
+  })
+
+  it('preserves the file-cached display text for a formula our evaluator cannot handle', () => {
+    const doc = createDocument([
+      sheetFixture([['looked up value']], {
+        grid: {
+          rows: [['looked up value']],
+          colCount: 1,
+          merges: [],
+          colWidthsPx: [],
+          rowHeightsPx: [],
+          formulas: [['VLOOKUP(A1,B:C,2,FALSE)']],
+        },
+      }),
+    ])
+    expect(doc.sheets[0].rows[0][0]).toBe('looked up value')
+  })
+
+  it('falls back to the literal formula text for an unsupported formula with no cached value at all', () => {
+    const doc = createDocument([
+      sheetFixture([['']], {
+        grid: {
+          rows: [['']],
+          colCount: 1,
+          merges: [],
+          colWidthsPx: [],
+          rowHeightsPx: [],
+          formulas: [['VLOOKUP(A1,B:C,2,FALSE)']],
+        },
+      }),
+    ])
+    expect(doc.sheets[0].rows[0][0]).toBe('=VLOOKUP(A1,B:C,2,FALSE)')
+  })
+})
+
 describe('setCellValue', () => {
   it('sets a plain value with no formula', () => {
     const doc = setCellValue(basicDoc(), 0, 1, 0, 'Carol')
@@ -116,6 +178,26 @@ describe('setCellValue', () => {
     const original = basicDoc()
     expect(setCellValue(original, 0, 99, 0, 'x')).toBe(original)
     expect(setCellValue(original, 5, 0, 0, 'x')).toBe(original)
+  })
+
+  it('does not clobber another cell\'s unsupported-formula cached text when an unrelated cell is edited', () => {
+    let doc = createDocument([
+      sheetFixture([['looked up value', '1']], {
+        grid: {
+          rows: [['looked up value', '1']],
+          colCount: 2,
+          merges: [],
+          colWidthsPx: [],
+          rowHeightsPx: [],
+          formulas: [['VLOOKUP(A1,B:C,2,FALSE)', undefined]],
+        },
+      }),
+    ])
+
+    doc = setCellValue(doc, 0, 0, 1, '2')
+
+    expect(doc.sheets[0].rows[0][0]).toBe('looked up value')
+    expect(doc.sheets[0].rows[0][1]).toBe('2')
   })
 
   it('never mutates the input document (immutability)', () => {
