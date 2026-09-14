@@ -3,10 +3,14 @@ import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 import { assertNever, type Block, type Paragraph, type Table } from '../model'
 import {
   buildNamespaceDeclarationAttributes,
-  buildParagraph,
-  buildTable,
+  buildParagraphWithState,
+  buildTableWithState,
+  restoreUnknownXml,
   STANDARD_NAMESPACE_URIS,
+  type SerializeState,
 } from './documentWriter'
+
+export { createSerializeState, type SerializeState } from './documentWriter'
 
 type ObjectXmlPrimitive = string | number | boolean
 type ObjectXmlValue = ObjectXmlPrimitive | ObjectXmlNode | ObjectXmlValue[]
@@ -58,24 +62,30 @@ const orderedXmlParser = new XMLParser({
  * table inside one — e.g. a letterhead, or a table-formatted footnote —
  * made `saveDocx` throw instead of round-tripping it).
  *
- * `UnknownNode` blocks are not supported at this level: the raw-XML
- * placeholder/restoration mechanism `documentWriter.ts` uses for unknown
- * *document*-body content requires a final restoration pass over the whole
- * generated XML string, which these standalone parts don't currently have
- * a hook for. This is an existing limitation carried forward, not a new
- * one — every block kind other than paragraph already failed to serialize
- * here before this fix; only `table` support is new.
+ * `UnknownNode` *blocks* (a top-level item in `blocks` itself being of kind
+ * `'unknown'`) are not supported: the schema for these wrapper elements
+ * (`w:hdr`/`w:ftr`/`w:footnote`/`w:endnote`/`w:comment`) only ever contains
+ * paragraphs and tables directly, so a top-level unknown block would mean
+ * something has gone wrong upstream. A node type this serializer doesn't
+ * model *nested inside* a paragraph or table (e.g. `w:proofErr`, ubiquitous
+ * in real Word documents) is fully supported: `state` must be threaded
+ * through to {@link serializeWordPart} (or restored directly via
+ * `restoreUnknownXml`, for a caller that builds its own root XML) so the
+ * `atlas-raw-unknown` placeholders `buildParagraphWithState`/
+ * `buildTableWithState` emit for such content get substituted back to the
+ * real raw XML — omitting that step leaves the literal placeholder tag in
+ * the saved part, an XML well-formedness violation.
  */
-export function buildBlockNodes(blocks: ReadonlyArray<Block>): ReadonlyArray<OrderedXmlNode> {
-  return blocks.map((block) => normalizeBlockNode(block))
+export function buildBlockNodes(blocks: ReadonlyArray<Block>, state: SerializeState): ReadonlyArray<OrderedXmlNode> {
+  return blocks.map((block) => normalizeBlockNode(block, state))
 }
 
-function normalizeBlockNode(block: Block): OrderedXmlNode {
+function normalizeBlockNode(block: Block, state: SerializeState): OrderedXmlNode {
   switch (block.kind) {
     case 'paragraph':
-      return normalizeParagraphNode(block)
+      return normalizeParagraphNode(block, state)
     case 'table':
-      return normalizeTableNode(block)
+      return normalizeTableNode(block, state)
     case 'unknown':
       throw new Error(
         'Cannot serialize an unrecognized (UnknownNode) block inside a standalone DOCX part '
@@ -95,22 +105,33 @@ function normalizeBlockNode(block: Block): OrderedXmlNode {
  * `documentWriter.ts` declares on the document root instead, so any content
  * `buildBlockNodes` can produce (which reuses `documentWriter.ts`'s own
  * paragraph/table builders) always has its namespaces in scope.
+ *
+ * `state`, when given, is the same {@link SerializeState} passed to
+ * `buildBlockNodes` for these `children` — required to substitute back any
+ * `atlas-raw-unknown` placeholder a nested unrecognized node produced (see
+ * `buildBlockNodes`'s doc comment). Omit only for a root with no block
+ * content at all (nothing to restore).
  */
-export function serializeWordPart(rootName: string, children: ReadonlyArray<OrderedXmlNode>): string {
+export function serializeWordPart(
+  rootName: string,
+  children: ReadonlyArray<OrderedXmlNode>,
+  state?: SerializeState,
+): string {
   const root: OrderedXmlNode = {
     [rootName]: [...children],
     ':@': buildNamespaceDeclarationAttributes(STANDARD_NAMESPACE_URIS),
   }
 
-  return `${XML_DECLARATION}${orderedXmlBuilder.build([root])}`
+  const xml = `${XML_DECLARATION}${orderedXmlBuilder.build([root])}`
+  return state !== undefined ? restoreUnknownXml(xml, state) : xml
 }
 
-function normalizeParagraphNode(paragraph: Paragraph): OrderedXmlNode {
-  return normalizeBuiltNode(buildParagraph(paragraph), 'w:p', 'buildParagraph')
+function normalizeParagraphNode(paragraph: Paragraph, state: SerializeState): OrderedXmlNode {
+  return normalizeBuiltNode(buildParagraphWithState(paragraph, state), 'w:p', 'buildParagraph')
 }
 
-function normalizeTableNode(table: Table): OrderedXmlNode {
-  return normalizeBuiltNode(buildTable(table), 'w:tbl', 'buildTable')
+function normalizeTableNode(table: Table, state: SerializeState): OrderedXmlNode {
+  return normalizeBuiltNode(buildTableWithState(table, state), 'w:tbl', 'buildTable')
 }
 
 /**

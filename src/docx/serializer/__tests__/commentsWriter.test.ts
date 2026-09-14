@@ -89,4 +89,34 @@ describe('writeCommentsXml', () => {
       expect(xml).toContain(`xmlns:${prefix}=`)
     }
   })
+
+  it(
+    'substitutes real XML back in for a nested unrecognized node instead of leaking an '
+      + 'unrestored atlas-raw-unknown placeholder',
+    () => {
+      const comment: Comment = {
+        kind: 'comment',
+        id: '1',
+        body: [
+          {
+            kind: 'paragraph',
+            children: [
+              {
+                kind: 'run',
+                children: [
+                  { kind: 'unknown', xml: '<w:proofErr w:type="spellStart"/>' },
+                  { kind: 'text', value: 'Helo' },
+                ],
+              },
+            ],
+          },
+        ],
+      }
+
+      const xml = writeCommentsXml([comment])
+
+      expect(xml).not.toContain('atlas-raw-unknown')
+      expect(xml).toContain('<w:proofErr w:type="spellStart"/>')
+    },
+  )
 })

@@ -65,7 +65,17 @@ interface OrderedXmlNode {
   readonly [name: string]: OrderedXmlNode[] | XmlAttributes | string | undefined
 }
 
-interface SerializeState {
+/**
+ * Exported (DXS-08 follow-up fix) so `partWriterSupport.ts` can share one
+ * state across an entire standalone part (header/footer/footnotes/comments)
+ * and run the same `restoreUnknownXml` substitution pass those parts'
+ * content needs whenever it contains a node type this serializer doesn't
+ * model (e.g. `w:proofErr`, ubiquitous in real Word-authored documents) —
+ * see `buildUnknownPlaceholder`'s doc comment for why a placeholder alone,
+ * left un-restored, is a literal `<atlas-raw-unknown>` tag leaking into the
+ * saved XML.
+ */
+export interface SerializeState {
   readonly unknownXml: Map<string, string>
   nextUnknownId: number
 }
@@ -210,7 +220,7 @@ function buildBlockNode(block: Block, state: SerializeState): OrderedXmlNode {
   }
 }
 
-function buildParagraphWithState(paragraph: Paragraph, state: SerializeState): OrderedXmlNode {
+export function buildParagraphWithState(paragraph: Paragraph, state: SerializeState): OrderedXmlNode {
   const children: OrderedXmlNode[] = []
   const props = buildParagraphPropertiesNode(paragraph.props)
 
@@ -608,7 +618,7 @@ function buildEndnoteReferenceNode(endnoteReference: EndnoteReference): OrderedX
   return createElement('w:endnoteReference', [], attributes)
 }
 
-function buildTableWithState(table: Table, state: SerializeState): OrderedXmlNode {
+export function buildTableWithState(table: Table, state: SerializeState): OrderedXmlNode {
   const children: OrderedXmlNode[] = []
   const props = buildTablePropertiesNode(table.props)
 
@@ -1310,7 +1320,7 @@ function buildDocumentAttributes(doc: Document): XmlAttributes {
   return attributes
 }
 
-function createSerializeState(): SerializeState {
+export function createSerializeState(): SerializeState {
   return {
     unknownXml: new Map(),
     nextUnknownId: 0,
@@ -1403,7 +1413,7 @@ function collapseEmptyElements(xml: string): string {
   return xml.replace(/<([A-Za-z_][\w.:-]*)([^>]*)><\/\1>/g, '<$1$2/>')
 }
 
-function restoreUnknownXml(xml: string, state: SerializeState): string {
+export function restoreUnknownXml(xml: string, state: SerializeState): string {
   let restored = xml
 
   for (const [id, rawXml] of state.unknownXml.entries()) {

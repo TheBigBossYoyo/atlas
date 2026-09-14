@@ -3,6 +3,18 @@ import { describe, expect, it } from 'vitest'
 import type { Endnote, Footnote, Paragraph } from '../../model'
 import { writeEndnotesXml, writeFootnotesXml } from '../footnotesWriter'
 
+function makeParagraphWithUnknownRunChild(rawXml: string, text: string): Paragraph {
+  return {
+    kind: 'paragraph',
+    children: [
+      {
+        kind: 'run',
+        children: [{ kind: 'unknown', xml: rawXml }, { kind: 'text', value: text }],
+      },
+    ],
+  }
+}
+
 function makeParagraph(text: string): Paragraph {
   return {
     kind: 'paragraph',
@@ -83,4 +95,27 @@ describe('writeFootnotesXml', () => {
     expect(xml).toContain('<w:endnote w:id="3">')
     expect(xml).toContain('Endnote text')
   })
+
+  it(
+    'substitutes real XML back in for a nested unrecognized run child instead of leaking an '
+      + 'unrestored atlas-raw-unknown placeholder, across multiple footnotes sharing one part',
+    () => {
+      const footnoteA: Footnote = {
+        kind: 'footnote',
+        id: '1',
+        blocks: [makeParagraphWithUnknownRunChild('<w:proofErr w:type="spellStart"/>', 'Fisrt')],
+      }
+      const footnoteB: Footnote = {
+        kind: 'footnote',
+        id: '2',
+        blocks: [makeParagraphWithUnknownRunChild('<w:proofErr w:type="spellEnd"/>', 'Second')],
+      }
+
+      const xml = writeFootnotesXml([footnoteA, footnoteB])
+
+      expect(xml).not.toContain('atlas-raw-unknown')
+      expect(xml).toContain('<w:proofErr w:type="spellStart"/>')
+      expect(xml).toContain('<w:proofErr w:type="spellEnd"/>')
+    },
+  )
 })
