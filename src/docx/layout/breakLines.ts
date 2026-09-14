@@ -35,7 +35,7 @@ export async function breakLines(input: LineBreakInput): Promise<ReadonlyArray<L
     input.leadingItems !== undefined && input.leadingItems.length > 0
       ? [...input.leadingItems, ...runItems]
       : runItems
-  const rawLines = buildRawLines(resolveTabStopWidths(items, input.tabStops), input)
+  const rawLines = buildRawLines(items, input)
   const metricsCache = new Map<string, Promise<FontMetrics>>()
 
   return Promise.all(
@@ -56,7 +56,7 @@ function buildRawLines(items: ReadonlyArray<LineItem>, input: LineBreakInput): R
 
   while (itemIndex < items.length) {
     const lineLimit = getLineLimit(input.paraProps, input.availableWidth, lineIndex)
-    const item = items[itemIndex]
+    const item = resolveLineItem(items, itemIndex, currentWidth, input.tabStops)
 
     if (item.kind === 'break') {
       currentItems.push(item)
@@ -317,51 +317,55 @@ async function resolveRunFontMetrics(
 }
 
 /**
- * Resolves every tab item's width (and leader glyph) in one forward pass
- * over the WHOLE item list, before line-breaking runs (D24/DXL-16). Center/
- * right/decimal tab stops need to know how wide the content following the
- * tab is — Word positions that content so its center/end/decimal-point
- * lands exactly at the stop, rather than starting the content flush at the
- * stop the way a left tab does — which means looking ahead past the tab to
- * the next hard stop (another tab, an explicit line break, or the end of
- * the paragraph).
+ * Resolves one item at `index` for line-breaking, computing a `tab` item's
+ * width (and leader glyph) on the fly (D24/DXL-16) using `currentWidth` —
+ * the caller's OWN running width for the visual line currently being built
+ * (reset on every wrap, forced or automatic; see `buildRawLines`'s loop).
+ * Every non-tab item passes through unchanged.
  *
- * This look-ahead deliberately does NOT know where an ordinary (unforced)
- * line wrap will land — that's exactly what line-breaking, running right
- * after this pass, still has to figure out — so it assumes the tab and its
- * following content stay on one line. That holds for the dominant
- * real-world use of non-left tab stops (a single-line TOC/header/footer
- * entry like "Chapter 1........42" or a right-aligned page number); a
- * center/right/decimal tab stop whose content is long enough to wrap onto a
- * second line is a rare combination where this pass's width may end up
- * very slightly off (an accepted, documented approximation).
+ * This MUST be resolved per-line, not in one forward pass over the whole
+ * paragraph: a paragraph long enough to wrap before reaching a tab has that
+ * tab starting fresh at its OWN line's left edge, not at some cumulative
+ * offset from the paragraph's start. Resolving with the wrong (paragraph-
+ * cumulative) position doesn't just shift the tab slightly — since tab-stop
+ * matching itself depends on that position (`tabStops.find(stop => stop.
+ * positionPt > currentWidth)`), an inflated `currentWidth` can skip straight
+ * past the paragraph's own configured stop and silently fall back to
+ * Word's default 36pt grid instead, landing content at the wrong horizontal
+ * position entirely.
+ *
+ * Center/right/decimal tab stops additionally need to know how wide the
+ * content FOLLOWING the tab is — Word positions that content so its
+ * center/end/decimal-point lands exactly at the stop, rather than starting
+ * the content flush at the stop the way a left tab does — which means
+ * looking ahead past the tab to the next hard stop (another tab, an
+ * explicit line break, or the end of the paragraph). That lookahead walks
+ * the original (pre-line-break) item list and deliberately does NOT know
+ * where an ordinary (unforced) line wrap will land — that's exactly what
+ * line-breaking, running right after this resolves, still has to figure
+ * out — so it assumes the tab and its following content stay on one line.
+ * That holds for the dominant real-world use of non-left tab stops (a
+ * single-line TOC/header/footer entry like "Chapter 1........42" or a
+ * right-aligned page number); a center/right/decimal tab stop whose content
+ * is long enough to wrap onto a second line is a rare combination where
+ * this lookahead's width may end up very slightly off (an accepted,
+ * documented approximation — unlike the base-position bug above, this one
+ * is about content AFTER the tab, not the tab's own anchor point).
  */
-function resolveTabStopWidths(
+function resolveLineItem(
   items: ReadonlyArray<LineItem>,
+  index: number,
+  currentWidth: number,
   tabStops: ReadonlyArray<TabStop>,
-): ReadonlyArray<LineItem> {
-  let currentWidth = 0
-  let sawTab = false
+): LineItem {
+  const item = items[index]
+  if (item.kind !== 'tab') {
+    return item
+  }
 
-  const resolved = items.map((item, index) => {
-    if (item.kind === 'break') {
-      currentWidth = 0
-      return item
-    }
-
-    if (item.kind !== 'tab') {
-      currentWidth += getItemWidth(item)
-      return item
-    }
-
-    sawTab = true
-    const matchedStop = tabStops.find((tabStop) => tabStop.positionPt > currentWidth)
-    const width = resolveTabStopWidth(currentWidth, matchedStop, () => lookaheadTabContent(items, index + 1))
-    currentWidth += width
-    return { ...item, width, leader: matchedStop?.leader ?? 'none' }
-  })
-
-  return sawTab ? resolved : items
+  const matchedStop = tabStops.find((tabStop) => tabStop.positionPt > currentWidth)
+  const width = resolveTabStopWidth(currentWidth, matchedStop, () => lookaheadTabContent(items, index + 1))
+  return { ...item, width, leader: matchedStop?.leader ?? 'none' }
 }
 
 type TabContentLookahead = {

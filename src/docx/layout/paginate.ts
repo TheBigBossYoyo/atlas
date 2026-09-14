@@ -1349,11 +1349,13 @@ function placeLine(
   // where this line fits, so a line that newly introduces a footnote
   // reference already sees the reduced effective content height (see
   // `effectiveContentHeightPt`). Look-ahead fit-checks elsewhere
-  // (`countLinesThatFitOnPage` called from `groupFitsOnPage`/
-  // `linesFitOnPage`) run against whatever reservation already exists at
-  // the time they're called, not one that anticipates a footnote the
-  // lines being tested would themselves introduce — an accepted,
-  // documented approximation (see `reserveFootnotesForLine`).
+  // (`countLinesThatFitOnPage`, called from `groupFitsOnPage`/
+  // `linesFitOnPage`/`placeUnit`) mirror this same growth via
+  // `simulateFootnoteReservationGrowthPt` so a batch of candidate lines is
+  // fit-checked against the reservation as it will actually stand once
+  // placed, including a footnote first referenced partway through that same
+  // batch — not just whatever was already reserved before the fit-check
+  // began.
   reserveFootnotesForLine(currentPage, line)
 
   let column = currentPage.columns[currentPage.currentColumnIndex]
@@ -1401,12 +1403,25 @@ function linesFitOnPage(lines: ReadonlyArray<LineBox>, currentPage: ActivePage):
 }
 
 function countLinesThatFitOnPage(lines: ReadonlyArray<LineBox>, currentPage: ActivePage): number {
-  const contentHeightPt = effectiveContentHeightPt(currentPage)
+  // D11 milestone 3 fix — a candidate line further down `lines` may itself
+  // be the FIRST reference to a footnote, growing the page's footnote
+  // reservation once it's actually placed (see `placeLine`'s call to
+  // `reserveFootnotesForLine`). Simulating that growth here too — instead
+  // of fit-checking every candidate line against today's fixed
+  // `effectiveContentHeightPt(currentPage)` — keeps this count from
+  // reporting more lines "fit" than actually will once placed: `placeLine`
+  // itself never truncates on overflow (only advances columns when
+  // possible), so an over-count here previously meant real content could
+  // render past the page's true remaining space and visually overlap the
+  // footnote area it was about to reserve.
+  const reservedPtByLine = simulateFootnoteReservationGrowthPt(lines, currentPage)
   let columnIndex = currentPage.currentColumnIndex
   let usedHeightPt = currentPage.columns[columnIndex].usedHeightPt
   let count = 0
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    const contentHeightPt = Math.max(0, currentPage.contentHeightPt - reservedPtByLine[index])
+
     while (!lineFitsInColumn(line, usedHeightPt, contentHeightPt)) {
       if (line.lineHeight > contentHeightPt || columnIndex >= currentPage.columns.length - 1) {
         return count
@@ -1421,6 +1436,53 @@ function countLinesThatFitOnPage(lines: ReadonlyArray<LineBox>, currentPage: Act
   }
 
   return count
+}
+
+/**
+ * Mirrors `reserveFootnotesForLine`'s reservation growth WITHOUT mutating
+ * the page, one running total per line in `lines` (parallel array), so
+ * `countLinesThatFitOnPage` can fit-check each candidate line against the
+ * footnote area as it would ACTUALLY stand once every earlier line in this
+ * same candidate batch has been placed — including a footnote first
+ * referenced by one of those earlier candidate lines, not just whatever was
+ * already reserved before this fit-check began. Must stay in lock-step with
+ * `reserveFootnotesForLine`'s own gap/dedup rules (first-on-page separator
+ * vs. inter-note gap; a footnote id reserved at most once per page) or the
+ * two would predict and then actually reserve different amounts.
+ */
+function simulateFootnoteReservationGrowthPt(
+  lines: ReadonlyArray<LineBox>,
+  currentPage: ActivePage,
+): ReadonlyArray<number> {
+  const seenIds = new Set(currentPage.footnoteIds)
+  let reservedPt = currentPage.footnoteAreaHeightPt
+  const perLine: number[] = []
+
+  for (const line of lines) {
+    for (const item of line.items) {
+      if (item.kind !== 'word' || item.noteRef === undefined || item.noteRef.kind !== 'footnote') {
+        continue
+      }
+
+      const id = item.noteRef.id
+      if (seenIds.has(id)) {
+        continue
+      }
+
+      const content = currentPage.footnoteContentById.get(id)
+      if (content === undefined) {
+        continue
+      }
+
+      const gapPt = seenIds.size === 0 ? FOOTNOTE_SEPARATOR_RESERVE_PT : FOOTNOTE_INTER_NOTE_GAP_PT
+      seenIds.add(id)
+      reservedPt += gapPt + sumLineHeights(content)
+    }
+
+    perLine.push(reservedPt)
+  }
+
+  return perLine
 }
 
 function simulatePlacedLines(lines: ReadonlyArray<LineBox>, currentPage: ActivePage): ActivePage {

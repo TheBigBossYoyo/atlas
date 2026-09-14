@@ -1413,6 +1413,16 @@ function DocxEditor({
           document: documentModel,
           fontResolver,
           theme: bundle.theme,
+          // D11 milestone 1/5 — these were parsed from word/settings.xml
+          // (see docx/parser/settings.ts) but never threaded through to the
+          // paginator in production; only paginate.test.ts's direct calls
+          // exercised them. Without this, a real document that turns on
+          // w:evenAndOddHeaders, or sets a non-default footnote/endnote
+          // numbering restart/format, silently fell back to "off"/
+          // "continuous" in the actual app.
+          evenAndOddHeaders: bundle.settings?.evenAndOddHeaders,
+          footnoteNumbering: bundle.settings?.footnotePr,
+          endnoteNumbering: bundle.settings?.endnotePr,
           onProgress: progress => {
             if (!cancelled) {
               setPaginationProgress(progress)
@@ -1441,7 +1451,7 @@ function DocxEditor({
     return () => {
       cancelled = true
     }
-  }, [documentModel, fontResolver, bundle.theme])
+  }, [documentModel, fontResolver, bundle.theme, bundle.settings])
 
   useLayoutEffect(() => {
     const root = editorRootRef.current

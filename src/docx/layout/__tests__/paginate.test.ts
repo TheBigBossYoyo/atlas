@@ -943,6 +943,48 @@ describe('paginate — footnotes (D11 milestones 2-3, 5)', () => {
     const bodyMarks = pages.map((page) => findNoteRefItem([page])?.text)
     expect(bodyMarks).toEqual(['1', '1'])
   })
+
+  it('does not overflow a line past the footnote area it is about to reserve on this same page', async () => {
+    // A single 6-line paragraph (20pt/line, exact spacing): lines 0-1 plain,
+    // line 2 carries the footnote reference, lines 3-5 plain. A 100pt page
+    // fits exactly 5 lines of body content with no footnote reservation —
+    // the bug this regresses: a stale fit-check that doesn't yet know line 2
+    // is about to reserve a 34pt footnote area (14pt separator + one 20pt
+    // line of body text) would report 5 lines as fitting and then actually
+    // place all 5, running lines 3-4 straight through the footnote area
+    // instead of correctly stopping after line 2.
+    const paragraph: Paragraph = {
+      kind: 'paragraph',
+      props: {},
+      children: [
+        {
+          kind: 'run',
+          children: [
+            { kind: 'break' },
+            { kind: 'break' },
+            { kind: 'footnote-reference', id: 'fn1' },
+            { kind: 'break' },
+            { kind: 'break' },
+            { kind: 'break' },
+          ],
+        },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([paragraph], { pageHeightPt: 100 })],
+        undefined,
+        undefined,
+        { footnotes: new Map([['fn1', createFootnote('fn1', 'X')]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    expect(paragraphLineCounts(pages, 0)).toEqual([3, 3])
+    expect(pages[0]?.hasFootnoteSeparator).toBe(true)
+  })
 })
 
 describe('paginate — table row splitting across page breaks (D24b/DXL-15)', () => {

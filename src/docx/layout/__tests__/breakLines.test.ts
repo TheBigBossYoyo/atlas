@@ -239,6 +239,37 @@ describe('breakLines', () => {
     expect(findTab(lines[0]?.items)?.leader).toBe('dot')
   })
 
+  it('resolves a tab stop against its OWN wrapped line, not the whole paragraph\'s cumulative width', async () => {
+    // "abcde"(25) + " "(5) forces a wrap at the 50pt line limit right
+    // before "fghij" (a plain word carries no break opportunity of its
+    // own, so the line closes at the preceding space). Line 2 then starts
+    // fresh with "fghij" (25pt) followed by the tab: the 40pt stop should
+    // resolve to a 15pt-wide tab (40 - 25) measured from line 2's own left
+    // edge. Resolving it from the paragraph's cumulative width instead
+    // (30 + 25 = 55) would incorrectly skip past the 40pt stop entirely and
+    // fall back to Word's default 36pt tab grid.
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'abcde' },
+            { kind: 'text', value: ' ' },
+            { kind: 'text', value: 'fghij' },
+            { kind: 'tab' },
+            { kind: 'text', value: 'klmno' },
+          ]),
+        ],
+        {},
+        50,
+        [{ positionPt: 40, alignment: 'left', leader: 'none' }],
+      ),
+    )
+
+    expect(lines).toHaveLength(3)
+    expect(lines[1]?.items.map((item) => item.kind)).toEqual(['word', 'tab'])
+    expect(findTab(lines[1]?.items)?.width).toBe(15)
+  })
+
   it('reduces first-line width by the first-line indent', async () => {
     const lines = await breakLines(
       createInput([wrapTextRun('aa aa aa')], { ind: { firstLine: twip(300) } }, 50),
