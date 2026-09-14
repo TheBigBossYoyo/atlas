@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   type Block,
+  type Field,
   type Hyperlink,
   type Paragraph,
   type Run,
@@ -52,6 +53,14 @@ function expectRun(child: Paragraph['children'][number] | Hyperlink['children'][
   expect(child.kind).toBe('run')
   if (child.kind !== 'run') {
     throw new Error('Expected run child')
+  }
+  return child
+}
+
+function expectField(child: Paragraph['children'][number] | Hyperlink['children'][number]): Field {
+  expect(child.kind).toBe('field')
+  if (child.kind !== 'field') {
+    throw new Error('Expected field child')
   }
   return child
 }
@@ -1020,6 +1029,191 @@ describe('parseDocument', () => {
         expect(error).toBeInstanceOf(DocxParseError)
         expect((error as Error).message).toContain('Failed to parse document XML')
       }
+    })
+  })
+
+  // DEFER-5 / DXS-20
+  describe('field parsing (DEFER-5 / DXS-20)', () => {
+    it('parses a w:fldSimple field, capturing its instruction, cached result, and raw source', () => {
+      const source = '<w:fldSimple w:instr=" PAGE \\* MERGEFORMAT "><w:r><w:t>1</w:t></w:r></w:fldSimple>'
+      const document = parseBody(`<w:p>${source}</w:p>`)
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const field = expectField(paragraph.children[0])
+
+      expect(field.simple).toBe(true)
+      expect(field.fieldType).toBe('PAGE')
+      expect(field.instruction).toBe('PAGE \\* MERGEFORMAT')
+      expect(field.result).toEqual([
+        { kind: 'run', children: [{ kind: 'text', value: '1' }] },
+      ])
+      expect(field.raw).toBe(source)
+    })
+
+    it('parses a w:fldSimple field\'s w:fldLock/w:dirty attributes', () => {
+      const document = parseBody(
+        '<w:p><w:fldSimple w:instr="AUTHOR" w:fldLock="1" w:dirty="0"><w:r><w:t>A. Author</w:t></w:r></w:fldSimple></w:p>',
+      )
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const field = expectField(paragraph.children[0])
+
+      expect(field.locked).toBe(true)
+      expect(field.dirty).toBe(false)
+    })
+
+    it('assembles a complex field (fldChar begin/separate/end + instrText) spanning sibling runs into one Field node', () => {
+      const source =
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        + '<w:r><w:instrText xml:space="preserve"> DATE \\@ "MMMM d, yyyy" </w:instrText></w:r>'
+        + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        + '<w:r><w:t>January 1, 2026</w:t></w:r>'
+        + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+      const document = parseBody(`<w:p>${source}</w:p>`)
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+
+      expect(paragraph.children).toHaveLength(1)
+      const field = expectField(paragraph.children[0])
+
+      expect(field.simple).toBeUndefined()
+      expect(field.fieldType).toBe('DATE')
+      expect(field.instruction).toBe('DATE \\@ "MMMM d, yyyy"')
+      expect(field.result).toEqual([
+        { kind: 'run', children: [{ kind: 'text', value: 'January 1, 2026' }] },
+      ])
+      expect(field.raw).toBe(source)
+    })
+
+    it('concatenates instrText split across multiple runs into one instruction', () => {
+      const document = parseBody(
+        '<w:p>'
+          + '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+          + '<w:r><w:instrText xml:space="preserve"> REF </w:instrText></w:r>'
+          + '<w:r><w:instrText xml:space="preserve">_Ref123 \\h</w:instrText></w:r>'
+          + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+          + '<w:r><w:t>Section 2</w:t></w:r>'
+          + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+          + '</w:p>',
+      )
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const field = expectField(paragraph.children[0])
+
+      expect(field.fieldType).toBe('REF')
+      expect(field.instruction).toBe('REF _Ref123 \\h')
+    })
+
+    it('parses a complex field with no separate/result as an unresolved field with an empty result', () => {
+      const document = parseBody(
+        '<w:p>'
+          + '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+          + '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+          + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+          + '</w:p>',
+      )
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const field = expectField(paragraph.children[0])
+
+      expect(field.fieldType).toBe('PAGE')
+      expect(field.result).toEqual([])
+    })
+
+    it('reads w:fldLock/w:dirty off the begin fldChar of a complex field', () => {
+      const document = parseBody(
+        '<w:p>'
+          + '<w:r><w:fldChar w:fldCharType="begin" w:fldLock="1" w:dirty="1"/></w:r>'
+          + '<w:r><w:instrText xml:space="preserve">PAGE</w:instrText></w:r>'
+          + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+          + '<w:r><w:t>1</w:t></w:r>'
+          + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+          + '</w:p>',
+      )
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const field = expectField(paragraph.children[0])
+
+      expect(field.locked).toBe(true)
+      expect(field.dirty).toBe(true)
+    })
+
+    it('does not mistake an unknown instruction keyword for a known field type', () => {
+      const document = parseBody('<w:p><w:fldSimple w:instr="MACROBUTTON DoSomething Click here"><w:r/></w:fldSimple></w:p>')
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const field = expectField(paragraph.children[0])
+
+      expect(field.fieldType).toBe('unknown')
+    })
+
+    it('tracks nesting depth so an outer field is not cut short by an inner field\'s own end', () => {
+      // An IF field (unknown to Atlas's evaluators, but still a valid
+      // complex field) nesting a REF field in its "true" branch.
+      const source =
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        + '<w:r><w:instrText xml:space="preserve">IF 1 = 1 "</w:instrText></w:r>'
+        + '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        + '<w:r><w:instrText xml:space="preserve"> REF _Ref1 \\h </w:instrText></w:r>'
+        + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        + '<w:r><w:t>Section 1</w:t></w:r>'
+        + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        + '<w:r><w:instrText xml:space="preserve">" "false"</w:instrText></w:r>'
+        + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        + '<w:r><w:t>Section 1</w:t></w:r>'
+        + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+      const document = parseBody(`<w:p>${source}</w:p>`)
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+
+      // The whole IF...REF...end end sequence collapses into ONE outer field.
+      expect(paragraph.children).toHaveLength(1)
+      const field = expectField(paragraph.children[0])
+      expect(field.fieldType).toBe('unknown')
+      expect(field.raw).toBe(source)
+    })
+
+    it('leaves a truncated field (no matching end) as ordinary unrecognized run content instead of swallowing the rest of the paragraph', () => {
+      const document = parseBody(
+        '<w:p>'
+          + '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+          + '<w:r><w:instrText xml:space="preserve">PAGE</w:instrText></w:r>'
+          + '<w:r><w:t>after</w:t></w:r>'
+          + '</w:p>',
+      )
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+
+      // No Field node — all three runs parsed as ordinary runs (fldChar/
+      // instrText fall back to their pre-existing UnknownNode-run-child
+      // treatment).
+      expect(paragraph.children).toHaveLength(3)
+      expect(paragraph.children[0].kind).toBe('run')
+      expect(paragraph.children[1].kind).toBe('run')
+      expect(paragraph.children[2].kind).toBe('run')
+      const lastRun = expectRun(paragraph.children[2])
+      expect(lastRun.children).toEqual([{ kind: 'text', value: 'after' }])
+    })
+
+    it('re-declares a namespace prefix used by a field embedded inside an unwrapped w:sdt, when only the (discarded) wrapper declared it', () => {
+      // Regression guard tying DXS-16's ancestor-namespace fix to fields:
+      // fldSimple/fldChar content can itself sit inside a content control.
+      const xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body xmlns:ext="urn:example:ext">
+    <w:p><ext:marker/><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>
+  </w:body>
+</w:document>`
+      const document = parseDocument(xml)
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+
+      expect(paragraph.children[0]).toEqual({
+        kind: 'unknown',
+        xml: '<ext:marker xmlns:ext="urn:example:ext"/>',
+      })
+    })
+
+    it('parses a field inside a hyperlink (a HYPERLINK field\'s own display run wrapped in a real w:hyperlink is uncommon, but nesting a different field inside one is valid)', () => {
+      const document = parseBody(
+        '<w:p><w:hyperlink w:anchor="Top">'
+          + '<w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple>'
+          + '</w:hyperlink></w:p>',
+      )
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      expect(paragraph.children[0].kind).toBe('hyperlink')
+      const hyperlink = paragraph.children[0] as Hyperlink
+      expect(hyperlink.children[0].kind).toBe('field')
     })
   })
 })

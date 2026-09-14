@@ -57,6 +57,8 @@ function describeInline(inline: Inline): string {
       return 'endnote-reference'
     case InlineKind.drawing:
       return 'drawing'
+    case InlineKind.field:
+      return 'field'
     case InlineKind.text:
       return 'text'
     case InlineKind.tab:

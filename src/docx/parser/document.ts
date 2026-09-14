@@ -33,6 +33,8 @@ import {
   type DrawingAnchorChild,
   type Endnote,
   type EndnoteReference,
+  type Field,
+  type FieldType,
   type Footer,
   type FooterReference,
   type FontSet,
@@ -336,7 +338,12 @@ function parseParagraph(element: OrderedXmlNode): Block {
   const props = parseParaProps(child(element, 'w:pPr'))
   const children: ParagraphChild[] = []
 
-  for (const entry of expandWrapperNodes(nodeChildren(element))) {
+  for (const entry of groupComplexFieldRuns(expandWrapperNodes(nodeChildren(element)))) {
+    if (isComplexFieldGroup(entry)) {
+      children.push(parseComplexField(entry.runs))
+      continue
+    }
+
     if (isIgnorableText(entry)) {
       continue
     }
@@ -393,6 +400,8 @@ function parseParagraphChild(element: OrderedXmlNode): ParagraphChild | null {
       return parseRevision(element, 'ins')
     case 'w:del':
       return parseRevision(element, 'del')
+    case 'w:fldSimple':
+      return parseSimpleField(element)
     default:
       return parseUnknownNode(element)
   }
@@ -461,7 +470,12 @@ function parseHyperlink(element: OrderedXmlNode): Hyperlink {
   const history = parseOnOff(attr(element, 'w:history'))
   const children: HyperlinkChild[] = []
 
-  for (const entry of expandWrapperNodes(nodeChildren(element))) {
+  for (const entry of groupComplexFieldRuns(expandWrapperNodes(nodeChildren(element)))) {
+    if (isComplexFieldGroup(entry)) {
+      children.push(parseComplexField(entry.runs))
+      continue
+    }
+
     if (isIgnorableText(entry)) {
       continue
     }
@@ -491,6 +505,9 @@ function parseHyperlink(element: OrderedXmlNode): Hyperlink {
       case 'w:endnoteReference':
         children.push(parseEndnoteReference(entry))
         break
+      case 'w:fldSimple':
+        children.push(parseSimpleField(entry))
+        break
       default:
         children.push(parseUnknownNode(entry))
         break
@@ -505,6 +522,258 @@ function parseHyperlink(element: OrderedXmlNode): Hyperlink {
     ...(targetFrame !== undefined ? { targetFrame } : {}),
     ...(history !== undefined ? { history } : {}),
     children,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DEFER-5 / DXS-20 — field parsing (w:fldSimple, and complex fields built
+// from w:fldChar begin/separate/end + w:instrText)
+// ---------------------------------------------------------------------------
+
+/**
+ * A complex field's begin/instrText/separate/result/end pieces are SIBLING
+ * `w:r` elements at the paragraph/hyperlink level, not nested inside one —
+ * unlike every other `ParagraphChild`, one `Field` model node has to be
+ * assembled from a whole RUN of sibling entries rather than a single one.
+ * `groupComplexFieldRuns` does that grouping as a preprocessing pass over
+ * an already `expandWrapperNodes`-flattened sibling list, so
+ * `parseParagraph`/`parseHyperlink`'s loops can treat a whole field like
+ * any other single child once grouped.
+ */
+interface ComplexFieldGroup {
+  readonly kind: 'complex-field-group'
+  /** Only the `w:r` entries from the begin run through the end run, inclusive — see `groupComplexFieldRuns`'s doc comment on why non-run siblings in between are dropped from this list (though not from the field's raw byte span). */
+  readonly runs: ReadonlyArray<OrderedXmlNode>
+}
+
+function isComplexFieldGroup(
+  entry: OrderedXmlNode | ComplexFieldGroup,
+): entry is ComplexFieldGroup {
+  return (entry as ComplexFieldGroup).kind === 'complex-field-group'
+}
+
+/**
+ * Scans `entries` for `w:r`-begin ... `w:r`-end runs (a "complex field")
+ * and replaces each whole span with one `ComplexFieldGroup`, tracking
+ * nesting depth so a field whose instruction or result legitimately
+ * contains another field (rare, but valid — e.g. an `IF` field nesting a
+ * `REF`) doesn't have its outer span cut short at the FIRST `end` it finds.
+ * Every other entry (including a truncated field with no matching `end`,
+ * left as ordinary `w:r` content) passes through unchanged.
+ */
+function groupComplexFieldRuns(
+  entries: ReadonlyArray<OrderedXmlNode>,
+): ReadonlyArray<OrderedXmlNode | ComplexFieldGroup> {
+  const result: Array<OrderedXmlNode | ComplexFieldGroup> = []
+  let index = 0
+
+  while (index < entries.length) {
+    const entry = entries[index]
+
+    if (entry !== undefined && nodeName(entry) === 'w:r' && fldCharTypeOf(entry) === 'begin') {
+      const group = collectComplexFieldGroup(entries, index)
+      if (group !== undefined) {
+        result.push(group.value)
+        index = group.nextIndex
+        continue
+      }
+    }
+
+    if (entry !== undefined) {
+      result.push(entry)
+    }
+    index += 1
+  }
+
+  return result
+}
+
+function collectComplexFieldGroup(
+  entries: ReadonlyArray<OrderedXmlNode>,
+  beginIndex: number,
+): { readonly value: ComplexFieldGroup; readonly nextIndex: number } | undefined {
+  const beginEntry = entries[beginIndex]
+  if (beginEntry === undefined) {
+    return undefined
+  }
+
+  const runs: OrderedXmlNode[] = [beginEntry]
+  let depth = 1
+
+  for (let i = beginIndex + 1; i < entries.length; i += 1) {
+    const entry = entries[i]
+    if (entry === undefined || nodeName(entry) !== 'w:r') {
+      // Non-run content inside a field's span (a bookmark, stray whitespace
+      // text, ...) still belongs to the field's raw byte range (captured
+      // separately via `captureFieldRawSpan`'s begin/end anchors) but has no
+      // structural role in `Field.result` — skip it from `runs` without
+      // abandoning the scan.
+      continue
+    }
+
+    runs.push(entry)
+    const type = fldCharTypeOf(entry)
+    if (type === 'begin') {
+      depth += 1
+    } else if (type === 'end') {
+      depth -= 1
+      if (depth === 0) {
+        return { value: { kind: 'complex-field-group', runs }, nextIndex: i + 1 }
+      }
+    }
+  }
+
+  // No matching end (truncated/malformed field): let the caller fall back
+  // to treating the begin run as ordinary content instead of silently
+  // consuming the rest of the paragraph looking for an end that isn't there.
+  return undefined
+}
+
+function fldCharTypeOf(runEntry: OrderedXmlNode): string | undefined {
+  const fldChar = child(runEntry, 'w:fldChar')
+  return fldChar !== undefined ? attr(fldChar, 'w:fldCharType') : undefined
+}
+
+const KNOWN_FIELD_TYPES: ReadonlySet<string> = new Set([
+  'DATE',
+  'TIME',
+  'AUTHOR',
+  'TITLE',
+  'REF',
+  'PAGEREF',
+  'SEQ',
+  'NUMPAGES',
+  'PAGE',
+  'HYPERLINK',
+  'TOC',
+])
+
+function parseFieldInstructionType(instruction: string): FieldType {
+  const token = /^([A-Za-z]+)/.exec(instruction)?.[1]?.toUpperCase()
+  return token !== undefined && KNOWN_FIELD_TYPES.has(token) ? (token as FieldType) : 'unknown'
+}
+
+/**
+ * Assembles a `Field` from a `ComplexFieldGroup`'s `w:r` runs: everything
+ * before the `separate` fldChar is instruction text (`w:instrText`
+ * content, concatenated across every run — Word sometimes splits a long
+ * instruction across several runs); everything after is the cached
+ * display content, parsed as ordinary runs. A field with no `separate` at
+ * all (legal — an unresolved field can be just begin/instrText/end) has no
+ * cached result runs, matching Word's own "not yet calculated" state.
+ */
+function parseComplexField(runs: ReadonlyArray<OrderedXmlNode>): Field {
+  let phase: 'instruction' | 'result' = 'instruction'
+  let instruction = ''
+  const result: ParagraphChild[] = []
+  let locked: OnOff | undefined
+  let dirty: OnOff | undefined
+
+  for (const run of runs) {
+    const fldChar = child(run, 'w:fldChar')
+    if (fldChar !== undefined) {
+      const type = attr(fldChar, 'w:fldCharType')
+      if (type === 'begin') {
+        locked = parseOnOff(attr(fldChar, 'w:fldLock'))
+        dirty = parseOnOff(attr(fldChar, 'w:dirty'))
+      } else if (type === 'separate') {
+        phase = 'result'
+      }
+      continue
+    }
+
+    if (phase === 'instruction') {
+      instruction += extractInstrText(run)
+    } else {
+      result.push(parseRun(run))
+    }
+  }
+
+  const trimmedInstruction = instruction.trim()
+  const firstRun = runs[0]
+  const lastRun = runs[runs.length - 1]
+  const raw = firstRun !== undefined && lastRun !== undefined
+    ? captureRawSpan(firstRun, lastRun)
+    : undefined
+
+  return {
+    kind: 'field',
+    fieldType: parseFieldInstructionType(trimmedInstruction),
+    instruction: trimmedInstruction,
+    result,
+    ...(locked !== undefined ? { locked } : {}),
+    ...(dirty !== undefined ? { dirty } : {}),
+    ...(raw !== undefined ? { raw } : {}),
+  }
+}
+
+function extractInstrText(run: OrderedXmlNode): string {
+  let text = ''
+  for (const entry of nodeChildren(run)) {
+    if (nodeName(entry) === 'w:instrText') {
+      text += textValue(entry)
+    }
+  }
+  return text
+}
+
+/**
+ * Byte-faithful passthrough for an unmodified field (D19 / DXS-16's
+ * infrastructure, reused here): slices the exact source text spanning
+ * `startNode` through `endNode` inclusive, from the same raw-range index
+ * `parseUnknownNode` uses. `undefined` only when one of the anchors has no
+ * indexed range (lookup miss, or this ran outside a `parseDocument` call,
+ * as unit tests calling this file's helpers directly do) — the field is
+ * still fully usable (`instruction`/`result` are always populated), it
+ * just gets structurally rebuilt on save instead of passed through
+ * verbatim (same fallback shape as `parseUnknownNode`'s).
+ */
+function captureRawSpan(startNode: OrderedXmlNode, endNode: OrderedXmlNode): string | undefined {
+  const startInfo = sourceRangeContext?.info.get(startNode)
+  const endInfo = sourceRangeContext?.info.get(endNode)
+  if (startInfo === undefined || endInfo === undefined) {
+    return undefined
+  }
+  return sourceRangeContext!.xml.slice(startInfo.start, endInfo.end)
+}
+
+/**
+ * `w:fldSimple` is the "simple field" form: a single element carrying the
+ * instruction as its own `w:instr` attribute, wrapping its cached result
+ * directly as normal paragraph-child content (most commonly one or more
+ * `w:r` runs) — no `fldChar`/`instrText` machinery needed. Dispatches its
+ * children through the same `parseParagraphChild` every paragraph uses, so
+ * a simple field's result can contain anything a paragraph can (bookmarks,
+ * even a nested field).
+ */
+function parseSimpleField(element: OrderedXmlNode): Field {
+  const instruction = (attr(element, 'w:instr') ?? '').trim()
+  const result: ParagraphChild[] = []
+
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
+    if (isIgnorableText(entry)) {
+      continue
+    }
+    const parsedChild = parseParagraphChild(entry)
+    if (parsedChild !== null) {
+      result.push(parsedChild)
+    }
+  }
+
+  const info = sourceRangeContext?.info.get(element)
+  const raw = info !== undefined ? sourceRangeContext!.xml.slice(info.start, info.end) : undefined
+  const locked = parseOnOff(attr(element, 'w:fldLock'))
+  const dirty = parseOnOff(attr(element, 'w:dirty'))
+
+  return {
+    kind: 'field',
+    fieldType: parseFieldInstructionType(instruction),
+    instruction,
+    result,
+    simple: true,
+    ...(locked !== undefined ? { locked } : {}),
+    ...(dirty !== undefined ? { dirty } : {}),
+    ...(raw !== undefined ? { raw } : {}),
   }
 }
 
