@@ -7,6 +7,19 @@
   background-color: var(--bg-primary);
   color: var(--text-primary);
   overflow: hidden;
+  /* Positions the in-viewer find overlay (T5/DAT-15 addendum) relative to
+     this panel instead of the whole app window. */
+  position: relative;
+}
+
+/* The shared `.search-overlay` (also used by markdown's Ctrl+F) is normally
+   offset from the whole app window (`top: 52px`, below the global toolbar).
+   Nested inside a viewer panel that already starts below that toolbar, the
+   same offset would double up — this keeps it just inside the panel's own
+   top-right corner instead. */
+.spreadsheet-viewer .search-overlay,
+.csv-viewer .search-overlay {
+  top: 12px;
 }
 
 .spreadsheet-viewer__toolbar,
@@ -26,6 +39,44 @@
   font-size: 13px;
   color: var(--text-secondary);
   white-space: nowrap;
+}
+
+.spreadsheet-viewer__toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.spreadsheet-viewer__hidden-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-primary);
+  white-space: nowrap;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.spreadsheet-viewer__hidden-toggle:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-tertiary);
+}
+
+.spreadsheet-viewer__hidden-toggle[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.spreadsheet-viewer__tab--hidden {
+  font-style: italic;
+  opacity: 0.75;
 }
 
 .spreadsheet-viewer__search,

@@ -1,0 +1,25 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ODT fixture corpus (T8/DAT-19) > renders embedded-image to stable HTML 1`] = `
+"<p>An embedded image follows:</p>
+<p>
+        <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR42mNQTX4NRwzEcQBO0hcxu+7i8gAAAABJRU5ErkJggg==" alt="" style="width:2cm;height:2cm">
+      </p>
+<p>Caption text after the image.</p>"
+`;
+
+exports[`ODT fixture corpus (T8/DAT-19) > renders tables-and-lists to stable HTML 1`] = `
+"<p>A table with a header row and two data rows:</p>
+<table><tr><td>Format</td><td>Status</td></tr><tr><td>ODT</td><td>Supported</td></tr><tr><td>RTF</td><td>Supported</td></tr></table>
+<p>An unordered list:</p>
+<ul><li>First bullet</li><li>Second bullet</li></ul>
+<p>An ordered list:</p>
+<ol><li>First step</li><li>Second step</li></ol>"
+`;
+
+exports[`ODT fixture corpus (T8/DAT-19) > renders tracked-changes to stable HTML 1`] = `
+"<p>An unchanged intro paragraph.</p>
+<ins data-author="Atlas QA" data-date="2026-01-01T00:00:00"><p>This paragraph was inserted by a reviewer.</p></ins>
+<del data-author="Atlas QA" data-date="2026-01-01T00:00:00"><p>This paragraph was deleted.</p></del>
+<p>An unchanged closing paragraph.</p>"
+`;

@@ -22,22 +22,38 @@ type CapturedProps = {
 
 let lastDataEditorProps: CapturedProps | null = null
 
-vi.mock('@glideapps/glide-data-grid', () => ({
-  DataEditor: (props: CapturedProps) => {
-    lastDataEditorProps = props
-    return null
-  },
-}))
+vi.mock('@glideapps/glide-data-grid', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@glideapps/glide-data-grid')>()
+  return {
+    ...actual,
+    DataEditor: (props: CapturedProps) => {
+      lastDataEditorProps = props
+      return null
+    },
+  }
+})
 
-vi.mock('xlsx', () => ({
-  read: () => ({ SheetNames: ['Sheet1'], Sheets: { Sheet1: {} } }),
-  utils: {
-    sheet_to_json: () => [
-      ['Name', 'Score'],
-      ['Alice', '10'],
-    ],
-  },
-}))
+// Only `read` is mocked (a fixed two-row worksheet) — `utils` stays real so
+// SpreadsheetViewer's direct `!ref`/`encode_cell` walk (T1/T4) behaves
+// exactly as it would against a genuine parsed workbook.
+vi.mock('xlsx', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('xlsx')>()
+  return {
+    ...actual,
+    read: () => ({
+      SheetNames: ['Sheet1'],
+      Sheets: {
+        Sheet1: {
+          '!ref': 'A1:B2',
+          A1: { t: 's', v: 'Name', w: 'Name' },
+          B1: { t: 's', v: 'Score', w: 'Score' },
+          A2: { t: 's', v: 'Alice', w: 'Alice' },
+          B2: { t: 's', v: '10', w: '10' },
+        },
+      },
+    }),
+  }
+})
 
 beforeEach(() => {
   lastDataEditorProps = null

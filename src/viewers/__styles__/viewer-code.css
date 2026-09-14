@@ -26,3 +26,34 @@
   margin: 0;
   background: transparent !important;
 }
+
+/* T2/DAT-13 — the large-file fallback (VirtualizedPlainText) owns its own
+   scrolling internally, so the outer container must not also scroll/pad
+   (that would double-scroll and misalign the notice banner). */
+.code-viewer--virtualized {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.code-viewer__virtualized-notice {
+  flex-shrink: 0;
+  padding: 8px 24px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.code-viewer__virtualized-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.code-viewer__virtualized-line {
+  padding: 0 24px;
+  font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  font-size: 13px;
+  line-height: 20px;
+}

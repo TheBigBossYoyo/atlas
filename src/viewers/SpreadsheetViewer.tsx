@@ -1,12 +1,15 @@
-import { memo, useEffect, useMemo, useState, useCallback, lazy, Suspense, useDeferredValue } from 'react'
-import { Table, FileSpreadsheet } from 'lucide-react'
+import { memo, useEffect, useMemo, useState, lazy, Suspense, useDeferredValue } from 'react'
+import { Table, FileSpreadsheet, Eye, EyeOff } from 'lucide-react'
 
 import type { ViewerProps } from '../formats/types'
-import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
-import { useGridTheme } from './shared/useGridTheme'
+import { useSetNavItems, useSetViewerStats, useRegisterViewerFind } from './shared/useViewerContext'
+import { useSpreadsheetWorkbook } from './shared/useSpreadsheetWorkbook'
+import { useSpreadsheetGrid } from './shared/useSpreadsheetGrid'
+import { useGridFind } from './shared/useGridFind'
+import { ViewerLoading } from '../components/ViewerLoading'
+import { SearchOverlay } from '../components/SearchOverlay'
+import type { ParsedSheet } from './shared/spreadsheetGrid'
 import './__styles__/viewer-spreadsheet.css'
-
-import type { GridCell, GridMouseEventArgs, GridColumn } from '@glideapps/glide-data-grid'
 
 // Lazy load DataEditor and its CSS
 const LazyDataEditor = lazy(async () => {
@@ -15,86 +18,59 @@ const LazyDataEditor = lazy(async () => {
   return { default: mod.DataEditor }
 })
 
-type SheetData = {
-  name: string
-  rows: string[][]
-  colCount: number
-}
-
 function SpreadsheetViewerBase({ file }: ViewerProps) {
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
-  const theme = useGridTheme()
+  const registerFind = useRegisterViewerFind()
 
-  const [sheets, setSheets] = useState<SheetData[]>([])
   const [activeSheetName, setActiveSheetName] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
+  const [showHiddenSheets, setShowHiddenSheets] = useState(false)
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
-  const [hoveredRow, setHoveredRow] = useState<number | undefined>()
 
-  useEffect(() => {
-    let cancelled = false
+  const buffer = file.kind === 'binary' ? file.content : null
+  const workbookState = useSpreadsheetWorkbook(buffer)
+  const sheets: ParsedSheet[] = useMemo(
+    () => (workbookState.status === 'ready' ? workbookState.sheets : []),
+    [workbookState],
+  )
 
-    if (file.kind !== 'binary') {
-      setError('Expected binary file for spreadsheet viewer.')
-      return
-    }
+  const hasHiddenSheets = useMemo(() => sheets.some((s) => s.hidden), [sheets])
+  const visibleSheets = useMemo(
+    () => (showHiddenSheets ? sheets : sheets.filter((s) => !s.hidden)),
+    [sheets, showHiddenSheets],
+  )
 
-    async function loadWorkbook() {
-      const content = file.content
-      try {
-        const XLSX = await import('xlsx')
-        const workbook = XLSX.read(content, { type: 'array', cellFormula: true, cellStyles: true, sheetStubs: true })
-        if (cancelled) return
-
-        const parsedSheets: SheetData[] = []
-        for (const name of workbook.SheetNames) {
-          const ws = workbook.Sheets[name]
-          const json = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1, defval: '' })
-          const maxCols = json.reduce((max, row) => Math.max(max, row.length), 0)
-          parsedSheets.push({ name, rows: json, colCount: maxCols })
-        }
-
-        setSheets(parsedSheets)
-        if (parsedSheets.length > 0) {
-          setActiveSheetName(parsedSheets[0].name)
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err))
-        }
-      }
-    }
-
-    loadWorkbook()
-
-    return () => {
-      cancelled = true
-    }
-  }, [file])
+  // Pick an initial/fallback active sheet once the workbook is ready, or
+  // when the current selection is no longer in the visible list (e.g. the
+  // "show hidden sheets" toggle was switched off while a hidden one was
+  // active). A pure derivation of `visibleSheets`/`activeSheetName`, so this
+  // uses the render-time "adjust state" idiom (see ViewerContext.tsx) rather
+  // than an effect.
+  if (visibleSheets.length > 0 && !visibleSheets.some((s) => s.name === activeSheetName)) {
+    setActiveSheetName(visibleSheets[0].name)
+  }
 
   const activeSheet = useMemo(
-    () => sheets.find(s => s.name === activeSheetName) ?? sheets[0],
-    [sheets, activeSheetName]
+    () => visibleSheets.find((s) => s.name === activeSheetName) ?? visibleSheets[0],
+    [visibleSheets, activeSheetName],
   )
 
   const filteredRows = useMemo(() => {
     if (!activeSheet) return []
     const q = deferredSearch.toLowerCase()
-    if (!q) return activeSheet.rows
-    return activeSheet.rows.filter(row => row.some(cell => String(cell).toLowerCase().includes(q)))
+    if (!q) return activeSheet.grid.rows
+    return activeSheet.grid.rows.filter((row) => row.some((cell) => cell.toLowerCase().includes(q)))
   }, [activeSheet, deferredSearch])
 
   const navItems = useMemo(() => {
-    return sheets.map(sheet => ({
+    return visibleSheets.map((sheet) => ({
       id: sheet.name,
       label: sheet.name,
       icon: Table,
       onSelect: () => setActiveSheetName(sheet.name),
     }))
-  }, [sheets])
+  }, [visibleSheets])
 
   useEffect(() => {
     setNavItems(navItems)
@@ -106,96 +82,32 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         kind: 'spreadsheet',
         sheet: activeSheet.name,
         rows: filteredRows.length,
-        cols: activeSheet.colCount,
+        cols: activeSheet.grid.colCount,
       })
     } else {
       setStats(null)
     }
   }, [setStats, activeSheet, filteredRows.length])
 
-  const getCellContent = useCallback(
-    ([col, row]: readonly [number, number]): GridCell => {
-      if (!activeSheet) {
-        return { kind: 'text' as const, data: '', displayData: '', allowOverlay: false } as GridCell
-      }
-      const cellValue = filteredRows[row]?.[col] ?? ''
-      
-      const isOdd = row % 2 !== 0
-      const isHovered = row === hoveredRow
-      let bgCell = isOdd ? theme.bgRowOdd : theme.bgCell
-      if (isHovered) bgCell = theme.bgRowHover
-      
-      return {
-        kind: 'text' as const,
-        data: cellValue,
-        displayData: String(cellValue),
-        // Spreadsheet editing is out of scope (DAT-06) — allowOverlay:true
-        // opened an edit box whose typed input was silently discarded, since
-        // no onCellEdited was ever wired up. Keep the grid read-only and honest.
-        allowOverlay: false,
-        themeOverride: { bgCell },
-      } as GridCell
-    },
-    [activeSheet, filteredRows, theme, hoveredRow]
-  )
+  const { columns, getCellContent, onColumnResize, onItemHovered, theme } = useSpreadsheetGrid({
+    rows: filteredRows,
+    colCount: activeSheet?.grid.colCount ?? 0,
+    colWidthsPx: activeSheet?.grid.colWidthsPx,
+    resetKey: activeSheetName ?? undefined,
+  })
 
-  const [colWidths, setColWidths] = useState<Record<string, number>>({})
-
-  // Clear col widths on sheet change
+  const gridFind = useGridFind(filteredRows)
   useEffect(() => {
-    setColWidths({})
-  }, [activeSheetName])
+    registerFind(gridFind.open)
+    return () => registerFind(null)
+  }, [registerFind, gridFind.open])
 
-  const columns = useMemo(() => {
-    if (!activeSheet) return []
-    return Array.from({ length: activeSheet.colCount }).map((_, i) => {
-      let title = ''
-      let n = i
-      while (n >= 0) {
-        title = String.fromCharCode(65 + (n % 26)) + title
-        n = Math.floor(n / 26) - 1
-      }
-      
-      // Sample first 50 non-empty rows
-      let numericCount = 0
-      let totalSampled = 0
-      for (const row of activeSheet.rows) {
-        const val = row[i]
-        if (val !== undefined && val !== null && String(val).trim() !== '') {
-          totalSampled++
-          if (!isNaN(Number(val))) {
-            numericCount++
-          }
-        }
-        if (totalSampled >= 50) break
-      }
-      
-      const isNumeric = totalSampled > 0 && (numericCount / totalSampled) >= 0.8
-      
-      return { 
-        title, 
-        id: String(i), 
-        width: colWidths[i] ?? 120, 
-        grow: colWidths[i] ? undefined : 1,
-        contentAlign: isNumeric ? 'right' as const : undefined
-      }
-    })
-  }, [activeSheet, colWidths])
+  if (workbookState.status === 'error') {
+    return <div className="spreadsheet-viewer__error">{workbookState.error}</div>
+  }
 
-  const onColumnResize = useCallback((column: GridColumn, newSize: number) => {
-    setColWidths(prev => ({ ...prev, [column.id ?? '']: newSize }))
-  }, [])
-
-  const onItemHovered = useCallback((args: GridMouseEventArgs) => {
-    if (args.location[1] >= 0) {
-      setHoveredRow(args.location[1])
-    } else {
-      setHoveredRow(undefined)
-    }
-  }, [])
-
-  if (error) {
-    return <div className="spreadsheet-viewer__error">{error}</div>
+  if (workbookState.status === 'loading') {
+    return <ViewerLoading format={file.format} />
   }
 
   if (sheets.length === 0) {
@@ -204,17 +116,41 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
 
   return (
     <div className="spreadsheet-viewer">
+      <SearchOverlay
+        isOpen={gridFind.isOpen}
+        query={gridFind.query}
+        matchCount={gridFind.matchCount}
+        currentMatch={gridFind.currentMatch}
+        onQueryChange={gridFind.setQuery}
+        onNext={() => gridFind.goToMatch('next')}
+        onPrev={() => gridFind.goToMatch('prev')}
+        onClose={gridFind.close}
+      />
       <div className="spreadsheet-viewer__toolbar">
         <div className="spreadsheet-viewer__stats">
-          {activeSheet ? `${filteredRows.length} rows × ${activeSheet.colCount} columns` : ''}
+          {activeSheet ? `${filteredRows.length} rows × ${activeSheet.grid.colCount} columns` : ''}
         </div>
-        <div className="spreadsheet-viewer__search">
-          <input
-            type="search"
-            placeholder="Search rows..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
+        <div className="spreadsheet-viewer__toolbar-actions">
+          {hasHiddenSheets && (
+            <button
+              type="button"
+              className="spreadsheet-viewer__hidden-toggle"
+              onClick={() => setShowHiddenSheets((prev) => !prev)}
+              title={showHiddenSheets ? 'Hide hidden sheets' : 'Show hidden sheets'}
+              aria-pressed={showHiddenSheets}
+            >
+              {showHiddenSheets ? <EyeOff size={14} /> : <Eye size={14} />}
+              {showHiddenSheets ? 'Hide hidden sheets' : 'Show hidden sheets'}
+            </button>
+          )}
+          <div className="spreadsheet-viewer__search">
+            <input
+              type="search"
+              placeholder="Search rows..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
         </div>
       </div>
       <div className="spreadsheet-viewer__grid">
@@ -237,21 +173,25 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
                 smoothScrollX
                 smoothScrollY
                 rowMarkers="number"
+                // Fixed UX default, not derived from the file's own freeze-pane
+                // metadata — see the "Frozen panes" note in spreadsheetGrid.ts.
                 freezeColumns={1}
                 headerHeight={36}
                 rowHeight={32}
                 onItemHovered={onItemHovered}
                 onColumnResize={onColumnResize}
+                gridSelection={gridFind.gridSelection}
+                onGridSelectionChange={gridFind.onGridSelectionChange}
               />
             )}
           </Suspense>
         )}
       </div>
       <div className="spreadsheet-viewer__tabs">
-        {sheets.map(sheet => (
+        {visibleSheets.map((sheet) => (
           <button
             key={sheet.name}
-            className={`spreadsheet-viewer__tab ${sheet.name === activeSheetName ? 'spreadsheet-viewer__tab--active' : ''}`}
+            className={`spreadsheet-viewer__tab ${sheet.name === activeSheetName ? 'spreadsheet-viewer__tab--active' : ''} ${sheet.hidden ? 'spreadsheet-viewer__tab--hidden' : ''}`}
             onClick={() => {
               setActiveSheetName(sheet.name)
               setSearch('')
