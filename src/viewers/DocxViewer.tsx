@@ -231,7 +231,10 @@ function unregisterEmbeddedFonts(faces: ReadonlyArray<FontFace>): void {
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  // `.slice()` always allocates a fresh, non-shared ArrayBuffer (unlike
+  // `.buffer.slice()`, whose return type widens to ArrayBufferLike because the
+  // source buffer could in principle be a SharedArrayBuffer).
+  return bytes.slice().buffer
 }
 
 function createFontResolver(embeddedFonts: ReadonlyArray<EmbeddedFontFamily> = []): FontResolver {
