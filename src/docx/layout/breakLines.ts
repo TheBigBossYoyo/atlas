@@ -1,4 +1,5 @@
 import { measureLineMetricsPt, type FontMetrics } from '../fonts'
+import type { Indent } from '../model'
 
 import { effectiveFontFamily } from './fontResolution'
 import { itemizeRuns } from './itemize'
@@ -29,7 +30,11 @@ type BreakOpportunity = {
 }
 
 export async function breakLines(input: LineBreakInput): Promise<ReadonlyArray<LineBox>> {
-  const items = await itemizeRuns(input.runs, input.fontResolver, input.theme)
+  const runItems = await itemizeRuns(input.runs, input.fontResolver, input.theme)
+  const items =
+    input.leadingItems !== undefined && input.leadingItems.length > 0
+      ? [...input.leadingItems, ...runItems]
+      : runItems
   const rawLines = buildRawLines(items, input)
   const metricsCache = new Map<string, Promise<FontMetrics>>()
 
@@ -149,6 +154,10 @@ async function buildLineBox(
       ? Math.max(rawLine.lineLimit - rawLine.width, 0) / spaceCount
       : 0
 
+  const lastItem = rawLine.items[rawLine.items.length - 1]
+  const endsWithPageBreak = lastItem?.kind === 'break' && lastItem.breakKind === 'page'
+  const endsWithColumnBreak = lastItem?.kind === 'break' && lastItem.breakKind === 'column'
+
   return {
     items: rawLine.items,
     width: rawLine.width,
@@ -158,6 +167,8 @@ async function buildLineBox(
     isJustified: canJustify && spaceCount > 0,
     justificationStretch,
     ...(drawingClearancePt > 0 ? { drawingClearancePt } : {}),
+    ...(endsWithPageBreak ? { endsWithPageBreak: true } : {}),
+    ...(endsWithColumnBreak ? { endsWithColumnBreak: true } : {}),
   }
 }
 
@@ -362,11 +373,49 @@ function getLineLimit(
   availableWidth: number,
   lineIndex: number,
 ): number {
-  const leftIndent = twipToPt(paraProps.ind?.left ?? paraProps.ind?.start)
-  const lineIndent =
-    lineIndex === 0 ? twipToPt(paraProps.ind?.firstLine) : twipToPt(paraProps.ind?.hanging)
+  const leftIndent = resolveLeftIndentPt(paraProps.ind)
+  const lineIndent = resolveLineIndentExtraPt(paraProps.ind, lineIndex)
 
   return Math.max(0, availableWidth - leftIndent - lineIndent)
+}
+
+/** The paragraph's base left indent (`w:ind/@w:left`, or `@w:start`), in points. */
+export function resolveLeftIndentPt(ind: Indent | undefined): number {
+  return twipToPt(ind?.left ?? ind?.start)
+}
+
+/**
+ * Extra horizontal offset for one specific line of a paragraph, beyond its
+ * base left indent (`resolveLeftIndentPt`):
+ *
+ * - `firstLine` PUSHES the first line right (a positive offset), leaving
+ *   continuation lines at the base indent — the classic prose first-line
+ *   indent.
+ * - `hanging` PULLS the first line left (a negative offset) instead, so
+ *   continuation lines sit at the base indent while the first line (where a
+ *   list marker lives, see D3) hangs out past it — the classic
+ *   marker-plus-hanging-indent list layout.
+ *
+ * `firstLine` and `hanging` are mutually exclusive per the OOXML schema;
+ * when a (malformed) paragraph sets both, `firstLine` wins. Used both to
+ * size each line's available width (here) and, in `paginate.ts`'s
+ * `placeLine`, to position it horizontally — the two MUST stay in sync so a
+ * line never renders wider than the space it was measured against.
+ */
+export function resolveLineIndentExtraPt(ind: Indent | undefined, lineIndex: number): number {
+  if (lineIndex !== 0) {
+    return 0
+  }
+
+  if (typeof ind?.firstLine === 'number') {
+    return twipToPt(ind.firstLine)
+  }
+
+  if (typeof ind?.hanging === 'number') {
+    return -twipToPt(ind.hanging)
+  }
+
+  return 0
 }
 
 function computeLineWidth(items: ReadonlyArray<LineItem>, penaltyWidth: number): number {
@@ -440,6 +489,32 @@ function findLastVisibleIndex(items: ReadonlyArray<LineItem>): number {
   }
 
   return cursor
+}
+
+/**
+ * Indices of the `space` items within a justified line that should absorb
+ * `line.justificationStretch` when rendering (D5) — the exact same set
+ * `countJustificationSpaces` counted when computing that stretch amount in
+ * the first place, so the renderer must reuse this rather than re-deriving
+ * its own notion of "which spaces stretch": trailing whitespace after the
+ * last visible glyph is excluded both times, or a render pass that
+ * stretched it too would overshoot `lineLimit`.
+ */
+export function resolveStretchableSpaceIndices(items: ReadonlyArray<LineItem>): ReadonlySet<number> {
+  const lastVisibleIndex = findLastVisibleIndex(items)
+  if (lastVisibleIndex < 0) {
+    return new Set()
+  }
+
+  const indices = new Set<number>()
+  for (let index = 0; index <= lastVisibleIndex; index += 1) {
+    const item = items[index]
+    if (item.kind === 'space' && item.stretchable) {
+      indices.add(index)
+    }
+  }
+
+  return indices
 }
 
 function resolveLineHeight(paraProps: EffectiveParaProps, naturalLineHeight: number): number {

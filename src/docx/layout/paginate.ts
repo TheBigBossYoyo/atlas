@@ -1,7 +1,9 @@
 import type {
+  Document,
   FooterReference,
   HeaderReference,
   HyperlinkChild,
+  LvlDef,
   ParaProps,
   Paragraph,
   ParagraphChild,
@@ -12,9 +14,17 @@ import type {
   Table,
   Tab,
 } from '../model'
+import { resolveParaProps, resolveRunProps } from '../parser/cascade'
 
-import { breakLines } from './breakLines'
+import { breakLines, resolveLeftIndentPt, resolveLineIndentExtraPt } from './breakLines'
+import { itemizeRuns } from './itemize'
 import { layoutTable } from './layoutTable'
+import {
+  createNumberingCounterState,
+  MARKER_RUN_INDEX,
+  resolveListMarker,
+  type NumberingCounterState,
+} from './listMarkers'
 import type {
   ColumnBox,
   Page,
@@ -25,7 +35,7 @@ import type {
 } from './pageTypes'
 import { PaginationCancelledError } from './pageTypes'
 import type { LaidOutTable } from './tableTypes'
-import type { EffectiveParaProps, EffectiveRunProps, LineBox, TabStop } from './types'
+import type { EffectiveParaProps, EffectiveRunProps, LineBox, LineItem, TabStop } from './types'
 
 /**
  * Yield to the event loop so the renderer can paint the loading indicator
@@ -114,6 +124,20 @@ type ParagraphUnit = {
   keepLines: boolean
   widowControl: boolean
   pageBreakBefore: boolean
+  /** Resolved alignment/indent/spacing, consumed by `computeLineLeftOffsetPt`. */
+  paraProps: EffectiveParaProps
+  /** The column width `breakLines` measured this paragraph's lines against. */
+  columnWidthPt: number
+  /**
+   * Blank space reserved above this paragraph's first line: the larger of
+   * this paragraph's `spacing.before` and the previous paragraph's
+   * `spacing.after` (0 across a table, or when `contextualSpacing` applies
+   * to two consecutive paragraphs sharing a style). Applied at placement
+   * time, and only when the paragraph doesn't happen to start at the very
+   * top of a page/column (see `placeLine`) — matching Word's suppression
+   * of spacing at a page/column top.
+   */
+  leadingGapPt: number
 }
 
 type TableUnit = {
@@ -168,6 +192,17 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
    * to convert placed synthetic table lines into `PageTableRef`s.
    */
   const tableMetaByPath = new Map<string, LaidOutTable>()
+  const styleCache = createStyleResolutionCache()
+  // Numbering counters persist across the whole document (a list can
+  // continue across a section break), so this is created once here rather
+  // than per-section.
+  const listCounterState = createNumberingCounterState()
+
+  // Carries across the `for` loop below (rather than being section-local)
+  // so a 'continuous'/'nextColumn' section break (D9) can keep flowing
+  // into the page the PREVIOUS section left in progress instead of always
+  // starting a fresh one. `undefined` only before the first section.
+  let currentPage: ActivePage | undefined
 
   for (const [sectionIndex, section] of input.document.sections.entries()) {
     const sectionLayout = resolveSectionLayout(section)
@@ -178,6 +213,8 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
       sectionLayout.columnWidthPt,
       totalBlocks,
       progressState,
+      styleCache,
+      listCounterState,
     )
 
     for (const unit of units) {
@@ -187,27 +224,47 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
     }
 
     let pageNumberInSection = 0
-
-    if (sectionIndex > 0) {
-      pageNumberInSection = addParityPaddingPages(
-        pages,
-        sectionLayout,
-        sectionIndex,
-        pageNumberInSection,
-        headerFooterLines,
-      )
+    const openNewPage = (): ActivePage => {
+      pageNumberInSection += 1
+      return createActivePage(sectionLayout, sectionIndex, pageNumberInSection, pages.length + 1, headerFooterLines)
     }
 
-    let currentPage = createActivePage(
-      sectionLayout,
-      sectionIndex,
-      ++pageNumberInSection,
-      pages.length + 1,
-      headerFooterLines,
-    )
+    // A section break's own type decides whether this section continues
+    // flowing into the previous section's last page (D9) or always starts
+    // a fresh one — the very first section never has a "previous" page to
+    // continue.
+    const continuation = sectionIndex === 0 ? 'fresh' : resolveSectionContinuation(section.props.type)
+
+    // `sectionPage` (definitely `ActivePage`, unlike the loop-spanning
+    // `currentPage`) carries this section's in-progress page through the
+    // rest of this iteration, including the nested unit-placement loop
+    // below — reassigning `currentPage` itself across a loop boundary
+    // doesn't narrow its `ActivePage | undefined` type back down reliably.
+    let sectionPage: ActivePage
+
+    if (continuation === 'continuous' && currentPage !== undefined) {
+      sectionPage = applyContinuousSectionGeometry(currentPage, sectionLayout, sectionIndex)
+    } else if (continuation === 'nextColumn' && currentPage !== undefined) {
+      sectionPage = forceColumnBreak(currentPage, pages, openNewPage)
+      sectionPage.sectionIndex = sectionIndex
+    } else {
+      if (currentPage !== undefined) {
+        pages.push(finalizePage(currentPage, pages.length))
+      }
+      if (sectionIndex > 0) {
+        pageNumberInSection = addParityPaddingPages(
+          pages,
+          sectionLayout,
+          sectionIndex,
+          pageNumberInSection,
+          headerFooterLines,
+        )
+      }
+      sectionPage = openNewPage()
+    }
 
     if (units.length === 0) {
-      pages.push(finalizePage(currentPage, pages.length))
+      currentPage = sectionPage
       continue
     }
 
@@ -217,33 +274,19 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
       pendingGroup.push(unit)
 
       if (!unit.keepWithNext) {
-        currentPage = flushPendingGroup(pendingGroup, currentPage, pages, () => {
-          pageNumberInSection += 1
-          return createActivePage(
-            sectionLayout,
-            sectionIndex,
-            pageNumberInSection,
-            pages.length + 1,
-            headerFooterLines,
-          )
-        })
+        sectionPage = flushPendingGroup(pendingGroup, sectionPage, pages, openNewPage)
         pendingGroup = []
       }
     }
 
     if (pendingGroup.length > 0) {
-      currentPage = flushPendingGroup(pendingGroup, currentPage, pages, () => {
-        pageNumberInSection += 1
-        return createActivePage(
-          sectionLayout,
-          sectionIndex,
-          pageNumberInSection,
-          pages.length + 1,
-          headerFooterLines,
-        )
-      })
+      sectionPage = flushPendingGroup(pendingGroup, sectionPage, pages, openNewPage)
     }
 
+    currentPage = sectionPage
+  }
+
+  if (currentPage !== undefined) {
     pages.push(finalizePage(currentPage, pages.length))
   }
 
@@ -499,7 +542,26 @@ function placeUnit(
 
   while (lineOffset < unit.lines.length) {
     const remainingLines = unit.lines.slice(lineOffset)
+    const forcedBreakOffset = findForcedBreakLineOffset(remainingLines)
     let fitCount = countLinesThatFitOnPage(remainingLines, currentPage)
+
+    if (forcedBreakOffset !== undefined && forcedBreakOffset < fitCount) {
+      // D10: a manual page/column break (Ctrl+Enter / Ctrl+Shift+Enter)
+      // forces a break immediately after this line, regardless of how much
+      // room remains on the current page/column — unlike ordinary
+      // overflow-driven splitting just below, it isn't subject to
+      // widow-control adjustment; the document explicitly asked for a
+      // break exactly here.
+      const chunkCount = forcedBreakOffset + 1
+      placeLineSlice(unit, lineOffset, chunkCount, currentPage)
+      const breakingLine = remainingLines[forcedBreakOffset]
+      lineOffset += chunkCount
+      currentPage =
+        breakingLine.endsWithPageBreak === true
+          ? forcePageBreak(currentPage, pages, openNewPage)
+          : forceColumnBreak(currentPage, pages, openNewPage)
+      continue
+    }
 
     if (fitCount >= remainingLines.length) {
       placeLineSlice(unit, lineOffset, remainingLines.length, currentPage)
@@ -545,6 +607,89 @@ function placeUnit(
   return currentPage
 }
 
+/** The offset (within `lines`) of the first line ending in a manual page or column break, or `undefined` if none. */
+function findForcedBreakLineOffset(lines: ReadonlyArray<LineBox>): number | undefined {
+  const index = lines.findIndex((line) => line.endsWithPageBreak === true || line.endsWithColumnBreak === true)
+  return index === -1 ? undefined : index
+}
+
+function forcePageBreak(currentPage: ActivePage, pages: Page[], openNewPage: () => ActivePage): ActivePage {
+  pages.push(finalizePage(currentPage, pages.length))
+  return openNewPage()
+}
+
+/** Advances to the next column on the current page, or opens a new page when already on the last column. */
+function forceColumnBreak(currentPage: ActivePage, pages: Page[], openNewPage: () => ActivePage): ActivePage {
+  if (currentPage.currentColumnIndex < currentPage.columns.length - 1) {
+    currentPage.currentColumnIndex += 1
+    return currentPage
+  }
+
+  return forcePageBreak(currentPage, pages, openNewPage)
+}
+
+type SectionContinuation = 'fresh' | 'continuous' | 'nextColumn'
+
+/**
+ * D9: a `continuous` or `nextColumn` section break keeps flowing into the
+ * page the previous section left in progress instead of always starting a
+ * fresh page — every other section type (the vast majority: `nextPage`,
+ * `evenPage`, `oddPage`, or no explicit type at all) starts fresh, exactly
+ * as before this task.
+ */
+function resolveSectionContinuation(sectionType: SectionProps['type']): SectionContinuation {
+  if (sectionType === 'continuous') {
+    return 'continuous'
+  }
+  if (sectionType === 'nextColumn') {
+    return 'nextColumn'
+  }
+  return 'fresh'
+}
+
+/**
+ * A `continuous` section break doesn't start a new page, so the page's own
+ * geometry (size, margins, header/footer — already resolved and, for
+ * header/footer, already laid out — when the page was created) stays
+ * exactly as it was; Word itself defers a page-level property change
+ * specified on a continuous section until the next real page. Only the
+ * COLUMN geometry can meaningfully change content flow without a page
+ * break, so this rebuilds `columns` from the new section's `cols`
+ * definition and resumes flowing from the first of them.
+ *
+ * Existing columns whose index still exists in the new layout keep their
+ * already-placed lines (the common case: the break doesn't actually change
+ * column count); a genuinely new column index starts empty. Both start at
+ * the SAME resumed height — the tallest of the old columns' used height —
+ * so new content never overlaps whatever was already placed, even though
+ * an actual change in column count means the old and new column shapes
+ * don't isometrically line up (a documented, deliberate approximation:
+ * getting this pixel-perfect would need the page model to represent
+ * differently-shaped column regions stacked vertically on one page, which
+ * is out of scope for this task).
+ */
+function applyContinuousSectionGeometry(
+  currentPage: ActivePage,
+  sectionLayout: ResolvedSectionLayout,
+  sectionIndex: number,
+): ActivePage {
+  const resumeUsedHeightPt = currentPage.columns.reduce(
+    (tallest, column) => Math.max(tallest, column.usedHeightPt),
+    0,
+  )
+
+  currentPage.sectionIndex = sectionIndex
+  currentPage.columns = sectionLayout.columnLeftsPt.map((leftPt, columnIndex) => ({
+    widthPt: sectionLayout.columnWidthPt,
+    leftPt,
+    lines: currentPage.columns[columnIndex]?.lines ?? [],
+    usedHeightPt: resumeUsedHeightPt,
+  }))
+  currentPage.currentColumnIndex = 0
+
+  return currentPage
+}
+
 function adjustSplitCount(totalRemainingLines: number, fitCount: number): number {
   if (fitCount >= totalRemainingLines) {
     return totalRemainingLines
@@ -568,8 +713,46 @@ function placeLineSlice(
   currentPage: ActivePage,
 ): void {
   for (let index = 0; index < count; index += 1) {
-    placeLine(currentPage, unit.paragraphPath, startLineIndex + index, unit.lines[startLineIndex + index])
+    const lineIndex = startLineIndex + index
+    const line = unit.lines[lineIndex]
+    const leftOffsetPt = unit.kind === 'paragraph' ? computeLineLeftOffsetPt(unit, lineIndex, line) : 0
+    const leadingGapPt =
+      unit.kind === 'paragraph' && lineIndex === 0 ? unit.leadingGapPt : 0
+    placeLine(currentPage, unit.paragraphPath, lineIndex, line, leftOffsetPt, leadingGapPt)
   }
+}
+
+/**
+ * Horizontal offset from the column's left edge for one line of a
+ * paragraph: base left indent, plus the first-line/hanging adjustment for
+ * that specific line (see `resolveLineIndentExtraPt`), plus an alignment
+ * offset for center/right-aligned text (0 for left/both/distribute, whose
+ * flush-right edge for "both" comes from justification stretch instead —
+ * see D5).
+ */
+function computeLineLeftOffsetPt(unit: ParagraphUnit, lineIndex: number, line: LineBox): number {
+  const leftIndentPt = resolveLeftIndentPt(unit.paraProps.ind)
+  const lineIndentExtraPt = resolveLineIndentExtraPt(unit.paraProps.ind, lineIndex)
+  const lineLimitPt = Math.max(0, unit.columnWidthPt - leftIndentPt - lineIndentExtraPt)
+  const alignmentOffsetPt = resolveAlignmentOffsetPt(unit.paraProps.jc, lineLimitPt, line.width)
+
+  return leftIndentPt + lineIndentExtraPt + alignmentOffsetPt
+}
+
+function resolveAlignmentOffsetPt(
+  alignment: EffectiveParaProps['jc'],
+  lineLimitPt: number,
+  lineWidthPt: number,
+): number {
+  if (alignment === 'end') {
+    return Math.max(0, lineLimitPt - lineWidthPt)
+  }
+
+  if (alignment === 'center') {
+    return Math.max(0, (lineLimitPt - lineWidthPt) / 2)
+  }
+
+  return 0
 }
 
 function placeLine(
@@ -577,6 +760,8 @@ function placeLine(
   paragraphPath: ReadonlyArray<number>,
   lineIndex: number,
   line: LineBox,
+  leftOffsetPt: number = 0,
+  leadingGapPt: number = 0,
 ): void {
   let column = currentPage.columns[currentPage.currentColumnIndex]
 
@@ -589,14 +774,19 @@ function placeLine(
     column = currentPage.columns[currentPage.currentColumnIndex]
   }
 
+  // Word suppresses a paragraph's leading spacing when it lands at the very
+  // top of a page/column (an empty column here) — only apply it when this
+  // paragraph is continuing a column that already has content above it.
+  const appliedGapPt = column.usedHeightPt > 0 ? leadingGapPt : 0
+
   column.lines.push({
     paragraphPath,
     lineIndex,
     line,
-    topPt: currentPage.contentTopPt + column.usedHeightPt,
-    leftPt: column.leftPt,
+    topPt: currentPage.contentTopPt + column.usedHeightPt + appliedGapPt,
+    leftPt: column.leftPt + leftOffsetPt,
   })
-  column.usedHeightPt += line.lineHeight
+  column.usedHeightPt += appliedGapPt + line.lineHeight
 }
 
 function groupFitsOnPage(group: ReadonlyArray<LayoutUnit>, currentPage: ActivePage): boolean {
@@ -674,24 +864,32 @@ async function buildSectionUnits(
   columnWidthPt: number,
   totalBlocks: number,
   progressState: { completedBlocks: number; tick: number },
+  styleCache: StyleResolutionCache,
+  listCounterState: NumberingCounterState,
 ): Promise<ReadonlyArray<LayoutUnit>> {
   const units: LayoutUnit[] = []
+  let previousParagraphSpacing: PreviousParagraphSpacing | undefined
 
   for (const [blockIndex, block] of section.blocks.entries()) {
     if (block.kind === 'paragraph') {
-      units.push(
-        await buildParagraphUnit(
-          input,
-          block,
-          sectionIndex,
-          blockIndex,
-          columnWidthPt,
-          input.document.defaults?.paragraph,
-          input.document.defaults?.run,
-        ),
+      const unit = await buildParagraphUnit(
+        input,
+        block,
+        sectionIndex,
+        blockIndex,
+        columnWidthPt,
+        styleCache,
+        previousParagraphSpacing,
+        listCounterState,
       )
+      units.push(unit)
+      previousParagraphSpacing = {
+        spacingAfterPt: twipToPt(unit.paraProps.spacing?.after),
+        pStyle: unit.paraProps.pStyle,
+      }
     } else if (block.kind === 'table') {
       units.push(await buildTableUnit(input, block, sectionIndex, blockIndex, columnWidthPt))
+      previousParagraphSpacing = undefined
     }
 
     progressState.completedBlocks += 1
@@ -709,26 +907,38 @@ async function buildSectionUnits(
   return units
 }
 
+type PreviousParagraphSpacing = {
+  readonly spacingAfterPt: number
+  readonly pStyle: string | undefined
+}
+
 async function buildParagraphUnit(
   input: PaginatorInput,
   paragraph: Paragraph,
   sectionIndex: number,
   blockIndex: number,
   columnWidthPt: number,
-  defaultParaProps: ParaProps | undefined,
-  defaultRunProps: RunProps | undefined,
+  styleCache: StyleResolutionCache,
+  previousParagraphSpacing: PreviousParagraphSpacing | undefined,
+  listCounterState: NumberingCounterState,
 ): Promise<ParagraphUnit> {
   void sectionIndex
 
-  const paraProps = mergeParaProps(defaultParaProps, paragraph.props)
+  const document = input.document
+  const resolvedParaProps = resolveEffectiveParaProps(paragraph.props, document, styleCache)
+  const paraProps = applyNumberingIndentFallback(resolvedParaProps, document)
+  const leadingItems = await buildMarkerLeadingItems(input, paraProps, styleCache, listCounterState)
+  const tabStops = buildTabStops(paraProps, leadingItems.length > 0)
+
   const lines = await breakLines({
     paragraph,
     paraProps,
-    runs: collectParagraphRuns(paragraph.children, defaultRunProps),
+    runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, document, styleCache),
     availableWidth: columnWidthPt,
     fontResolver: input.fontResolver,
-    tabStops: resolveTabStops(paraProps.tabs?.items ?? EMPTY_TABS),
+    tabStops,
     theme: input.theme,
+    ...(leadingItems.length > 0 ? { leadingItems } : {}),
   })
 
   return {
@@ -739,7 +949,130 @@ async function buildParagraphUnit(
     keepLines: paraProps.keepLines === true,
     widowControl: paraProps.widowControl !== false,
     pageBreakBefore: paraProps.pageBreakBefore === true,
+    paraProps,
+    columnWidthPt,
+    leadingGapPt: resolveLeadingGapPt(paraProps, previousParagraphSpacing),
   }
+}
+
+/**
+ * A list paragraph's indent almost always lives on its NUMBERING LEVEL
+ * (`w:lvl/w:pPr/w:ind`), not directly on the paragraph itself — `resolveParaProps`
+ * has no numbering awareness, so a list paragraph with no direct `w:ind`
+ * would otherwise resolve to no indent at all and lose its hanging-indent
+ * marker layout entirely. Fall back to the level's indent only when the
+ * paragraph doesn't already resolve one of its own (direct formatting, or a
+ * paragraph style, always wins).
+ */
+function applyNumberingIndentFallback(paraProps: EffectiveParaProps, document: Document): EffectiveParaProps {
+  if (paraProps.ind !== undefined || paraProps.numPr?.numId === undefined) {
+    return paraProps
+  }
+
+  const levelDef = resolveNumberingLevelDef(document, paraProps.numPr.numId, paraProps.numPr.ilvl ?? 0)
+  const levelIndent = levelDef?.paragraph?.ind
+  if (levelIndent === undefined) {
+    return paraProps
+  }
+
+  return { ...paraProps, ind: levelIndent }
+}
+
+function resolveNumberingLevelDef(document: Document, numId: string, ilvl: number): LvlDef | undefined {
+  const def = document.numbering.get(numId)
+  return def?.levelOverrides?.get(ilvl)?.levelDefinition ?? def?.levels.get(ilvl)
+}
+
+/**
+ * Builds the already-itemized marker (+ trailing tab/space) for a list
+ * paragraph, measured through the same font pipeline as real content so it
+ * participates in line-breaking (D3). Returns an empty array for a
+ * non-list paragraph, or when the numbering definition/level can't be
+ * resolved.
+ */
+async function buildMarkerLeadingItems(
+  input: PaginatorInput,
+  paraProps: EffectiveParaProps,
+  styleCache: StyleResolutionCache,
+  listCounterState: NumberingCounterState,
+): Promise<ReadonlyArray<LineItem>> {
+  const marker = resolveListMarker(paraProps.numPr, input.document, listCounterState)
+  if (marker === undefined) {
+    return []
+  }
+
+  const markerRunProps = resolveEffectiveRunProps(marker.runProps, paraProps.pStyle, input.document, styleCache)
+  const markerRun: Run = {
+    kind: 'run',
+    props: marker.runProps,
+    children:
+      marker.suffix === 'tab'
+        ? [{ kind: 'text', value: marker.text }, { kind: 'tab' }]
+        : marker.suffix === 'space'
+          ? [{ kind: 'text', value: `${marker.text} ` }]
+          : [{ kind: 'text', value: marker.text }],
+  }
+
+  const markerItems = await itemizeRuns(
+    [{ run: markerRun, runProps: markerRunProps }],
+    input.fontResolver,
+    input.theme,
+  )
+
+  return markerItems.map((item) => ({ ...item, runIndex: MARKER_RUN_INDEX }))
+}
+
+/**
+ * When a marker's trailing tab needs to land at the paragraph's hanging
+ * "text starts here" position, add a synthetic tab stop there — see
+ * `resolveLineIndentExtraPt`'s doc comment for the hanging-vs-firstLine
+ * geometry this derives from. Line 0's own left offset is
+ * `leftIndent + extra` (negative `extra` for hanging); the marker's tab is
+ * line-relative, so it needs to travel exactly `-extra` from line 0's own
+ * origin to land back at `leftIndent`.
+ */
+function buildTabStops(paraProps: EffectiveParaProps, hasMarker: boolean): ReadonlyArray<TabStop> {
+  const configuredStops = resolveTabStops(paraProps.tabs?.items ?? EMPTY_TABS)
+  if (!hasMarker) {
+    return configuredStops
+  }
+
+  const markerTabStopPt = Math.max(0, -resolveLineIndentExtraPt(paraProps.ind, 0))
+  return [{ positionPt: markerTabStopPt, alignment: 'left', leader: 'none' }, ...configuredStops]
+}
+
+/**
+ * The blank space reserved above a paragraph's first line: the larger of
+ * this paragraph's own `spacing.before` and the immediately preceding
+ * paragraph's `spacing.after` (Word collapses adjacent spacing rather than
+ * summing it), unless `contextualSpacing` is set and both paragraphs share
+ * the same style (Word's "don't add space between paragraphs of the same
+ * style"). `previous` is `undefined` for a section's first paragraph or
+ * right after a table, in which case only this paragraph's own `before`
+ * applies. Suppressing the gap entirely at an actual page/column top is
+ * handled separately, at placement time, since only the placer knows
+ * whether a column is currently empty.
+ */
+function resolveLeadingGapPt(
+  paraProps: EffectiveParaProps,
+  previous: PreviousParagraphSpacing | undefined,
+): number {
+  const beforePt = twipToPt(paraProps.spacing?.before)
+
+  if (previous === undefined) {
+    return beforePt
+  }
+
+  const suppressedByContext =
+    paraProps.contextualSpacing === true &&
+    previous.pStyle !== undefined &&
+    previous.pStyle === paraProps.pStyle
+
+  if (suppressedByContext) {
+    return 0
+  }
+
+  return Math.max(beforePt, previous.spacingAfterPt)
 }
 
 async function buildTableUnit(
@@ -814,7 +1147,9 @@ function createSyntheticLineBox(lineHeight: number): LineBox {
 
 function collectParagraphRuns(
   children: ReadonlyArray<ParagraphChild>,
-  defaultRunProps: RunProps | undefined,
+  paraStyleId: string | undefined,
+  document: Document,
+  styleCache: StyleResolutionCache,
 ): ReadonlyArray<{
   run: Run
   runProps: EffectiveRunProps
@@ -828,23 +1163,23 @@ function collectParagraphRuns(
     if (child.kind === 'run') {
       runs.push({
         run: child,
-        runProps: mergeRunProps(defaultRunProps, child.props),
+        runProps: resolveEffectiveRunProps(child.props, paraStyleId, document, styleCache),
       })
       continue
     }
 
     if (child.kind === 'hyperlink') {
-      runs.push(...collectHyperlinkRuns(child.children, defaultRunProps))
+      runs.push(...collectHyperlinkRuns(child.children, paraStyleId, document, styleCache))
       continue
     }
 
     if (child.kind === 'ins-revision' || child.kind === 'del-revision') {
       const tag: 'ins' | 'del' = child.kind === 'ins-revision' ? 'ins' : 'del'
       for (const run of child.children) {
-        const merged = mergeRunProps(defaultRunProps, run.props)
+        const resolved = resolveEffectiveRunProps(run.props, paraStyleId, document, styleCache)
         runs.push({
           run,
-          runProps: { ...merged, _revision: tag },
+          runProps: { ...resolved, _revision: tag },
         })
       }
     }
@@ -855,7 +1190,9 @@ function collectParagraphRuns(
 
 function collectHyperlinkRuns(
   children: ReadonlyArray<HyperlinkChild>,
-  defaultRunProps: RunProps | undefined,
+  paraStyleId: string | undefined,
+  document: Document,
+  styleCache: StyleResolutionCache,
 ): ReadonlyArray<{
   run: Run
   runProps: EffectiveRunProps
@@ -869,7 +1206,7 @@ function collectHyperlinkRuns(
     if (child.kind === 'run') {
       runs.push({
         run: child,
-        runProps: mergeRunProps(defaultRunProps, child.props),
+        runProps: resolveEffectiveRunProps(child.props, paraStyleId, document, styleCache),
       })
     }
   }
@@ -909,78 +1246,76 @@ function normalizeTabLeader(leader: Tab['leader']): TabStop['leader'] {
   return 'none'
 }
 
-function mergeParaProps(
-  base: ParaProps | undefined,
-  override: ParaProps | undefined,
-): EffectiveParaProps {
-  return {
-    ...(base ?? {}),
-    ...(override ?? {}),
-    ...(base?.spacing || override?.spacing
-      ? {
-          spacing: {
-            ...(base?.spacing ?? {}),
-            ...(override?.spacing ?? {}),
-          },
-        }
-      : {}),
-    ...(base?.ind || override?.ind
-      ? {
-          ind: {
-            ...(base?.ind ?? {}),
-            ...(override?.ind ?? {}),
-          },
-        }
-      : {}),
-    ...(base?.tabs || override?.tabs
-      ? {
-          tabs: {
-            ...(base?.tabs ?? {}),
-            ...(override?.tabs ?? {}),
-            items: override?.tabs?.items ?? base?.tabs?.items ?? EMPTY_TABS,
-          },
-        }
-      : {}),
-    ...(base?.numPr || override?.numPr
-      ? {
-          numPr: {
-            ...(base?.numPr ?? {}),
-            ...(override?.numPr ?? {}),
-          },
-        }
-      : {}),
-    ...(base?.framePr || override?.framePr
-      ? {
-          framePr: {
-            ...(base?.framePr ?? {}),
-            ...(override?.framePr ?? {}),
-          },
-        }
-      : {}),
-  }
+/**
+ * Resolving a paragraph's or run's effective properties means walking the
+ * full `basedOn` style chain (cascade.ts's `resolveParaProps`/
+ * `resolveRunProps`) every time it's called. A large document re-lays-out on
+ * every keystroke (D23), and most paragraphs/runs in a document share a
+ * small handful of distinct styleId + direct-props combinations — so cache
+ * the resolved result per `paginate()` call, keyed by styleId plus a stable
+ * hash of the direct-formatting object, to avoid re-walking the chain for
+ * every occurrence.
+ */
+type StyleResolutionCache = {
+  readonly paragraphs: Map<string, EffectiveParaProps>
+  readonly runs: Map<string, EffectiveRunProps>
 }
 
-function mergeRunProps(base: RunProps | undefined, override: RunProps | undefined): EffectiveRunProps {
-  return {
-    ...(base ?? {}),
-    ...(override ?? {}),
-    ...(base?.rFonts || override?.rFonts
-      ? {
-          rFonts: {
-            ...(base?.rFonts ?? {}),
-            ...(override?.rFonts ?? {}),
-          },
-        }
-      : {}),
-    ...(base?.lang || override?.lang
-      ? {
-          lang: {
-            ...(base?.lang ?? {}),
-            ...(override?.lang ?? {}),
-          },
-        }
-      : {}),
+function createStyleResolutionCache(): StyleResolutionCache {
+  return { paragraphs: new Map(), runs: new Map() }
+}
+
+function buildStyleCacheKey(styleId: string | undefined, direct: unknown): string {
+  return `${styleId ?? ''}::${JSON.stringify(direct ?? null)}`
+}
+
+function resolveEffectiveParaProps(
+  direct: ParaProps | undefined,
+  document: Document,
+  cache: StyleResolutionCache,
+): EffectiveParaProps {
+  const styleId = direct?.pStyle
+  const key = buildStyleCacheKey(styleId, direct)
+  const cached = cache.paragraphs.get(key)
+  if (cached !== undefined) {
+    return cached
   }
+
+  const resolved = resolveParaProps(direct, styleId, document.styles, {
+    pPr: document.defaults?.paragraph,
+  })
+  cache.paragraphs.set(key, resolved)
+  return resolved
+}
+
+/**
+ * A run's effective properties resolve against the run's own `rStyle`
+ * (character style) when it has one; otherwise they fall back to the
+ * enclosing paragraph's `pStyle` so plain runs in, e.g., a "Heading 1"
+ * paragraph pick up that style's run-level formatting (bold/size/color) —
+ * `cascade.ts`'s `resolveRunProps` already follows a paragraph-type style's
+ * `linked` character style in that case. This is the DXP-02 fix: previously
+ * the (dead) legacy renderer resolved every run against the paragraph's
+ * style id even when the run carried its own `rStyle`.
+ */
+function resolveEffectiveRunProps(
+  direct: RunProps | undefined,
+  paraStyleId: string | undefined,
+  document: Document,
+  cache: StyleResolutionCache,
+): EffectiveRunProps {
+  const styleId = direct?.rStyle ?? paraStyleId
+  const key = buildStyleCacheKey(styleId, direct)
+  const cached = cache.runs.get(key)
+  if (cached !== undefined) {
+    return cached
+  }
+
+  const resolved = resolveRunProps(direct, styleId, document.styles, {
+    rPr: document.defaults?.run,
+  })
+  cache.runs.set(key, resolved)
+  return resolved
 }
 
 function resolveSectionLayout(section: Section): ResolvedSectionLayout {

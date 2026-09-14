@@ -153,13 +153,18 @@ describe('breakLines', () => {
     expect(lines.map((line) => line.width)).toEqual([25, 10])
   })
 
-  it('reduces subsequent line width by the hanging indent', async () => {
+  it('pulls the first line left under a hanging indent, leaving continuation lines at the base indent (D2/DXL-02)', async () => {
+    // `hanging` gives the FIRST line (where a list marker sits, see D3) more
+    // room by pulling it back past the base left indent; continuation lines
+    // sit at the (unindented-by-hanging) base — the opposite of `firstLine`.
     const lines = await breakLines(
-      createInput([wrapTextRun('aa aa aa aa aa')], { ind: { hanging: twip(400) } }, 50),
+      createInput([wrapTextRun('aa aa aa aa aa aa aa aa')], { ind: { hanging: twip(200) } }, 50),
     )
 
-    expect(lines).toHaveLength(2)
-    expect(lines.map((line) => line.width)).toEqual([40, 25])
+    expect(lines).toHaveLength(3)
+    // Line 0's limit is boosted by the 10pt hanging pull-back (60pt vs the
+    // continuation lines' base 50pt), so it fits one more "aa" than they do.
+    expect(lines.map((line) => line.width)).toEqual([55, 40, 10])
   })
 
   it('combines left and first-line indent when computing the first line limit', async () => {
@@ -235,6 +240,45 @@ describe('breakLines', () => {
     expect(lines[1]?.items.map((item) => item.kind)).toEqual(['word'])
   })
 
+  it('tags a line ending in a manual page break with endsWithPageBreak (D10/DXL-06)', async () => {
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'aa' },
+            { kind: 'break', breakType: 'page' },
+            { kind: 'text', value: 'bb' },
+          ]),
+        ],
+        {},
+        40,
+      ),
+    )
+
+    expect(lines[0]?.endsWithPageBreak).toBe(true)
+    expect(lines[0]?.endsWithColumnBreak).toBeUndefined()
+    expect(lines[1]?.endsWithPageBreak).toBeUndefined()
+  })
+
+  it('tags a line ending in a manual column break with endsWithColumnBreak (D10/DXL-06)', async () => {
+    const lines = await breakLines(
+      createInput(
+        [
+          wrapRun([
+            { kind: 'text', value: 'aa' },
+            { kind: 'break', breakType: 'column' },
+            { kind: 'text', value: 'bb' },
+          ]),
+        ],
+        {},
+        40,
+      ),
+    )
+
+    expect(lines[0]?.endsWithColumnBreak).toBe(true)
+    expect(lines[0]?.endsWithPageBreak).toBeUndefined()
+  })
+
   it('splits line boxes around explicit line breaks', async () => {
     const lines = await breakLines(
       createInput(
@@ -253,6 +297,9 @@ describe('breakLines', () => {
     expect(lines).toHaveLength(2)
     expect(lines[0]?.items.map((item) => item.kind)).toEqual(['word', 'break'])
     expect(lines[1]?.items.map((item) => item.kind)).toEqual(['word'])
+    // An ordinary (Shift+Enter) line break is neither a page nor column break.
+    expect(lines[0]?.endsWithPageBreak).toBeUndefined()
+    expect(lines[0]?.endsWithColumnBreak).toBeUndefined()
   })
 
   it('emits a trailing empty line when a break terminates the paragraph', async () => {

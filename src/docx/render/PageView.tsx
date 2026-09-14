@@ -1,13 +1,17 @@
 import React, { useMemo } from 'react';
 import type {
   Document,
+  Hyperlink,
   HyperlinkChild,
-  Paragraph,
   ParagraphChild,
 } from '../model/document';
 import type { Page, PageTableRef, PageTableRowRef } from '../layout/pageTypes';
 import type { LineBox } from '../layout/types';
+import type { Relationship } from '../parser/relationships';
 import type { Theme } from '../parser/theme';
+import { resolveStretchableSpaceIndices } from '../layout/breakLines';
+import { MARKER_RUN_INDEX } from '../layout/listMarkers';
+
 import { borderToCss, revisionStyleToCss, type RevisionRenderKind, runStyleToCss } from './style';
 import { InlineDrawing } from './InlineDrawing';
 import './__styles__/page-view.css';
@@ -17,6 +21,8 @@ export type PageViewProps = {
   zoom: number;
   document: Document;
   theme?: Theme;
+  /** Document-level relationships, used to resolve an external hyperlink's URL (D6). */
+  relationships?: ReadonlyArray<Relationship>;
 };
 
 type RevisionRunMeta = {
@@ -24,8 +30,28 @@ type RevisionRunMeta = {
   readonly author?: string;
 };
 
+type HyperlinkRunMeta = {
+  readonly href: string;
+  readonly isExternal: boolean;
+  readonly tooltip?: string;
+};
+
+type RunMeta = {
+  readonly revision?: RevisionRunMeta;
+  readonly hyperlink?: HyperlinkRunMeta;
+};
+
 // CSS px is 96dpi, pt is 72dpi. So 1pt = 1.333px.
 const PT_TO_PX = 4 / 3;
+
+const EMPTY_STRETCH_INDICES: ReadonlySet<number> = new Set();
+const EMPTY_RELATIONSHIPS: ReadonlyArray<Relationship> = [];
+const EMPTY_BOOKMARK_NAMES: ReadonlyArray<string> = [];
+
+/** Prefix for a bookmark's rendered anchor `id` — an internal hyperlink's
+ * `href` points at `#${BOOKMARK_ANCHOR_ID_PREFIX}${anchor}`, letting the
+ * browser's own same-page fragment navigation do the scrolling (D6). */
+const BOOKMARK_ANCHOR_ID_PREFIX = 'docx-bookmark-';
 
 type RenderLineFn = (
   line: LineBox,
@@ -33,6 +59,7 @@ type RenderLineFn = (
   leftPt: number,
   key: string,
   paragraphPath?: ReadonlyArray<number>,
+  paragraphLineIndex?: number,
 ) => React.ReactNode;
 
 /**
@@ -223,9 +250,14 @@ function applyCellBorders(
  * to scale the inner contents. This keeps the internal layout exactly 1:1
  * with the pt values calculated by the paginator.
  */
-export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme }) => {
+export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme, relationships }) => {
   const scale = zoom * PT_TO_PX;
-  const revisionRunsByParagraph = useMemo(() => collectRevisionRunsByParagraph(document), [document]);
+  const resolvedRelationships = relationships ?? EMPTY_RELATIONSHIPS;
+  const runMetaByParagraph = useMemo(
+    () => collectRunMetaByParagraph(document, resolvedRelationships),
+    [document, resolvedRelationships],
+  );
+  const bookmarkNamesByParagraph = useMemo(() => collectBookmarkNamesByParagraph(document), [document]);
 
   const outerStyle = useMemo(() => ({
     width: `${page.sizePt.width * scale}px`,
@@ -249,12 +281,57 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
     leftPt: number,
     key: string,
     paragraphPath?: ReadonlyArray<number>,
+    paragraphLineIndex?: number,
   ) => {
     const paragraphKey = paragraphPath?.join(',');
-    const revisionRuns = paragraphKey ? revisionRunsByParagraph.get(paragraphKey) : undefined;
+    const runMetas = paragraphKey ? runMetaByParagraph.get(paragraphKey) : undefined;
+    // Bookmarks anchor at their paragraph's first rendered line — precise
+    // enough for "jump to section" navigation without tracking exact
+    // character offsets through pagination.
+    const bookmarkNames =
+      paragraphLineIndex === 0 && paragraphKey
+        ? bookmarkNamesByParagraph.get(paragraphKey) ?? EMPTY_BOOKMARK_NAMES
+        : EMPTY_BOOKMARK_NAMES;
     // Tall drawings reserve clearance above the text strut; the strut keeps
     // its own line height so the baseline lands where the paginator put it.
     const clearance = line.drawingClearancePt ?? 0;
+    // D5: `line.isJustified`/`justificationStretch` were already computed by
+    // the paginator but never read here — a "Justify" paragraph rendered
+    // with its natural (ragged) width instead of a flush right edge. Widen
+    // each stretchable space by the paginator's per-space stretch amount,
+    // and widen the line container to match so the flush edge is real
+    // (not clipped/overflowing).
+    const stretchableIndices = line.isJustified
+      ? resolveStretchableSpaceIndices(line.items)
+      : EMPTY_STRETCH_INDICES;
+    const lineWidthPt =
+      stretchableIndices.size > 0
+        ? line.width + stretchableIndices.size * line.justificationStretch
+        : line.width;
+    // D6: wrap a hyperlink-hosted item (including the spaces between its
+    // words, so the whole span is clickable with no gaps) in a real <a>.
+    // Each item gets its own <a> rather than one <a> spanning the whole
+    // hyperlink — adjacent inline <a> tags render and click seamlessly,
+    // and this avoids restructuring the per-item render loop into a
+    // run-grouping pass.
+    const wrapHyperlink = (node: React.ReactNode, runIndex: number, key: number): React.ReactNode => {
+      const hyperlink = runMetas?.[runIndex]?.hyperlink;
+      if (hyperlink === undefined) {
+        return node;
+      }
+      return (
+        <a
+          key={key}
+          href={hyperlink.href}
+          title={hyperlink.tooltip}
+          className="docx-hyperlink"
+          style={{ cursor: 'pointer' }}
+          {...(hyperlink.isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+        >
+          {node}
+        </a>
+      );
+    };
 
     return (
       <div
@@ -264,15 +341,24 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
         style={{
           top: `${topPt}px`,
           left: `${leftPt}px`,
-          width: `${line.width}px`,
+          width: `${lineWidthPt}px`,
           height: `${line.lineHeight}px`,
           lineHeight: `${line.lineHeight - clearance}px`,
           ...(clearance > 0 ? { paddingTop: `${clearance}px`, boxSizing: 'border-box' as const } : {}),
         }}
       >
+        {bookmarkNames.map((name) => (
+          <a
+            key={`bookmark-${name}`}
+            id={`${BOOKMARK_ANCHOR_ID_PREFIX}${name}`}
+            aria-hidden="true"
+            tabIndex={-1}
+            style={{ position: 'absolute', width: 0, height: 0, pointerEvents: 'none' }}
+          />
+        ))}
         {line.items.map((item, idx) => {
           if (item.kind === 'drawing') {
-            const revisionKind = revisionRuns?.[item.runIndex]?.kind ?? item.runProps._revision;
+            const revisionKind = runMetas?.[item.runIndex]?.revision?.kind ?? item.runProps._revision;
             return (
               <InlineDrawing
                 key={`drawing-${item.runIndex}-${item.charStart}`}
@@ -287,7 +373,9 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
             );
           }
           if (item.kind === 'word' || item.kind === 'glyph-cluster') {
-            const revision = revisionRuns?.[item.runIndex];
+            const isMarker = item.runIndex === MARKER_RUN_INDEX;
+            const runMeta = isMarker ? undefined : runMetas?.[item.runIndex];
+            const revision = runMeta?.revision;
             const revisionKind = revision?.kind ?? item.runProps._revision;
             const revisionClass =
               revisionKind === 'ins'
@@ -295,6 +383,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
                 : revisionKind === 'del'
                   ? ' docx-revision--del'
                   : '';
+            const markerClass = isMarker ? ' docx-list-marker' : '';
             const style =
               revisionKind === undefined
                 ? runStyleToCss(item.runProps, theme, { lengthUnit: 'layoutPx' })
@@ -302,10 +391,10 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
                     ...runStyleToCss(item.runProps, theme, { lengthUnit: 'layoutPx' }),
                     ...revisionStyleToCss(revisionKind, revision?.author),
                   };
-            return (
+            const wordSpan = (
               <span
                 key={idx}
-                className={`docx-run${revisionClass}`}
+                className={`docx-run${revisionClass}${markerClass}`}
                 data-run-index={item.runIndex}
                 data-char-start={item.charStart}
                 data-char-end={item.charEnd}
@@ -326,20 +415,27 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
                 {item.text}
               </span>
             );
+
+            return wrapHyperlink(wordSpan, item.runIndex, idx);
           }
           if (item.kind === 'space') {
-            // Spaces MUST keep their measured width — the paginator uses them
-            // to drive justification stretch and to anchor glue positions.
-            // Emit a real space character so accessibility tools and copy/paste
-            // see the document's actual whitespace, not an invisible spacer.
-            return (
+            // Spaces keep their measured width, EXCEPT on a justified line's
+            // stretchable spaces, which absorb the paginator's per-space
+            // stretch amount so the line's flush-right edge is real. Emit a
+            // real space character so accessibility tools and copy/paste see
+            // the document's actual whitespace, not an invisible spacer.
+            const width = stretchableIndices.has(idx)
+              ? item.width + line.justificationStretch
+              : item.width;
+            const spaceSpan = (
               <span
                 key={idx}
-                style={{ display: 'inline-block', width: `${item.width}px`, whiteSpace: 'pre' }}
+                style={{ display: 'inline-block', width: `${width}px`, whiteSpace: 'pre' }}
               >
                 {' '}
               </span>
             );
+            return wrapHyperlink(spaceSpan, item.runIndex, idx);
           }
           if (item.kind === 'tab') {
             return <span key={idx} style={{ display: 'inline-block', width: `${item.width}px` }} />;
@@ -394,6 +490,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
                 lineRef.leftPt - col.leftPt,
                 `line-${colIdx}-${lineIdx}`,
                 lineRef.paragraphPath,
+                lineRef.lineIndex,
               )
             )}
           </div>
@@ -430,10 +527,20 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme 
   );
 };
 
-function collectRevisionRunsByParagraph(
+/**
+ * Walks every paragraph once, producing per-run-index metadata (tracked-
+ * change revision AND/OR enclosing hyperlink target) in the exact same
+ * flattened run order paginate.ts's `collectParagraphRuns`/
+ * `collectHyperlinkRuns` produce `LineItem.runIndex` values in — run, then
+ * a hyperlink's own runs, then a revision's own runs, all in document
+ * order. The two concerns share one walk (rather than two independent
+ * ones) so they can never drift apart on what "the i-th run" means.
+ */
+function collectRunMetaByParagraph(
   document: Document,
-): ReadonlyMap<string, ReadonlyArray<RevisionRunMeta | undefined>> {
-  const paragraphs = new Map<string, ReadonlyArray<RevisionRunMeta | undefined>>();
+  relationships: ReadonlyArray<Relationship>,
+): ReadonlyMap<string, ReadonlyArray<RunMeta | undefined>> {
+  const paragraphs = new Map<string, ReadonlyArray<RunMeta | undefined>>();
 
   for (const section of document.sections) {
     section.blocks.forEach((block, blockIndex) => {
@@ -441,62 +548,178 @@ function collectRevisionRunsByParagraph(
         return;
       }
 
-      paragraphs.set(String(blockIndex), collectParagraphRevisionRuns(block));
+      const runs: Array<RunMeta | undefined> = [];
+      appendParagraphChildRuns(block.children, runs, relationships, {});
+      paragraphs.set(String(blockIndex), runs);
     });
   }
 
   return paragraphs;
 }
 
-function collectParagraphRevisionRuns(
-  paragraph: Paragraph,
-): ReadonlyArray<RevisionRunMeta | undefined> {
-  const runs: Array<RevisionRunMeta | undefined> = [];
-  appendParagraphChildRuns(paragraph.children, runs);
-  return runs;
-}
-
 function appendParagraphChildRuns(
   children: ReadonlyArray<ParagraphChild>,
-  runs: Array<RevisionRunMeta | undefined>,
-  revision?: RevisionRunMeta,
+  runs: Array<RunMeta | undefined>,
+  relationships: ReadonlyArray<Relationship>,
+  context: RunMeta,
 ): void {
   for (const child of children) {
     if (child.kind === 'run') {
-      runs.push(revision);
+      runs.push(hasRunMeta(context) ? context : undefined);
       continue;
     }
 
     if (child.kind === 'hyperlink') {
-      appendHyperlinkChildRuns(child.children, runs, revision);
+      const hyperlink = resolveHyperlinkMeta(child, relationships);
+      appendHyperlinkChildRuns(child.children, runs, {
+        ...context,
+        ...(hyperlink !== undefined ? { hyperlink } : {}),
+      });
       continue;
     }
 
     if (child.kind === 'ins-revision' || child.kind === 'del-revision') {
-      appendParagraphChildRuns(
-        getRevisionChildren(child),
-        runs,
-        {
+      appendParagraphChildRuns(getRevisionChildren(child), runs, relationships, {
+        ...context,
+        revision: {
           kind: child.kind === 'ins-revision' ? 'ins' : 'del',
           ...(child.author !== undefined ? { author: child.author } : {}),
         },
-      );
+      });
     }
   }
 }
 
 function appendHyperlinkChildRuns(
   children: ReadonlyArray<HyperlinkChild>,
-  runs: Array<RevisionRunMeta | undefined>,
-  revision?: RevisionRunMeta,
+  runs: Array<RunMeta | undefined>,
+  context: RunMeta,
 ): void {
   for (const child of children) {
     if (child.kind === 'run') {
-      runs.push(revision);
+      runs.push(hasRunMeta(context) ? context : undefined);
     }
   }
 }
 
+function hasRunMeta(context: RunMeta): boolean {
+  return context.revision !== undefined || context.hyperlink !== undefined;
+}
+
 function getRevisionChildren(child: Extract<ParagraphChild, { kind: 'ins-revision' | 'del-revision' }>): ReadonlyArray<ParagraphChild> {
   return child.children as ReadonlyArray<ParagraphChild>;
+}
+
+/**
+ * External hyperlink targets come straight from the (untrusted) document's
+ * own relationship parts — a crafted `.docx` could set one to
+ * `javascript:`/`vbscript:`/`data:` etc. Chromium already refuses to
+ * execute a `javascript:` URI opened via `target="_blank"`, and Electron's
+ * own `setWindowOpenHandler` additionally allow-lists http/https before
+ * calling `shell.openExternal` (see `electron/main.cjs`'s
+ * `isAllowedExternalScheme`) — but this renders the raw string as a
+ * literal `href` regardless, so it's still worth validating at the source
+ * rather than depending solely on those other layers. Mirrors this
+ * codebase's existing convention (`OdtViewer.tsx`'s DOMPurify sanitization,
+ * `main.cjs`'s own scheme allow-list) of never trusting a URL scheme from
+ * file content.
+ */
+const SAFE_HYPERLINK_SCHEMES: ReadonlySet<string> = new Set(['http:', 'https:', 'mailto:']);
+
+function isSafeHyperlinkHref(href: string): boolean {
+  try {
+    // A base is required for a protocol-relative or bare host string; a
+    // genuinely relative (schemeless) target is not a scheme we allow, so
+    // this intentionally has no fallback base that would let one through.
+    return SAFE_HYPERLINK_SCHEMES.has(new URL(href).protocol);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolves a `Hyperlink` node to a renderable target: an external URL via
+ * the document's relationships (only when the relationship is genuinely
+ * marked `TargetMode="External"`, matching how DOCX generators — including
+ * the one that built this wave's corpus fixture — author external
+ * hyperlinks), or an internal same-document anchor via `w:anchor`
+ * (resolved against a bookmark's rendered `id`, see
+ * `BOOKMARK_ANCHOR_ID_PREFIX`). Returns `undefined` for a hyperlink this
+ * viewer can't safely resolve (e.g. a relationship id with no matching
+ * External relationship, or an unsafe URL scheme — see
+ * `isSafeHyperlinkHref`).
+ */
+function resolveHyperlinkMeta(
+  hyperlink: Hyperlink,
+  relationships: ReadonlyArray<Relationship>,
+): HyperlinkRunMeta | undefined {
+  if (hyperlink.relationshipId !== undefined) {
+    const relationship = relationships.find((candidate) => candidate.id === hyperlink.relationshipId);
+    if (
+      relationship === undefined ||
+      relationship.targetMode !== 'External' ||
+      !isSafeHyperlinkHref(relationship.target)
+    ) {
+      return undefined;
+    }
+    return {
+      href: relationship.target,
+      isExternal: true,
+      ...(hyperlink.tooltip !== undefined ? { tooltip: hyperlink.tooltip } : {}),
+    };
+  }
+
+  if (hyperlink.anchor !== undefined) {
+    return {
+      href: `#${BOOKMARK_ANCHOR_ID_PREFIX}${hyperlink.anchor}`,
+      isExternal: false,
+      ...(hyperlink.tooltip !== undefined ? { tooltip: hyperlink.tooltip } : {}),
+    };
+  }
+
+  return undefined;
+}
+
+function collectBookmarkNamesByParagraph(document: Document): ReadonlyMap<string, ReadonlyArray<string>> {
+  const paragraphs = new Map<string, ReadonlyArray<string>>();
+
+  for (const section of document.sections) {
+    section.blocks.forEach((block, blockIndex) => {
+      if (block.kind !== 'paragraph') {
+        return;
+      }
+
+      const names = collectParagraphBookmarkNames(block.children);
+      if (names.length > 0) {
+        paragraphs.set(String(blockIndex), names);
+      }
+    });
+  }
+
+  return paragraphs;
+}
+
+function collectParagraphBookmarkNames(children: ReadonlyArray<ParagraphChild>): ReadonlyArray<string> {
+  const names: string[] = [];
+
+  for (const child of children) {
+    if (child.kind === 'bookmark' && child.boundary === 'start' && child.name !== undefined) {
+      names.push(child.name);
+      continue;
+    }
+
+    if (child.kind === 'hyperlink') {
+      for (const hyperlinkChild of child.children) {
+        if (
+          hyperlinkChild.kind === 'bookmark' &&
+          hyperlinkChild.boundary === 'start' &&
+          hyperlinkChild.name !== undefined
+        ) {
+          names.push(hyperlinkChild.name);
+        }
+      }
+    }
+  }
+
+  return names;
 }

@@ -5,16 +5,20 @@ import type {
   Document,
   FooterReference,
   HeaderReference,
+  NumberingDef,
   ParaProps,
+  Paragraph,
   Section,
   SectionProps,
+  Style,
   Table,
 } from '../../model'
-import { twip } from '../../model'
+import { halfPoint, hexColor, twip } from '../../model'
 
+import { MARKER_RUN_INDEX } from '../listMarkers'
 import { paginate } from '../paginate'
-import type { Page } from '../pageTypes'
-import type { FontResolver, LineBox } from '../types'
+import type { Page, PageLineRef } from '../pageTypes'
+import type { FontResolver, LineBox, LineItem } from '../types'
 
 describe('paginate', () => {
   it('returns one page for a short one-paragraph document', async () => {
@@ -276,6 +280,97 @@ describe('paginate', () => {
     expect(pageLineCounts([pages[2]])).toEqual([1])
   })
 
+  it('forces a new page right after a manual page break, even when everything would otherwise fit (D10/DXL-06)', async () => {
+    const paragraph = createParagraphWithManualBreak(2, 'page', 3)
+
+    const pages = await paginate({
+      // Default section is 200pt tall; 5 lines at the doc-default 20pt
+      // line height (100pt) would easily fit on one page without D10.
+      document: createDocument([createSection([paragraph])]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    expect(paragraphLineCounts(pages, 0)).toEqual([2, 3])
+  })
+
+  it('advances to the next column for a manual column break when one remains (D10/DXL-06)', async () => {
+    const paragraph = createParagraphWithManualBreak(1, 'column', 1)
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { columnCount: 2 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    expect(pages[0].columns.map((column) => column.lines.length)).toEqual([1, 1])
+  })
+
+  it('opens a new page for a manual column break when already on the last column (D10/DXL-06)', async () => {
+    const paragraph = createParagraphWithManualBreak(2, 'column', 3)
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { columnCount: 1 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    expect(paragraphLineCounts(pages, 0)).toEqual([2, 3])
+  })
+
+  it("flows a continuous section break's content onto the previous section's page instead of an unwanted extra page break (D9/DXL-07)", async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)]),
+        createSection([createParagraph(1)], { type: 'continuous' }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    expect(pageLineCounts(pages)).toEqual([2])
+  })
+
+  it('recomputes column geometry for a continuous section break that changes column count (D9/DXL-07)', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)]),
+        createSection([createParagraph(1)], { type: 'continuous', columnCount: 2 }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    expect(pages[0].columns).toHaveLength(2)
+    expect(pageLineCounts(pages)).toEqual([2])
+  })
+
+  it('advances to the next column for a nextColumn section break when one remains (D9/DXL-07)', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)], { columnCount: 2 }),
+        createSection([createParagraph(1)], { type: 'nextColumn', columnCount: 2 }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    expect(pages[0].columns.map((column) => column.lines.length)).toEqual([1, 1])
+  })
+
+  it('opens a new page for a nextColumn section break when already on the last column (D9/DXL-07)', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)]),
+        createSection([createParagraph(1)], { type: 'nextColumn' }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    expect(pageLineCounts(pages)).toEqual([1, 1])
+  })
+
   it('reserves header and footer line height from the page content area', async () => {
     const headerReference: HeaderReference = {
       id: 'header-default',
@@ -309,6 +404,316 @@ describe('paginate', () => {
     expect(pages[0].headerLines).toHaveLength(1)
     expect(pages[0].footerLines).toHaveLength(1)
     expect(paragraphLineCounts(pages, 0)).toEqual([3, 2])
+  })
+
+  it('resolves a run inheriting a paragraph style chain, including its linked character style (D1/DXP-01/DXL-01)', async () => {
+    const styles = makeStyles([
+      {
+        id: 'Normal',
+        type: 'paragraph',
+        isDefault: true,
+      },
+      {
+        id: 'Heading1',
+        type: 'paragraph',
+        basedOn: 'Normal',
+        linked: 'Heading1Char',
+        run: { bold: true, sz: halfPoint(48) },
+      },
+      {
+        id: 'Heading1Char',
+        type: 'character',
+        linked: 'Heading1',
+        run: { color: hexColor('FF0000') },
+      },
+    ])
+
+    const headingParagraph: Paragraph = {
+      kind: 'paragraph',
+      props: { pStyle: 'Heading1' },
+      children: [{ kind: 'run', children: [{ kind: 'text', value: 'Title text' }] }],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([headingParagraph])], styles),
+      fontResolver: createFontResolver(),
+    })
+
+    const item = firstWordItem(pages)
+    expect(item?.runProps.bold).toBe(true)
+    expect(item?.runProps.sz).toBe(halfPoint(48))
+    expect(item?.runProps.color).toBe('FF0000')
+  })
+
+  it("resolves a run's own rStyle instead of the enclosing paragraph's pStyle (D1/DXP-02 fix)", async () => {
+    const styles = makeStyles([
+      {
+        id: 'Heading1',
+        type: 'paragraph',
+        run: { bold: true },
+      },
+      {
+        id: 'Emphasis',
+        type: 'character',
+        run: { italic: true },
+      },
+    ])
+
+    const paragraph: Paragraph = {
+      kind: 'paragraph',
+      // Deliberately give the paragraph a DIFFERENT style than the run's own
+      // character style, so a bug that resolves against pStyle instead of
+      // the run's rStyle would pick up `bold` from Heading1 and miss
+      // `italic` from Emphasis entirely.
+      props: { pStyle: 'Heading1' },
+      children: [
+        { kind: 'run', props: { rStyle: 'Emphasis' }, children: [{ kind: 'text', value: 'emphasized' }] },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph])], styles),
+      fontResolver: createFontResolver(),
+    })
+
+    const item = firstWordItem(pages)
+    expect(item?.runProps.italic).toBe(true)
+  })
+
+  it('renders a right-aligned paragraph flush with the far edge of the column (D2/DXL-02)', async () => {
+    const paragraph = createTextParagraph('aaaa', { jc: 'end' })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    // 4 chars * 5.5pt (11pt default font, 500/1000 em advance) = 22pt wide;
+    // a 400pt-wide column with no margins pushes it to leftPt = 400 - 22.
+    expect(lineRef?.line.width).toBe(22)
+    expect(lineRef?.leftPt).toBe(378)
+  })
+
+  it('renders a centered paragraph with equal space on both sides (D2/DXL-02)', async () => {
+    const paragraph = createTextParagraph('aaaa', { jc: 'center' })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    expect(lineRef?.leftPt).toBe((400 - 22) / 2)
+  })
+
+  it('offsets a paragraph by its left indent (D2/DXL-02)', async () => {
+    const paragraph = createTextParagraph('aaaa', { ind: { left: twip(200) } })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    expect(lineRef?.leftPt).toBe(10)
+  })
+
+  it('leaves a plain left-aligned paragraph flush with the column edge', async () => {
+    const paragraph = createTextParagraph('aaaa')
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    expect(lineRef?.leftPt).toBe(0)
+  })
+
+  it('applies the larger of adjacent spacing.after/spacing.before between two paragraphs (D2/DXL-05)', async () => {
+    const paragraphs = [
+      createTextParagraph('first', { spacing: { after: twip(120) } }),
+      createTextParagraph('second', { spacing: { before: twip(240) } }),
+    ]
+
+    const pages = await paginate({
+      document: createDocument([createSection(paragraphs, { pageHeightPt: 500 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRefs = allLineRefs(pages)
+    // Doc defaults pin every line's height at 20pt (exact spacing) — see
+    // createDocument's defaults — so the gap is directly observable as the
+    // difference between the second paragraph's top and 20pt.
+    expect(lineRefs[0]?.topPt).toBe(0)
+    expect(lineRefs[1]?.topPt).toBe(20 + 12)
+  })
+
+  it('suppresses spacing.before for the very first paragraph on a page (D2/DXL-05)', async () => {
+    const paragraph = createTextParagraph('first', { spacing: { before: twip(240) } })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageHeightPt: 500 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(firstLineRef(pages)?.topPt).toBe(0)
+  })
+
+  it('suppresses spacing between two contextualSpacing paragraphs sharing a style (D2/DXL-05)', async () => {
+    const paragraphs = [
+      createTextParagraph('first', { pStyle: 'ListParagraph', spacing: { after: twip(120) } }),
+      createTextParagraph('second', {
+        pStyle: 'ListParagraph',
+        contextualSpacing: true,
+        spacing: { before: twip(240) },
+      }),
+    ]
+
+    const pages = await paginate({
+      document: createDocument([createSection(paragraphs, { pageHeightPt: 500 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRefs = allLineRefs(pages)
+    expect(lineRefs[1]?.topPt).toBe(20)
+  })
+
+  it('generates and increments decimal markers across paragraphs sharing a numId (D3/DXP-07/DXL-04)', async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [0, { level: 0, format: 'decimal', text: { value: '%1.', placeholders: [1] }, suffix: 'tab' }],
+          ]),
+        },
+      ],
+    ])
+
+    const paragraphs = [
+      createTextParagraph('first item', {
+        numPr: { numId: '1', ilvl: 0 },
+        ind: { left: twip(720), hanging: twip(360) },
+      }),
+      createTextParagraph('second item', {
+        numPr: { numId: '1', ilvl: 0 },
+        ind: { left: twip(720), hanging: twip(360) },
+      }),
+    ]
+
+    const pages = await paginate({
+      document: createDocument([createSection(paragraphs, { pageWidthPt: 400 })], undefined, numbering),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRefs = allLineRefs(pages)
+    expect(markerWordOf(lineRefs[0])?.text).toBe('1.')
+    expect(markerWordOf(lineRefs[1])?.text).toBe('2.')
+  })
+
+  it('positions the marker via hanging pull-back and lands its tab at the text-start indent (D3/DXL-04)', async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [0, { level: 0, format: 'decimal', text: { value: '%1.', placeholders: [1] }, suffix: 'tab' }],
+          ]),
+        },
+      ],
+    ])
+
+    const paragraph = createTextParagraph('item text', {
+      numPr: { numId: '1', ilvl: 0 },
+      ind: { left: twip(720), hanging: twip(360) },
+    })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })], undefined, numbering),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    const markerItem = markerWordOf(lineRef)
+    const tabItem = lineRef?.line.items.find((item) => item.kind === 'tab')
+    const firstRealWord = lineRef?.line.items.find(
+      (item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word' && item.runIndex === 0,
+    )
+
+    // Line 0 is pulled back by the 18pt hanging amount from the 36pt (720
+    // twip) base left indent, so the marker starts at 18pt...
+    expect(lineRef?.leftPt).toBe(18)
+    // ...and the marker + its tab together land exactly back at the 36pt
+    // text-start indent, where the real paragraph text begins.
+    expect((lineRef?.leftPt ?? 0) + (markerItem?.width ?? 0) + (tabItem?.width ?? 0)).toBe(36)
+    expect(firstRealWord?.text).toBe('item')
+  })
+
+  it("falls back to the numbering level's own indent when the paragraph sets none (D3)", async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [
+              0,
+              {
+                level: 0,
+                format: 'decimal',
+                text: { value: '%1.', placeholders: [1] },
+                suffix: 'tab',
+                paragraph: { ind: { left: twip(720), hanging: twip(360) } },
+              },
+            ],
+          ]),
+        },
+      ],
+    ])
+
+    const paragraph = createTextParagraph('item', { numPr: { numId: '1', ilvl: 0 } })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })], undefined, numbering),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(firstLineRef(pages)?.leftPt).toBe(18)
+  })
+
+  it('renders a bulleted paragraph marker without disturbing the real run\'s own index (D3)', async () => {
+    const numbering = new Map<string, NumberingDef>([
+      [
+        '1',
+        {
+          numId: '1',
+          levels: new Map([
+            [0, { level: 0, format: 'bullet', text: { value: '•', placeholders: [] }, suffix: 'tab' }],
+          ]),
+        },
+      ],
+    ])
+
+    const paragraph = createTextParagraph('bulleted', {
+      numPr: { numId: '1', ilvl: 0 },
+      ind: { left: twip(720), hanging: twip(360) },
+    })
+
+    const pages = await paginate({
+      document: createDocument([createSection([paragraph], { pageWidthPt: 400 })], undefined, numbering),
+      fontResolver: createFontResolver(),
+    })
+
+    const lineRef = firstLineRef(pages)
+    expect(markerWordOf(lineRef)?.text).toBe('•')
+    const realWord = lineRef?.line.items.find(
+      (item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word' && item.runIndex === 0,
+    )
+    expect(realWord?.text).toBe('bulleted')
   })
 
   it('uses the injected tableLayout callback for table height', async () => {
@@ -348,12 +753,44 @@ function createFontResolver(): FontResolver {
   return async () => metrics
 }
 
-function createDocument(sections: ReadonlyArray<Section>): Document {
+function makeStyles(styles: ReadonlyArray<Style>): ReadonlyMap<string, Style> {
+  const map = new Map<string, Style>()
+  for (const style of styles) {
+    map.set(style.id, style)
+  }
+  return map
+}
+
+function markerWordOf(lineRef: PageLineRef | undefined): Extract<LineItem, { kind: 'word' }> | undefined {
+  return lineRef?.line.items.find(
+    (item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word' && item.runIndex === MARKER_RUN_INDEX,
+  )
+}
+
+function firstWordItem(pages: ReadonlyArray<Page>): Extract<LineItem, { kind: 'word' }> | undefined {
+  for (const page of pages) {
+    for (const column of page.columns) {
+      for (const lineRef of column.lines) {
+        const word = lineRef.line.items.find((item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word')
+        if (word !== undefined) {
+          return word
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+function createDocument(
+  sections: ReadonlyArray<Section>,
+  styles: ReadonlyMap<string, Style> = new Map(),
+  numbering: ReadonlyMap<string, NumberingDef> = new Map(),
+): Document {
   return {
     kind: 'document',
     sections,
-    styles: new Map(),
-    numbering: new Map(),
+    styles,
+    numbering,
     defaults: {
       paragraph: {
         spacing: {
@@ -432,6 +869,48 @@ function createParagraph(lineCount: number, props: ParaProps = {}) {
           ]
         : [],
   }
+}
+
+/**
+ * A paragraph of `linesBefore + linesAfter` total lines (matching
+ * `createParagraph`'s line-count convention — see D10's tests), with a
+ * manual page/column break (`breakType`) ending the `linesBefore`-th line.
+ */
+function createParagraphWithManualBreak(
+  linesBefore: number,
+  breakType: 'page' | 'column',
+  linesAfter: number,
+): Paragraph {
+  return {
+    kind: 'paragraph',
+    props: {},
+    children: [
+      {
+        kind: 'run',
+        children: [
+          ...Array.from({ length: linesBefore - 1 }, () => ({ kind: 'break' as const })),
+          { kind: 'break' as const, breakType },
+          ...Array.from({ length: linesAfter - 1 }, () => ({ kind: 'break' as const })),
+        ],
+      },
+    ],
+  }
+}
+
+function createTextParagraph(text: string, props: ParaProps = {}): Paragraph {
+  return {
+    kind: 'paragraph',
+    props,
+    children: [{ kind: 'run', children: [{ kind: 'text', value: text }] }],
+  }
+}
+
+function allLineRefs(pages: ReadonlyArray<Page>): ReadonlyArray<PageLineRef> {
+  return pages.flatMap((page) => page.columns.flatMap((column) => column.lines))
+}
+
+function firstLineRef(pages: ReadonlyArray<Page>): PageLineRef | undefined {
+  return allLineRefs(pages)[0]
 }
 
 function createTable(): Table {
