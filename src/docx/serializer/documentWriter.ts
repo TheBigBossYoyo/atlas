@@ -85,7 +85,7 @@ const xmlBuilder = new XMLBuilder({
 
 export function writeDocumentXml(doc: Document): string {
   const state = createSerializeState()
-  const documentNode = createElement('w:document', [buildBodyNodeWithState(doc, state)], buildDocumentAttributes())
+  const documentNode = createElement('w:document', [buildBodyNodeWithState(doc, state)], buildDocumentAttributes(doc))
   const xml = `${XML_DECLARATION}${xmlBuilder.build([documentNode])}`
   return restoreUnknownXml(collapseEmptyElements(xml), state)
 }
@@ -1218,32 +1218,95 @@ function buildUnknownPlaceholder(node: UnknownNode, state: SerializeState): Orde
   })
 }
 
-function buildDocumentAttributes(): XmlAttributes {
+/**
+ * The namespace prefixes Atlas's own serializer relies on somewhere in its
+ * output (directly, or via unknown-node passthrough content that commonly
+ * uses one of these). Shared with `partWriterSupport.ts` (DXS-08) so
+ * standalone parts (header/footer/footnote/endnote/comment) declare the
+ * same set — previously they declared only `xmlns:w` (+ `xmlns:r`), so a
+ * drawing/revision/etc. inside one of those parts emitted an undeclared
+ * namespace prefix, which is an XML well-formedness violation Word may
+ * reject or "repair" on open.
+ */
+export const STANDARD_NAMESPACE_URIS: Readonly<Record<string, string>> = {
+  wpc: 'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas',
+  mc: 'http://schemas.openxmlformats.org/markup-compatibility/2006',
+  o: 'urn:schemas-microsoft-com:office:office',
+  r: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+  m: 'http://schemas.openxmlformats.org/officeDocument/2006/math',
+  v: 'urn:schemas-microsoft-com:vml',
+  wp14: 'http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing',
+  wp: 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing',
+  w10: 'urn:schemas-microsoft-com:office:word',
+  w: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+  w14: 'http://schemas.microsoft.com/office/word/2010/wordml',
+  w15: 'http://schemas.microsoft.com/office/word/2012/wordml',
+  w16cex: 'http://schemas.microsoft.com/office/word/2018/wordml/cex',
+  w16cid: 'http://schemas.microsoft.com/office/word/2016/wordml/cid',
+  w16: 'http://schemas.microsoft.com/office/word/2018/wordml',
+  w16sdtdh: 'http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash',
+  w16se: 'http://schemas.microsoft.com/office/word/2015/wordml/symex',
+  wpg: 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup',
+  wpi: 'http://schemas.microsoft.com/office/word/2010/wordprocessingInk',
+  wne: 'http://schemas.microsoft.com/office/word/2006/wordml',
+  wps: 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape',
+  a: 'http://schemas.openxmlformats.org/drawingml/2006/main',
+  pic: 'http://schemas.openxmlformats.org/drawingml/2006/picture',
+}
+
+const BASELINE_MC_IGNORABLE = 'w14 w15 w16se w16cid w16 w16cex w16sdtdh wp14'
+
+/** `{prefix: uri}` -> `{'@_xmlns:prefix': uri}`, for splicing into an XmlAttributes record. */
+export function buildNamespaceDeclarationAttributes(
+  namespaces: Readonly<Record<string, string>>,
+): XmlAttributes {
   const attributes = createAttributes()
-  attributes['@_xmlns:wpc'] = 'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas'
-  attributes['@_xmlns:mc'] = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
-  attributes['@_xmlns:o'] = 'urn:schemas-microsoft-com:office:office'
-  attributes['@_xmlns:r'] = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-  attributes['@_xmlns:m'] = 'http://schemas.openxmlformats.org/officeDocument/2006/math'
-  attributes['@_xmlns:v'] = 'urn:schemas-microsoft-com:vml'
-  attributes['@_xmlns:wp14'] = 'http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing'
-  attributes['@_xmlns:wp'] = 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'
-  attributes['@_xmlns:w10'] = 'urn:schemas-microsoft-com:office:word'
-  attributes['@_xmlns:w'] = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
-  attributes['@_xmlns:w14'] = 'http://schemas.microsoft.com/office/word/2010/wordml'
-  attributes['@_xmlns:w15'] = 'http://schemas.microsoft.com/office/word/2012/wordml'
-  attributes['@_xmlns:w16cex'] = 'http://schemas.microsoft.com/office/word/2018/wordml/cex'
-  attributes['@_xmlns:w16cid'] = 'http://schemas.microsoft.com/office/word/2016/wordml/cid'
-  attributes['@_xmlns:w16'] = 'http://schemas.microsoft.com/office/word/2018/wordml'
-  attributes['@_xmlns:w16sdtdh'] = 'http://schemas.microsoft.com/office/word/2020/wordml/sdtdatahash'
-  attributes['@_xmlns:w16se'] = 'http://schemas.microsoft.com/office/word/2015/wordml/symex'
-  attributes['@_xmlns:wpg'] = 'http://schemas.microsoft.com/office/word/2010/wordprocessingGroup'
-  attributes['@_xmlns:wpi'] = 'http://schemas.microsoft.com/office/word/2010/wordprocessingInk'
-  attributes['@_xmlns:wne'] = 'http://schemas.microsoft.com/office/word/2006/wordml'
-  attributes['@_xmlns:wps'] = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape'
-  attributes['@_xmlns:a'] = 'http://schemas.openxmlformats.org/drawingml/2006/main'
-  attributes['@_xmlns:pic'] = 'http://schemas.openxmlformats.org/drawingml/2006/picture'
-  attributes['@_mc:Ignorable'] = 'w14 w15 w16se w16cid w16 w16cex w16sdtdh wp14'
+  for (const [prefix, uri] of Object.entries(namespaces)) {
+    attributes[`@_xmlns:${prefix}`] = uri
+  }
+  return attributes
+}
+
+/**
+ * Unions two `mc:Ignorable` token lists (space-separated namespace
+ * prefixes), deduplicated, preserving baseline order first.
+ */
+function mergeIgnorableTokens(baseline: string, extra: string | undefined): string {
+  const tokens: string[] = []
+  const seen = new Set<string>()
+
+  for (const token of `${baseline} ${extra ?? ''}`.split(/\s+/)) {
+    if (token === '' || seen.has(token)) {
+      continue
+    }
+    seen.add(token)
+    tokens.push(token)
+  }
+
+  return tokens.join(' ')
+}
+
+/**
+ * DXS-15: the document root's namespace declarations previously came from
+ * a fixed, hardcoded set regardless of what the source document actually
+ * declared. Now unions that baseline with whatever extra namespace
+ * prefixes the source root declared (`doc.rootNamespaces`, captured by the
+ * parser) — the baseline wins on the prefixes Atlas's own serializer
+ * depends on (so e.g. `xmlns:w` always resolves to the wordprocessingml
+ * URI regardless of what a source document did), while any additional,
+ * unrecognized prefix the source declared — most relevantly one used only
+ * by unknown-node passthrough content this serializer doesn't otherwise
+ * understand — survives instead of being silently dropped. Likewise
+ * `mc:Ignorable` unions the baseline token list with the source's.
+ */
+function buildDocumentAttributes(doc: Document): XmlAttributes {
+  const attributes: Record<string, string | undefined> = {
+    ...(doc.rootNamespaces !== undefined
+      ? buildNamespaceDeclarationAttributes(Object.fromEntries(doc.rootNamespaces))
+      : {}),
+    ...buildNamespaceDeclarationAttributes(STANDARD_NAMESPACE_URIS),
+  }
+  attributes['@_mc:Ignorable'] = mergeIgnorableTokens(BASELINE_MC_IGNORABLE, doc.mcIgnorable)
   return attributes
 }
 
