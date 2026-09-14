@@ -101,7 +101,7 @@ describe('App — CSV export for csv/tsv files (UX-12)', () => {
     render(<App />);
     mockOpenTextFile('/abs/data.csv', 'name,age\nAda,36');
     await openViaToolbar();
-    await waitFor(() => expect(window.electronAPI!.openFileByPath).toHaveBeenCalledWith('/abs/data.csv'));
+    await waitFor(() => expect(toolbarFilenameText()).toBe('data.csv'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
     fireEvent.click(screen.getByRole('button', { name: 'Export to CSV' }));
@@ -116,7 +116,7 @@ describe('App — CSV export for csv/tsv files (UX-12)', () => {
     render(<App />);
     mockOpenTextFile('/abs/data.tsv', 'name\tage\nAda\t36');
     await openViaToolbar();
-    await waitFor(() => expect(window.electronAPI!.openFileByPath).toHaveBeenCalledWith('/abs/data.tsv'));
+    await waitFor(() => expect(toolbarFilenameText()).toBe('data.tsv'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
     fireEvent.click(screen.getByRole('button', { name: 'Export to CSV' }));
