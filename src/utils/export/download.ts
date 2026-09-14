@@ -72,7 +72,11 @@ export async function saveBinaryOutput(
   mimeType: string,
   filters?: readonly SaveFilter[],
 ): Promise<void> {
-  const bytes = content instanceof Uint8Array ? content : new Uint8Array(content);
+  // Always copy into a fresh, plain-`ArrayBuffer`-backed view: `content` may
+  // already be a `Uint8Array` typed over a general `ArrayBufferLike` (which
+  // also admits `SharedArrayBuffer`), and `Blob`'s `BlobPart` type only
+  // accepts a view backed by a concrete `ArrayBuffer`.
+  const bytes: Uint8Array<ArrayBuffer> = new Uint8Array(content);
   const electronAPI = window.electronAPI;
   if (electronAPI?.saveBinaryFile) {
     const result = await electronAPI.saveBinaryFile({

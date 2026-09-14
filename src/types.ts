@@ -1,6 +1,7 @@
 export type Theme = 'light' | 'dark' | 'sepia' | 'nord' | 'dracula';
 export type ViewMode = 'preview' | 'editor' | 'split';
-export type ExportFormat = 'html' | 'pdf' | 'docx' | 'md';
+// UX-12 — 'csv' added for spreadsheet/csv/tsv's real delimited-text export.
+export type ExportFormat = 'html' | 'pdf' | 'docx' | 'md' | 'csv';
 
 export interface ThemeMeta {
   id: Theme;
