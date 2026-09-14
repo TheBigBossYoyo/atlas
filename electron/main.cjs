@@ -251,7 +251,7 @@ function applyContentSecurityPolicy(win) {
 function isAllowedExternalScheme(urlString) {
   try {
     const { protocol } = new URL(urlString);
-    return protocol === 'http:' || protocol === 'https:';
+    return protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:';
   } catch {
     return false;
   }
