@@ -89,11 +89,17 @@ function toNumeric(value: Value): number | { readonly code: string } {
 /** A minimal recursive-descent parser/evaluator over the token stream produced by `tokenize`. */
 class FormulaParser {
   private position = 0
+  private readonly tokens: ReadonlyArray<Token>
+  private readonly lookup: CellLookup
 
-  constructor(
-    private readonly tokens: ReadonlyArray<Token>,
-    private readonly lookup: CellLookup,
-  ) {}
+  // Explicit fields + assignment (not TS constructor-parameter-property
+  // shorthand): this project's `erasableSyntaxOnly` tsconfig setting forbids
+  // that shorthand since it requires emitting real field-assignment code
+  // rather than being erasable at the type layer alone.
+  constructor(tokens: ReadonlyArray<Token>, lookup: CellLookup) {
+    this.tokens = tokens
+    this.lookup = lookup
+  }
 
   private peek(): Token | undefined {
     return this.tokens[this.position]
