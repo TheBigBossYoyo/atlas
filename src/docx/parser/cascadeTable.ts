@@ -160,7 +160,15 @@ export function resolveTableCellStyle(
   }
 }
 
-/** A band size must be a positive integer; anything else falls back to Word's default of 1. */
+/**
+ * A band size must be a positive integer; anything else (including a
+ * missing value) falls back to Word's default of 1. An explicit `0` is
+ * NOT normalized here — per MS-OI29500 §2.1.251, `w:tblStyleRowBandSize`/
+ * `w:tblStyleColBandSize` of exactly 0 is a documented explicit opt-out
+ * ("no banding in this dimension"), distinct from the field being absent
+ * (which defaults to 1, alternating every row/column). Callers must check
+ * for `=== 0` before calling this so that case is handled separately.
+ */
 function normalizeBandSize(value: number | undefined): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 1
 }
@@ -230,16 +238,21 @@ function resolveActiveConditionalTypes(
   const isFirstCol = context.columnStart === 0
   const isLastCol = context.columnStart + context.gridSpan >= context.columnCount
 
-  const rowBandSize = normalizeBandSize(resolvedTableProps?.rowBandSize)
-  const colBandSize = normalizeBandSize(resolvedTableProps?.colBandSize)
+  // A band size of exactly 0 is an explicit "no banding" opt-out
+  // (MS-OI29500 2.1.251), distinct from an unset band size (defaults to 1
+  // via normalizeBandSize). Check the raw value before normalizing.
+  const rowBandingActive = bandRowsOn && resolvedTableProps?.rowBandSize !== 0
+  const colBandingActive = bandColsOn && resolvedTableProps?.colBandSize !== 0
 
   // Row banding first, then column banding — column banding wins ties
   // (Word's actual behavior; see this function's doc comment).
-  if (bandRowsOn) {
+  if (rowBandingActive) {
+    const rowBandSize = normalizeBandSize(resolvedTableProps?.rowBandSize)
     const stripeIndex = Math.floor(context.rowIndex / rowBandSize)
     active.push(stripeIndex % 2 === 0 ? 'band1Horz' : 'band2Horz')
   }
-  if (bandColsOn) {
+  if (colBandingActive) {
+    const colBandSize = normalizeBandSize(resolvedTableProps?.colBandSize)
     const stripeIndex = Math.floor(context.columnStart / colBandSize)
     active.push(stripeIndex % 2 === 0 ? 'band1Vert' : 'band2Vert')
   }
