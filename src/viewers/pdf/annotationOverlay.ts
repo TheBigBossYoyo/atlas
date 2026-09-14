@@ -59,11 +59,18 @@ function createInternalLinkElement(
       (id: string) => pdfDoc.getDestination(id),
       (ref: PdfRef) => pdfDoc.getPageIndex(ref),
       annotation.dest ?? null,
-    ).then((pageNumber) => {
-      if (pageNumber !== null) {
-        onInternalNavigate(pageNumber)
-      }
-    })
+    )
+      .then((pageNumber) => {
+        if (pageNumber !== null) {
+          onInternalNavigate(pageNumber)
+        }
+      })
+      .catch((err: unknown) => {
+        // A malformed/dangling destination (e.g. a ref pointing at a page
+        // that doesn't exist) must not surface as an unhandled promise
+        // rejection — just leave the click a no-op.
+        console.error('Failed to resolve internal PDF link destination', err)
+      })
   })
   return anchor
 }
