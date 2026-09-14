@@ -165,6 +165,7 @@ describe('DocxViewer editor', () => {
       getPathForFile: vi.fn(),
       registerDroppedPath: vi.fn().mockResolvedValue({ ok: true }),
       requestOpenRecent: vi.fn().mockResolvedValue({ ok: true }),
+      revealInFolder: vi.fn().mockResolvedValue({ ok: true }),
       // Overridden per-test via `window.electronAPI!.image!.pick = ...` (see
       // the P1.6/DXE-01 image-insert test below), so it must exist here.
       image: { pick: vi.fn() },

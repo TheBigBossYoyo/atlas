@@ -10,6 +10,7 @@ const { decodeTextBuffer } = require('./lib/textDecoding.cjs');
 const { buildContentSecurityPolicy } = require('./lib/csp.cjs');
 const { logToFile } = require('./lib/crashLog.cjs');
 const { FileTooLargeError, assertFileSizeAllowed } = require('./lib/fileSizeGuard.cjs');
+const { EXTENSIONS: MANIFEST_EXTENSIONS } = require('./lib/extensionManifest.generated.cjs');
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -119,17 +120,14 @@ function logMainEvent(level, message, error) {
 
 // ---- File path helpers ---- //
 
-const KNOWN_EXTENSIONS = new Set([
-  'md','markdown','mdx','mkd',
-  'docx','xlsx','xlsm','xlsb','pptx','pptm',
-  'pdf','csv','tsv','tab',
-  'odt','ods','odp','rtf','txt','log',
-  'js','jsx','ts','tsx','mjs','cjs',
-  'py','rb','go','rs','java','kt','swift',
-  'c','h','cpp','hpp','cs','php',
-  'json','yaml','yml','toml','xml','html','css','scss',
-  'sql','sh','bat','ps1',
-]);
+// P2.2/ELEC-05/ELEC-15/LOAD-03/LOAD-12 — derived from the single canonical
+// manifest (src/formats/extensionManifest.ts) via
+// scripts/generate-extension-manifest.mjs, instead of a hand-maintained
+// literal that used to disagree with both detect.ts's EXTENSION_MAP and
+// electron-builder.yml's fileAssociations (e.g. `.mdown`/`.ini` were
+// registered Windows file associations that this set didn't recognize, so
+// double-clicking them silently failed).
+const KNOWN_EXTENSIONS = new Set(MANIFEST_EXTENSIONS);
 
 function extractFilePath(argv) {
   // In production, argv[0] is the exe, argv[1] might be the file
@@ -489,20 +487,7 @@ ipcMain.handle('dialog:openFileBinary', async (event) => {
   const result = await dialog.showOpenDialog(win || undefined, {
     properties: ['openFile'],
     filters: [
-      {
-        name: 'Supported Files',
-        extensions: [
-          'md','markdown','mdx','mkd',
-          'docx','xlsx','xlsm','xlsb','pptx','pptm',
-          'pdf','csv','tsv','tab',
-          'odt','ods','odp','rtf','txt','log',
-          'js','jsx','ts','tsx','mjs','cjs',
-          'py','rb','go','rs','java','kt','swift',
-          'c','h','cpp','hpp','cs','php',
-          'json','yaml','yml','toml','xml','html','css','scss',
-          'sql','sh','bat','ps1',
-        ],
-      },
+      { name: 'Supported Files', extensions: MANIFEST_EXTENSIONS },
       { name: 'All Files', extensions: ['*'] },
     ],
   });
@@ -698,6 +683,12 @@ ipcMain.handle('spellcheck:set-languages', (_event, languages) => {
   }
 });
 
+// ELEC-20/P4.10 — inserted images are decoded and held in memory by the
+// DOCX editor, so cap them well below the general file-read ceiling
+// (fileSizeGuard's 200 MiB default) rather than letting someone insert a
+// multi-hundred-megabyte "image" and hang the renderer.
+const IMAGE_PICK_MAX_BYTES = 25 * 1024 * 1024; // 25 MiB
+
 ipcMain.handle('image:pick', async (event) => {
   if (!isFromMainFrame(event)) return { cancelled: true };
   if (!mainWindow || mainWindow.isDestroyed()) return { cancelled: true };
@@ -713,6 +704,16 @@ ipcMain.handle('image:pick', async (event) => {
       return { cancelled: true };
     }
     const filePath = result.filePaths[0];
+
+    try {
+      assertFileSizeAllowed(filePath, IMAGE_PICK_MAX_BYTES);
+    } catch (err) {
+      if (err instanceof FileTooLargeError) {
+        return { cancelled: true, error: err.message };
+      }
+      throw err;
+    }
+
     const buffer = fs.readFileSync(filePath);
     const ext = path.extname(filePath).slice(1).toLowerCase();
     const mime =
@@ -726,8 +727,24 @@ ipcMain.handle('image:pick', async (event) => {
       suggestedName: path.basename(filePath),
     };
   } catch (err) {
-    console.error('image:pick failed', err);
+    logMainEvent('ERROR', 'image:pick failed', err);
     return { cancelled: true, error: String(err) };
+  }
+});
+
+// P2.11/LOAD-18 — lets UnknownViewer's "Reveal in folder" action work for a
+// file Atlas couldn't otherwise open. Reuses the same path allowlist as
+// every read/write handler so it can only reveal a path this window is
+// already vouched for, not an arbitrary renderer-supplied string.
+ipcMain.handle('shell:reveal-in-folder', (event, filePath) => {
+  if (!isFromMainFrame(event)) return { ok: false };
+  if (typeof filePath !== 'string' || !pathAllowlist.has(filePath)) return { ok: false };
+  try {
+    shell.showItemInFolder(filePath);
+    return { ok: true };
+  } catch (err) {
+    logMainEvent('ERROR', 'shell:reveal-in-folder failed', err);
+    return { ok: false };
   }
 });
 

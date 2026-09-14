@@ -19,6 +19,7 @@ win:
   icon: build/icon.ico
   signAndEditExecutable: false
   fileAssociations:
+    # BEGIN GENERATED FILE ASSOCIATIONS — scripts/generate-extension-manifest.mjs (source: src/formats/extensionManifest.ts). Do not edit by hand; edit the manifest and run `npm run generate:extensions`.
     - ext: md
       name: Markdown Document
       description: Markdown Document
@@ -35,162 +36,355 @@ win:
       name: Markdown Document
       description: Markdown Document
       role: Editor
+    - ext: mdx
+      name: MDX Document
+      description: Markdown Document with JSX
+      role: Editor
     - ext: docx
       name: Word Document
       description: Word Document
       role: Editor
-    - ext: rtf
-      name: Rich Text Document
-      description: Rich Text Document
+    - ext: docm
+      name: Word Macro-Enabled Document
+      description: Word Macro-Enabled Document
       role: Editor
-    - ext: odt
-      name: OpenDocument Text
-      description: OpenDocument Text Document
+    - ext: dotx
+      name: Word Template
+      description: Word Template
+      role: Editor
+    - ext: dotm
+      name: Word Macro-Enabled Template
+      description: Word Macro-Enabled Template
       role: Editor
     - ext: xlsx
       name: Excel Spreadsheet
       description: Excel Spreadsheet
-      role: Editor
+      role: Viewer
     - ext: xlsm
       name: Excel Macro-Enabled Spreadsheet
       description: Excel Macro-Enabled Spreadsheet
-      role: Editor
-    - ext: ods
-      name: OpenDocument Spreadsheet
-      description: OpenDocument Spreadsheet
-      role: Editor
-    - ext: csv
-      name: Comma-Separated Values
-      description: Comma-Separated Values File
-      role: Editor
-    - ext: tsv
-      name: Tab-Separated Values
-      description: Tab-Separated Values File
-      role: Editor
+      role: Viewer
+    - ext: xlsb
+      name: Excel Binary Spreadsheet
+      description: Excel Binary Spreadsheet
+      role: Viewer
+    - ext: xltx
+      name: Excel Template
+      description: Excel Template
+      role: Viewer
+    - ext: xltm
+      name: Excel Macro-Enabled Template
+      description: Excel Macro-Enabled Template
+      role: Viewer
     - ext: pptx
       name: PowerPoint Presentation
       description: PowerPoint Presentation
-      role: Editor
-    - ext: odp
-      name: OpenDocument Presentation
-      description: OpenDocument Presentation
-      role: Editor
+      role: Viewer
+    - ext: pptm
+      name: PowerPoint Macro-Enabled Presentation
+      description: PowerPoint Macro-Enabled Presentation
+      role: Viewer
+    - ext: potx
+      name: PowerPoint Template
+      description: PowerPoint Template
+      role: Viewer
+    - ext: potm
+      name: PowerPoint Macro-Enabled Template
+      description: PowerPoint Macro-Enabled Template
+      role: Viewer
+    - ext: ppsx
+      name: PowerPoint Slide Show
+      description: PowerPoint Slide Show
+      role: Viewer
+    - ext: ppsm
+      name: PowerPoint Macro-Enabled Slide Show
+      description: PowerPoint Macro-Enabled Slide Show
+      role: Viewer
     - ext: pdf
       name: PDF Document
       description: PDF Document
-      role: Editor
+      role: Viewer
+    - ext: csv
+      name: Comma-Separated Values
+      description: Comma-Separated Values File
+      role: Viewer
+    - ext: tsv
+      name: Tab-Separated Values
+      description: Tab-Separated Values File
+      role: Viewer
+    - ext: tab
+      name: Tab-Separated Values
+      description: Tab-Separated Values File
+      role: Viewer
     - ext: txt
       name: Plain Text
       description: Plain Text
-      role: Editor
+      role: Viewer
     - ext: log
       name: Plain Text
       description: Plain Text Log
-      role: Editor
-    - ext: json
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: yaml
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: yml
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: toml
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: ini
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: js
-      name: Source Code
-      description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: odt
+      name: OpenDocument Text
+      description: OpenDocument Text Document
+      role: Viewer
+    - ext: ods
+      name: OpenDocument Spreadsheet
+      description: OpenDocument Spreadsheet
+      role: Viewer
+    - ext: odp
+      name: OpenDocument Presentation
+      description: OpenDocument Presentation
+      role: Viewer
+    - ext: rtf
+      name: Rich Text Document
+      description: Rich Text Document
+      role: Viewer
     - ext: ts
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
     - ext: tsx
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: js
+      name: Source Code
+      description: Source Code
+      role: Viewer
     - ext: jsx
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: mjs
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: cjs
+      name: Source Code
+      description: Source Code
+      role: Viewer
     - ext: py
       name: Source Code
       description: Source Code
-      role: Editor
-    - ext: rs
+      role: Viewer
+    - ext: pyw
       name: Source Code
       description: Source Code
-      role: Editor
-    - ext: go
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: java
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: c
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: cpp
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: h
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: hpp
-      name: Source Code
-      description: Source Code
-      role: Editor
-    - ext: cs
-      name: Source Code
-      description: Source Code
-      role: Editor
+      role: Viewer
     - ext: rb
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: go
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: rs
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: java
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: kt
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: kts
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: swift
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: c
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: h
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: cpp
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: hpp
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: cc
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: cs
+      name: Source Code
+      description: Source Code
+      role: Viewer
     - ext: php
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: pl
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: lua
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: r
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: scala
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: clj
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: ex
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: exs
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: erl
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: hs
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: ml
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: dart
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: vue
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: svelte
+      name: Source Code
+      description: Source Code
+      role: Viewer
     - ext: sh
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: bash
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: zsh
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: fish
+      name: Source Code
+      description: Source Code
+      role: Viewer
     - ext: ps1
       name: Source Code
       description: Source Code
-      role: Editor
-    - ext: sql
+      role: Viewer
+    - ext: bat
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: cmd
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: json
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: jsonc
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: yaml
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: yml
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: toml
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: xml
+      name: Source Code
+      description: Source Code
+      role: Viewer
     - ext: html
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: htm
+      name: Source Code
+      description: Source Code
+      role: Viewer
     - ext: css
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
     - ext: scss
       name: Source Code
       description: Source Code
-      role: Editor
+      role: Viewer
+    - ext: sass
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: less
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: sql
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: graphql
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: proto
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: dockerfile
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: ini
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: cfg
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    - ext: conf
+      name: Source Code
+      description: Source Code
+      role: Viewer
+    # END GENERATED FILE ASSOCIATIONS
 
 nsis:
   oneClick: false

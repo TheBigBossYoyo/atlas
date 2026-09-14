@@ -46,6 +46,18 @@ function buildElectronAPI(overrides: Partial<typeof window.electronAPI> = {}): t
     openFileBinary: vi.fn().mockResolvedValue({ canceled: true, path: '', buffer: new ArrayBuffer(0) }),
     readBinaryByPath: vi.fn().mockResolvedValue({ path: '', buffer: new ArrayBuffer(0) }),
     onFileOpenedPath: vi.fn().mockReturnValue(() => {}),
+    getPathForFile: vi.fn(),
+    registerDroppedPath: vi.fn().mockResolvedValue({ ok: true }),
+    requestOpenRecent: vi.fn().mockResolvedValue({ ok: true }),
+    revealInFolder: vi.fn().mockResolvedValue({ ok: true }),
+    image: { pick: vi.fn() },
+    spellcheck: {
+      onContextMenu: vi.fn().mockReturnValue(() => {}),
+      replaceMisspelling: vi.fn(),
+      addWord: vi.fn(),
+      getLanguages: vi.fn().mockResolvedValue({ available: [], enabled: [] }),
+      setLanguages: vi.fn().mockResolvedValue({ ok: true }),
+    },
     ...overrides,
   } as typeof window.electronAPI;
 }
@@ -177,17 +189,14 @@ describe('useFileHandler', () => {
 
   // 6. openDialog — success → routes through loadFromPath, file set
   it('openDialog() success routes through loadFromPath and sets file', async () => {
+    const openFileByPath = vi.fn();
     window.electronAPI = buildElectronAPI({
       openFileBinary: vi.fn().mockResolvedValue({
         canceled: false,
         path: '/abs/report.md',
         buffer: makeTextBuffer('# Report'),
       }),
-      openFileByPath: vi.fn().mockResolvedValue({
-        content: '# Report',
-        name: 'report.md',
-        path: '/abs/report.md',
-      }),
+      openFileByPath,
     });
 
     const { result } = renderFileHandler();
@@ -196,10 +205,150 @@ describe('useFileHandler', () => {
       await result.current.openDialog();
     });
 
-    expect(window.electronAPI!.openFileByPath).toHaveBeenCalledWith('/abs/report.md');
     expect(result.current.file).toMatchObject({
       kind: 'text',
       format: 'markdown',
+      content: '# Report',
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // P4.10/LOAD-13 — openDialog's prefetched buffer skips the second read
+  // ---------------------------------------------------------------------------
+
+  it('P4.10/LOAD-13: openDialog() does not re-read the file — no second IPC call for a text-class format', async () => {
+    const openFileByPath = vi.fn();
+    window.electronAPI = buildElectronAPI({
+      openFileBinary: vi.fn().mockResolvedValue({
+        canceled: false,
+        path: '/abs/report.md',
+        buffer: makeTextBuffer('# Report'),
+      }),
+      openFileByPath,
+    });
+
+    const { result } = renderFileHandler();
+
+    await act(async () => {
+      await result.current.openDialog();
+    });
+
+    expect(openFileByPath).not.toHaveBeenCalled();
+    expect(result.current.file).toMatchObject({ kind: 'text', format: 'markdown', content: '# Report' });
+  });
+
+  it('P4.10/LOAD-13: openDialog() does not re-read the file — no second IPC call for a binary-class format', async () => {
+    const readBinaryByPath = vi.fn();
+    const buf = makePdfBuffer();
+    window.electronAPI = buildElectronAPI({
+      openFileBinary: vi.fn().mockResolvedValue({ canceled: false, path: '/abs/doc.pdf', buffer: buf }),
+      readBinaryByPath,
+    });
+
+    const { result } = renderFileHandler();
+
+    await act(async () => {
+      await result.current.openDialog();
+    });
+
+    expect(readBinaryByPath).not.toHaveBeenCalled();
+    expect(result.current.file).toMatchObject({ kind: 'binary', format: 'pdf', content: buf });
+  });
+
+  it('P4.10/LOAD-13: loadFromPath still reads via IPC when no buffer is prefetched (drag-drop/recent/OS-open paths)', async () => {
+    const openFileByPath = vi.fn().mockResolvedValue({ content: '# Hi', name: 'a.md', path: '/abs/a.md' });
+    window.electronAPI = buildElectronAPI({ openFileByPath });
+
+    const { result } = renderFileHandler();
+
+    await act(async () => {
+      await result.current.loadFromPath('/abs/a.md');
+    });
+
+    expect(openFileByPath).toHaveBeenCalledWith('/abs/a.md');
+    expect(result.current.file).toMatchObject({ kind: 'text', format: 'markdown', content: '# Hi' });
+  });
+
+  // ---------------------------------------------------------------------------
+  // P2.14/LOAD-04 — magic-byte verification on the fast path
+  // ---------------------------------------------------------------------------
+
+  describe('P2.14/LOAD-04: magic-byte verification on the recognized-extension fast path', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('opens normally when the magic bytes agree with the extension', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm');
+      window.electronAPI = buildElectronAPI({
+        readBinaryByPath: vi.fn().mockResolvedValue({ path: '/abs/doc.pdf', buffer: makePdfBuffer() }),
+      });
+
+      const { result } = renderFileHandler();
+      await act(async () => {
+        await result.current.loadFromPath('/abs/doc.pdf');
+      });
+
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(result.current.file).toMatchObject({ kind: 'binary', format: 'pdf' });
+    });
+
+    it('prompts and proceeds when the user confirms a mismatched file', async () => {
+      // .docx extension, but the bytes are actually a PDF.
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      window.electronAPI = buildElectronAPI({
+        readBinaryByPath: vi.fn().mockResolvedValue({ path: '/abs/fake.docx', buffer: makePdfBuffer() }),
+      });
+
+      const { result } = renderFileHandler();
+      await act(async () => {
+        await result.current.loadFromPath('/abs/fake.docx');
+      });
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/doesn't look like a valid/i);
+      expect(result.current.file).toMatchObject({ kind: 'binary', format: 'docx' });
+    });
+
+    it('aborts silently when the user declines a mismatched file', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      window.electronAPI = buildElectronAPI({
+        readBinaryByPath: vi.fn().mockResolvedValue({ path: '/abs/fake.docx', buffer: makePdfBuffer() }),
+      });
+
+      const { result } = renderFileHandler();
+      await act(async () => {
+        await result.current.loadFromPath('/abs/fake.docx');
+      });
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(result.current.file).toBeNull();
+      expect(result.current.error).toBeNull();
+      expect(result.current.loading).toBe(false);
+    });
+
+    it('still prompts for a ZIP-family mismatch where magic is confidently a different supported binary format', async () => {
+      // .pdf extension, but the bytes are actually a ZIP-based xlsx — still
+      // a real mismatch worth confirming.
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const zipXlsxBuffer = (() => {
+        const marker = new TextEncoder().encode('xl/workbook.xml');
+        const bytes = new Uint8Array(4 + marker.length);
+        bytes.set([0x50, 0x4b, 0x03, 0x04], 0);
+        bytes.set(marker, 4);
+        return bytes.buffer;
+      })();
+      window.electronAPI = buildElectronAPI({
+        readBinaryByPath: vi.fn().mockResolvedValue({ path: '/abs/report.pdf', buffer: zipXlsxBuffer }),
+      });
+
+      const { result } = renderFileHandler();
+      await act(async () => {
+        await result.current.loadFromPath('/abs/report.pdf');
+      });
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      expect(result.current.file).toMatchObject({ kind: 'binary', format: 'pdf' });
     });
   });
 
@@ -477,5 +626,43 @@ describe('useFileHandler', () => {
     });
 
     expect(result.current.error).toMatch(/desktop app/i);
+  });
+
+  // ---------------------------------------------------------------------------
+  // P2.11/LOAD-10 — extensionless text sniff
+  // ---------------------------------------------------------------------------
+
+  describe('P2.11/LOAD-10: extensionless plain-text sniff', () => {
+    it('routes an extensionless plain-text file (e.g. README) to the text viewer', async () => {
+      const buffer = makeTextBuffer('This is a README with no extension.\n');
+      window.electronAPI = buildElectronAPI({
+        readBinaryByPath: vi.fn().mockResolvedValue({ path: '/abs/README', buffer }),
+      });
+
+      const { result } = renderFileHandler();
+      await act(async () => {
+        await result.current.loadFromPath('/abs/README');
+      });
+
+      expect(result.current.file).toMatchObject({
+        kind: 'text',
+        format: 'text',
+        content: 'This is a README with no extension.\n',
+      });
+    });
+
+    it('keeps a genuinely unrecognizable extensionless binary as unknown/binary', async () => {
+      const bytes = new Uint8Array([0x00, 0x01, 0x02, 0x03, 0xff, 0xfe]);
+      window.electronAPI = buildElectronAPI({
+        readBinaryByPath: vi.fn().mockResolvedValue({ path: '/abs/mystery', buffer: bytes.buffer }),
+      });
+
+      const { result } = renderFileHandler();
+      await act(async () => {
+        await result.current.loadFromPath('/abs/mystery');
+      });
+
+      expect(result.current.file).toMatchObject({ kind: 'binary', format: 'unknown' });
+    });
   });
 });

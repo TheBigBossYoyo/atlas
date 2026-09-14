@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { LoadedFile, FormatId } from '../formats/types';
-import { detectByExtension, detectByMagic, detectFormat } from '../formats/detect';
+import { detectByExtension, detectByMagic, looksLikeText } from '../formats/detect';
 import { decodeTextBuffer } from '../utils/textDecoding';
 import type { RecentFile } from '../types';
 
@@ -18,6 +18,55 @@ const BINARY_CLASS_FORMATS = new Set<FormatId>([
 
 const BROWSER_MODE_ERROR =
   'This feature requires the Atlas desktop app — file access is unavailable in a plain browser tab.';
+
+// P2.14/LOAD-04 — human-readable labels for the "extension vs. actual
+// contents disagree" confirm prompt below. Falls back to the bare FormatId
+// for anything not worth a friendlier label.
+const FORMAT_LABELS: Partial<Record<FormatId, string>> = {
+  docx: 'Word (.docx)',
+  xlsx: 'Excel (.xlsx)',
+  pptx: 'PowerPoint (.pptx)',
+  pdf: 'PDF (.pdf)',
+  odt: 'OpenDocument Text (.odt)',
+  ods: 'OpenDocument Spreadsheet (.ods)',
+  odp: 'OpenDocument Presentation (.odp)',
+  rtf: 'Rich Text (.rtf)',
+};
+
+function formatLabel(format: FormatId): string {
+  return FORMAT_LABELS[format] ?? format;
+}
+
+/**
+ * P2.14/LOAD-04 — the recognized-extension "fast path" used to trust the
+ * extension blindly and hand the bytes straight to a format-specific
+ * parser, which could throw an unfriendly low-level error on a renamed or
+ * corrupted file. Verifies the magic bytes actually agree with the
+ * extension for binary-class formats; on a confident mismatch, asks before
+ * proceeding instead of silently mis-parsing (or failing outright).
+ *
+ * Returns `true` when the load should proceed (no mismatch, or the user
+ * chose "open anyway"), `false` when it should be silently aborted.
+ */
+function confirmMagicMatchesExtension(absPath: string, extFormat: FormatId, buffer: ArrayBuffer): boolean {
+  const magicFormat = detectByMagic(buffer);
+
+  // No confident magic result, or it agrees with the extension — nothing to warn about.
+  if (magicFormat === 'unknown' || magicFormat === extFormat) {
+    return true;
+  }
+
+  if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+    // No way to ask the user — fail safe by refusing rather than silently mis-parsing.
+    return false;
+  }
+
+  const name = absPath.split(/[\\/]/).pop() ?? absPath;
+  return window.confirm(
+    `"${name}" doesn't look like a valid ${formatLabel(extFormat)} file — its contents look like ` +
+      `${formatLabel(magicFormat)} instead. Open it anyway?`,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -38,7 +87,12 @@ export interface FileHandlerState {
 
 export interface FileHandlerActions {
   openDialog: () => Promise<void>;
-  loadFromPath: (absPath: string) => Promise<void>;
+  /**
+   * @param prefetchedBuffer P4.10/LOAD-13 — when the caller already has the
+   * file's bytes (e.g. from the Open dialog's own read), pass them here to
+   * skip a redundant second disk read/IPC round trip.
+   */
+  loadFromPath: (absPath: string, prefetchedBuffer?: ArrayBuffer) => Promise<void>;
   clear: () => void;
   /** Dismiss the current error without discarding the currently-open file (P2.3). */
   clearError: () => void;
@@ -98,7 +152,7 @@ export function useFileHandler({
   // Core loader
   // -------------------------------------------------------------------------
 
-  const loadFromPath = useCallback(async (absPath: string): Promise<void> => {
+  const loadFromPath = useCallback(async (absPath: string, prefetchedBuffer?: ArrayBuffer): Promise<void> => {
     // P2.12/SHELL-20/ELEC-19/QA-26 — running outside Electron (e.g. `npm run
     // dev` in a plain browser tab) must fail with a friendly, surfaced error
     // instead of throwing on a non-null assertion.
@@ -129,46 +183,76 @@ export function useFileHandler({
       let loaded: LoadedFile;
 
       if (TEXT_CLASS_FORMATS.has(extFormat)) {
-        const data = await electronAPI.openFileByPath(absPath);
-        if (!data) throw new Error(`Failed to read file: ${absPath}`);
-        loaded = {
-          kind: 'text',
-          content: data.content,
-          path: absPath,
-          format: extFormat,
-        };
+        if (prefetchedBuffer) {
+          // P4.10/LOAD-13 — a dialog-based open already has the bytes (the
+          // Open dialog's own IPC handler reads the file to return it
+          // alongside the chosen path); decode locally instead of asking
+          // main to read the same file from disk a second time.
+          loaded = {
+            kind: 'text',
+            content: decodeTextBuffer(prefetchedBuffer),
+            path: absPath,
+            format: extFormat,
+          };
+        } else {
+          const data = await electronAPI.openFileByPath(absPath);
+          if (!data) throw new Error(`Failed to read file: ${absPath}`);
+          loaded = {
+            kind: 'text',
+            content: data.content,
+            path: absPath,
+            format: extFormat,
+          };
+        }
       } else if (BINARY_CLASS_FORMATS.has(extFormat)) {
-        const data = await electronAPI.readBinaryByPath(absPath);
+        const buffer = prefetchedBuffer ?? (await electronAPI.readBinaryByPath(absPath)).buffer;
+
+        // A newer load may have started while we were awaiting the read —
+        // don't bother prompting for a load the user has already superseded.
+        if (requestIdRef.current !== requestId) {
+          return;
+        }
+
+        if (!confirmMagicMatchesExtension(absPath, extFormat, buffer)) {
+          return;
+        }
+
         loaded = {
           kind: 'binary',
-          content: data.buffer,
+          content: buffer,
           path: absPath,
           format: extFormat,
         };
       } else {
-        // Unknown extension — read binary then use magic-byte detection
-        const data = await electronAPI.readBinaryByPath(absPath);
-        const magicFormat = detectByMagic(data.buffer);
-        const finalFormat = detectFormat(absPath, data.buffer);
+        // Unknown extension — read the bytes, then try magic-byte detection
+        // and finally a plain-text sniff before giving up as genuinely
+        // unrecognized.
+        const buffer = prefetchedBuffer ?? (await electronAPI.readBinaryByPath(absPath)).buffer;
+        const magicFormat = detectByMagic(buffer);
 
-        if (TEXT_CLASS_FORMATS.has(finalFormat)) {
-          // Sniffs a BOM and falls back to Windows-1252 for non-UTF-8
-          // content instead of blindly UTF-8-decoding into U+FFFD mojibake
-          // (LOAD-05/DAT-03/RUN-05).
-          const content = decodeTextBuffer(data.buffer);
+        if (magicFormat !== 'unknown') {
+          loaded = {
+            kind: 'binary',
+            content: buffer,
+            path: absPath,
+            format: magicFormat,
+          };
+        } else if (looksLikeText(buffer)) {
+          // P2.11/LOAD-10 — an extensionless plain-text file (README,
+          // LICENSE, Dockerfile, .gitignore) gets a real text viewer
+          // instead of the generic "unknown format" empty state.
           loaded = {
             kind: 'text',
-            content,
+            content: decodeTextBuffer(buffer),
             path: absPath,
-            format: finalFormat,
+            format: 'text',
           };
         } else {
           loaded = {
             kind: 'binary',
-            content: data.buffer,
+            content: buffer,
             path: absPath,
-            // finalFormat may still be 'unknown' if magic also failed
-            format: magicFormat !== 'unknown' ? magicFormat : finalFormat,
+            format: 'unknown',
           };
         }
       }
@@ -206,13 +290,46 @@ export function useFileHandler({
       setError(BROWSER_MODE_ERROR);
       return;
     }
+    const electronAPI = window.electronAPI;
 
-    // NOTE: openFileBinary() returns the buffer alongside the path, but we
-    // deliberately route through loadFromPath so all detection logic stays in
-    // one place. The second IPC read is acceptable overhead for now.
-    const result = await window.electronAPI.openFileBinary();
-    if (result.canceled) return;
-    await loadFromPath(result.path);
+    // P4.10/LOAD-13 — openFileBinary() itself performs the (potentially
+    // slow) file read; surface the same loading/error state around it that
+    // loadFromPath manages for every other open path, instead of a silent
+    // pause followed by handing an already-read buffer to loadFromPath (so
+    // detection/decoding still happens in one place, without a second IPC
+    // round trip re-reading the same file from disk).
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
+    setError(null);
+
+    let result: Awaited<ReturnType<typeof electronAPI.openFileBinary>>;
+    try {
+      result = await electronAPI.openFileBinary();
+    } catch (err) {
+      if (requestIdRef.current === requestId) {
+        setError(err instanceof Error ? err.message : String(err));
+        setLoading(false);
+      }
+      return;
+    }
+
+    // A newer request (another openDialog/loadFromPath call) started while
+    // the dialog/read was in flight — let it own the loading/error state.
+    if (requestIdRef.current !== requestId) {
+      return;
+    }
+
+    if (result.canceled) {
+      setLoading(false);
+      return;
+    }
+
+    // Hand off to loadFromPath, which manages its own loading/error/request-id
+    // lifecycle from here — including the confirmDiscardChanges guard, which
+    // can decline without ever touching loading, so reset it first rather
+    // than risk leaving the indicator stuck on.
+    setLoading(false);
+    await loadFromPath(result.path, result.buffer);
   }, [loadFromPath]);
 
   // -------------------------------------------------------------------------

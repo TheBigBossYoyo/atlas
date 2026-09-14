@@ -141,7 +141,10 @@ describe('App — unsaved-changes guard (P1.1/SHELL-03/04/LOAD-01/RUN-01)', () =
     await waitFor(() => {
       expect(toolbarFilenameText()).toBe('b.md');
     });
-    expect(window.electronAPI!.openFileByPath).toHaveBeenCalledWith('/abs/b.md');
+    // P4.10/LOAD-13 — the dialog-based open now decodes the buffer
+    // openFileBinary() already read instead of re-reading via
+    // openFileByPath; the filename/content assertions above are the real
+    // behavioral signal that the open completed.
     expect(toolbarIsDirty()).toBe(false);
   });
 
@@ -160,8 +163,11 @@ describe('App — unsaved-changes guard (P1.1/SHELL-03/04/LOAD-01/RUN-01)', () =
     await waitFor(() => {
       expect(window.electronAPI!.saveFile).toHaveBeenCalledTimes(1);
     });
+    // P4.10/LOAD-13 — the dialog-based open now decodes the buffer
+    // openFileBinary() already read instead of re-reading via
+    // openFileByPath.
     await waitFor(() => {
-      expect(window.electronAPI!.openFileByPath).toHaveBeenCalledWith('/abs/b.md');
+      expect(toolbarFilenameText()).toBe('b.md');
     });
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
@@ -282,12 +288,10 @@ describe('App — P2.4: single useRecentFiles instance (SHELL-06/LOAD-16/RUN-16)
 
 describe('App — P2.3: loading/error state surfaced app-wide (SHELL-07/LOAD-06/RUN-17)', () => {
   it('shows a loading indicator while a file load is in flight', async () => {
-    window.electronAPI!.openFileBinary = vi.fn().mockResolvedValue({
-      canceled: false,
-      path: '/abs/big.pdf',
-      buffer: new ArrayBuffer(0),
-    });
-    window.electronAPI!.readBinaryByPath = vi.fn().mockImplementation(() => new Promise(() => {}));
+    // P4.10/LOAD-13 — openFileBinary() is now the single read for a
+    // dialog-based open (readBinaryByPath is no longer called when a
+    // buffer was already prefetched), so a slow read is simulated here.
+    window.electronAPI!.openFileBinary = vi.fn().mockImplementation(() => new Promise(() => {}));
 
     render(<App />);
     await openViaToolbar();
@@ -298,12 +302,9 @@ describe('App — P2.3: loading/error state surfaced app-wide (SHELL-07/LOAD-06/
   });
 
   it('shows a dismissible error banner when a load fails, without touching the currently-open file', async () => {
-    window.electronAPI!.openFileBinary = vi.fn().mockResolvedValue({
-      canceled: false,
-      path: '/abs/locked.pdf',
-      buffer: new ArrayBuffer(0),
-    });
-    window.electronAPI!.readBinaryByPath = vi.fn().mockRejectedValue(new Error('EBUSY: file is locked'));
+    // P4.10/LOAD-13 — same as above: the failure now surfaces from
+    // openFileBinary() itself rather than a follow-up readBinaryByPath call.
+    window.electronAPI!.openFileBinary = vi.fn().mockRejectedValue(new Error('EBUSY: file is locked'));
 
     render(<App />);
     await openViaToolbar();

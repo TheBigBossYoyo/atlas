@@ -11,13 +11,15 @@
   },
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/generate-extension-manifest.mjs",
     "build": "tsc -b && vite build",
+    "generate:extensions": "node scripts/generate-extension-manifest.mjs",
     "lint": "eslint src electron tests scripts",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "tsc -b && vite build && electron-builder --win",
+    "electron:build": "node scripts/generate-extension-manifest.mjs && tsc -b && vite build && electron-builder --win",
     "electron:preview": "npm run build && electron ."
   },
   "dependencies": {
