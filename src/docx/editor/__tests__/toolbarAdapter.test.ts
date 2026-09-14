@@ -126,6 +126,30 @@ describe('toolbarToCommand', () => {
     expect(command).toEqual({ kind: 'insert-table', at: pos([0], 0, 2), rows: 2, cols: 3 })
   })
 
+  it('insert-page-break builds an insert-inline command with a page BreakNode at the caret', () => {
+    const document = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('hello')]) }) as Paragraph,
+    ])
+    const command = toolbarToCommand(
+      { kind: 'insert-page-break' },
+      collapsed(pos([0], 0, 2)),
+      document,
+    )
+
+    expect(command).toEqual({
+      kind: 'insert-inline',
+      at: pos([0], 0, 2),
+      child: { kind: 'break', breakType: 'page' },
+    })
+  })
+
+  it('insert-page-break returns null when there is no selection', () => {
+    const document = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('hello')]) }) as Paragraph,
+    ])
+    expect(toolbarToCommand({ kind: 'insert-page-break' }, null, document)).toBeNull()
+  })
+
   it('insert-hyperlink is still handled by the caller (bundle-aware), not this pure mapper', () => {
     const document = createDocument([
       Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('hello')]) }) as Paragraph,

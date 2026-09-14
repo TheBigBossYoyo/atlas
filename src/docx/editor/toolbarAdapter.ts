@@ -304,8 +304,12 @@ export function toolbarToCommand(
       return null
     case 'insert-footer':
       return null
-    case 'insert-page-break':
-      return null
+    case 'insert-page-break': {
+      const focus = selection?.focus ?? selection?.anchor
+      return focus === undefined
+        ? null
+        : { kind: 'insert-inline', at: focus, child: { kind: 'break', breakType: 'page' } }
+    }
     case 'insert-comment':
       return null
     case 'set-margins':

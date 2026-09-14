@@ -58,6 +58,12 @@ function hasDrawing(document: DocxDocument): boolean {
   return collectRunChildren(document).some((child) => child.kind === 'drawing')
 }
 
+function hasPageBreak(document: DocxDocument): boolean {
+  return collectRunChildren(document).some(
+    (child) => child.kind === 'break' && child.breakType === 'page',
+  )
+}
+
 /** Types into Find, then Replace, and clicks "Replace" — a real edit via the
  * real (unmocked) find/replace/command pipeline, without needing a genuine
  * DOM selection (the mocked PageStack doesn't render real paragraph text). */
@@ -746,6 +752,68 @@ describe('DocxViewer editor', () => {
     const paragraph = savedBundle.document.sections[0].blocks[0] as { props?: { numPr?: { numId?: string } } }
     expect(paragraph.props?.numPr?.numId).toBe('1')
     expect(savedBundle.numberingPart?.nums.has('1')).toBe(true)
+  })
+
+  it('inserts a page break at the caret via the Insert tab and it survives save/undo', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    // Establishes a real, valid caret position (see the image-insert tests
+    // above for why this matters) before inserting the break there.
+    replaceFirstMatch('Hello', 'Howdy')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
+    fireEvent.click(screen.getByLabelText('Page Break'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(hasPageBreak(savedDocument)).toBe(true)
+    expect(collectText(savedDocument)).toContain('Howdy')
+  })
+
+  it('Ctrl+Z after inserting a page break removes it again', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello', 'Howdy')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
+    fireEvent.click(screen.getByLabelText('Page Break'))
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    const ctrlZ = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true })
+    fireEvent(editor, ctrlZ)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(hasPageBreak(savedDocument)).toBe(false)
+    expect(collectText(savedDocument)).toContain('Howdy')
   })
 
   // ---------------------------------------------------------------------------
