@@ -57,11 +57,19 @@ export async function buildOutlineNavItems(
   const items: NavItem[] = []
 
   for (const node of outline) {
-    const pageNumber = await resolveDestinationPage(
-      getDestination,
-      getPageIndex,
-      node.dest,
-    )
+    let pageNumber: number | null
+    try {
+      pageNumber = await resolveDestinationPage(getDestination, getPageIndex, node.dest)
+    } catch {
+      // A single malformed/dangling bookmark (a named destination that
+      // throws, or a ref pointing at a page that no longer exists — both
+      // seen in real-world, slightly-corrupted PDFs) must not abort
+      // building the rest of the outline, and must not bubble up into the
+      // document-load effect's catch block and brick loading the WHOLE
+      // document over one broken link. Treat it the same as a destination
+      // that legitimately resolved to nothing.
+      pageNumber = null
+    }
     const label = node.title.trim() || 'Untitled'
 
     items.push({

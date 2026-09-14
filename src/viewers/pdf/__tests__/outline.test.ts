@@ -118,6 +118,29 @@ describe('buildOutlineNavItems', () => {
 
     expect(scrollToPage).not.toHaveBeenCalled()
   })
+
+  it('treats a bookmark whose destination throws as unresolved instead of aborting the whole outline', async () => {
+    // A single malformed/dangling destination (seen in real-world,
+    // slightly-corrupted PDFs) must not bubble up and brick loading the
+    // rest of the document's outline — or the document itself, since this
+    // is awaited directly from the load effect.
+    const throwingGetDestination = vi.fn(async () => {
+      throw new Error('bad destination')
+    })
+    const outline: PdfOutlineNode[] = [
+      { title: 'Broken bookmark', dest: 'nonexistent', items: [] },
+      { title: 'Fine bookmark', dest: [0, 'Fit'], items: [] },
+    ]
+    const scrollToPage = vi.fn()
+
+    const items = await buildOutlineNavItems(outline, scrollToPage, throwingGetDestination, getPageIndex)
+
+    expect(items).toHaveLength(2)
+    items[0].onSelect()
+    expect(scrollToPage).not.toHaveBeenCalled()
+    items[1].onSelect()
+    expect(scrollToPage).toHaveBeenCalledWith(1)
+  })
 })
 
 describe('buildFallbackNavItems', () => {
