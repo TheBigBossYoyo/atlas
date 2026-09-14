@@ -206,4 +206,84 @@ describe('toolbarToCommand', () => {
 
     expect(command).toMatchObject({ kind: 'apply-para-format', paragraphPaths: [[0, 0], [0, 1]] })
   })
+
+  // ---------------------------------------------------------------------------
+  // Regression — a real Word document almost always already defines its own
+  // numId "1" (and often "2"). Hardcoding those for the toolbar's list
+  // toggle meant clicking "Bulleted List" on such a document silently reused
+  // whatever list style numId 1 already meant there instead of creating an
+  // actual bullet definition.
+  // ---------------------------------------------------------------------------
+
+  function documentWithNumbering(numbering: ReadonlyMap<string, NumberingDef>): Document {
+    const doc = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('One')]) }) as Paragraph,
+    ])
+    return { ...doc, numbering }
+  }
+
+  function decimalNumberingDef(numId: string): NumberingDef {
+    return {
+      numId,
+      abstractNumId: `real-doc-${numId}`,
+      levels: new Map([[0, { level: 0, format: 'decimal' }]]),
+    }
+  }
+
+  it('toggle-bullet-list does not reuse an existing non-Atlas numId "1" from the source document', () => {
+    const document = documentWithNumbering(new Map([['1', decimalNumberingDef('1')]]))
+    const command = toolbarToCommand({ kind: 'toggle-bullet-list' }, collapsed(pos([0, 0], 0, 0)), document)
+
+    expect(command).toMatchObject({ kind: 'insert-list' })
+    expect((command as { numId: number }).numId).not.toBe(1)
+  })
+
+  it('toggle-numbered-list does not collide with an existing numId "1" OR "2"', () => {
+    const document = documentWithNumbering(
+      new Map([
+        ['1', decimalNumberingDef('1')],
+        ['2', decimalNumberingDef('2')],
+      ]),
+    )
+    const command = toolbarToCommand({ kind: 'toggle-numbered-list' }, collapsed(pos([0, 0], 0, 0)), document)
+
+    expect(command).toMatchObject({ kind: 'insert-list' })
+    const numId = (command as { numId: number }).numId
+    expect(numId).not.toBe(1)
+    expect(numId).not.toBe(2)
+  })
+
+  it('reuses the same numId on repeated bullet-list toggles once one is allocated', () => {
+    const withRealNumbering = documentWithNumbering(new Map([['1', decimalNumberingDef('1')]]))
+    const first = toolbarToCommand({ kind: 'toggle-bullet-list' }, collapsed(pos([0, 0], 0, 0)), withRealNumbering)
+    const allocatedNumId = (first as { numId: number }).numId
+
+    // Simulate ensureListNumbering having registered the allocated id as an
+    // Atlas-created bullet definition, the way handleToggleList really does.
+    const withAtlasBullet = documentWithNumbering(
+      new Map([
+        ['1', decimalNumberingDef('1')],
+        [
+          String(allocatedNumId),
+          {
+            numId: String(allocatedNumId),
+            abstractNumId: `atlas-list-${allocatedNumId}`,
+            levels: new Map([[0, { level: 0, format: 'bullet' }]]),
+          },
+        ],
+      ]),
+    )
+    const second = toolbarToCommand({ kind: 'toggle-bullet-list' }, collapsed(pos([0, 0], 0, 0)), withAtlasBullet)
+
+    expect((second as { numId: number }).numId).toBe(allocatedNumId)
+  })
+
+  it('toggle-bullet-list still allocates numId 1 for a document with no existing numbering', () => {
+    const document = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('One')]) }) as Paragraph,
+    ])
+    const command = toolbarToCommand({ kind: 'toggle-bullet-list' }, collapsed(pos([0, 0], 0, 0)), document)
+
+    expect((command as { numId: number }).numId).toBe(1)
+  })
 })

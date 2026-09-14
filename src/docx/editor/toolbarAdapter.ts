@@ -63,6 +63,50 @@ function getParagraphPaths(
   return allPaths.slice(lo, hi + 1)
 }
 
+const LIST_FORMAT_BY_KIND: Readonly<Record<'bullet' | 'number', string>> = {
+  bullet: 'bullet',
+  number: 'decimal',
+}
+
+/**
+ * DXE-06/D18 — picks the `numId` to use for the toolbar's bullet/numbered
+ * list toggle. A real Word document almost always already defines numId "1"
+ * (frequently "2" as well) for its own lists — hardcoding those values here
+ * would mean clicking "Bulleted List" on such a document silently reuses
+ * whatever list style the document already assigned to numId 1 (rarely an
+ * actual bullet format) via `ensureListNumbering`'s "reuse if already
+ * defined" rule, instead of creating Atlas's own bullet definition.
+ *
+ * Reuses an Atlas-created list definition of the matching kind if one
+ * already exists in this document (identified by the `atlas-list-` prefix
+ * `ensureListNumbering` gives its own `abstractNumId`s, plus a matching
+ * level-0 format) so repeated toggles of the same kind keep converging on
+ * one shared definition; otherwise allocates one past every numId already
+ * in use, which can never collide with the source document's own numbering
+ * or with a different-kind list Atlas already created in this session.
+ */
+function pickListNumId(document: Document, kind: 'bullet' | 'number'): number {
+  const wantedFormat = LIST_FORMAT_BY_KIND[kind]
+  let maxNumId = 0
+
+  for (const [numIdStr, def] of document.numbering) {
+    const parsed = Number.parseInt(numIdStr, 10)
+    if (Number.isFinite(parsed) && parsed > maxNumId) {
+      maxNumId = parsed
+    }
+
+    if (
+      Number.isFinite(parsed) &&
+      def.abstractNumId?.startsWith('atlas-list-') === true &&
+      def.levels.get(0)?.format === wantedFormat
+    ) {
+      return parsed
+    }
+  }
+
+  return maxNumId + 1
+}
+
 function toAlignment(align: 'left' | 'center' | 'right' | 'justify'): JustifyContent {
   switch (align) {
     case 'left':
@@ -270,13 +314,13 @@ export function toolbarToCommand(
       const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
-        : { kind: 'insert-list', paragraphPaths, numId: 1, level: 0 }
+        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document, 'bullet'), level: 0 }
     }
     case 'toggle-numbered-list': {
       const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
-        : { kind: 'insert-list', paragraphPaths, numId: 2, level: 0 }
+        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document, 'number'), level: 0 }
     }
     case 'change-indent': {
       const paragraphPath = getPrimaryParagraphPath(selection)
