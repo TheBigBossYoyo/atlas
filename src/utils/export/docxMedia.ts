@@ -6,12 +6,15 @@
  * (`MarkdownRenderer` + `Mermaid.tsx`, both out of scope to touch per the
  * plan's markdown guardrails) already shows on screen.
  *
- * Both `katex` and `mermaid` are dynamically imported so this module (and the
- * cost of loading either library) is only pulled in when a document actually
- * contains math or a Mermaid fence. `katex` is a transitive dependency (via
- * `rehype-katex`, used by the live preview) rather than a direct one, but it
- * renders synchronously to a plain HTML string with no engine of its own, so
- * importing it directly for this one rasterization step is safe.
+ * Both `katex` and `mermaid` are dynamically imported so this rasterization
+ * path only runs when a document actually contains math or a Mermaid fence.
+ * `mermaid` is genuinely lazy-loaded this way (Vite code-splits it into its
+ * own chunk, per the build output). `katex` is a transitive dependency (via
+ * `rehype-katex`, used by the live preview) that's already statically
+ * bundled into the main chunk regardless — the dynamic import here doesn't
+ * additionally defer *loading* it, but it renders synchronously to a plain
+ * HTML string with no engine of its own, so importing it directly for this
+ * one rasterization step is still simple and safe.
  */
 import html2canvas from 'html2canvas-pro';
 
