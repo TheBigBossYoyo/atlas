@@ -32,6 +32,8 @@ interface ToolbarProps {
   isElectron: boolean;
   exportFormat: FormatId;
   exportMenuOpen: boolean;
+  /** UX-12 — whether a real CSV export is available for the current document. */
+  canExportCsv: boolean;
   onSelectTheme: (t: Theme) => void;
   onViewModeChange: (mode: ViewMode) => void;
   onToggleSidebar: () => void;
@@ -67,6 +69,7 @@ export function Toolbar({
   isElectron,
   exportFormat,
   exportMenuOpen,
+  canExportCsv,
   onSelectTheme,
   onViewModeChange,
   onToggleSidebar,
@@ -182,6 +185,7 @@ export function Toolbar({
           open={exportMenuOpen}
           onOpenChange={onExportMenuOpenChange}
           disabled={!hasContent}
+          canExportCsv={canExportCsv}
         />
 
         <ThemeMenu current={theme} themes={themes} onSelect={onSelectTheme} />
