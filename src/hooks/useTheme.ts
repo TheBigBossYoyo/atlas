@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { THEMES, type Theme } from '../types';
 
+const THEME_KEY = 'atlas-theme';
 const EXPLICIT_KEY = 'atlas-theme-explicit';
 
 function isTheme(value: string | null): value is Theme {
@@ -12,14 +13,33 @@ function systemTheme(): Theme {
 }
 
 function getInitialTheme(): Theme {
-  const stored = localStorage.getItem('atlas-theme');
+  const stored = localStorage.getItem(THEME_KEY);
   if (isTheme(stored)) return stored;
   return systemTheme();
 }
 
+/**
+ * Migration (wave 3 shell-polish follow-up to SHELL-25): an install that
+ * already had a persisted theme before `EXPLICIT_KEY` existed must keep
+ * behaving the way it always did — sticky across launches, never silently
+ * re-derived from a live OS change — even though a stored value alone can no
+ * longer tell us whether it came from a deliberate ThemeMenu/Ctrl+T pick or
+ * just the very first cold-start OS read. Without this, every upgraded
+ * install would start unexpectedly retheming itself on the next OS light/
+ * dark toggle, which is a bigger surprise than the smaller risk of also
+ * grandfathering a same-version install that never touched the theme picker
+ * before its first relaunch. A brand-new install (no stored theme at all
+ * yet) is unaffected and still follows the OS live until the user actually
+ * picks one.
+ */
 function hasExplicitChoice(): boolean {
   try {
-    return localStorage.getItem(EXPLICIT_KEY) === '1';
+    if (localStorage.getItem(EXPLICIT_KEY) === '1') return true;
+    if (localStorage.getItem(THEME_KEY) !== null) {
+      localStorage.setItem(EXPLICIT_KEY, '1');
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -30,11 +50,27 @@ export function useTheme() {
   // Tracks whether the user has ever explicitly picked a theme (ThemeMenu or
   // Ctrl+T) — a ref so the SHELL-25 matchMedia listener below always reads
   // the latest value without needing to re-subscribe every time it changes.
-  const explicitRef = useRef(hasExplicitChoice());
+  //
+  // Lazily initialized (`useRef(undefined)` + a render-time backfill) rather
+  // than `useRef(hasExplicitChoice())`: that argument is a plain expression,
+  // re-evaluated on EVERY render (React only uses its value on the very
+  // first one) — and `hasExplicitChoice()` is side-effecting, persisting
+  // `EXPLICIT_KEY` once it sees a stored theme. The mount effect below
+  // writes `THEME_KEY` right after the first render, so the SECOND render
+  // for any reason at all (an OS-driven theme change included) would call
+  // hasExplicitChoice() again, see the just-written THEME_KEY, and
+  // permanently mark the install "explicit" — breaking live OS-following
+  // for brand-new installs too, not just migrating existing ones. Computing
+  // it once here, only on the render that actually initializes the ref,
+  // keeps the migration's side effect from firing on unrelated re-renders.
+  const explicitRef = useRef<boolean | undefined>(undefined);
+  if (explicitRef.current === undefined) {
+    explicitRef.current = hasExplicitChoice();
+  }
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('atlas-theme', theme);
+    localStorage.setItem(THEME_KEY, theme);
     window.electronAPI?.setTheme?.(theme as never);
   }, [theme]);
 

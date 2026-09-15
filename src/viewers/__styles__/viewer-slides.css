@@ -230,6 +230,14 @@
   object-fit: contain;
 }
 
+/* S18/SLD-19 — shown briefly in the thumbnail rail while its downscaled
+   bitmap is being generated, instead of painting the full-resolution image. */
+.slide-shape__image--pending {
+  width: 100%;
+  height: 100%;
+  background: var(--bg-tertiary);
+}
+
 .slide-shape__table {
   width: 100%;
   height: 100%;

@@ -120,6 +120,80 @@ describe('useTheme — live system theme changes (SHELL-25)', () => {
     expect(second.result.current.theme).toBe('dark');
   });
 
+  it('migration: a pre-existing stored theme with no explicit flag is treated as explicit, so an OS toggle does not override it', () => {
+    // Simulates an install from before the explicit-choice flag existed:
+    // `atlas-theme` is already on disk (from ordinary persistence, not
+    // necessarily a deliberate ThemeMenu pick) but `atlas-theme-explicit`
+    // has never been written.
+    localStorage.setItem('atlas-theme', 'nord');
+    const mql = installMatchMediaMock(false);
+
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.theme).toBe('nord');
+
+    act(() => {
+      mql.setSystemDark(true);
+    });
+
+    expect(result.current.theme).toBe('nord');
+    expect(localStorage.getItem('atlas-theme-explicit')).toBe('1');
+  });
+
+  it('a brand-new install (no stored theme at all) still follows the OS live, unaffected by the migration', () => {
+    const mql = installMatchMediaMock(false);
+    const { result } = renderHook(() => useTheme());
+
+    expect(result.current.theme).toBe('light');
+
+    act(() => {
+      mql.setSystemDark(true);
+    });
+
+    expect(result.current.theme).toBe('dark');
+  });
+
+  it('regression (wave-3 shell-polish review): a brand-new install does not persist an explicit-choice flag just from a re-render', () => {
+    // The mount effect writes `atlas-theme` to localStorage right after the
+    // first render. If `hasExplicitChoice()`'s persisting side effect were
+    // re-evaluated on every render (a non-lazy `useRef(hasExplicitChoice())`
+    // initializer does this — it discards the return value after mount but
+    // still re-runs the side effect), any later re-render — including one
+    // triggered by a live OS toggle, not a user action — would wrongly and
+    // permanently mark the install as having made an explicit choice.
+    const mql = installMatchMediaMock(false)
+    const { rerender } = renderHook(() => useTheme())
+
+    // Force at least one extra render after mount, exactly as an OS-driven
+    // update or any unrelated parent re-render would.
+    act(() => {
+      mql.setSystemDark(true)
+    })
+    rerender()
+
+    expect(localStorage.getItem('atlas-theme-explicit')).toBeNull()
+  })
+
+  it('still follows further live OS toggles within the same mounted instance after several re-renders', () => {
+    // Multiple re-renders in a row (each one, pre-fix, would re-run
+    // hasExplicitChoice()'s persisting side effect) must not eventually
+    // "trip" the in-memory explicitRef either — it was set once at mount
+    // and must stay false across any number of later renders.
+    const mql = installMatchMediaMock(false)
+    const { result, rerender } = renderHook(() => useTheme())
+
+    act(() => {
+      mql.setSystemDark(true)
+    })
+    rerender()
+    rerender()
+    act(() => {
+      mql.setSystemDark(false)
+    })
+
+    expect(result.current.theme).toBe('light')
+    expect(localStorage.getItem('atlas-theme-explicit')).toBeNull()
+  })
+
   it('cleans up its matchMedia listener on unmount', () => {
     const mql = installMatchMediaMock(false);
     const { unmount } = renderHook(() => useTheme());

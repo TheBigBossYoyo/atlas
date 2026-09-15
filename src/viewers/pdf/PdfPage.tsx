@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { RenderTask } from 'pdfjs-dist'
 
 import { resolveScaleForPage } from './geometry'
@@ -142,10 +142,22 @@ function PdfPageBase({
   const displayWidth = Math.ceil(effectiveWidth * scale)
   const displayHeight = Math.ceil(effectiveHeight * scale)
 
-  const setWrapperNode = (node: HTMLDivElement | null) => {
-    wrapperRef.current = node
-    registerNode(pageNumber, node)
-  }
+  // Memoized (wave-3 shell-polish follow-up): an inline ref-callback would
+  // get a new identity every render, which React treats as "the ref
+  // changed" — it calls the old one with `null` then the new one with the
+  // node again, forcing `registerNode` to `unobserve`/`observe` this page's
+  // `IntersectionObserver` entry on every re-render even when `pageNumber`
+  // and `registerNode` haven't actually changed. `PdfPage` is already
+  // wrapped in `memo`, but that only skips whole re-renders on unchanged
+  // props — it doesn't help once a re-render does happen for an unrelated
+  // reason (e.g. a sibling page's geometry resolving).
+  const setWrapperNode = useCallback(
+    (node: HTMLDivElement | null) => {
+      wrapperRef.current = node
+      registerNode(pageNumber, node)
+    },
+    [pageNumber, registerNode],
+  )
 
   // Render (or release) this page's canvas + text layer + annotation layer.
   useEffect(() => {

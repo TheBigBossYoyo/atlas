@@ -4,10 +4,55 @@ import { FileQuestion, FileWarning, FolderOpen, Type } from 'lucide-react'
 import type { LoadedFile } from '../formats/types'
 import { isLegacyOfficeMagic, guessLegacyOfficeKind, legacyOfficeMessage } from '../formats/legacyOffice'
 import { decodeTextBuffer } from '../utils/textDecoding'
+import { VirtualizedPlainText } from './shared/VirtualizedPlainText'
 import './__styles__/viewer-unknown.css'
 
 type UnknownViewerProps = {
   readonly file: LoadedFile
+}
+
+/**
+ * wave-3 shell-polish follow-up — "Open as text" is a best-effort fallback
+ * for a file Atlas couldn't otherwise identify; it may not be text at all
+ * (a heuristic guess gone wrong) and could be arbitrarily large. Capping how
+ * much of it is ever decoded/rendered bounds both the string-decode cost and
+ * the DOM this view can produce, independent of `VirtualizedPlainText`'s own
+ * row virtualization (which only bounds *mounted* rows, not the decoded
+ * string itself).
+ */
+const TEXT_PREVIEW_MAX_BYTES = 5 * 1024 * 1024 // 5 MiB
+
+/**
+ * Review fix (wave-3 shell-polish): a byte-boundary cap has to trim off a
+ * trailing UTF-8 sequence that got cut in half, or `decodeTextBuffer`'s own
+ * `isValidUtf8` check — which rejects a buffer outright the moment any
+ * multi-byte sequence runs off the end, not just its own last character —
+ * fails for the *entire* preview and silently falls back to decoding it all
+ * as Windows-1252 instead, turning every non-ASCII character in an
+ * otherwise-legitimate preview into mojibake well before the truncation
+ * point, not just the one character actually cut off. Scans back at most 4
+ * bytes (UTF-8's longest sequence) for the start of a sequence left without
+ * enough continuation bytes and drops it; a no-op for content that happens
+ * to end cleanly (pure ASCII, a complete multi-byte character, or genuinely
+ * invalid UTF-8 that `isValidUtf8` was always going to reject regardless).
+ */
+function trimIncompleteUtf8Tail(bytes: Uint8Array): Uint8Array {
+  const len = bytes.length
+  const maxBack = Math.min(4, len)
+  for (let back = 1; back <= maxBack; back += 1) {
+    const byte = bytes[len - back]
+    if ((byte & 0xc0) === 0x80) continue // continuation byte — keep looking back for its lead
+
+    let expectedLength: number
+    if (byte <= 0x7f) expectedLength = 1
+    else if ((byte & 0xe0) === 0xc0) expectedLength = 2
+    else if ((byte & 0xf0) === 0xe0) expectedLength = 3
+    else if ((byte & 0xf8) === 0xf0) expectedLength = 4
+    else expectedLength = 1 // not a valid lead byte either way — leave it for isValidUtf8 to reject
+
+    return expectedLength > back ? bytes.subarray(0, len - back) : bytes
+  }
+  return bytes
 }
 
 function fileNameOf(filePath: string): string {
@@ -49,11 +94,21 @@ function UnknownViewerBase({ file }: UnknownViewerProps) {
     return guessLegacyOfficeKind(file.path)
   }, [buffer, file.path])
 
-  const decodedText = useMemo(() => {
+  const isTruncated = Boolean(buffer && buffer.byteLength > TEXT_PREVIEW_MAX_BYTES)
+
+  const decodedLines = useMemo(() => {
     if (!showAsText || !buffer) {
-      return ''
+      return []
     }
-    return decodeTextBuffer(buffer)
+    if (buffer.byteLength <= TEXT_PREVIEW_MAX_BYTES) {
+      return decodeTextBuffer(buffer).split('\n')
+    }
+    const capped = buffer.slice(0, TEXT_PREVIEW_MAX_BYTES)
+    const trimmed = trimIncompleteUtf8Tail(new Uint8Array(capped))
+    // `.slice()` (not `.subarray()`) so the ArrayBuffer handed to
+    // `decodeTextBuffer` is exactly `trimmed`'s bytes, not `capped`'s full
+    // (untrimmed) backing buffer at a shorter view length.
+    return decodeTextBuffer(trimmed.slice().buffer).split('\n')
   }, [showAsText, buffer])
 
   const handleRevealInFolder = async () => {
@@ -76,8 +131,17 @@ function UnknownViewerBase({ file }: UnknownViewerProps) {
             Back
           </button>
           <span className="unknown-viewer__text-filename">{fileName}</span>
+          {isTruncated && (
+            <span className="unknown-viewer__text-truncated">
+              Showing the first {formatFileSize(TEXT_PREVIEW_MAX_BYTES)} only
+            </span>
+          )}
         </div>
-        <pre className="unknown-viewer__text-content">{decodedText}</pre>
+        <VirtualizedPlainText
+          lines={decodedLines}
+          className="unknown-viewer__text-content"
+          lineClassName="unknown-viewer__text-line"
+        />
       </div>
     )
   }

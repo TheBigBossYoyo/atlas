@@ -5,11 +5,18 @@
  * out non-matching rows): this scans every visible cell for a query and lets
  * the user jump to and select each match in turn, mirroring markdown's
  * Ctrl+F `SearchOverlay` (match count, next/prev) but against grid cells
- * instead of DOM text nodes. Exposed to the shell dispatcher as `openFind()`
- * via the ViewerContext capability contract (see `useRegisterViewerFind`).
+ * instead of DOM text nodes. Also exposed as `openFind()` via the
+ * ViewerContext capability contract (see `useRegisterViewerFind`) for any
+ * future non-keyboard entry point; Ctrl+F/Escape themselves are registered
+ * directly through the shell's centralized shortcut dispatcher below
+ * (`useViewerShortcuts`, wave-3 shell-polish follow-up) so they get the same
+ * viewer/shell precedence as every other shortcut.
  */
-import { useCallback, useDeferredValue, useMemo, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { CompactSelection, type GridSelection } from '@glideapps/glide-data-grid'
+
+import { useViewerShortcuts } from '../../hooks/useShortcutManager'
+import type { ShortcutHandler } from '../../hooks/shortcutManagerContext'
 
 export type GridFindMatch = {
   readonly row: number
@@ -104,6 +111,42 @@ export function useGridFind(rows: ReadonlyArray<ReadonlyArray<string>>): UseGrid
     setQuery('')
     setGridSelection(undefined)
   }, [])
+
+  // wave-3 shell-polish follow-up: previously the only way to open this grid
+  // find was `registerFind`'s ViewerContext capability contract, which
+  // nothing actually invoked from a keyboard shortcut — Ctrl+F over a
+  // spreadsheet/CSV file did nothing at all (App.tsx's own `useSearch`
+  // deliberately excludes these formats; its TreeWalker can't walk a
+  // canvas-rendered grid). Registering directly through the shell's
+  // dispatcher, in the "active viewer" tier, gives spreadsheet/CSV the same
+  // Ctrl+F/Escape behavior as every other find implementation, scoped to
+  // whichever of SpreadsheetViewer/CsvViewer is actually mounted.
+  const isOpenRef = useRef(isOpen)
+  useEffect(() => {
+    isOpenRef.current = isOpen
+  }, [isOpen])
+
+  const findShortcutHandler = useCallback<ShortcutHandler>(
+    (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        if (isOpenRef.current) {
+          close()
+        } else {
+          open()
+        }
+        return true
+      }
+      if (event.key === 'Escape' && isOpenRef.current) {
+        close()
+        return true
+      }
+      return false
+    },
+    [close, open],
+  )
+
+  useViewerShortcuts(findShortcutHandler)
 
   const onGridSelectionChange = useCallback((selection: GridSelection) => {
     setGridSelection(selection)

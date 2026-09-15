@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { useViewerShortcuts } from '../../hooks/useShortcutManager'
+import type { ShortcutHandler } from '../../hooks/shortcutManagerContext'
 import { extractPageText, findMatches, type PdfMatch, type PdfPageText } from './search'
 import type { PdfDocument } from './types'
 
@@ -140,6 +142,36 @@ export function usePdfFind(
     setIsOpen(false)
     setQueryState('')
   }, [])
+
+  // wave-3 shell-polish follow-up: Ctrl+F used to be handled inside
+  // PdfViewer's own raw `window.addEventListener('keydown', ...)`, racing
+  // with every other shortcut source at no defined precedence. Registering
+  // it here — through the shell's centralized dispatcher, in the "active
+  // viewer" tier — means it participates in the same precedence as every
+  // other shortcut (a modal opened on top of the PDF viewer gets first
+  // refusal) instead of an ad hoc container-focus check.
+  const isOpenRef = useRef(isOpen)
+  useEffect(() => {
+    isOpenRef.current = isOpen
+  }, [isOpen])
+
+  const findShortcutHandler = useCallback<ShortcutHandler>(
+    (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'f') {
+        return false
+      }
+      event.preventDefault()
+      if (isOpenRef.current) {
+        close()
+      } else {
+        open()
+      }
+      return true
+    },
+    [close, open],
+  )
+
+  useViewerShortcuts(findShortcutHandler)
 
   const next = useCallback(() => {
     setCurrentMatchIndex((prev) => (matches.length === 0 ? 0 : (prev + 1) % matches.length))

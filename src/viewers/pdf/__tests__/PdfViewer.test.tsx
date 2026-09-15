@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { ShortcutManagerProvider } from '../../../hooks/ShortcutManagerProvider'
 import { ViewerProvider } from '../../shared/ViewerContext'
 import { useNavItems } from '../../shared/useViewerContext'
 import type { LoadedFile } from '../../../formats/types'
@@ -224,9 +225,11 @@ describe('PdfViewer', () => {
 
   it('opens the find bar on Ctrl+F while the viewer is focused', async () => {
     render(
-      <ViewerProvider filePath="/fixtures/sample.pdf">
-        <PdfViewer file={binaryFile()} />
-      </ViewerProvider>,
+      <ShortcutManagerProvider>
+        <ViewerProvider filePath="/fixtures/sample.pdf">
+          <PdfViewer file={binaryFile()} />
+        </ViewerProvider>
+      </ShortcutManagerProvider>,
     )
 
     await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
