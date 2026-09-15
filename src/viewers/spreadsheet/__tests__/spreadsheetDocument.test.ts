@@ -307,6 +307,48 @@ describe('insertRowAt / deleteRowAt', () => {
     const doc = insertRowAt(withMerge, 0, 1)
     expect(doc.sheets[0].merges).toEqual([{ r0: 0, c0: 0, r1: 2, c1: 1 }])
   })
+
+  it('shrinks (rather than leaves unchanged) a merge range when its own bottom row is deleted', () => {
+    const withMerge = createDocument([
+      sheetFixture(
+        [
+          ['a', 'a'],
+          ['a', 'a'],
+          ['b', 'c'],
+        ],
+        {
+          grid: {
+            rows: [
+              ['a', 'a'],
+              ['a', 'a'],
+              ['b', 'c'],
+            ],
+            colCount: 2,
+            merges: [{ r0: 0, c0: 0, r1: 1, c1: 1 }],
+            colWidthsPx: [],
+            rowHeightsPx: [],
+            formulas: [
+              [undefined, undefined],
+              [undefined, undefined],
+              [undefined, undefined],
+            ],
+          },
+        },
+      ),
+    ])
+
+    // Row 1 is the merge's own BOTTOM row (r0:0-r1:1). Deleting it must
+    // shrink the merge to a single row (r1:0), not leave r1 at its old
+    // numeric value of 1 — which, after the delete, would point at the
+    // OLD row 2 (now slid up to index 1) and incorrectly absorb it into
+    // the merge even though it was never part of it.
+    const doc = deleteRowAt(withMerge, 0, 1)
+    expect(doc.sheets[0].merges).toEqual([{ r0: 0, c0: 0, r1: 0, c1: 1 }])
+    expect(doc.sheets[0].rows).toEqual([
+      ['a', 'a'],
+      ['b', 'c'],
+    ])
+  })
 })
 
 describe('insertColumnAt / deleteColumnAt', () => {
@@ -357,6 +399,44 @@ describe('insertColumnAt / deleteColumnAt', () => {
     // c1:2, not shift right whole.
     const doc = insertColumnAt(withMerge, 0, 1)
     expect(doc.sheets[0].merges).toEqual([{ r0: 0, c0: 0, r1: 0, c1: 2 }])
+  })
+
+  it('shrinks (rather than leaves unchanged) a merge range when its own right column is deleted', () => {
+    const withMerge = createDocument([
+      sheetFixture(
+        [
+          ['a', 'a', 'b'],
+          ['c', 'd', 'e'],
+        ],
+        {
+          grid: {
+            rows: [
+              ['a', 'a', 'b'],
+              ['c', 'd', 'e'],
+            ],
+            colCount: 3,
+            merges: [{ r0: 0, c0: 0, r1: 0, c1: 1 }],
+            colWidthsPx: [],
+            rowHeightsPx: [],
+            formulas: [
+              [undefined, undefined, undefined],
+              [undefined, undefined, undefined],
+            ],
+          },
+        },
+      ),
+    ])
+
+    // Column 1 is the merge's own RIGHT column (c0:0-c1:1). Deleting it must
+    // shrink the merge to a single column (c1:0), not leave c1 at its old
+    // numeric value of 1 — which would otherwise absorb the old column 2
+    // (now slid left to index 1) even though it was never part of the merge.
+    const doc = deleteColumnAt(withMerge, 0, 1)
+    expect(doc.sheets[0].merges).toEqual([{ r0: 0, c0: 0, r1: 0, c1: 0 }])
+    expect(doc.sheets[0].rows).toEqual([
+      ['a', 'b'],
+      ['c', 'e'],
+    ])
   })
 })
 

@@ -226,11 +226,19 @@ export function deleteRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
   const formulas = sheet.formulas.filter((_, i) => i !== atIndex)
   const rowHeightsPx = sheet.rowHeightsPx.filter((_, i) => i !== atIndex)
 
+  // r0 shifts only when the deleted row was strictly ABOVE it (`> atIndex`):
+  // a merge whose top row IS the deleted row keeps r0's numeric value
+  // unchanged, since the row that slides up to fill that index was already
+  // part of the merge. r1 must shift on `>= atIndex` (not `> atIndex`): a
+  // merge whose BOTTOM row is exactly the deleted row needs to shrink by one
+  // too, or it silently grows to swallow the next surviving row (which was
+  // never part of it) once that row slides up into the vacated index — the
+  // asymmetry with r0 is intentional, not a copy-paste of the same rule.
   const merges = sheet.merges
     .filter((m) => !(m.r0 === atIndex && m.r1 === atIndex))
     .map((m) => ({
       r0: m.r0 > atIndex ? m.r0 - 1 : m.r0,
-      r1: m.r1 > atIndex ? m.r1 - 1 : m.r1,
+      r1: m.r1 >= atIndex ? m.r1 - 1 : m.r1,
       c0: m.c0,
       c1: m.c1,
     }))
@@ -280,11 +288,14 @@ export function deleteColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
   const formulas = sheet.formulas.map((row) => row.filter((_, i) => i !== atIndex))
   const colWidthsPx = sheet.colWidthsPx.filter((_, i) => i !== atIndex)
 
+  // See `deleteRowAt`'s identical comment: c1 shifts on `>= atIndex` (not
+  // `> atIndex`) so a merge whose RIGHT edge is exactly the deleted column
+  // shrinks instead of silently growing into the next surviving column.
   const merges = sheet.merges
     .filter((m) => !(m.c0 === atIndex && m.c1 === atIndex))
     .map((m) => ({
       c0: m.c0 > atIndex ? m.c0 - 1 : m.c0,
-      c1: m.c1 > atIndex ? m.c1 - 1 : m.c1,
+      c1: m.c1 >= atIndex ? m.c1 - 1 : m.c1,
       r0: m.r0,
       r1: m.r1,
     }))
