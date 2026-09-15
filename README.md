@@ -10,16 +10,16 @@ Markdown — 12 binary formats plus Markdown, all through one app.
 
 | Format | View | Edit + Save | Export |
 |---|---|---|---|
-| **Markdown** (`.md`) | Live preview, raw editor, split view, math (KaTeX), Mermaid diagrams, GFM tables/task lists, auto TOC, in-document find | Yes — autosave draft + Save/Save As | HTML, PDF, DOCX, Markdown |
-| **DOCX** (`.docx`) | Full layout fidelity (style cascade, pagination, lists, hyperlinks, headers/footers, track changes, comments) | Yes — text editing, formatting, lists/tables/hyperlinks/images/page breaks, undo/redo, accept/reject track changes; Save/Save As. *Not yet: table row/column insert-delete/merge-split, RTL, live field/TOC recalculation — see [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md)* | PDF (screenshot-based) |
+| **Markdown** (`.md`) | Live preview, raw editor, split view, math (KaTeX), Mermaid diagrams, GFM tables/task lists, auto TOC, in-document find | Yes — autosave draft + Save/Save As | HTML, PDF (vector, via Chromium's `printToPDF`), DOCX, Markdown |
+| **DOCX** (`.docx`) | Full layout fidelity (style cascade, pagination, headers/footers/footnotes/endnotes, tab stops, section vertical alignment, lists, hyperlinks, anchored/floating images with crop/rotation/flip, embedded fonts, fields/TOC, track changes, comments) | Yes — text editing, formatting, lists/tables (insert/delete row+column, horizontal merge/split, resize)/hyperlinks/images/page breaks, rich paste, undo/redo, track-changes recording (`w:ins`/`w:del`) + accept/reject, Update Field(s)/Update TOC; Save/Save As. *Not yet: vertical table cell merge, RTL, text wrap around a floating image, TOC regeneration on a multi-paragraph TOC field, formatting-change tracking — see [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md)* | PDF (real per-format export, not a screenshot) |
 | **PDF** (`.pdf`) | Virtualized page rendering, text layer (select/copy), find, print, page rotation, thumbnails, password-protected files, link/form-field annotations | View-only | Save a copy |
-| **PPTX** (`.pptx`) / **ODP** (`.odp`) | Slide layout + master inheritance, run formatting, bullets, tables, grouped shapes, speaker notes, keyboard navigation, thumbnail rail | View-only | PDF (screenshot-based) |
-| **XLSX/ODS spreadsheets** (`.xlsx`, `.ods`) | Formatted values, merged cells, column widths, hidden sheets, frozen panes; parsed off the main thread | View-only on `main` (cell editing + write-back is in progress on an unmerged branch — see Known Limitations) | PDF (screenshot-based) |
-| **CSV / TSV** (`.csv`, `.tsv`) | Grid view via the same spreadsheet engine | View-only | PDF (screenshot-based) or a faithful CSV re-export |
-| **Plain text** (`.txt` and 40+ others) | Virtualized for large files, in-document find | View-only | PDF (screenshot-based) |
-| **Code** | Shiki syntax highlighting (30+ languages), virtualized, in-document find | View-only | PDF (screenshot-based) |
-| **RTF** (`.rtf`) | Rendered via `rtf.js` (including embedded WMF/EMF images), sanitized with DOMPurify, in-document find | View-only | PDF (screenshot-based) |
-| **ODT** (`.odt`) | Rendered via `odf-kit`, sanitized with DOMPurify, in-document find | View-only | PDF (screenshot-based) |
+| **PPTX** (`.pptx`) / **ODP** (`.odp`) | Slide layout + master inheritance, run formatting, bullets, tables, grouped shapes, speaker notes, keyboard navigation, thumbnail rail | View-only | PDF (one page per slide at deck aspect ratio, not a screenshot) |
+| **XLSX/ODS/legacy spreadsheets** (`.xlsx`, `.ods`, `.xls`, `.xlsb`, `.fods`) | Formatted values, merged cells, column widths, hidden sheets, frozen panes (XLSX/ODS only); parsed off the main thread | Cell edit, formulas (small in-house evaluator), insert/delete rows/columns, add/rename/delete sheets, undo/redo, copy/paste; Save/Save As to `.xlsx`/`.xlsm`/`.xlsb`/`.xls`/`.ods`/`.fods` (`.xls`/`.xlsb` always Save-As on first save, never silently re-encoded) | PDF (real table export) + CSV per visible sheet |
+| **CSV / TSV** (`.csv`, `.tsv`) | Grid view via the same spreadsheet engine | Cell edit, insert/delete rows/columns, undo/redo, copy/paste; Save/Save As | PDF (real export) or a faithful CSV/TSV re-export |
+| **Plain text** (`.txt` and 40+ others) | Virtualized for large files, in-document find | View-only | PDF or HTML (full raw content, not a screenshot) |
+| **Code** | Shiki syntax highlighting (30+ languages), virtualized, in-document find | View-only | PDF or HTML (full raw content, not a screenshot) |
+| **RTF** (`.rtf`) | Rendered via `rtf.js` (including embedded WMF/EMF images), sanitized with DOMPurify, in-document find | View-only | PDF (real export, not a screenshot) |
+| **ODT** (`.odt`) | Rendered via `odf-kit`, sanitized with DOMPurify, in-document find | View-only | PDF (real export, not a screenshot) |
 | Legacy `.doc`/`.xls`/`.ppt` | Detected (CFB magic bytes) and given a friendly "open the modern equivalent" message | Not parsed | — |
 
 See [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md) for the honest,

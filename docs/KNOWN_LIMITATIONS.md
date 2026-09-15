@@ -4,9 +4,11 @@ An honest, per-format list of what Atlas does **not** do today, so a user
 (or a future contributor) doesn't have to discover a gap by hitting it. This
 is a living document — update it whenever a limitation below is closed or a
 new one is found, per Task P4.9/QA-18's "documentation must track reality"
-fix. Written against `main` after wave 2 (commit `03b2e2a`); items already
-under active (unmerged) development on a `wave3/*` branch are called out
-explicitly as **in progress**, not shipped.
+fix. Written against `main` after wave 2 (commit `03b2e2a`); updated again
+once all wave 3 branches (docx-fields-fonts, docx-drawings, docx-pagination,
+docx-editing, sheets, export, shell-polish, docs-quality) merged to `main`
+— items below reflect that merged state, not the wave-3-in-progress snapshot
+this document originally shipped with.
 
 For the reasoning behind *why* something below is deferred rather than
 fixed, see `.sisyphus/plans/atlas-phase3-improvement.md` Section 8
@@ -17,15 +19,20 @@ a `DEFER-N` entry there.
 
 ## Editing scope, overall
 
-Only **Markdown** and **DOCX** support editing + save today. Every other
-format — PDF, PPTX, ODP, XLSX/ODS spreadsheets, CSV/TSV, plain text, code,
-RTF, ODT — is **view-only**: you can open, read, search, and (per-format,
-see below) export or print, but not edit the source file in place.
+**Markdown**, **DOCX**, and **spreadsheets/CSV/TSV** support editing + save.
+Every other format — PDF, PPTX, ODP, plain text, code, RTF, ODT — is
+**view-only**: you can open, read, search, and (per-format, see below)
+export or print, but not edit the source file in place.
 
-**In progress (wave3/sheets, unmerged):** real spreadsheet cell editing
-(edit a cell, insert/delete rows and columns, undo/redo, TSV-shaped
-clipboard paste) with write-back to `.xlsx`/`.xlsm`/`.xls`/`.ods`/`.fods`
-and CSV/TSV. Not yet available in a build off `main`.
+Spreadsheet/CSV editing (wave3/sheets): cell edit, formulas (a small
+in-house evaluator — no full spreadsheet formula engine — with unsupported
+formulas falling back to their cached literal value), insert/delete rows
+and columns, add/rename/delete sheets, undo/redo, and copy/paste. Saves to
+`.xlsx`/`.xlsm`/`.xlsb`/`.xls`/`.ods`/`.fods` (via SheetJS; per-cell styling
+is not preserved) and `.csv`/`.tsv`. No fill-handle drag-fill. Editing a
+cell inside a visually merged range other than its anchor cell silently
+diverges that one cell's text from its merge-mates (the merge itself still
+saves/loads correctly) — a real, narrow gap, not data loss.
 
 ## DOCX
 
@@ -39,24 +46,56 @@ track-changes accept/reject (single and all) with a `trackChanges` on/off
 setting; comments; undo/redo (command-pattern, bounded history); image
 insert; Save and Save As with an atomic, lock-aware write path.
 
+Also supported as of wave 3: table structural editing (insert/delete row
+and column, horizontal cell merge/split via `gridSpan`, column resize by
+drag, a table-properties dialog); track-changes recording (typed
+insertions/deletions recorded as real `w:ins`/`w:del` when Track Changes is
+on, not just accept/reject of pre-existing revisions); rich paste (tables
+with horizontal merge, hyperlinks restricted to http/https/mailto, inline
+color/highlight, lists, `data:`-URL images); embedded font de-obfuscation
+and registration; field evaluators and an explicit "Update Field(s)" /
+"Update TOC" action; per-section headers/footers/footnotes/endnotes with
+correct numbering and restart rules; tab stops with leaders; per-section
+vertical alignment; table rows splitting across a page break; a pagination
+zoom control; anchored/floating image position, wrap metadata, crop,
+rotation and flip (parsed, serialized, and rendered at the right spot with
+correct z-order).
+
 **Not supported:**
-- **Table structural editing** — no row/column insert or delete, no cell
-  merge/split, no column resize once a table exists (only inserting a whole
-  new table is supported). *(DEFER-1)*
-- **Paste fidelity** for tables/hyperlinks/images/colors pasted from Word or
-  the web is limited — plain-formatting paste works, structural paste does
-  not yet reconstruct the source's table/image structure. *(DEFER-1)*
+- **Vertical table cell merge** (`w:vMerge` / row-span) — only horizontal
+  merge (`gridSpan`) is supported for structural table editing. *(DEFER-1)*
+- **Paste fidelity** gaps: a nested table inside a pasted cell, vertical
+  merge in a pasted table, per-level list indent, and list formatting for a
+  list pasted inside a table cell are not reconstructed. *(DEFER-1)*
+- **Formatting-change tracking** — Track Changes records insertions and
+  deletions as `w:ins`/`w:del`, but a formatting-only edit (e.g. toggling
+  bold) while Track Changes is on is not recorded as `w:rPrChange`. A
+  tracked delete spanning a paragraph boundary falls back to an untracked
+  delete rather than modeling a merged-paragraph revision.
+- **Text does not wrap around a floating image.** Anchored/floating
+  drawings are correctly positioned, sized and z-ordered, but
+  `square`/`tight`/`through`/`topAndBottom` wrap does not yet push body
+  text aside — a wrapped float can overlap text. The layout module
+  (`src/docx/layout/floats.ts`) already exposes a pure, unit-tested
+  `getLineExclusions` helper for this; wiring it into `breakLines.ts`/
+  `paginate.ts` needs a two-pass repagination and a `LineBox` extension, a
+  substantial change to that shared hotspot deliberately left as a
+  follow-up rather than attempted piecemeal. An anchored drawing inside a
+  table cell also isn't floated (still round-trips correctly, just doesn't
+  render as a page-level float).
+- **Table-of-contents regeneration only recognizes a single-paragraph TOC
+  field.** A real Word-generated TOC's `fldChar` begin/end almost always
+  spans many paragraphs (OOXML structurally requires this — a `w:r` can't
+  contain a nested `w:p`), which the parser does not yet group into one
+  Field node, so "Update Table of Contents" reports "No table of contents
+  found" on most real documents that have one. The field's own runs still
+  round-trip byte-faithfully either way (no data loss) — this is a
+  known-open gap in the field parser, not a display bug. *(DEFER-5)*
+- **Hyphenation** is not pattern-based/automatic — only an explicit
+  soft-hyphen (`­`) and discretionary-break are honored. No permissively
+  licensed hyphenation pattern set was integrated.
 - **RTL / bidi text** (Arabic, Hebrew, Persian, Urdu) is not modeled or
   laid out. *(DEFER-2)*
-- **Embedded fonts** (`w:embedTrueTypeFonts`, obfuscated font parts) are not
-  read — a document embedding a non-standard font falls back to a
-  substitute. **In progress (wave3/docx-fields-fonts, unmerged):**
-  de-obfuscation and parsing of embedded fonts. *(DEFER-4)*
-- **Live field/TOC regeneration** — `PAGE`/`REF`/table-of-contents fields
-  round-trip with their last-cached text preserved but do not recalculate
-  on edit. **In progress (wave3/docx-fields-fonts, unmerged):** field
-  evaluators and an explicit "Update Field(s)"/"Update TOC" action.
-  *(DEFER-5)*
 - **Equations (OMML)** render via a MathML conversion; not editable.
 - **SmartArt and embedded charts** render as a static placeholder image;
   not editable.
@@ -68,13 +107,10 @@ insert; Save and Save As with an atomic, lock-aware write path.
   editable.
 - **Real-time collaboration** (no CRDT) and **DRM/IRM**-protected documents
   are not supported.
-- **In progress (wave3/docx-pagination, unmerged), not yet on `main`:**
-  table rows splitting across a page break, footnote/endnote layout,
-  per-section header/footer vertical alignment, hyphenation, a pagination
-  zoom control.
-- **In progress (wave3/docx-drawings and wave3/docx-editing, unmerged):**
-  no commits yet at time of writing — branches exist but scope has not
-  landed.
+- A saved picture's `pic:nvPicPr` and most of `pic:spPr` (shape geometry,
+  borders, effects — everything except the crop/rotation/flip transform)
+  are not re-emitted on save, a schema-validity gap pre-dating wave 3 that
+  wave 3's own picture-fidelity work did not introduce or fix.
 - **Spell check** runs through Electron/Chromium's own native spellchecker
   (`window.electronAPI.spellcheck`, backed by `session.setSpellCheckerLanguages`)
   rather than the bundled-Hunspell-dictionary (`nspell` + `dictionary-en`/
@@ -83,13 +119,22 @@ insert; Save and Save As with an atomic, lock-aware write path.
   Practical effect: available languages are whatever the OS/Chromium
   spellchecker supports, not a bundled dictionary pair.
 
-## Legacy binary Office formats (`.doc`, `.xls`, `.ppt`)
+## Legacy binary Office formats (`.doc`, `.xls`, `.xlsb`, `.ppt`, `.xlt`)
 
-Detected by CFB (OLE Compound File Binary) magic bytes and given a specific,
-friendly message pointing at the modern equivalent (`.docx`/`.xlsx`/`.pptx`)
-— Atlas does **not** parse the legacy binary format itself. Full OLE-CFB
-parsing for pre-2007 Office documents is out of scope for this plan
-(declining real-world frequency; a separate, large undertaking).
+`.xls` (BIFF8) and `.xlsb` (BIFF12) genuinely parse via SheetJS and open in
+the same spreadsheet viewer/editor as `.xlsx` — view, edit, and Save As
+`.xlsx`/`.xlsm`/`.xlsb`/`.xls`/`.ods`/`.fods` (the first save always goes
+through the format-choice dialog rather than silently re-encoding the
+original legacy file in place); frozen-pane metadata specifically is not
+read for these two formats (different, binary settings schema). `.fods`
+(flat ODS) opens in the ODS viewer/editor the same way.
+
+`.doc`, `.ppt`, and `.xlt` (template) are still detected by CFB (OLE
+Compound File Binary) magic bytes and given a specific, friendly message
+pointing at the modern equivalent (`.docx`/`.pptx`/`.xlsx`) — Atlas does
+**not** parse these. Full OLE-CFB parsing for the remaining pre-2007 Office
+formats is out of scope for this plan (declining real-world frequency; a
+separate, large undertaking).
 
 ## PPTX / ODP (slides)
 
@@ -107,15 +152,17 @@ print, page rotation, a thumbnail rail, and password-protected PDF support.
 **Form fields are rendered but not interactively fillable, and there is no
 PDF editing or save-back** — Atlas does not write PDF files.
 
-## Spreadsheets (XLSX/ODS) and CSV/TSV
+## Spreadsheets (XLSX/ODS/legacy) and CSV/TSV
 
-On `main` today: view-only. Formatted cell values (numbers/dates/currency
-per the workbook's own number formats), merged cells, column widths, hidden
-sheets, and frozen-pane metadata are read and displayed; parsing runs off
-the main thread in a worker for large files. No cell editing, no formula
-evaluation UI, and no save path exist on `main`.
-
-**In progress (wave3/sheets, unmerged)** — see "Editing scope" above.
+View and edit — see "Editing scope, overall" above for what editing covers.
+Formatted cell values (numbers/dates/currency per the workbook's own number
+formats), merged cells, column widths, hidden sheets, and frozen-pane
+metadata (XLSX/ODS only — not `.xls`/`.xlsb`, see "Legacy binary Office
+formats" above) are read and displayed; parsing runs off the main thread in
+a worker for large files. Frozen rows use an editable `<input>`-based strip
+above the main grid rather than a native frozen-row primitive (the grid
+library only supports frozen columns and trailing rows, not leading rows);
+it's disabled while a row-search filter is active.
 
 Number/date/currency formatting follows the workbook's own stored format,
 not an explicit user-chosen locale; no UI localization exists elsewhere in
