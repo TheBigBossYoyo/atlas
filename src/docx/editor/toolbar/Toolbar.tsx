@@ -29,6 +29,8 @@ import {
   Superscript
 } from 'lucide-react';
 import type { ToolbarCommand, ToolbarState } from './toolbarTypes';
+import { TableEditMenuItems } from './TableEditMenuItems';
+import { TablePropertiesDialog } from './TablePropertiesDialog';
 import './__styles__/toolbar.css';
 
 function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () => void) {
@@ -124,7 +126,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           />
         )}
         {currentTab === 'insert' && (
-          <InsertTab onCommand={handleCommand} />
+          <InsertTab onCommand={handleCommand} state={state} />
         )}
         {currentTab === 'layout' && (
           <LayoutTab onCommand={handleCommand} />
@@ -210,7 +212,7 @@ const HomeTab: React.FC<TabProps> = ({ onCommand, state, activeFormats, availabl
   );
 };
 
-const InsertTab: React.FC<TabProps> = ({ onCommand }) => {
+const InsertTab: React.FC<TabProps> = ({ onCommand, state }) => {
   return (
     <>
       <div className="docx-toolbar__group">
@@ -219,6 +221,7 @@ const InsertTab: React.FC<TabProps> = ({ onCommand }) => {
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
         <TablePickerPopover onCommand={onCommand} />
+        <TableEditPopover onCommand={onCommand} state={state} />
         <IconButton label="Image" onClick={() => onCommand({ kind: 'insert-image' })}><ImageIcon /></IconButton>
         <IconButton label="Hyperlink" onClick={() => onCommand({ kind: 'insert-hyperlink' })}><LinkIcon /></IconButton>
       </div>
@@ -430,6 +433,63 @@ const TablePickerPopover = ({ onCommand }: { onCommand: (cmd: ToolbarCommand) =>
           <div className="docx-toolbar__table-label" aria-live="polite">
             {hoverRow + 1}x{hoverCol + 1} Table
           </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * DXE-14 — structural table-editing commands (insert/delete row & column,
+ * merge, split) plus the table properties dialog, gated on
+ * `ToolbarState.insideTable` the same way the rest of this file gates
+ * unimplemented controls (D18/DXE-12): a real disabled button with an
+ * explanatory tooltip rather than a button that silently does nothing.
+ */
+const TableEditPopover = ({ onCommand, state }: { onCommand: (cmd: ToolbarCommand) => void; state?: ToolbarState }) => {
+  const [open, setOpen] = useState(false);
+  const [showProperties, setShowProperties] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useClickOutside(ref, () => { setOpen(false); setShowProperties(false); });
+
+  const insideTable = state?.insideTable ?? false;
+  const close = () => { setOpen(false); setShowProperties(false); };
+
+  return (
+    <div className="docx-toolbar__popover-container" ref={ref}>
+      <button
+        type="button"
+        className="docx-toolbar__button"
+        onClick={() => setOpen(o => !o)}
+        disabled={!insideTable}
+        title={insideTable ? 'Edit Table' : 'Place the cursor inside a table to edit it'}
+        aria-label="Edit Table"
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
+        <TableIcon />
+      </button>
+      {open && insideTable && (
+        <div className="docx-toolbar__popover" role="dialog" aria-label="Edit table">
+          {showProperties ? (
+            <TablePropertiesDialog
+              seed={{
+                widthTwips: state?.tableWidthTwips ?? null,
+                alignment: state?.tableAlignment ?? null,
+                bordersOn: state?.tableBordersOn ?? true,
+              }}
+              onApply={cmd => { onCommand(cmd); close(); }}
+              onCancel={() => setShowProperties(false)}
+            />
+          ) : (
+            <>
+              <TableEditMenuItems onCommand={onCommand} onAfterCommand={close} />
+              <div className="docx-toolbar__menu-divider" role="separator" />
+              <button type="button" className="docx-toolbar__menu-item" onClick={() => setShowProperties(true)}>
+                Table Properties…
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
