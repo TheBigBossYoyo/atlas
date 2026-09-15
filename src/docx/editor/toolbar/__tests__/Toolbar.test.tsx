@@ -11,6 +11,10 @@ const defaultState: ToolbarState = {
   styleId: null,
   trackChanges: false,
   spellCheck: false,
+  insideTable: false,
+  tableWidthTwips: null,
+  tableAlignment: null,
+  tableBordersOn: true,
 };
 
 describe('Toolbar', () => {
@@ -244,5 +248,65 @@ describe('Toolbar', () => {
 
     fireEvent.click(getByLabelText('Reject All'));
     expect(onCommand).toHaveBeenLastCalledWith({ kind: 'reject-all-changes' });
+  });
+
+  // ---------------------------------------------------------------------------
+  // DXE-14 — table structural editing + properties dialog
+  // ---------------------------------------------------------------------------
+
+  it('disables the Edit Table button outside a table', () => {
+    const { getByLabelText } = render(
+      <Toolbar state={defaultState} onCommand={vi.fn()} activeTab="insert" />,
+    );
+    expect(getByLabelText('Edit Table')).toBeDisabled();
+  });
+
+  it('opens the table edit menu and fires the matching command inside a table', () => {
+    const onCommand = vi.fn();
+    const insideTableState = { ...defaultState, insideTable: true };
+    const { getByLabelText, getByText } = render(
+      <Toolbar state={insideTableState} onCommand={onCommand} activeTab="insert" />,
+    );
+
+    const editButton = getByLabelText('Edit Table');
+    expect(editButton).not.toBeDisabled();
+    fireEvent.click(editButton);
+
+    fireEvent.click(getByText('Insert Row Above'));
+    expect(onCommand).toHaveBeenCalledWith({ kind: 'insert-table-row-above' });
+
+    // The menu closes after a command fires.
+    expect(() => getByText('Insert Row Above')).toThrow();
+  });
+
+  it('opens the table properties dialog seeded from the current table and applies it', () => {
+    const onCommand = vi.fn();
+    const seededState = {
+      ...defaultState,
+      insideTable: true,
+      tableWidthTwips: 2880, // 2 inches
+      tableAlignment: 'center' as const,
+      tableBordersOn: false,
+    };
+    const { getByLabelText, getByText, getByLabelText: getFormField } = render(
+      <Toolbar state={seededState} onCommand={onCommand} activeTab="insert" />,
+    );
+
+    fireEvent.click(getByLabelText('Edit Table'));
+    fireEvent.click(getByText('Table Properties…'));
+
+    const widthInput = getFormField('Table width in inches') as HTMLInputElement;
+    expect(widthInput.value).toBe('2');
+    expect((getByText('Show borders').closest('label')?.querySelector('input') as HTMLInputElement).checked).toBe(
+      false,
+    );
+
+    fireEvent.click(getByText('Apply'));
+    expect(onCommand).toHaveBeenCalledWith({
+      kind: 'set-table-properties',
+      widthTwips: 2880,
+      alignment: 'center',
+      bordersOn: false,
+    });
   });
 });

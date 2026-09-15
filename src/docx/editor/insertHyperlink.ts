@@ -16,6 +16,7 @@ import type { Relationship } from '../parser/relationships'
 
 import { applyCommand } from './commands'
 import type { Command, Range } from './commandTypes'
+import { allocateRelationshipId } from './relationshipIds'
 
 const HYPERLINK_REL_TYPE =
   'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink'
@@ -57,18 +58,4 @@ export function insertHyperlinkIntoBundle(
     range: nextRange,
     inverse: result.inverse,
   }
-}
-
-function allocateRelationshipId(existing: ReadonlyArray<Relationship>): string {
-  let max = 0
-  for (const rel of existing) {
-    const match = /^rId(\d+)$/.exec(rel.id)
-    if (match !== null) {
-      const value = Number.parseInt(match[1] ?? '0', 10)
-      if (Number.isFinite(value) && value > max) {
-        max = value
-      }
-    }
-  }
-  return `rId${max + 1}`
 }

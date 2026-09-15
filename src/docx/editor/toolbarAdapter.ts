@@ -1,7 +1,20 @@
-import { halfPoint, hexColor, twip, type Document, type HighlightColor, type JustifyContent } from '../model'
+import {
+  eighthPoint,
+  halfPoint,
+  hexColor,
+  twip,
+  type Border,
+  type BorderSet,
+  type Document,
+  type JustifyContent,
+  type TableProps,
+} from '../model'
 
-import { findParagraph } from './commands'
+import { toHighlightColor } from './colorMapping'
+import { findEnclosingTable, findParagraph } from './commands'
+import type { EnclosingTable } from './commands'
 import type { Command, Range } from './commandTypes'
+import { pickListNumId } from './insertList'
 import { normalizeRange } from './Selection'
 import type { ToolbarCommand } from './toolbar/toolbarTypes'
 
@@ -63,50 +76,6 @@ function getParagraphPaths(
   return allPaths.slice(lo, hi + 1)
 }
 
-const LIST_FORMAT_BY_KIND: Readonly<Record<'bullet' | 'number', string>> = {
-  bullet: 'bullet',
-  number: 'decimal',
-}
-
-/**
- * DXE-06/D18 — picks the `numId` to use for the toolbar's bullet/numbered
- * list toggle. A real Word document almost always already defines numId "1"
- * (frequently "2" as well) for its own lists — hardcoding those values here
- * would mean clicking "Bulleted List" on such a document silently reuses
- * whatever list style the document already assigned to numId 1 (rarely an
- * actual bullet format) via `ensureListNumbering`'s "reuse if already
- * defined" rule, instead of creating Atlas's own bullet definition.
- *
- * Reuses an Atlas-created list definition of the matching kind if one
- * already exists in this document (identified by the `atlas-list-` prefix
- * `ensureListNumbering` gives its own `abstractNumId`s, plus a matching
- * level-0 format) so repeated toggles of the same kind keep converging on
- * one shared definition; otherwise allocates one past every numId already
- * in use, which can never collide with the source document's own numbering
- * or with a different-kind list Atlas already created in this session.
- */
-function pickListNumId(document: Document, kind: 'bullet' | 'number'): number {
-  const wantedFormat = LIST_FORMAT_BY_KIND[kind]
-  let maxNumId = 0
-
-  for (const [numIdStr, def] of document.numbering) {
-    const parsed = Number.parseInt(numIdStr, 10)
-    if (Number.isFinite(parsed) && parsed > maxNumId) {
-      maxNumId = parsed
-    }
-
-    if (
-      Number.isFinite(parsed) &&
-      def.abstractNumId?.startsWith('atlas-list-') === true &&
-      def.levels.get(0)?.format === wantedFormat
-    ) {
-      return parsed
-    }
-  }
-
-  return maxNumId + 1
-}
-
 function toAlignment(align: 'left' | 'center' | 'right' | 'justify'): JustifyContent {
   switch (align) {
     case 'left':
@@ -117,54 +86,6 @@ function toAlignment(align: 'left' | 'center' | 'right' | 'justify'): JustifyCon
       return 'end'
     case 'justify':
       return 'both'
-  }
-}
-
-function toHighlightColor(colorHex: string): HighlightColor | null {
-  switch (colorHex.trim().toLowerCase()) {
-    case '#000000':
-      return 'black'
-    case '#0000ff':
-      return 'blue'
-    case '#00ffff':
-      return 'cyan'
-    case '#00008b':
-      return 'darkBlue'
-    case '#008b8b':
-      return 'darkCyan'
-    case '#a9a9a9':
-    case '#666666':
-      return 'darkGray'
-    case '#006400':
-      return 'darkGreen'
-    case '#8b008b':
-      return 'darkMagenta'
-    case '#8b0000':
-    case '#980000':
-      return 'darkRed'
-    case '#b8860b':
-    case '#ff9900':
-      return 'darkYellow'
-    case '#00ff00':
-      return 'green'
-    case '#d3d3d3':
-    case '#cccccc':
-    case '#d9d9d9':
-    case '#efefef':
-      return 'lightGray'
-    case '#ff00ff':
-      return 'magenta'
-    case 'transparent':
-    case 'none':
-      return 'none'
-    case '#ff0000':
-      return 'red'
-    case '#ffffff':
-      return 'white'
-    case '#ffff00':
-      return 'yellow'
-    default:
-      return null
   }
 }
 
@@ -199,6 +120,120 @@ function findRevisionAtSelection(
   )
 
   return childIndex === -1 ? null : { paragraphPath, childIndex }
+}
+
+/**
+ * DXE-14 fix — `EnclosingTable.cellIndex` is the clicked cell's position in
+ * `row.cells` (array index), but `insert-table-column`/`delete-table-column`
+ * (see `commands.ts`'s `insertColumnIntoRow`/`deleteColumnFromRow` doc
+ * comments) both address a column by *grid* index instead — the two only
+ * coincide when every cell before it in the row has `gridSpan` 1. Once an
+ * earlier cell has been merged wider, the array index undercounts the grid
+ * index, so resolving straight from `cellIndex` silently picks the wrong
+ * column (widening/narrowing the merged cell instead of the clicked one).
+ * Summing every earlier cell's span translates array index to grid index;
+ * the clicked cell's own span is also returned so "insert to its right" can
+ * land just past *all* of the columns it covers, not just its first one.
+ */
+function cellGridColumnRange(enclosing: EnclosingTable): { readonly start: number; readonly span: number } {
+  const row = enclosing.table.rows[enclosing.rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    return { start: enclosing.cellIndex, span: 1 }
+  }
+
+  let start = 0
+  for (let i = 0; i < enclosing.cellIndex; i += 1) {
+    const cell = row.cells[i]
+    start += cell !== undefined && cell.kind === 'table-cell' ? cell.props?.gridSpan ?? 1 : 1
+  }
+
+  const current = row.cells[enclosing.cellIndex]
+  const span = current !== undefined && current.kind === 'table-cell' ? current.props?.gridSpan ?? 1 : 1
+
+  return { start, span }
+}
+
+/**
+ * DXE-14 — resolves a table-editing toolbar/context-menu command against the
+ * cell the cursor is currently in. There's no rectangular multi-cell mouse
+ * selection yet (documented remaining scope for DXE-14), so "merge" acts on
+ * the current cell and its immediate right-hand neighbor — the single most
+ * common real case (merging a header cell with the one beside it) — and
+ * "split" reverses a merge on the current cell back into single-column
+ * cells. Returns `null` when the cursor isn't inside a table at all, or
+ * (merge/split) when the specific operation isn't valid at that cell, so the
+ * UI's disabled state (`ToolbarState.insideTable`) and this resolution never
+ * disagree about *whether* a table command can run, only about the finer
+ * per-command validity `applyCommand` itself already enforces.
+ */
+function resolveTableCommand(
+  kind:
+    | 'insert-table-row-above'
+    | 'insert-table-row-below'
+    | 'insert-table-column-left'
+    | 'insert-table-column-right'
+    | 'delete-table-row'
+    | 'delete-table-column'
+    | 'delete-table'
+    | 'merge-table-cell-right'
+    | 'split-table-cell',
+  selection: Range | null,
+  document: Document,
+): Command | null {
+  const paragraphPath = getPrimaryParagraphPath(selection)
+  if (paragraphPath === null) {
+    return null
+  }
+
+  const enclosing = findEnclosingTable(document, paragraphPath)
+  if (enclosing === null) {
+    return null
+  }
+
+  const { tablePath, rowIndex, cellIndex } = enclosing
+
+  switch (kind) {
+    case 'insert-table-row-above':
+      return { kind: 'insert-table-row', tablePath, at: rowIndex }
+    case 'insert-table-row-below':
+      return { kind: 'insert-table-row', tablePath, at: rowIndex + 1 }
+    case 'insert-table-column-left': {
+      const { start } = cellGridColumnRange(enclosing)
+      return { kind: 'insert-table-column', tablePath, at: start }
+    }
+    case 'insert-table-column-right': {
+      const { start, span } = cellGridColumnRange(enclosing)
+      return { kind: 'insert-table-column', tablePath, at: start + span }
+    }
+    case 'delete-table-row':
+      return { kind: 'delete-table-row', tablePath, rowIndex }
+    case 'delete-table-column': {
+      const { start } = cellGridColumnRange(enclosing)
+      return { kind: 'delete-table-column', tablePath, columnIndex: start }
+    }
+    case 'delete-table':
+      return { kind: 'delete-table', tablePath }
+    case 'merge-table-cell-right':
+      return { kind: 'merge-table-cells', tablePath, rowIndex, fromCellIndex: cellIndex, toCellIndex: cellIndex + 1 }
+    case 'split-table-cell':
+      return { kind: 'split-table-cell', tablePath, rowIndex, cellIndex }
+  }
+}
+
+/**
+ * DXE-14 — the two border sets the properties dialog's on/off checkbox
+ * toggles between. `'single'`/half-point 4 (2pt in eighth-points) mirrors
+ * Word's own default table border when one is turned on from scratch;
+ * `'none'` (rather than `'nil'`, which means "unset — inherit") explicitly
+ * suppresses every edge, matching what "no borders" means to a user picking
+ * it from a dialog.
+ */
+const TABLE_BORDER_ON: Border = Object.freeze({ style: 'single', size: eighthPoint(4), color: hexColor('#000000') })
+const TABLE_BORDER_OFF: Border = Object.freeze({ style: 'none' })
+
+function buildTableBorderSet(bordersOn: boolean): BorderSet {
+  const edge = bordersOn ? TABLE_BORDER_ON : TABLE_BORDER_OFF
+  return Object.freeze({ top: edge, bottom: edge, left: edge, right: edge, insideH: edge, insideV: edge })
 }
 
 export function toolbarToCommand(
@@ -314,13 +349,13 @@ export function toolbarToCommand(
       const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
-        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document, 'bullet'), level: 0 }
+        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document.numbering, 'bullet'), level: 0 }
     }
     case 'toggle-numbered-list': {
       const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
-        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document, 'number'), level: 0 }
+        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document.numbering, 'number'), level: 0 }
     }
     case 'change-indent': {
       const paragraphPath = getPrimaryParagraphPath(selection)
@@ -339,6 +374,31 @@ export function toolbarToCommand(
       return focus === undefined
         ? null
         : { kind: 'insert-table', at: focus, rows: toolbarCmd.rows, cols: toolbarCmd.cols }
+    }
+    case 'insert-table-row-above':
+    case 'insert-table-row-below':
+    case 'insert-table-column-left':
+    case 'insert-table-column-right':
+    case 'delete-table-row':
+    case 'delete-table-column':
+    case 'delete-table':
+    case 'merge-table-cell-right':
+    case 'split-table-cell':
+      return resolveTableCommand(toolbarCmd.kind, selection, document)
+    case 'set-table-properties': {
+      const paragraphPath = getPrimaryParagraphPath(selection)
+      const enclosing = paragraphPath === null ? null : findEnclosingTable(document, paragraphPath)
+      if (enclosing === null) {
+        return null
+      }
+
+      const props: TableProps = {
+        ...(toolbarCmd.widthTwips !== null ? { tblW: { type: 'dxa' as const, value: twip(toolbarCmd.widthTwips) } } : {}),
+        jc: toAlignment(toolbarCmd.alignment),
+        tblBorders: buildTableBorderSet(toolbarCmd.bordersOn),
+      }
+
+      return { kind: 'apply-table-props', tablePath: enclosing.tablePath, props }
     }
     case 'insert-image':
       return null

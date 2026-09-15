@@ -245,3 +245,78 @@
   margin-top: 4px;
   color: var(--toolbar-text-muted);
 }
+
+/* DXE-14 — table-editing dropdown menu (Toolbar.tsx's TableEditPopover) and
+   the matching right-click context menu (DocxViewer.tsx). */
+.docx-toolbar__menu-item {
+  display: block;
+  width: 100%;
+  min-width: 160px;
+  text-align: left;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: var(--toolbar-text);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.docx-toolbar__menu-item:hover,
+.docx-toolbar__menu-item:focus-visible {
+  background-color: var(--toolbar-hover-bg);
+  outline: none;
+}
+
+.docx-toolbar__menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background-color: var(--toolbar-border);
+}
+
+.docx-toolbar__table-props-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+}
+
+.docx-toolbar__form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--toolbar-text);
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.docx-toolbar__form-row label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.docx-toolbar__form-row input[type="number"] {
+  width: 60px;
+  border: 1px solid var(--toolbar-border);
+  border-radius: 2px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.docx-toolbar__form-actions {
+  justify-content: flex-end;
+}
+
+.docx-toolbar__form-actions button {
+  font-size: 12px;
+  border: 1px solid var(--toolbar-border);
+  background: var(--toolbar-hover-bg);
+  border-radius: 2px;
+  padding: 4px 10px;
+  cursor: pointer;
+}

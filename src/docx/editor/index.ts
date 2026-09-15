@@ -2,7 +2,8 @@ export type { Command } from './commandTypes'
 export * from './commandTypes'
 
 export { applyCommand } from './commands'
-export { findParagraph } from './commands'
+export { findParagraph, findEnclosingTable } from './commands'
+export type { EnclosingTable } from './commands'
 export { History } from './History'
 
 export {
@@ -42,3 +43,8 @@ export { buildSpellCheckReplacement } from './spellCheckReplace'
 export type { SpellCheckReplacement } from './spellCheckReplace'
 export { buildPasteCommands, htmlToParagraphs, textToParagraphs } from './htmlPaste'
 export type { ParsedParagraph, ParsedRun, PasteCommandsResult } from './htmlPaste'
+export { friendlyDocxErrorMessage } from './friendlyDocxError'
+export { htmlToPasteBlocks } from './pasteBlocks'
+export type { PasteBlock, PasteParagraph, PasteTable } from './pasteBlocks'
+export { buildRichPasteCommands, bundleContextFor } from './pasteRich'
+export type { RichPasteBundleContext, RichPasteBundlePatch, RichPasteResult } from './pasteRich'

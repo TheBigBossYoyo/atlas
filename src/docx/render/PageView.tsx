@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import type {
   Document,
   Hyperlink,
@@ -25,6 +25,16 @@ export type PageViewProps = {
   theme?: Theme;
   /** Document-level relationships, used to resolve an external hyperlink's URL (D6). */
   relationships?: ReadonlyArray<Relationship>;
+  /**
+   * DXE-14 — called with a table's own path (`PageTableRef.blockPath`), the
+   * grid column index and the new width in twips once the user finishes
+   * dragging that column's resize handle (never mid-drag — see
+   * `TableColumnResizeHandle`'s own doc comment for why only the handle
+   * itself previews live). Omit to render every table with no resize
+   * handles at all: a read-only preview (print, an eventual "view mode")
+   * has no business offering a drag interaction that edits the document.
+   */
+  onResizeTableColumn?: (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => void;
 };
 
 type RevisionRunMeta = {
@@ -45,6 +55,14 @@ type RunMeta = {
 
 // CSS px is 96dpi, pt is 72dpi. So 1pt = 1.333px.
 const PT_TO_PX = 4 / 3;
+// OOXML twips are 1/20 of a point.
+const TWIPS_PER_PT = 20;
+// DXE-14 — mirrors `commands.ts`'s own `MIN_COLUMN_WIDTH_TWIPS` (180 twips):
+// clamped here too so a drag never submits a resize `applyEditorCommand`
+// would reject outright (which would silently no-op — DocxViewer's
+// `applyEditorCommand` swallows a throwing command rather than surfacing
+// it, so the drag would otherwise just appear to do nothing).
+const MIN_COLUMN_WIDTH_PT = 9;
 
 /**
  * Renders a tab's leader (D24/DXL-16) as a bottom border spanning its
@@ -106,6 +124,8 @@ function renderPageTable(
   tableRef: PageTableRef,
   key: string,
   renderLine: RenderLineFn,
+  scale: number,
+  onResizeTableColumn?: (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => void,
 ): React.ReactNode {
   const wrapperStyle: React.CSSProperties = {
     position: 'absolute',
@@ -123,6 +143,14 @@ function renderPageTable(
   if (tableRef.shadingFill !== undefined) {
     tableStyle.backgroundColor = tableRef.shadingFill;
   }
+
+  // DXE-14 — a continuation fragment (this table's rows spilling onto a
+  // later page) shares the same underlying table, but resizing from a
+  // continuation's handles would need this fragment's OWN column offset
+  // reconciled with the source table's, which isn't worth the complexity
+  // for what is, in practice, always reachable from the table's first page
+  // too. Handles only render on the fragment that starts the table.
+  const canResize = onResizeTableColumn !== undefined && !tableRef.isContinuation;
 
   return (
     <div
@@ -144,7 +172,100 @@ function renderPageTable(
           )}
         </tbody>
       </table>
+      {canResize &&
+        tableRef.columnWidthsPt.map((widthPt, colIdx) => (
+          <TableColumnResizeHandle
+            key={`resize-${colIdx}`}
+            tablePath={tableRef.blockPath}
+            columnIndex={colIdx}
+            leftPt={tableRef.columnWidthsPt.slice(0, colIdx + 1).reduce((sum, w) => sum + w, 0)}
+            heightPt={tableRef.heightPt}
+            currentWidthPt={widthPt}
+            scale={scale}
+            onResize={onResizeTableColumn}
+          />
+        ))}
     </div>
+  );
+}
+
+/**
+ * DXE-14 — a draggable vertical guide over a table's column border. Only the
+ * guide line itself tracks the pointer while dragging (via local `dragPt`
+ * state) — the table's actual columns don't live-reflow, since that would
+ * mean re-pagination on every `pointermove`. The real `resize-table-column`
+ * command (an undoable, single History step) only fires once, on release,
+ * from `initialWidthPt + totalDelta` — never as an incremental sequence of
+ * commands per pixel moved.
+ *
+ * Listens on `window` rather than relying on pointer capture on the handle
+ * itself: simpler, and unaffected by the cursor moving off the (2px-wide)
+ * handle mid-drag.
+ */
+function TableColumnResizeHandle({
+  tablePath,
+  columnIndex,
+  leftPt,
+  heightPt,
+  currentWidthPt,
+  scale,
+  onResize,
+}: {
+  tablePath: ReadonlyArray<number>;
+  columnIndex: number;
+  /** The x-position, in the table's own pt coordinate space, of this
+   * column's right edge — where the handle sits at rest. */
+  leftPt: number;
+  heightPt: number;
+  currentWidthPt: number;
+  scale: number;
+  onResize: (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => void;
+}) {
+  const [dragDeltaPt, setDragDeltaPt] = useState<number | null>(null);
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Only the primary mouse button / a genuine touch-or-pen contact starts
+    // a drag — a right-click here should still fall through to whatever
+    // context menu the table itself offers, not silently swallow the event.
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const startClientX = event.clientX;
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      setDragDeltaPt((moveEvent.clientX - startClientX) / scale);
+    };
+    const handleUp = (upEvent: PointerEvent) => {
+      const deltaPt = (upEvent.clientX - startClientX) / scale;
+      const nextWidthPt = Math.max(MIN_COLUMN_WIDTH_PT, currentWidthPt + deltaPt);
+      onResize(tablePath, columnIndex, Math.round(nextWidthPt * TWIPS_PER_PT));
+      setDragDeltaPt(null);
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+  };
+
+  const currentLeftPt = leftPt + (dragDeltaPt ?? 0);
+
+  return (
+    <div
+      className={`docx-page__table-col-resize${dragDeltaPt !== null ? ' docx-page__table-col-resize--active' : ''}`}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: `${currentLeftPt}px`,
+        height: `${heightPt}px`,
+      }}
+      onPointerDown={handlePointerDown}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize column ${columnIndex + 1}`}
+    />
   );
 }
 
@@ -275,7 +396,14 @@ function applyCellBorders(
  * to scale the inner contents. This keeps the internal layout exactly 1:1
  * with the pt values calculated by the paginator.
  */
-export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme, relationships }) => {
+export const PageView: React.FC<PageViewProps> = ({
+  page,
+  zoom,
+  document,
+  theme,
+  relationships,
+  onResizeTableColumn,
+}) => {
   const scale = zoom * PT_TO_PX;
   const resolvedRelationships = relationships ?? EMPTY_RELATIONSHIPS;
   const runMetaByParagraph = useMemo(
@@ -576,7 +704,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
             paints exactly where the paginator placed it. */}
         {page.columns.flatMap((col, colIdx) =>
           col.tables.map((tableRef, tableIdx) =>
-            renderPageTable(tableRef, `table-${colIdx}-${tableIdx}`, renderLine),
+            renderPageTable(tableRef, `table-${colIdx}-${tableIdx}`, renderLine, scale, onResizeTableColumn),
           ),
         )}
 

@@ -123,7 +123,10 @@ describe('DocxViewer file-change effect', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to render DOCX: corrupt archive')).toBeInTheDocument()
+      // RUN-14 — raw exceptions are now wrapped by friendlyDocxErrorMessage;
+      // "corrupt archive" doesn't match any of its known patterns, so it
+      // falls through to the generic-but-still-friendly open-failure message.
+      expect(screen.getByText("Couldn't open this Word document. (corrupt archive)")).toBeInTheDocument()
     })
   })
 
@@ -137,7 +140,7 @@ describe('DocxViewer file-change effect', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to render DOCX: corrupt archive')).toBeInTheDocument()
+      expect(screen.getByText("Couldn't open this Word document. (corrupt archive)")).toBeInTheDocument()
     })
 
     loadDocxMock.mockResolvedValueOnce(createBundle(1))

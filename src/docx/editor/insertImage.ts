@@ -23,6 +23,7 @@ import { ensureMediaContentType } from '../serializer/contentTypesWriter'
 
 import { applyCommand } from './commands'
 import type { Command, Position, Range } from './commandTypes'
+import { allocateRelationshipId } from './relationshipIds'
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -188,20 +189,6 @@ export function insertImageIntoBundle(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function allocateRelationshipId(existing: ReadonlyArray<Relationship>): string {
-  let max = 0
-  for (const rel of existing) {
-    const match = /^rId(\d+)$/.exec(rel.id)
-    if (match !== null) {
-      const value = Number.parseInt(match[1] ?? '0', 10)
-      if (Number.isFinite(value) && value > max) {
-        max = value
-      }
-    }
-  }
-  return `rId${max + 1}`
-}
 
 function allocateMediaPath(
   archive: ReadonlyMap<string, Uint8Array>,

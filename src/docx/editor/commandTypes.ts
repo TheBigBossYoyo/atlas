@@ -1,9 +1,25 @@
-import type { Block, ParaProps, RunChild, RunProps } from '../model'
+import type { Block, ParaProps, RunChild, RunProps, Table, TableProps } from '../model'
 
 export type Position = {
   readonly paragraphPath: ReadonlyArray<number>
   readonly runIndex: number
   readonly charOffset: number
+}
+
+/**
+ * DXE-11 — passed alongside a forward `insert-text`/`delete-range` command
+ * (never alongside History's own undo/redo replay — see `commands.ts`'s
+ * `applyInsertText`/`applyDeleteSpan` doc comments for why an *untracked*
+ * replay of the stored inverse is exactly what makes undo/redo of a tracked
+ * edit come out coherent for free) to record the edit as `w:ins`/`w:del`
+ * instead of mutating the run directly, when the document's Track Changes
+ * setting is on.
+ */
+export type TrackChangesContext = {
+  readonly enabled: boolean
+  readonly author: string
+  /** ISO 8601 timestamp, e.g. `new Date().toISOString()`. */
+  readonly date: string
 }
 
 export type Range = {
@@ -44,6 +60,15 @@ export type InsertTableCommand = {
   readonly at: Position
   readonly rows: number
   readonly cols: number
+  /**
+   * DXE-19 — paste fidelity: a fully-built table (real cell content, and
+   * merged cells via `gridSpan`) to insert verbatim instead of the empty
+   * `rows` x `cols` grid of blank cells `rows`/`cols` would otherwise
+   * build. When present, `rows`/`cols` are ignored for the table's actual
+   * shape — kept required so the toolbar's table-size picker (which never
+   * sets `table`) doesn't need its own separate command shape.
+   */
+  readonly table?: Table
 }
 
 export type InsertHyperlinkCommand = {
@@ -117,6 +142,108 @@ export type ChangeListLevelCommand = {
   readonly delta: 1 | -1
 }
 
+// ---------------------------------------------------------------------------
+// DXE-14 — table structural editing
+// ---------------------------------------------------------------------------
+//
+// Every command below addresses the table itself with `tablePath`: a
+// paragraphPath-shaped `[sectionIndex, ...blockPath]` ending exactly at the
+// table's own block index (the same addressing `insert-table`'s cursor
+// position resolves to, and what `resolveParagraphPath`/`updateBlocksAtPath`
+// already walk generically for a *nested* table inside a cell). Structural
+// removals (`delete-table-row`/`delete-table-column`, merge, split, resize)
+// all invert via `replace-table`, an exact verbatim snapshot of the table
+// before the change — the same "capture the original, don't try to compute a
+// symmetric inverse operation" philosophy `replace-blocks` already uses for
+// paragraph-level structural edits. A pure structural *insert* (a fresh,
+// empty row/column) has nothing worth preserving, so its own inverse is just
+// the matching delete at the same index.
+
+export type InsertTableRowCommand = {
+  readonly kind: 'insert-table-row'
+  readonly tablePath: ReadonlyArray<number>
+  /** Row index the new row is inserted before; `rows.length` appends. */
+  readonly at: number
+}
+
+export type DeleteTableRowCommand = {
+  readonly kind: 'delete-table-row'
+  readonly tablePath: ReadonlyArray<number>
+  readonly rowIndex: number
+}
+
+export type InsertTableColumnCommand = {
+  readonly kind: 'insert-table-column'
+  readonly tablePath: ReadonlyArray<number>
+  /** Grid column index the new column is inserted before; the column count
+   * appends. Falling inside an existing merged (`gridSpan > 1`) cell widens
+   * that cell by one column instead of splitting it. */
+  readonly at: number
+  readonly widthTwips?: number
+}
+
+export type DeleteTableColumnCommand = {
+  readonly kind: 'delete-table-column'
+  readonly tablePath: ReadonlyArray<number>
+  readonly columnIndex: number
+}
+
+export type DeleteTableCommand = {
+  readonly kind: 'delete-table'
+  readonly tablePath: ReadonlyArray<number>
+}
+
+export type MergeTableCellsCommand = {
+  readonly kind: 'merge-table-cells'
+  readonly tablePath: ReadonlyArray<number>
+  readonly rowIndex: number
+  /** Inclusive cell-index range within the row to merge into one cell
+   * (horizontal merge only — see the module doc comment for the vertical/
+   * `vMerge` follow-up this intentionally leaves out). */
+  readonly fromCellIndex: number
+  readonly toCellIndex: number
+}
+
+export type SplitTableCellCommand = {
+  readonly kind: 'split-table-cell'
+  readonly tablePath: ReadonlyArray<number>
+  readonly rowIndex: number
+  readonly cellIndex: number
+  /** Number of cells to split into, from 2 up to the cell's current
+   * `gridSpan`. Omitted defaults to the full `gridSpan` (undo a merge back
+   * into single-column cells). */
+  readonly into?: number
+}
+
+export type ResizeTableColumnCommand = {
+  readonly kind: 'resize-table-column'
+  readonly tablePath: ReadonlyArray<number>
+  readonly columnIndex: number
+  readonly widthTwips: number
+}
+
+/** The universal exact inverse for a destructive table-structure edit — see
+ * the module doc comment above. */
+export type ReplaceTableCommand = {
+  readonly kind: 'replace-table'
+  readonly tablePath: ReadonlyArray<number>
+  readonly table: Table
+}
+
+/**
+ * DXE-14 — table properties dialog (width/alignment/borders basics).
+ * Replaces the table's whole `props` object outright rather than merging
+ * (like `apply-run-format`/`apply-para-format` do): the dialog always
+ * submits every field it shows, so a full replacement — inverting to the
+ * exact original `props` — is simpler and just as exact as computing a
+ * field-by-field merge inverse would be.
+ */
+export type ApplyTablePropsCommand = {
+  readonly kind: 'apply-table-props'
+  readonly tablePath: ReadonlyArray<number>
+  readonly props: TableProps | undefined
+}
+
 type RevisionTarget =
   | {
       readonly id: string
@@ -160,6 +287,16 @@ export type Command =
   | RejectRevisionCommand
   | AcceptAllRevisionsCommand
   | RejectAllRevisionsCommand
+  | InsertTableRowCommand
+  | DeleteTableRowCommand
+  | InsertTableColumnCommand
+  | DeleteTableColumnCommand
+  | DeleteTableCommand
+  | MergeTableCellsCommand
+  | SplitTableCellCommand
+  | ResizeTableColumnCommand
+  | ReplaceTableCommand
+  | ApplyTablePropsCommand
 
 export function acceptRevision(id: string): AcceptRevisionCommand {
   return {

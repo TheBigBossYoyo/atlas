@@ -65,6 +65,33 @@ function hasPageBreak(document: DocxDocument): boolean {
   )
 }
 
+/** Every top-level `ins-revision` paragraph child's own flattened run text —
+ * used to confirm a paste landed as a tracked insertion rather than plain
+ * text (regression coverage for DXE-11 + DXE-19 composing correctly). */
+function insRevisionTexts(document: DocxDocument): ReadonlyArray<string> {
+  const texts: string[] = []
+  for (const section of document.sections) {
+    for (const block of section.blocks) {
+      if (block.kind !== 'paragraph') continue
+      for (const child of block.children as ReadonlyArray<{
+        kind: string
+        children?: ReadonlyArray<{ kind: string; children?: ReadonlyArray<{ kind: string; value?: string }> }>
+      }>) {
+        if (child.kind !== 'ins-revision') continue
+        for (const run of child.children ?? []) {
+          if (run.kind !== 'run') continue
+          for (const grandchild of run.children ?? []) {
+            if (grandchild.kind === 'text' && typeof grandchild.value === 'string') {
+              texts.push(grandchild.value)
+            }
+          }
+        }
+      }
+    }
+  }
+  return texts
+}
+
 /** Types into Find, then Replace, and clicks "Replace" — a real edit via the
  * real (unmocked) find/replace/command pipeline, without needing a genuine
  * DOM selection (the mocked PageStack doesn't render real paragraph text). */
@@ -140,6 +167,87 @@ function createBundle() {
     },
     rawArchive: new Map(),
   }
+}
+
+/** DXE-14 — a document whose only top-level block is a 1x1 table, so a
+ * selection at paragraph path `[0, 0, 0, 0, 0]` (section, table block, row,
+ * cell, paragraph) sits inside its one cell. */
+function createTableBundle() {
+  return {
+    document: {
+      kind: 'document' as const,
+      sections: [
+        {
+          kind: 'section' as const,
+          props: {},
+          blocks: [
+            {
+              kind: 'table' as const,
+              rows: [
+                {
+                  kind: 'table-row' as const,
+                  cells: [
+                    {
+                      kind: 'table-cell' as const,
+                      blocks: [
+                        {
+                          kind: 'paragraph' as const,
+                          props: {},
+                          children: [
+                            {
+                              kind: 'run' as const,
+                              props: {},
+                              children: [{ kind: 'text' as const, value: 'Cell text' }],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      styles: new Map(),
+      numbering: new Map(),
+      headers: new Map(),
+      footers: new Map(),
+      comments: new Map(),
+      footnotes: new Map(),
+      endnotes: new Map(),
+    },
+    rawArchive: new Map(),
+  }
+}
+
+/**
+ * DXE-14 — the mocked `PageStack` above always renders one fixed line
+ * regardless of document content, so a real "cursor inside a table cell"
+ * selection is built directly against the DOM instead: append a line with
+ * the deep paragraph path a table cell would have, then point the browser's
+ * real Selection at its run span — exactly what `getSelectionFromDom`
+ * (`DocxViewer.tsx`) reads.
+ */
+function placeSelectionInsideSurfaceTableCell(): void {
+  const surface = document.querySelector('.docx-viewer__surface') as HTMLElement
+  const line = document.createElement('div')
+  line.className = 'docx-page__line'
+  line.setAttribute('data-paragraph-path', '0,0,0,0,0')
+  const span = document.createElement('span')
+  span.setAttribute('data-run-index', '0')
+  span.textContent = 'Cell text'
+  line.appendChild(span)
+  surface.appendChild(line)
+
+  const textNode = span.firstChild as Text
+  const domRange = document.createRange()
+  domRange.setStart(textNode, 0)
+  domRange.setEnd(textNode, 0)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(domRange)
 }
 
 describe('DocxViewer editor', () => {
@@ -977,4 +1085,258 @@ describe('DocxViewer editor', () => {
       expect(ctrlBOnButton.defaultPrevented).toBe(true)
     },
   )
+
+  // ---------------------------------------------------------------------------
+  // DXE-14 — right-click table-editing context menu
+  // ---------------------------------------------------------------------------
+
+  it('right-clicking inside a table cell opens the table menu, and picking an entry applies its command', async () => {
+    loadDocxMock.mockResolvedValue(createTableBundle())
+    window.getSelection()?.removeAllRanges()
+
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <ViewerDirtyProbe />
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+
+    placeSelectionInsideSurfaceTableCell()
+    const surface = document.querySelector('.docx-viewer__surface') as HTMLElement
+    const contextMenuEvent = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 40,
+      clientY: 60,
+    })
+    fireEvent(surface, contextMenuEvent)
+    expect(contextMenuEvent.defaultPrevented).toBe(true)
+
+    expect(await screen.findByRole('menu', { name: 'Table editing' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Delete Table'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+    expect(screen.queryByRole('menu', { name: 'Table editing' })).not.toBeInTheDocument()
+  })
+
+  it('right-clicking outside a table leaves the native context menu alone', async () => {
+    window.getSelection()?.removeAllRanges()
+
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    const surface = document.querySelector('.docx-viewer__surface') as HTMLElement
+    const contextMenuEvent = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 10,
+      clientY: 10,
+    })
+    fireEvent(surface, contextMenuEvent)
+
+    expect(contextMenuEvent.defaultPrevented).toBe(false)
+    expect(screen.queryByRole('menu', { name: 'Table editing' })).not.toBeInTheDocument()
+  })
+
+  // ---------------------------------------------------------------------------
+  // DXE-19 — rich HTML paste (tables/hyperlinks/formatting) wired into the
+  // real `onPaste` handler, going through the async bundle-patch path.
+  // ---------------------------------------------------------------------------
+
+  it('pastes rich HTML as formatted text and records an external hyperlink relationship', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+        <ViewerDirtyProbe />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    // Establishes a real, non-null cursor via a genuine find/replace command
+    // (see `replaceFirstMatch`'s own doc comment above) rather than
+    // fabricating a DOM selection the mocked PageStack can't render — paste
+    // needs `range?.focus` populated just like hyperlink insertion does.
+    replaceFirstMatch('Hello', 'Howdy')
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (format: string) =>
+          format === 'text/html'
+            ? '<p>Pasted <b>bold</b> and <a href="https://example.com">a link</a></p>'
+            : '',
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedBundle = saveDocxMock.mock.calls[0][0] as {
+      document: DocxDocument
+      relationships?: ReadonlyArray<{ target: string; targetMode?: string }>
+    }
+    expect(collectText(savedBundle.document)).toBe('HowdyPasted bold and a link DOCX')
+    expect(
+      savedBundle.relationships?.some(
+        (rel) => rel.target === 'https://example.com' && rel.targetMode === 'External',
+      ),
+    ).toBe(true)
+  })
+
+  it('falls back to plain-text paste when the clipboard carries no parseable HTML blocks', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+        <ViewerDirtyProbe />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello DOCX', 'Howdy ')
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (format: string) => (format === 'text/plain' ? 'plain paste' : ''),
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(collectText(savedDocument)).toBe('Howdy plain paste')
+  })
+
+  // ---------------------------------------------------------------------------
+  // Regression — DXE-11 (track changes) + DXE-19 (paste) composing correctly.
+  // `applyEditorCommands`/`handleRichPaste` used to apply their command batch
+  // with no `trackChanges` argument at all, so pasting while Track Changes
+  // was on silently produced a plain, untracked edit instead of a `w:ins` —
+  // exactly the edit a reviewer relying on Track Changes most needs to see.
+  // ---------------------------------------------------------------------------
+
+  it('records a plain-text paste as a tracked insertion when Track Changes is on', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Review' }))
+    fireEvent.click(screen.getByLabelText('Toggle track changes'))
+
+    replaceFirstMatch('Hello DOCX', 'Howdy ')
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (format: string) => (format === 'text/plain' ? 'plain paste' : ''),
+      },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(insRevisionTexts(savedDocument)).toContain('plain paste')
+  })
+
+  it('records rich HTML paste as a tracked insertion when Track Changes is on', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+        <ViewerDirtyProbe />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Review' }))
+    fireEvent.click(screen.getByLabelText('Toggle track changes'))
+
+    replaceFirstMatch('Hello', 'Howdy')
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (format: string) => (format === 'text/html' ? '<p>Pasted text</p>' : ''),
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(insRevisionTexts(savedDocument)).toContain('Pasted text')
+  })
 })

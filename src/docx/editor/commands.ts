@@ -1,8 +1,10 @@
 import type {
   Block,
+  DelRevision,
   Document,
   Hyperlink,
   Indent,
+  InsRevision,
   ParaProps,
   Paragraph,
   ParagraphChild,
@@ -11,8 +13,11 @@ import type {
   Section,
   Table,
   TableCell,
+  TableCellProps,
+  TableProps,
   TableRow,
   TextNode,
+  Twip,
 } from '../model'
 import { twip } from '../model'
 
@@ -23,6 +28,7 @@ import type {
   DeleteRangeCommand,
   Position,
   Range,
+  TrackChangesContext,
 } from './commandTypes'
 
 type ResolvedParagraphPath = {
@@ -39,9 +45,35 @@ type ResolvedParagraphPath = {
  * `Hyperlink` wrapper (verbatim, minus any interior non-run children) when
  * writing the paragraph back out.
  */
-type RunOwner = { readonly kind: 'direct' } | { readonly kind: 'hyperlink'; readonly wrapper: Hyperlink }
+/**
+ * DXE-11 — a run's owner additionally tracks whether it lives inside an
+ * existing `w:ins`/`w:del` (parsed from the source document, or created by a
+ * previous tracked edit in this session). Flattening through these two kinds
+ * the same way hyperlinks already flatten (rather than rejecting the whole
+ * paragraph — `getEditableRuns`'s previous behavior for any unrecognized
+ * child kind) fixes a real editing gap: a paragraph containing so much as one
+ * existing tracked change used to be entirely uneditable, silently, since
+ * `requireEditableRuns` threw and every caller's `event.preventDefault()`
+ * safety net (D12) made that indistinguishable from "nothing happened."
+ */
+type RunOwner =
+  | { readonly kind: 'direct' }
+  | { readonly kind: 'hyperlink'; readonly wrapper: Hyperlink }
+  | { readonly kind: 'ins-revision'; readonly wrapper: InsRevision }
+  | { readonly kind: 'del-revision'; readonly wrapper: DelRevision }
 
 const DIRECT_OWNER: RunOwner = Object.freeze({ kind: 'direct' })
+
+/**
+ * A freshly minted `InsRevision`/`DelRevision` wrapper only ever needs its
+ * `children` field as a placeholder — `buildParagraphChildren`'s owner
+ * grouping (the same mechanism that already reconstructs a `Hyperlink`
+ * wrapper from its own template) immediately replaces it with the real
+ * grouped runs. Typed the same way the parser's `freezeRevisionChildren`
+ * already has to (`ReadonlyArray<ParagraphChild> & ReadonlyArray<Run>`, see
+ * the model's own `InsRevision`/`DelRevision` field types).
+ */
+const EMPTY_REVISION_CHILDREN = Object.freeze([]) as ReadonlyArray<ParagraphChild> & ReadonlyArray<Run>
 
 type RunEntry = {
   readonly run: Run
@@ -75,6 +107,7 @@ type RevisionTarget = {
 export function applyCommand(
   doc: Document,
   cmd: Command,
+  trackChanges?: TrackChangesContext,
 ): {
   document: Document
   inverse: Command
@@ -82,9 +115,9 @@ export function applyCommand(
 } {
   switch (cmd.kind) {
     case 'insert-text':
-      return applyInsertText(doc, cmd)
+      return applyInsertText(doc, cmd, trackChanges)
     case 'delete-range':
-      return applyDeleteRange(doc, cmd)
+      return applyDeleteRange(doc, cmd, trackChanges)
     case 'insert-paragraph-break':
       return applyInsertParagraphBreak(doc, cmd)
     case 'apply-run-format':
@@ -100,7 +133,7 @@ export function applyCommand(
     case 'insert-inline':
       return applyInsertInline(doc, cmd)
     case 'composite':
-      return applyComposite(doc, cmd)
+      return applyComposite(doc, cmd, trackChanges)
     case 'replace-blocks':
       return applyReplaceBlocks(doc, cmd)
     case 'insert-list':
@@ -115,6 +148,26 @@ export function applyCommand(
       return applyAllRevisions(doc, 'accept')
     case 'reject-all-revisions':
       return applyAllRevisions(doc, 'reject')
+    case 'insert-table-row':
+      return applyInsertTableRow(doc, cmd)
+    case 'delete-table-row':
+      return applyDeleteTableRow(doc, cmd)
+    case 'insert-table-column':
+      return applyInsertTableColumn(doc, cmd)
+    case 'delete-table-column':
+      return applyDeleteTableColumn(doc, cmd)
+    case 'delete-table':
+      return applyDeleteTable(doc, cmd)
+    case 'merge-table-cells':
+      return applyMergeTableCells(doc, cmd)
+    case 'split-table-cell':
+      return applySplitTableCell(doc, cmd)
+    case 'resize-table-column':
+      return applyResizeTableColumn(doc, cmd)
+    case 'replace-table':
+      return applyReplaceTable(doc, cmd)
+    case 'apply-table-props':
+      return applyTableProps(doc, cmd)
   }
 }
 
@@ -122,16 +175,27 @@ export function applyCommand(
 // Composite / structural primitives (D13, D12 cross-paragraph support)
 // ---------------------------------------------------------------------------
 
+/**
+ * DXE-11 — `trackChanges`, when given, is forwarded to every sub-command
+ * exactly as `applyCommand` would for a lone command: an `insert-text`/
+ * `delete-range` inside a batch (e.g. `handleRichPaste`'s pasted-text
+ * commands, or Replace All's find-and-replace pairs) is recorded as
+ * `w:ins`/`w:del` the same as typed text, while a sub-command kind that
+ * doesn't accept tracking (`insert-table`, `apply-run-format`, ...) just
+ * ignores the extra argument as it always has — see those functions' own
+ * signatures for which kinds actually consult it.
+ */
 function applyComposite(
   doc: Document,
   cmd: Extract<Command, { kind: 'composite' }>,
+  trackChanges?: TrackChangesContext,
 ): { document: Document; inverse: Command; range?: Range } {
   let workingDocument = doc
   const inverses: Command[] = []
   let lastRange: Range | undefined
 
   for (const sub of cmd.commands) {
-    const result = applyCommand(workingDocument, sub)
+    const result = applyCommand(workingDocument, sub, trackChanges)
     workingDocument = result.document
     inverses.push(result.inverse)
     if (result.range !== undefined) {
@@ -300,11 +364,36 @@ function applyInsertHyperlink(
   }
 }
 
+/** DXE-19 — builds the default empty `rows` x `cols` grid `applyInsertTable`
+ * uses when the caller (the toolbar's table-size picker) doesn't supply a
+ * fully-built `table` of its own (paste fidelity's own content-bearing
+ * table, inserted verbatim instead — see `InsertTableCommand`'s doc
+ * comment). */
+function buildEmptyTable(rows: number, cols: number): Table {
+  const TOTAL_WIDTH_TWIPS = 9000
+  const columnWidth = twip(Math.max(1, Math.floor(TOTAL_WIDTH_TWIPS / cols)))
+  const tblGrid = freezeArray(Array.from({ length: cols }, () => columnWidth))
+
+  const makeCell = (): TableCell =>
+    Object.freeze({ kind: 'table-cell', blocks: freezeArray<Block>([emptyParagraph()]) })
+  const makeRow = (): TableRow =>
+    Object.freeze({ kind: 'table-row', cells: freezeArray(Array.from({ length: cols }, makeCell)) })
+
+  return Object.freeze({
+    kind: 'table',
+    tblGrid,
+    rows: freezeArray(Array.from({ length: rows }, makeRow)),
+  })
+}
+
 function applyInsertTable(
   doc: Document,
   cmd: Extract<Command, { kind: 'insert-table' }>,
 ): { document: Document; inverse: Command; range: Range } {
-  if (cmd.rows < 1 || cmd.cols < 1) {
+  if (cmd.table === undefined && (cmd.rows < 1 || cmd.cols < 1)) {
+    throw new Error('InsertTable requires at least one row and one column')
+  }
+  if (cmd.table !== undefined && cmd.table.rows.length < 1) {
     throw new Error('InsertTable requires at least one row and one column')
   }
 
@@ -312,19 +401,7 @@ function applyInsertTable(
   const editableRuns = requireEditableRuns(paragraph)
   const split = splitEntriesAtPosition(editableRuns, cmd.at)
 
-  const TOTAL_WIDTH_TWIPS = 9000
-  const columnWidth = twip(Math.max(1, Math.floor(TOTAL_WIDTH_TWIPS / cmd.cols)))
-  const tblGrid = freezeArray(Array.from({ length: cmd.cols }, () => columnWidth))
-
-  const makeCell = (): TableCell =>
-    Object.freeze({ kind: 'table-cell', blocks: freezeArray<Block>([emptyParagraph()]) })
-  const makeRow = (): TableRow =>
-    Object.freeze({ kind: 'table-row', cells: freezeArray(Array.from({ length: cmd.cols }, makeCell)) })
-  const table: Table = Object.freeze({
-    kind: 'table',
-    tblGrid,
-    rows: freezeArray(Array.from({ length: cmd.rows }, makeRow)),
-  })
+  const table: Table = cmd.table ?? buildEmptyTable(cmd.rows, cmd.cols)
 
   const beforeParagraph = cloneParagraph(paragraph, buildParagraphChildren(split.beforeEntries))
   const afterParagraph = cloneParagraph(paragraph, buildParagraphChildren(split.afterEntries))
@@ -369,6 +446,547 @@ function applyInsertTable(
       cursor: { anchor: cmd.at, focus: cmd.at },
     },
     range: { anchor: cursor, focus: cursor },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Table structural editing (DXE-14) — see commandTypes.ts's module doc
+// comment above the command shapes for the addressing/inverse design.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_COLUMN_WIDTH_TWIPS = 1440
+const MIN_COLUMN_WIDTH_TWIPS = 180
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function requireTableAt(doc: Document, tablePath: ReadonlyArray<number>): Table {
+  const resolved = resolveParagraphPath(doc, tablePath)
+  if (resolved === null || resolved.blockPath.length === 0) {
+    throw new Error('Table not found')
+  }
+
+  const section = doc.sections[resolved.sectionIndex]
+  if (section === undefined) {
+    throw new Error('Table not found')
+  }
+
+  const prefix = resolved.blockPath.slice(0, -1)
+  const index = resolved.blockPath[resolved.blockPath.length - 1]
+  const siblingBlocks = getBlocksAtPrefix(section.blocks, prefix)
+  const block = siblingBlocks?.[index]
+  if (block === undefined || block.kind !== 'table') {
+    throw new Error('Table not found')
+  }
+
+  return block
+}
+
+/** Replaces the table at `tablePath` with whatever `transform` returns (or
+ * removes it entirely when `transform` returns `null`), reusing the same
+ * generic block-path walk `updateDocumentAtParagraphPath` already uses for
+ * paragraph edits — it works unchanged for a table nested inside a cell. */
+function updateTable(
+  doc: Document,
+  tablePath: ReadonlyArray<number>,
+  transform: (table: Table) => Table | null,
+): Document {
+  const nextDocument = updateDocumentAtParagraphPath(doc, tablePath, (blocks, blockIndex) => {
+    const table = blocks[blockIndex]
+    if (table === undefined || table.kind !== 'table') {
+      return null
+    }
+
+    const nextTable = transform(table)
+    if (nextTable === null) {
+      return freezeArray([...blocks.slice(0, blockIndex), ...blocks.slice(blockIndex + 1)])
+    }
+
+    return replaceArrayItem(blocks, blockIndex, nextTable)
+  })
+
+  if (nextDocument === null) {
+    throw new Error('Table not found')
+  }
+
+  return nextDocument
+}
+
+function cloneTableFull(
+  table: Table,
+  rows: ReadonlyArray<Table['rows'][number]>,
+  tblGrid: ReadonlyArray<Twip> | undefined,
+): Table {
+  return Object.freeze({
+    kind: 'table',
+    ...(table.props !== undefined ? { props: table.props } : {}),
+    ...(tblGrid !== undefined ? { tblGrid } : {}),
+    rows,
+  })
+}
+
+function createEmptyTableCell(): TableCell {
+  return Object.freeze({ kind: 'table-cell', blocks: freezeArray<Block>([emptyParagraph()]) })
+}
+
+function createEmptyTableRow(columnCount: number): TableRow {
+  return Object.freeze({
+    kind: 'table-row',
+    cells: freezeArray(Array.from({ length: columnCount }, createEmptyTableCell)),
+  })
+}
+
+/** The number of grid columns a table has — `tblGrid` when present (the
+ * common, schema-required case), otherwise the first row's total cell
+ * `gridSpan`. */
+function tableColumnCount(table: Table): number {
+  if (table.tblGrid !== undefined) {
+    return table.tblGrid.length
+  }
+
+  const firstRow = table.rows.find((row): row is TableRow => row.kind === 'table-row')
+  if (firstRow === undefined) {
+    return 1
+  }
+
+  return firstRow.cells.reduce(
+    (sum, cell) => sum + (cell.kind === 'table-cell' ? cell.props?.gridSpan ?? 1 : 1),
+    0,
+  )
+}
+
+function insertGridColumn(
+  tblGrid: ReadonlyArray<Twip> | undefined,
+  at: number,
+  width: Twip,
+): ReadonlyArray<Twip> | undefined {
+  if (tblGrid === undefined) {
+    return undefined
+  }
+
+  return freezeArray([...tblGrid.slice(0, at), width, ...tblGrid.slice(at)])
+}
+
+function deleteGridColumn(
+  tblGrid: ReadonlyArray<Twip> | undefined,
+  columnIndex: number,
+): ReadonlyArray<Twip> | undefined {
+  if (tblGrid === undefined) {
+    return undefined
+  }
+
+  return freezeArray([...tblGrid.slice(0, columnIndex), ...tblGrid.slice(columnIndex + 1)])
+}
+
+function withTableCellProps(cell: TableCell, props: TableCellProps | undefined): TableCell {
+  return Object.freeze({
+    kind: 'table-cell',
+    ...(props !== undefined ? { props } : {}),
+    blocks: cell.blocks,
+  })
+}
+
+/**
+ * Inserts a new cell before grid column `columnIndex`, walking the row's
+ * cells while tracking accumulated `gridSpan` so the index is interpreted in
+ * *grid-column* space, not cell-array space. `columnIndex` landing strictly
+ * inside an existing merged cell's span widens that cell by one column
+ * instead (matching Word: inserting a column through a merged header cell
+ * grows the merge rather than splitting it); landing exactly on a cell
+ * boundary — including at the very start or end of the row — inserts a new
+ * standalone cell there.
+ */
+function insertColumnIntoRow(row: TableRow, columnIndex: number, makeCell: () => TableCell): TableRow {
+  const nextCells: Array<TableRow['cells'][number]> = []
+  let accumulated = 0
+  let inserted = false
+
+  for (const cell of row.cells) {
+    if (!inserted && columnIndex === accumulated) {
+      nextCells.push(makeCell())
+      inserted = true
+    }
+
+    if (cell.kind !== 'table-cell') {
+      nextCells.push(cell)
+      accumulated += 1
+      continue
+    }
+
+    const span = cell.props?.gridSpan ?? 1
+    if (!inserted && columnIndex > accumulated && columnIndex < accumulated + span) {
+      nextCells.push(withTableCellProps(cell, { ...cell.props, gridSpan: span + 1 }))
+      inserted = true
+      accumulated += span
+      continue
+    }
+
+    nextCells.push(cell)
+    accumulated += span
+  }
+
+  if (!inserted) {
+    nextCells.push(makeCell())
+  }
+
+  return cloneTableRow(row, freezeArray(nextCells))
+}
+
+/**
+ * Removes grid column `columnIndex` from a row: a cell exactly one column
+ * wide covering it is dropped entirely; a merged cell spanning it is
+ * narrowed by one column instead (the mirror image of
+ * `insertColumnIntoRow`'s widen case).
+ */
+function deleteColumnFromRow(row: TableRow, columnIndex: number): TableRow {
+  const nextCells: Array<TableRow['cells'][number]> = []
+  let accumulated = 0
+  let handled = false
+
+  for (const cell of row.cells) {
+    if (cell.kind !== 'table-cell') {
+      nextCells.push(cell)
+      accumulated += 1
+      continue
+    }
+
+    const span = cell.props?.gridSpan ?? 1
+    if (!handled && columnIndex >= accumulated && columnIndex < accumulated + span) {
+      handled = true
+      if (span > 1) {
+        nextCells.push(withTableCellProps(cell, { ...cell.props, gridSpan: span - 1 }))
+      }
+      accumulated += span
+      continue
+    }
+
+    nextCells.push(cell)
+    accumulated += span
+  }
+
+  return cloneTableRow(row, freezeArray(nextCells))
+}
+
+function resizeColumnInRow(row: TableRow, columnIndex: number, width: Twip): TableRow {
+  let accumulated = 0
+  const nextCells = row.cells.map((cell) => {
+    if (cell.kind !== 'table-cell') {
+      accumulated += 1
+      return cell
+    }
+
+    const span = cell.props?.gridSpan ?? 1
+    const covers = columnIndex >= accumulated && columnIndex < accumulated + span
+    accumulated += span
+
+    // A merged cell's own width is the sum of every grid column it spans;
+    // resizing one of those columns without re-deriving every affected
+    // cell's total width is a documented gap (see DXE-14's remaining-work
+    // note) — only an unspanned (single-column) cell's `tcW` is updated here.
+    if (!covers || span !== 1) {
+      return cell
+    }
+
+    return withTableCellProps(cell, { ...cell.props, tcW: { type: 'dxa', value: width } })
+  })
+
+  return cloneTableRow(row, freezeArray(nextCells))
+}
+
+function evenlyDistributeSpan(total: number, into: number): ReadonlyArray<number> {
+  const base = Math.floor(total / into)
+  const remainder = total % into
+  return Array.from({ length: into }, (_, index) => base + (index < remainder ? 1 : 0))
+}
+
+function withoutGridSpan(props: TableCellProps | undefined): TableCellProps | undefined {
+  if (props === undefined || props.gridSpan === undefined) {
+    return props
+  }
+
+  const rest = Object.fromEntries(
+    Object.entries(props).filter(([key]) => key !== 'gridSpan'),
+  ) as TableCellProps
+  return Object.keys(rest).length > 0 ? rest : undefined
+}
+
+function applyInsertTableRow(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'insert-table-row' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const at = clamp(cmd.at, 0, table.rows.length)
+  const newRow = createEmptyTableRow(tableColumnCount(table))
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) =>
+    cloneTableFull(t, freezeArray([...t.rows.slice(0, at), newRow, ...t.rows.slice(at)]), t.tblGrid),
+  )
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'delete-table-row', tablePath: cmd.tablePath, rowIndex: at },
+  }
+}
+
+function applyDeleteTableRow(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'delete-table-row' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  if (cmd.rowIndex < 0 || cmd.rowIndex >= table.rows.length) {
+    throw new Error('DeleteTableRow row index is out of range')
+  }
+  if (table.rows.length <= 1) {
+    throw new Error('Cannot delete a table\'s last row — delete the table instead')
+  }
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) =>
+    cloneTableFull(
+      t,
+      freezeArray([...t.rows.slice(0, cmd.rowIndex), ...t.rows.slice(cmd.rowIndex + 1)]),
+      t.tblGrid,
+    ),
+  )
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+function applyInsertTableColumn(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'insert-table-column' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const at = clamp(cmd.at, 0, tableColumnCount(table))
+  const width = twip(cmd.widthTwips ?? DEFAULT_COLUMN_WIDTH_TWIPS)
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextRows = t.rows.map((row) =>
+      row.kind === 'table-row' ? insertColumnIntoRow(row, at, createEmptyTableCell) : row,
+    )
+    return cloneTableFull(t, freezeArray(nextRows), insertGridColumn(t.tblGrid, at, width))
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'delete-table-column', tablePath: cmd.tablePath, columnIndex: at },
+  }
+}
+
+function applyDeleteTableColumn(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'delete-table-column' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const columnCount = tableColumnCount(table)
+  if (cmd.columnIndex < 0 || cmd.columnIndex >= columnCount) {
+    throw new Error('DeleteTableColumn column index is out of range')
+  }
+  if (columnCount <= 1) {
+    throw new Error('Cannot delete a table\'s last column — delete the table instead')
+  }
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextRows = t.rows.map((row) =>
+      row.kind === 'table-row' ? deleteColumnFromRow(row, cmd.columnIndex) : row,
+    )
+    return cloneTableFull(t, freezeArray(nextRows), deleteGridColumn(t.tblGrid, cmd.columnIndex))
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+/** Deletes the whole table — a thin, table-specific entry point over the
+ * same general `replace-blocks` primitive cross-paragraph delete already
+ * uses, so its inverse (re-inserting the exact table verbatim) comes for
+ * free rather than needing its own command kind. */
+function applyDeleteTable(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'delete-table' }>,
+): { document: Document; inverse: Command; range?: Range } {
+  return applyReplaceBlocks(doc, { kind: 'replace-blocks', at: cmd.tablePath, count: 1, blocks: [] })
+}
+
+/**
+ * Merges cells `fromCellIndex..toCellIndex` (inclusive) of one row into a
+ * single cell: `gridSpan` becomes the sum of the merged cells' spans, and
+ * the resulting cell's content is every merged cell's paragraphs
+ * concatenated in order (Word has no more principled way to combine them
+ * either). Horizontal-only — see commandTypes.ts's module doc comment for
+ * why a vertical (`vMerge`, across rows) merge is a documented follow-up
+ * rather than implemented here.
+ */
+function applyMergeTableCells(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'merge-table-cells' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const row = table.rows[cmd.rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    throw new Error('MergeTableCells target row not found')
+  }
+  if (
+    cmd.fromCellIndex < 0 ||
+    cmd.toCellIndex >= row.cells.length ||
+    cmd.fromCellIndex >= cmd.toCellIndex
+  ) {
+    throw new Error('MergeTableCells requires at least two cells in range')
+  }
+
+  const targetCells = row.cells.slice(cmd.fromCellIndex, cmd.toCellIndex + 1)
+  if (targetCells.some((cell) => cell.kind !== 'table-cell')) {
+    throw new Error('MergeTableCells range includes an unsupported cell')
+  }
+  const cells = targetCells as ReadonlyArray<TableCell>
+
+  const totalSpan = cells.reduce((sum, cell) => sum + (cell.props?.gridSpan ?? 1), 0)
+  const mergedCell: TableCell = Object.freeze({
+    kind: 'table-cell',
+    props: { ...cells[0].props, gridSpan: totalSpan },
+    blocks: freezeArray(cells.flatMap((cell) => cell.blocks)),
+  })
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextRow = cloneTableRow(
+      row,
+      freezeArray([
+        ...row.cells.slice(0, cmd.fromCellIndex),
+        mergedCell,
+        ...row.cells.slice(cmd.toCellIndex + 1),
+      ]),
+    )
+    return cloneTableFull(t, replaceArrayItem(t.rows, cmd.rowIndex, nextRow), t.tblGrid)
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+/**
+ * Splits a merged cell back into `into` (default: its full `gridSpan`)
+ * side-by-side cells, distributing the original span as evenly as possible.
+ * All of the original cell's content goes into the first resulting cell —
+ * matching Word, which has no principled way to redistribute paragraphs
+ * across the new cells either — leaving the rest empty.
+ */
+function applySplitTableCell(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'split-table-cell' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const row = table.rows[cmd.rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    throw new Error('SplitTableCell target row not found')
+  }
+  const cell = row.cells[cmd.cellIndex]
+  if (cell === undefined || cell.kind !== 'table-cell') {
+    throw new Error('SplitTableCell target cell not found')
+  }
+
+  const span = cell.props?.gridSpan ?? 1
+  const into = cmd.into ?? span
+  if (into < 2 || into > span) {
+    throw new Error("SplitTableCell must split into 2..the cell's current column span")
+  }
+
+  const spans = evenlyDistributeSpan(span, into)
+  const newCells: TableCell[] = spans.map((cellSpan, index) => {
+    const baseProps = index === 0 ? cell.props : undefined
+    const props = cellSpan > 1 ? { ...baseProps, gridSpan: cellSpan } : withoutGridSpan(baseProps)
+    return withTableCellProps(
+      { kind: 'table-cell', blocks: index === 0 ? cell.blocks : freezeArray<Block>([emptyParagraph()]) },
+      props,
+    )
+  })
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextRow = cloneTableRow(
+      row,
+      freezeArray([...row.cells.slice(0, cmd.cellIndex), ...newCells, ...row.cells.slice(cmd.cellIndex + 1)]),
+    )
+    return cloneTableFull(t, replaceArrayItem(t.rows, cmd.rowIndex, nextRow), t.tblGrid)
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+function applyResizeTableColumn(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'resize-table-column' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const columnCount = tableColumnCount(table)
+  if (cmd.columnIndex < 0 || cmd.columnIndex >= columnCount) {
+    throw new Error('ResizeTableColumn column index is out of range')
+  }
+  if (cmd.widthTwips < MIN_COLUMN_WIDTH_TWIPS) {
+    throw new Error('ResizeTableColumn width is too small')
+  }
+
+  const width = twip(cmd.widthTwips)
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextGrid =
+      t.tblGrid !== undefined
+        ? freezeArray(t.tblGrid.map((w, index) => (index === cmd.columnIndex ? width : w)))
+        : t.tblGrid
+    const nextRows = t.rows.map((row) =>
+      row.kind === 'table-row' ? resizeColumnInRow(row, cmd.columnIndex, width) : row,
+    )
+    return cloneTableFull(t, freezeArray(nextRows), nextGrid)
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+function applyReplaceTable(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'replace-table' }>,
+): { document: Document; inverse: Command } {
+  const original = requireTableAt(doc, cmd.tablePath)
+  const nextDocument = updateTable(doc, cmd.tablePath, () => cmd.table)
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table: original },
+  }
+}
+
+/** See `commandTypes.ts`'s `ApplyTablePropsCommand` doc comment for why this
+ * replaces `props` wholesale rather than merging like the run/paragraph
+ * format commands do. */
+function withTableProps(table: Table, props: TableProps | undefined): Table {
+  return Object.freeze({
+    kind: 'table',
+    ...(props !== undefined ? { props } : {}),
+    ...(table.tblGrid !== undefined ? { tblGrid: table.tblGrid } : {}),
+    rows: table.rows,
+  })
+}
+
+function applyTableProps(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'apply-table-props' }>,
+): { document: Document; inverse: Command } {
+  const original = requireTableAt(doc, cmd.tablePath)
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => withTableProps(t, cmd.props))
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'apply-table-props', tablePath: cmd.tablePath, props: original.props },
   }
 }
 
@@ -732,6 +1350,69 @@ export function findParagraph(
   return findParagraphInBlocks(section.blocks, resolvedPath.blockPath)
 }
 
+export type EnclosingTable = {
+  readonly tablePath: ReadonlyArray<number>
+  readonly table: Table
+  readonly rowIndex: number
+  readonly cellIndex: number
+}
+
+/**
+ * DXE-14 — given any paragraph path, finds the *innermost* table cell it
+ * sits directly inside (`null` when it isn't inside one at all). Used by
+ * Input.ts's Tab/Shift+Tab cell navigation and by the toolbar's table
+ * commands to resolve "the table/row/cell the cursor is currently in"
+ * without duplicating the block-path recursion `updateBlocksAtPath` already
+ * walks for edits.
+ */
+export function findEnclosingTable(
+  doc: Document,
+  paragraphPath: ReadonlyArray<number>,
+): EnclosingTable | null {
+  const resolved = resolveParagraphPath(doc, paragraphPath)
+  if (resolved === null) {
+    return null
+  }
+
+  const section = doc.sections[resolved.sectionIndex]
+  if (section === undefined) {
+    return null
+  }
+
+  return findEnclosingTableInBlocks(section.blocks, [resolved.sectionIndex], resolved.blockPath)
+}
+
+function findEnclosingTableInBlocks(
+  blocks: ReadonlyArray<Block>,
+  pathPrefix: ReadonlyArray<number>,
+  blockPath: ReadonlyArray<number>,
+): EnclosingTable | null {
+  if (blockPath.length === 0) {
+    return null
+  }
+
+  const [blockIndex, ...rest] = blockPath
+  const block = blocks[blockIndex]
+  if (block === undefined || rest.length === 0 || block.kind !== 'table') {
+    return null
+  }
+
+  const tablePath = freezeArray([...pathPrefix, blockIndex])
+  const [rowIndex, cellIndex, ...childPath] = rest
+  const row = block.rows[rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    return null
+  }
+  const cell = row.cells[cellIndex]
+  if (cell === undefined || cell.kind !== 'table-cell') {
+    return null
+  }
+
+  // Prefer a more deeply nested table when the path reaches into one.
+  const nested = findEnclosingTableInBlocks(cell.blocks, freezeArray([...tablePath, rowIndex, cellIndex]), childPath)
+  return nested ?? { tablePath, table: block, rowIndex, cellIndex }
+}
+
 export function replaceParagraph(
   doc: Document,
   paragraphPath: ReadonlyArray<number>,
@@ -753,9 +1434,112 @@ export function replaceParagraph(
 // Text editing (D12 — cross-paragraph, cross-run, hyperlink-aware)
 // ---------------------------------------------------------------------------
 
+/**
+ * DXE-11 — decides which owner a freshly-typed run should get. Untracked
+ * (`trackChanges` absent/disabled), this always returns `currentOwner`
+ * unchanged — exactly the pre-DXE-11 behavior of extending whatever run/
+ * hyperlink/owner already sits at the insertion point. Tracked, it also
+ * extends when `currentOwner` is already a pending insertion by the *same*
+ * author ("typing inside your own pending insertion extends it," rather than
+ * nesting a new `w:ins` inside the last one on every keystroke); otherwise it
+ * mints a fresh `w:ins` wrapper, so newly-typed text next to plain content,
+ * next to someone else's tracked insertion, or next to an already-tracked
+ * deletion, always gets its own new revision.
+ */
+function resolveInsertOwner(
+  doc: Document,
+  trackChanges: TrackChangesContext | undefined,
+  currentOwner: RunOwner,
+): RunOwner {
+  if (trackChanges === undefined || !trackChanges.enabled) {
+    return currentOwner
+  }
+
+  if (currentOwner.kind === 'ins-revision' && currentOwner.wrapper.author === trackChanges.author) {
+    return currentOwner
+  }
+
+  return {
+    kind: 'ins-revision',
+    wrapper: createInsRevisionWrapper(doc, trackChanges),
+  }
+}
+
+function createInsRevisionWrapper(doc: Document, trackChanges: TrackChangesContext): InsRevision {
+  return Object.freeze({
+    kind: 'ins-revision',
+    id: nextRevisionId(doc),
+    author: trackChanges.author,
+    date: trackChanges.date,
+    children: EMPTY_REVISION_CHILDREN,
+  })
+}
+
+function createDelRevisionWrapper(doc: Document, trackChanges: TrackChangesContext): DelRevision {
+  return Object.freeze({
+    kind: 'del-revision',
+    id: nextRevisionId(doc),
+    author: trackChanges.author,
+    date: trackChanges.date,
+    children: EMPTY_REVISION_CHILDREN,
+  })
+}
+
+/**
+ * Every `w:id` already used by an `ins-revision`/`del-revision` anywhere in
+ * the document (including inside table cells — mirroring
+ * `findRevisionTargetInBlocks`'s own recursion depth), so a freshly minted
+ * revision's id can never collide with one carried over from the source
+ * file. `w:id` only needs to be unique, not contiguous, so returning
+ * `max + 1` (starting at `1` for a document with none yet) is enough.
+ */
+function nextRevisionId(doc: Document): string {
+  let max = 0
+  for (const section of doc.sections) {
+    max = Math.max(max, maxRevisionIdInBlocks(section.blocks))
+  }
+  return String(max + 1)
+}
+
+function maxRevisionIdInBlocks(blocks: ReadonlyArray<Block>): number {
+  let max = 0
+  for (const block of blocks) {
+    if (block.kind === 'paragraph') {
+      for (const child of block.children) {
+        if (child.kind === 'ins-revision' || child.kind === 'del-revision') {
+          const parsed = Number.parseInt(child.id, 10)
+          if (Number.isFinite(parsed)) {
+            max = Math.max(max, parsed)
+          }
+        }
+      }
+      continue
+    }
+
+    if (block.kind !== 'table') {
+      continue
+    }
+
+    for (const row of block.rows) {
+      if (row.kind !== 'table-row') {
+        continue
+      }
+
+      for (const cell of row.cells) {
+        if (cell.kind === 'table-cell') {
+          max = Math.max(max, maxRevisionIdInBlocks(cell.blocks))
+        }
+      }
+    }
+  }
+
+  return max
+}
+
 function applyInsertText(
   doc: Document,
   cmd: Extract<Command, { kind: 'insert-text' }>,
+  trackChanges?: TrackChangesContext,
 ): {
   document: Document
   inverse: Command
@@ -778,8 +1562,9 @@ function applyInsertText(
       throw new Error('InsertText position is outside the paragraph')
     }
 
+    const owner = resolveInsertOwner(doc, trackChanges, DIRECT_OWNER)
     const insertedRun = createRunWithText(undefined, cmd.text)
-    const nextParagraph = cloneParagraph(paragraph, [insertedRun])
+    const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren([{ run: insertedRun, owner }]))
     const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
     const start = createPosition(cmd.at.paragraphPath, 0, 0)
     const end = createPosition(cmd.at.paragraphPath, 0, cmd.text.length)
@@ -796,18 +1581,29 @@ function applyInsertText(
 
   // DXE-18/D18 — `resolveInsertTarget`'s own end-of-paragraph branch resolves
   // "insert at the very end" to `{runIndex: lastIndex, charOffset: 0}` when
-  // the last entry is an atomic one (image/break/tab, zero-length "text") —
-  // exactly what happens when a user keeps typing right after inserting an
-  // image at the end of a paragraph. Splicing a new sibling text run in
-  // after it (rather than calling createRunLike on it, which would silently
-  // replace its non-text child with a plain text node — see
-  // toRunEntryOrNull) keeps the image and places the typed text right after
-  // it, matching what the user was actually doing.
-  if (isAtomicRun(current.run)) {
+  // the last entry is an atomic image/break/tab run (exactly what happens
+  // when a user keeps typing right after inserting an image at the end of a
+  // paragraph), or (DXE-11) an already-tracked-deletion entry, which is
+  // presented with zero width the same way for the same reason (see
+  // `getEditableRuns`'s `del-revision` case) even though its *real* run text
+  // is non-empty. Splicing a new sibling text run in after it (rather than
+  // calling createRunLike on it, which would silently replace its non-text
+  // child with a plain text node — see toRunEntryOrNull — or, for a
+  // del-revision entry, silently overwrite the deleted text with whatever
+  // was just typed) keeps it intact and places the typed text right after
+  // it, matching what the user was actually doing. Deliberately checked as
+  // two explicit shape tests rather than `current.text.length === 0`: an
+  // ordinary, genuinely-empty text run (e.g. an emptied-out paragraph — see
+  // `applyDeleteSpan`'s own empty-paragraph fallback) also reports a
+  // zero-length `.text` but is not a boundary — it must still take the
+  // normal splice path below so typing into it replaces its content in
+  // place instead of leaving a stray empty run behind.
+  if (isAtomicRun(current.run) || current.owner.kind === 'del-revision') {
+    const owner = resolveInsertOwner(doc, trackChanges, current.owner)
     const insertedRun = createRunWithText(undefined, cmd.text)
     const nextEntries: RunEntry[] = [
       ...editableRuns.slice(0, target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
-      { run: insertedRun, owner: current.owner },
+      { run: insertedRun, owner },
       ...editableRuns.slice(target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
     ]
 
@@ -823,21 +1619,63 @@ function applyInsertText(
     }
   }
 
-  const nextText =
-    current.text.slice(0, target.charOffset) +
-    cmd.text +
-    current.text.slice(target.charOffset)
+  const owner = resolveInsertOwner(doc, trackChanges, current.owner)
 
-  const nextEntries = editableRuns.map((entry, index): RunEntry =>
-    index === target.runIndex
-      ? { run: createRunLike(entry.run, nextText, entry.run.props), owner: entry.owner }
-      : { run: entry.run, owner: entry.owner },
-  )
+  if (sameOwner(owner, current.owner)) {
+    // Untracked, or typing inside your own pending insertion (DXE-11): a
+    // simple in-place text splice, exactly the pre-DXE-11 behavior — no new
+    // wrapper, no run split.
+    const nextText =
+      current.text.slice(0, target.charOffset) +
+      cmd.text +
+      current.text.slice(target.charOffset)
+
+    const nextEntries = editableRuns.map((entry, index): RunEntry =>
+      index === target.runIndex
+        ? { run: createRunLike(entry.run, nextText, entry.run.props), owner: entry.owner }
+        : { run: entry.run, owner: entry.owner },
+    )
+
+    const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
+    const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
+    const start = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset)
+    const end = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset + cmd.text.length)
+
+    return {
+      document: nextDocument,
+      inverse: createDeleteRangeCommand(start, end),
+      range: { anchor: end, focus: end },
+    }
+  }
+
+  // DXE-11 — Track Changes is on and the caret sits inside a run that isn't
+  // already a pending insertion of ours: split that run at the caret (both
+  // halves keep its original owner untouched — plain text stays plain,
+  // someone else's tracked insertion stays theirs) and splice the freshly
+  // typed text in between as its own new `w:ins`-owned run, inheriting the
+  // split run's formatting the same way the untracked splice above always
+  // has.
+  const leftText = current.text.slice(0, target.charOffset)
+  const rightText = current.text.slice(target.charOffset)
+  const insertedRun = createRunWithText(current.run.props, cmd.text)
+  const insertedIndex = target.runIndex + (leftText.length > 0 ? 1 : 0)
+
+  const nextEntries: RunEntry[] = [
+    ...editableRuns.slice(0, target.runIndex).map((entry) => ({ run: entry.run, owner: entry.owner })),
+    ...(leftText.length > 0
+      ? [{ run: createRunLike(current.run, leftText, current.run.props), owner: current.owner }]
+      : []),
+    { run: insertedRun, owner },
+    ...(rightText.length > 0
+      ? [{ run: createRunLike(current.run, rightText, current.run.props), owner: current.owner }]
+      : []),
+    ...editableRuns.slice(target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
+  ]
 
   const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
   const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
-  const start = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset)
-  const end = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset + cmd.text.length)
+  const start = createPosition(cmd.at.paragraphPath, insertedIndex, 0)
+  const end = createPosition(cmd.at.paragraphPath, insertedIndex, cmd.text.length)
 
   return {
     document: nextDocument,
@@ -849,6 +1687,7 @@ function applyInsertText(
 function applyDeleteRange(
   doc: Document,
   cmd: DeleteRangeCommand,
+  trackChanges?: TrackChangesContext,
 ): {
   document: Document
   inverse: Command
@@ -863,7 +1702,7 @@ function applyDeleteRange(
     }
   }
 
-  return applyDeleteSpan(doc, range)
+  return applyDeleteSpan(doc, range, trackChanges)
 }
 
 /**
@@ -874,10 +1713,21 @@ function applyDeleteRange(
  * paragraph before `range.anchor`, keep the content of the last affected
  * paragraph after `range.focus`, merge those two halves into one paragraph,
  * and splice it in place of every paragraph the range touched.
+ *
+ * DXE-11 — when Track Changes is on *and* the whole range sits inside one
+ * paragraph, the deleted content is kept and wrapped in a fresh `w:del`
+ * (`buildTrackedDeleteParagraph`) instead of being dropped. A range spanning
+ * several paragraphs still deletes untracked even with Track Changes on: a
+ * merge across paragraph boundaries would need to record a deleted
+ * *paragraph mark* (`w:pPr/w:rPr/w:del`) to be reversible, which this editor's
+ * model doesn't represent yet — a documented scope cut rather than an
+ * oversight, left for a follow-up once cross-paragraph tracked deletion is
+ * needed.
  */
 function applyDeleteSpan(
   doc: Document,
   range: Range,
+  trackChanges?: TrackChangesContext,
 ): {
   document: Document
   inverse: Command
@@ -934,22 +1784,10 @@ function applyDeleteSpan(
   const firstParagraph = paragraphs[0]
   const lastParagraph = paragraphs[paragraphs.length - 1]
 
-  const firstRuns = requireEditableRuns(firstParagraph)
-  const lastRuns = requireEditableRuns(lastParagraph)
-
-  const beforeEntries = splitEntriesAtPosition(firstRuns, range.anchor).beforeEntries
-  const afterEntries = splitEntriesAtPosition(lastRuns, range.focus).afterEntries
-
-  const mergedEntries = mergeAdjacentEntries([...beforeEntries, ...afterEntries])
-  // Deleting every run's text still leaves the paragraph holding one
-  // (now-empty) run rather than none, matching the representation the rest of
-  // the pipeline (e.g. InsertText's own empty-paragraph branch) already
-  // treats as "an empty paragraph" the model was loaded/created with.
-  const mergedChildren =
-    mergedEntries.length > 0
-      ? buildParagraphChildren(mergedEntries)
-      : freezeArray<ParagraphChild>([createRunWithText(firstRuns[0]?.run.props, '')])
-  const mergedParagraph = cloneParagraph(firstParagraph, mergedChildren)
+  const mergedParagraph =
+    trackChanges?.enabled === true && paragraphs.length === 1
+      ? buildTrackedDeleteParagraph(doc, firstParagraph, range, trackChanges)
+      : buildPlainDeleteParagraph(firstParagraph, lastParagraph, range)
 
   const nextSiblingBlocks = freezeArray([
     ...siblingBlocks.slice(0, startIndex),
@@ -972,6 +1810,75 @@ function applyDeleteSpan(
     },
     range: { anchor: collapsedAt, focus: collapsedAt },
   }
+}
+
+function buildPlainDeleteParagraph(
+  firstParagraph: Paragraph,
+  lastParagraph: Paragraph,
+  range: Range,
+): Paragraph {
+  const firstRuns = requireEditableRuns(firstParagraph)
+  const lastRuns = requireEditableRuns(lastParagraph)
+
+  const beforeEntries = splitEntriesAtPosition(firstRuns, range.anchor).beforeEntries
+  const afterEntries = splitEntriesAtPosition(lastRuns, range.focus).afterEntries
+
+  const mergedEntries = mergeAdjacentEntries([...beforeEntries, ...afterEntries])
+  // Deleting every run's text still leaves the paragraph holding one
+  // (now-empty) run rather than none, matching the representation the rest of
+  // the pipeline (e.g. InsertText's own empty-paragraph branch) already
+  // treats as "an empty paragraph" the model was loaded/created with.
+  const mergedChildren =
+    mergedEntries.length > 0
+      ? buildParagraphChildren(mergedEntries)
+      : freezeArray<ParagraphChild>([createRunWithText(firstRuns[0]?.run.props, '')])
+  return cloneParagraph(firstParagraph, mergedChildren)
+}
+
+/**
+ * DXE-11 — Track Changes is on and the whole selection sits inside one
+ * paragraph: keep the selected text instead of dropping it, marking it
+ * `w:del` so Reject can restore it later. The one exception is a slice
+ * that's already part of a *pending insertion by this same author*: text
+ * that was never actually committed is removed outright, shrinking (or
+ * fully removing) that `w:ins` — the deletion counterpart of "typing inside
+ * your own pending insertion extends it" — rather than nesting a `w:del`
+ * inside a `w:ins` that reflects nothing Word itself does for your own
+ * still-open edit. Every other slice (plain text, someone else's tracked
+ * insertion, or a hyperlink's runs — whose wrapper is intentionally dropped
+ * here, a documented limitation: DXE-11 doesn't extend the del-revision
+ * model to carry a nested hyperlink target) is re-owned under one freshly
+ * minted `DelRevision` shared across the whole deleted span, so a selection
+ * touching several such slices still comes out as a single `<w:del>` rather
+ * than one per slice.
+ */
+function buildTrackedDeleteParagraph(
+  doc: Document,
+  paragraph: Paragraph,
+  range: Range,
+  trackChanges: TrackChangesContext,
+): Paragraph {
+  const editableRuns = requireEditableRuns(paragraph)
+  const offsets = getRangeOffsets(paragraph, range)
+  const { before, within, after } = sliceEntriesByOffsets(editableRuns, offsets)
+
+  const survivors = within.filter(
+    (entry) => !(entry.owner.kind === 'ins-revision' && entry.owner.wrapper.author === trackChanges.author),
+  )
+
+  if (survivors.length === 0) {
+    const mergedEntries = mergeAdjacentEntries([...before, ...after])
+    const mergedChildren =
+      mergedEntries.length > 0
+        ? buildParagraphChildren(mergedEntries)
+        : freezeArray<ParagraphChild>([createRunWithText(editableRuns[0]?.run.props, '')])
+    return cloneParagraph(paragraph, mergedChildren)
+  }
+
+  const delOwner: RunOwner = { kind: 'del-revision', wrapper: createDelRevisionWrapper(doc, trackChanges) }
+  const deletedEntries: RunEntry[] = survivors.map((entry) => ({ run: entry.run, owner: delOwner }))
+  const mergedEntries = mergeAdjacentEntries([...before, ...deletedEntries, ...after])
+  return cloneParagraph(paragraph, buildParagraphChildren(mergedEntries))
 }
 
 function applyInsertParagraphBreak(
@@ -1543,6 +2450,46 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> | nul
       continue
     }
 
+    if (child.kind === 'ins-revision') {
+      const owner: RunOwner = { kind: 'ins-revision', wrapper: child }
+      for (const grandchild of child.children) {
+        if (grandchild.kind !== 'run') {
+          return null
+        }
+
+        const entry = toRunEntryOrNull(grandchild, owner)
+        if (entry === null) {
+          return null
+        }
+
+        editableRuns.push(entry)
+      }
+      continue
+    }
+
+    if (child.kind === 'del-revision') {
+      // DXE-11 — an already-tracked deletion's text is presented with zero
+      // width, exactly like an atomic image/tab/break run (see
+      // `toRunEntryOrNull`): the surrounding paragraph stays fully editable,
+      // but the struck-through text itself is never a target a caret
+      // position can land inside or a delete/insert range can split — it
+      // reads as a single boundary you type/delete around, matching how a
+      // reviewer reads (not edits) already-rejected-pending content. Each
+      // grandchild run must still be text-only (checked via `getRunText`, not
+      // just assumed) so a deleted drawing/tab/break — a shape this editor
+      // doesn't specifically model as "deleted" — still conservatively
+      // rejects the whole paragraph rather than silently mishandling it.
+      const owner: RunOwner = { kind: 'del-revision', wrapper: child }
+      for (const grandchild of child.children) {
+        if (grandchild.kind !== 'run' || getRunText(grandchild) === null) {
+          return null
+        }
+
+        editableRuns.push({ run: grandchild, owner, text: '' })
+      }
+      continue
+    }
+
     return null
   }
 
@@ -1642,7 +2589,15 @@ function sameOwner(a: RunOwner, b: RunOwner): boolean {
     return true
   }
 
-  return a.kind === 'hyperlink' && b.kind === 'hyperlink' && a.wrapper === b.wrapper
+  if (a.kind === 'hyperlink' && b.kind === 'hyperlink') {
+    return a.wrapper === b.wrapper
+  }
+
+  if (a.kind === 'ins-revision' && b.kind === 'ins-revision') {
+    return a.wrapper === b.wrapper
+  }
+
+  return a.kind === 'del-revision' && b.kind === 'del-revision' && a.wrapper === b.wrapper
 }
 
 /**

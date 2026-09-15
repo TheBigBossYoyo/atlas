@@ -671,6 +671,38 @@ describe('docx editor commands', () => {
     expect(reverted.document).toEqual(original)
   })
 
+  it("InsertTable inserts a caller-supplied table verbatim when `table` is given (DXE-19 paste fidelity)", () => {
+    const original = createDocument([createParagraph(['AtlasDoc'])])
+    const prebuilt: Table = {
+      kind: 'table',
+      tblGrid: [twip(1000), twip(2000)],
+      rows: [
+        {
+          kind: 'table-row',
+          cells: [
+            { kind: 'table-cell', blocks: [{ kind: 'paragraph', children: [{ kind: 'run', children: [{ kind: 'text', value: 'A' }] }] }] },
+            { kind: 'table-cell', props: { gridSpan: 1 }, blocks: [{ kind: 'paragraph', children: [] }] },
+          ],
+        },
+      ],
+    }
+
+    const result = applyCommand(original, {
+      kind: 'insert-table',
+      at: position([0], 0, 5),
+      rows: 1,
+      cols: 1,
+      table: prebuilt,
+    })
+
+    const blocks = result.document.sections[0].blocks
+    const table = blocks[1] as Table
+    expect(table).toEqual(prebuilt)
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
   it('InsertHyperlink wraps a collapsed cursor with the link text and undoes exactly', () => {
     const original = createDocument([createParagraph(['Visit  today'])])
 

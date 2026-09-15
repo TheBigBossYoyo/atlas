@@ -9,6 +9,7 @@ import {
   type FormEvent,
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react'
 
 import { Printer, Save, X, ZoomIn, ZoomOut } from 'lucide-react'
@@ -54,6 +55,7 @@ import {
   ensureListNumbering,
   findAll,
   findNext,
+  findEnclosingTable,
   findParagraph,
   findPrev,
   handleBeforeInput,
@@ -61,20 +63,29 @@ import {
   insertHyperlinkIntoBundle,
   insertImageIntoBundle,
   buildPasteCommands,
+  buildRichPasteCommands,
+  bundleContextFor,
+  friendlyDocxErrorMessage,
   htmlToParagraphs,
+  htmlToPasteBlocks,
   textToParagraphs,
   toolbarToCommand,
   useComposition,
   useSpellCheck,
   type Command,
+  type EnclosingTable,
   type FindOptions,
   type ImageMimeType,
+  type PasteBlock,
+  type Position,
   type Range,
+  type TrackChangesContext,
 } from '../docx/editor'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
 import { comparePositions } from '../docx/editor/Selection'
 import { domPointToPosition, positionToDomRange } from '../docx/editor/Cursor'
 import { Toolbar } from '../docx/editor/toolbar/Toolbar'
+import { TableEditMenuItems } from '../docx/editor/toolbar/TableEditMenuItems'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
 import './__styles__/viewer-docx.css'
 import { useRegisterViewerSave, useSetNavItems, useSetViewerDirty, useSetViewerStats } from './shared/useViewerContext'
@@ -387,6 +398,30 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<Run> {
   })
 }
 
+/**
+ * DXE-14 — seed values for the table properties dialog, read straight off
+ * the enclosing table's own `props` so opening the dialog shows what the
+ * table actually has rather than a fixed default. `null` fields mean "not
+ * inside a table" (the dialog stays disabled) or "no explicit value set on
+ * this table" (the dialog falls back to its own placeholder default).
+ * `tableBordersOn` only inspects the top border as a representative sample —
+ * a table with a genuinely mixed on/off border set is a finer distinction
+ * this basic on/off toggle doesn't attempt to preserve, matching Word's own
+ * "Borders" quick-toggle rather than its full per-edge borders dialog.
+ */
+function tableToolbarFields(
+  enclosing: EnclosingTable | null,
+): Pick<ToolbarState, 'insideTable' | 'tableWidthTwips' | 'tableAlignment' | 'tableBordersOn'> {
+  const props = enclosing?.table.props
+
+  return {
+    insideTable: enclosing !== null,
+    tableWidthTwips: props?.tblW?.type === 'dxa' && typeof props.tblW.value === 'number' ? props.tblW.value : null,
+    tableAlignment: props?.jc === 'center' ? 'center' : props?.jc === 'end' ? 'right' : props?.jc === 'start' ? 'left' : null,
+    tableBordersOn: props?.tblBorders?.top?.style !== 'none' && props?.tblBorders?.top?.style !== 'nil',
+  }
+}
+
 function createToolbarState(
   document: DocxDocument,
   range: Range | null,
@@ -394,6 +429,10 @@ function createToolbarState(
 ): ToolbarState {
   const paragraph = range ? findParagraph(document, range.focus.paragraphPath) : null
   const activeFormats = new Set<'bold' | 'italic' | 'underline' | 'strike' | 'subscript' | 'superscript'>()
+  // DXE-14 — gates the table-editing button group and seeds the table
+  // properties dialog.
+  const enclosingTable = range !== null ? findEnclosingTable(document, range.focus.paragraphPath) : null
+  const tableFields = tableToolbarFields(enclosingTable)
 
   if (paragraph !== null && range !== null) {
     const run = getEditableRuns(paragraph)[range.focus.runIndex]
@@ -433,6 +472,7 @@ function createToolbarState(
       styleId: paragraph.props?.pStyle ?? null,
       spellCheck: liveState.spellCheck,
       trackChanges: liveState.trackChanges,
+      ...tableFields,
     }
   }
 
@@ -444,6 +484,7 @@ function createToolbarState(
     styleId: null,
     spellCheck: liveState.spellCheck,
     trackChanges: liveState.trackChanges,
+    ...tableFields,
   }
 }
 
@@ -663,6 +704,11 @@ function DocxEditor({
   const [fieldUpdateMessage, setFieldUpdateMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
   const [range, setRange] = useState<Range | null>(null)
+  // DXE-14 — right-click table-editing context menu; `null` when closed.
+  // Screen coordinates only (not which table/cell), since by the time a
+  // menu item fires, `range` (synced onto the click below) is already the
+  // source of truth `handleToolbarCommand`/`toolbarToCommand` resolve against.
+  const [tableContextMenuAt, setTableContextMenuAt] = useState<{ x: number; y: number } | null>(null)
   const [pages, setPages] = useState<ReadonlyArray<Page> | null>(null)
   const [paginationProgress, setPaginationProgress] = useState<PaginationProgress | null>(null)
   const [paginationError, setPaginationError] = useState<string | null>(null)
@@ -684,6 +730,21 @@ function DocxEditor({
   // `zoom` prop); this was simply never wired to anything, hardcoded to 1
   // below. Percent steps match the common Word/most-viewers convention.
   const [zoom, setZoom] = useState(1)
+  // DXE-11 — the context threaded into Input.ts so a genuine typed
+  // insertion/deletion (never History's own undo/redo replay — see
+  // `InputContext`'s own doc comment) is recorded as `w:ins`/`w:del`.
+  // `author` is a static "Atlas" rather than the OS user's real name: Word
+  // itself falls back to a generic label when it can't resolve one, and
+  // wiring a real OS-username IPC channel would mean adding one in
+  // electron/main.cjs + preload.cjs, both outside this task's editor-only
+  // ownership boundary (see the wave plan) and shared with other in-flight
+  // branches. Recomputed fresh on every keystroke (not memoized) so `date`
+  // is always "now," matching what Word itself stamps per edit.
+  const getTrackChanges = useCallback((): TrackChangesContext | undefined => {
+    return trackChangesEnabled
+      ? { enabled: true, author: 'Atlas', date: new Date().toISOString() }
+      : undefined
+  }, [trackChangesEnabled])
   const [spellCheckEnabled, setSpellCheckEnabled] = useState(true)
   const composition = useComposition()
   const spellCheck = useSpellCheck()
@@ -766,6 +827,17 @@ function DocxEditor({
     [commitState, documentModel, range],
   )
 
+  // DXE-14 — column resize by dragging a table's column border
+  // (PageView.tsx's TableColumnResizeHandle, threaded here through
+  // PageStack). A drag fires this exactly once, on release, with the final
+  // width — never a stream of intermediate commands per pixel moved.
+  const handleResizeTableColumn = useCallback(
+    (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => {
+      applyEditorCommand({ kind: 'resize-table-column', tablePath, columnIndex, widthTwips })
+    },
+    [applyEditorCommand],
+  )
+
   // DXE-02/DXE-17 — a whole command batch (paste, Replace All) is wrapped in
   // one `composite` command instead of applied+pushed one at a time: if any
   // sub-command throws, `applyCommand`'s own composite handling means NOTHING
@@ -776,14 +848,14 @@ function DocxEditor({
   // batch pushes exactly one inverse, so Ctrl+Z undoes the whole batch in one
   // step.
   const applyEditorCommands = useCallback(
-    (commands: ReadonlyArray<Command>, nextRange: Range | null): boolean => {
+    (commands: ReadonlyArray<Command>, nextRange: Range | null, trackChanges?: TrackChangesContext): boolean => {
       if (commands.length === 0) {
         return false
       }
 
       try {
         const batch: Command = commands.length === 1 ? commands[0] : { kind: 'composite', commands }
-        const result = applyCommand(documentModel, batch)
+        const result = applyCommand(documentModel, batch, trackChanges)
         historyRef.current.push(result.inverse)
         // Prefer the caller's own cursor computation (e.g. buildPasteCommands'
         // finalCursor) over the composite's own `range` (the LAST
@@ -807,6 +879,37 @@ function DocxEditor({
     const nextRange = getSelectionFromDom(root)
     setRange(current => (rangeEquals(current, nextRange) ? current : nextRange))
   }, [])
+
+  /**
+   * DXE-14 — right-click inside a table cell opens Atlas's own table-editing
+   * menu instead of the native context menu; right-clicking anywhere else
+   * leaves the native menu alone (this viewer doesn't yet have a general
+   * replacement for it — cut/copy/paste, spell-check suggestions, etc.).
+   * Reads the DOM selection directly (`getSelectionFromDom`) rather than the
+   * `range` state, which a right-click's `mousedown` has already moved in
+   * the real DOM by the time this fires but this component's `onMouseUp`
+   * sync hasn't caught up with yet — see the `onContextMenu`/`onMouseUp`
+   * ordering note on the surface element below.
+   */
+  const handleTableContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      const root = editorRootRef.current
+      if (root === null) {
+        return
+      }
+
+      const domRange = getSelectionFromDom(root)
+      const enclosing = domRange === null ? null : findEnclosingTable(documentModel, domRange.focus.paragraphPath)
+      if (enclosing === null) {
+        return
+      }
+
+      event.preventDefault()
+      setRange(domRange)
+      setTableContextMenuAt({ x: event.clientX, y: event.clientY })
+    },
+    [documentModel],
+  )
 
   const mediaResolver = useArchiveMediaResolver(bundle.rawArchive, bundle.relationships)
 
@@ -910,6 +1013,58 @@ function DocxEditor({
     [bundle, commitState, documentModel, onBundleChange, range],
   )
 
+  // DXE-19 — rich HTML paste (tables/hyperlinks/images/colors/lists) is
+  // async (image natural-size decoding needs it), unlike every other
+  // editor command, so it can't reuse `applyEditorCommands` directly: it
+  // applies its own composite command once `buildRichPasteCommands`
+  // resolves, folding in a bundle patch (new relationships/media/numbering)
+  // in the same `onBundleChange` as the document update, matching
+  // `handleInsertImage`/`handleInsertHyperlink`'s own bundle+document
+  // pairing above. `documentModel`/`bundle` are captured at call time (the
+  // same closure-capture hazard those two helpers already accept for their
+  // own async picker/decode work), so a paste started just before another
+  // edit lands could in principle race it — acceptable for a user-initiated,
+  // effectively-instantaneous paste.
+  //
+  // DXE-11 — `getTrackChanges()` is passed the same way Input.ts's keyboard
+  // handlers pass it, so pasted text lands as `w:ins` (not a silent,
+  // untracked insertion) whenever Track Changes is on; `applyComposite`
+  // forwards it to each streamed `insert-text` sub-command exactly as a
+  // single one would get it. Sub-commands that don't consult `trackChanges`
+  // (`insert-table`, `apply-run-format`, `insert-hyperlink`) are unaffected —
+  // see `applyComposite`'s own doc comment.
+  const handleRichPaste = useCallback(
+    (blocks: ReadonlyArray<PasteBlock>, focus: Position, selection: Range | null) => {
+      void (async () => {
+        try {
+          const result = await buildRichPasteCommands(
+            documentModel,
+            bundleContextFor(bundle),
+            blocks,
+            focus,
+            selection,
+          )
+          if (result === null) {
+            return
+          }
+
+          const batch: Command =
+            result.commands.length === 1 ? result.commands[0] : { kind: 'composite', commands: result.commands }
+          const applied = applyCommand(documentModel, batch, getTrackChanges())
+          historyRef.current.push(applied.inverse)
+          const finalRange: Range = { anchor: result.finalCursor, focus: result.finalCursor }
+          if (result.bundlePatch !== null) {
+            onBundleChange({ ...bundle, ...result.bundlePatch, document: applied.document })
+          }
+          commitState(applied.document, finalRange)
+        } catch (error) {
+          setSaveError(error instanceof Error ? error.message : String(error))
+        }
+      })()
+    },
+    [bundle, commitState, documentModel, getTrackChanges, onBundleChange],
+  )
+
   const handlePaste = useCallback(
     (event: ReactClipboardEvent<HTMLDivElement>) => {
       const clipboard = event.clipboardData
@@ -923,8 +1078,17 @@ function DocxEditor({
       }
 
       const html = clipboard.getData('text/html')
-      const text = clipboard.getData('text/plain')
 
+      if (html.length > 0) {
+        const blocks = htmlToPasteBlocks(html)
+        if (blocks.length > 0) {
+          event.preventDefault()
+          handleRichPaste(blocks, focus, range)
+          return
+        }
+      }
+
+      const text = clipboard.getData('text/plain')
       const paragraphs =
         html.length > 0 ? htmlToParagraphs(html) : textToParagraphs(text)
 
@@ -936,9 +1100,12 @@ function DocxEditor({
 
       const { commands, finalCursor } = buildPasteCommands(paragraphs, focus, range)
       const finalRange: Range = { anchor: finalCursor, focus: finalCursor }
-      applyEditorCommands(commands, finalRange)
+      // DXE-11 — plain-text/plain-paragraph paste (no parseable HTML, or
+      // `DOMParser` unavailable) is still an insertion; track it the same
+      // way the rich-paste path above does.
+      applyEditorCommands(commands, finalRange, getTrackChanges())
     },
-    [applyEditorCommands, range],
+    [applyEditorCommands, getTrackChanges, handleRichPaste, range],
   )
 
   const handleBeforeInputEvent = useCallback(
@@ -964,6 +1131,7 @@ function DocxEditor({
           document: documentModel,
           range,
           history: historyRef.current,
+          trackChanges: getTrackChanges(),
         }),
       )
 
@@ -974,7 +1142,7 @@ function DocxEditor({
         composition.markApplied(nativeEvent.data)
       }
     },
-    [applyResult, composition, documentModel, range],
+    [applyResult, composition, documentModel, getTrackChanges, range],
   )
 
   // Wave F.4 — refs for handlers defined later in this component, so the
@@ -1068,6 +1236,7 @@ function DocxEditor({
           document: documentModel,
           range,
           history: historyRef.current,
+          trackChanges: getTrackChanges(),
         }),
       )
 
@@ -1084,7 +1253,7 @@ function DocxEditor({
         event.preventDefault()
       }
     },
-    [applyResult, documentModel, range],
+    [applyResult, documentModel, getTrackChanges, range],
   )
 
   const handleCompositionStart = useCallback((event: FormEvent<HTMLDivElement>) => {
@@ -1107,10 +1276,11 @@ function DocxEditor({
           document: documentModel,
           range,
           history: historyRef.current,
+          trackChanges: getTrackChanges(),
         }),
       )
     },
-    [applyResult, composition.handlers, documentModel, range],
+    [applyResult, composition.handlers, documentModel, getTrackChanges, range],
   )
 
   const handleFind = useCallback((query: string, options: FindOptions) => {
@@ -1448,7 +1618,9 @@ function DocxEditor({
         setLastSavedDocument(documentModel)
         return true
       } catch (error) {
-        setSaveError(error instanceof Error ? error.message : String(error))
+        // RUN-14 — wrap JSZip/fast-xml-parser/DocxSaveError internals in a
+        // friendly, actionable message instead of showing the raw exception.
+        setSaveError(friendlyDocxErrorMessage(error, 'save'))
         return false
       }
     },
@@ -1823,6 +1995,7 @@ function DocxEditor({
           onCompositionUpdate={handleCompositionUpdate}
           onCompositionEnd={handleCompositionEnd}
           onPaste={handlePaste}
+          onContextMenu={handleTableContextMenu}
         >
           {pages !== null ? (
             <MediaContext.Provider value={mediaResolver}>
@@ -1832,6 +2005,7 @@ function DocxEditor({
                 document={documentModel}
                 theme={bundle.theme}
                 relationships={bundle.relationships}
+                onResizeTableColumn={handleResizeTableColumn}
               />
             </MediaContext.Provider>
           ) : paginationError !== null ? (
@@ -1872,6 +2046,32 @@ function DocxEditor({
             </div>
           )}
         </div>
+        {tableContextMenuAt !== null ? (
+          <>
+            {/* DXE-14 — a full-viewport transparent layer that closes the menu on
+                any outside click/right-click, mirroring Toolbar.tsx's popovers
+                (whose own useClickOutside hook isn't exported/reusable here). */}
+            <div
+              className="docx-viewer__context-menu-overlay"
+              onClick={() => setTableContextMenuAt(null)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                setTableContextMenuAt(null)
+              }}
+            />
+            <div
+              className="docx-toolbar__popover docx-viewer__context-menu"
+              style={{ position: 'fixed', top: tableContextMenuAt.y, left: tableContextMenuAt.x }}
+              role="menu"
+              aria-label="Table editing"
+            >
+              <TableEditMenuItems
+                onCommand={handleToolbarCommand}
+                onAfterCommand={() => setTableContextMenuAt(null)}
+              />
+            </div>
+          </>
+        ) : null}
         {commentsPaneOpen || documentModel.comments.size > 0 ? (
           <CommentsPane
             document={commentsDocument}
@@ -1959,7 +2159,8 @@ function DocxViewerBase({ file }: ViewerProps) {
           setBundle(null)
           setNavItems([])
           setStats(null)
-          setErrorMessage(error instanceof Error ? error.message : String(error))
+          // RUN-14 — see friendlyDocxErrorMessage's own doc comment.
+          setErrorMessage(friendlyDocxErrorMessage(error, 'open'))
         }
       }
     })()
@@ -2014,7 +2215,10 @@ function DocxViewerBase({ file }: ViewerProps) {
   }
 
   if (errorMessage !== null) {
-    return <div className="docx-viewer docx-viewer--error">Failed to render DOCX: {errorMessage}</div>
+    // RUN-14 — errorMessage is already a complete, friendly sentence (see
+    // friendlyDocxErrorMessage), so it's shown as-is rather than appended to
+    // a generic "Failed to render DOCX:" prefix.
+    return <div className="docx-viewer docx-viewer--error">{errorMessage}</div>
   }
 
   return (
