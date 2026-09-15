@@ -1,5 +1,35 @@
 # Atlas Phase 1 — Universal Document Viewer (Plan)
 
+> **Status as of 2026-09-15 (added retroactively — Task P4.9/QA-18).**
+> QA-18 found this document repeatedly asserting "COMPLETE, 151/151 tests"
+> at a point where the actual, re-run state was 6 lint errors, 3 test
+> failures, and 7 test suites that failed to even load — a real,
+> independently-reproduced gap between what this file claimed and what the
+> code did. Everything below this line is a **frozen historical record of
+> what was believed true at the time it was written**, not a live status
+> — treat every "✅ COMPLETE" checkmark below as "was believed complete on
+> the date this section was last edited," never as current ground truth.
+> Phase 1 has long since been superseded by Phase 2 (DOCX editing) and
+> Phase 3 (waves 1–2, merged) — for what has *actually* shipped as of any
+> given date, see `.sisyphus/plans/atlas-phase3-improvement.md`'s Section 13
+> ("Execution Status"), which is re-verified against `git log` and the code
+> itself rather than self-reported.
+>
+> **QA-20 (Phase 1's own closing baseline artifact, `.sisyphus/baselines/
+> atlas-phase1.json`, was never produced) is resolved here by dropping the
+> requirement rather than fabricating one retroactively.** The
+> `{ lintWarnings, lintErrors, tscErrors, distSizeKB, mainChunkKB }` shape
+> referenced below (line ~140, ~533-539) was superseded by Task P4.3's
+> per-chunk `.sisyphus/baselines/atlas-phase3-bundle.json` mechanism, which
+> tracks every `dist/assets` chunk rather than one snapshot's `mainChunkKB`.
+> Writing a same-shaped `atlas-phase1.json` today, backdated against numbers
+> measured long after Phase 1 actually closed, would misrepresent itself as
+> a contemporaneous record when it wouldn't be one — a second instance of
+> exactly the "documentation asserting something that wasn't independently
+> verified at the time" pattern QA-18 exists to stop. The genuinely useful
+> function this baseline was meant to serve (catch bundle-size regressions)
+> is fully covered by the newer, still-live mechanism instead.
+
 **Repo**: `C:\Users\Youssef\Documents\Projects\md-reader`
 **Target artifact**: `release/Atlas-Setup-2.0.0.exe` (in-place upgrade over `MD Reader` via shared `appId: com.mdreader.app`)
 **Mode**: VIEW-ONLY. No editing surfaces.

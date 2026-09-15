@@ -1,53 +1,48 @@
 # Atlas
 
-A universal document viewer & editor for Windows. Opens Word, Excel, PowerPoint, PDF, markdown, code, and more.
-
-Open files, edit them live, switch between five themes, render math and Mermaid diagrams, and export to PDF, DOCX, HTML, or Markdown.
+A universal document viewer & editor for Windows, built on Electron + React.
+Opens Word, Excel, PowerPoint, PDF, OpenDocument, plain text/code, RTF, and
+Markdown — 13 binary formats plus Markdown, all through one app.
 
 ---
 
-## Features
+## Features by format
 
-### Reading & Editing
-- **Live preview** with GitHub-flavored Markdown
-- **Editor** view for raw markdown
-- **Split** view — editor and preview side-by-side
-- **Autosave** drafts to local storage
-- **Save** / **Save As** to disk (Electron) or download (browser)
-- **Recent files** quick access from the welcome screen
+| Format | View | Edit + Save | Export |
+|---|---|---|---|
+| **Markdown** (`.md`) | Live preview, raw editor, split view, math (KaTeX), Mermaid diagrams, GFM tables/task lists, auto TOC, in-document find | Yes — autosave draft + Save/Save As | HTML, PDF, DOCX, Markdown |
+| **DOCX** (`.docx`) | Full layout fidelity (style cascade, pagination, lists, hyperlinks, headers/footers, track changes, comments) | Yes — text editing, formatting, lists/tables/hyperlinks/images/page breaks, undo/redo, accept/reject track changes; Save/Save As. *Not yet: table row/column insert-delete/merge-split, RTL, live field/TOC recalculation — see [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md)* | PDF (screenshot-based) |
+| **PDF** (`.pdf`) | Virtualized page rendering, text layer (select/copy), find, print, page rotation, thumbnails, password-protected files, link/form-field annotations | View-only | Save a copy |
+| **PPTX** (`.pptx`) / **ODP** (`.odp`) | Slide layout + master inheritance, run formatting, bullets, tables, grouped shapes, speaker notes, keyboard navigation, thumbnail rail | View-only | PDF (screenshot-based) |
+| **XLSX/ODS spreadsheets** (`.xlsx`, `.ods`) | Formatted values, merged cells, column widths, hidden sheets, frozen panes; parsed off the main thread | View-only on `main` (cell editing + write-back is in progress on an unmerged branch — see Known Limitations) | PDF (screenshot-based) |
+| **CSV / TSV** (`.csv`, `.tsv`) | Grid view via the same spreadsheet engine | View-only | PDF (screenshot-based) or a faithful CSV re-export |
+| **Plain text** (`.txt` and 40+ others) | Virtualized for large files, in-document find | View-only | PDF (screenshot-based) |
+| **Code** | Shiki syntax highlighting (30+ languages), virtualized, in-document find | View-only | PDF (screenshot-based) |
+| **RTF** (`.rtf`) | Rendered via `rtf.js` (including embedded WMF/EMF images), sanitized with DOMPurify, in-document find | View-only | PDF (screenshot-based) |
+| **ODT** (`.odt`) | Rendered via `odf-kit`, sanitized with DOMPurify, in-document find | View-only | PDF (screenshot-based) |
+| Legacy `.doc`/`.xls`/`.ppt` | Detected (CFB magic bytes) and given a friendly "open the modern equivalent" message | Not parsed | — |
 
-### Rendering
-- Syntax highlighting for all major languages
-- Math / LaTeX (KaTeX) — inline and block
-- Mermaid diagrams (flowcharts, sequence, gantt, etc.)
-- Auto-generated table of contents
-- In-document search (`Ctrl+F`)
+See [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md) for the honest,
+detailed gap list per format, and
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the file-open →
+detect → route → viewer pipeline and the editing/save contract work.
 
-### Themes
-Five built-in themes, persisted across sessions:
-- Light
-- Dark
-- Sepia
-- Nord
-- Dracula
+### Shell features
 
-Cycle with `Ctrl+T`.
-
-### Export
-- **PDF** — true PDF via html2canvas + jsPDF (multi-page A4)
-- **DOCX** — proper Word document via `docx` (headings, lists, tables, code, quotes, links)
-- **HTML** — standalone HTML5 file with embedded styles
-- **Markdown** — raw `.md` download
-
-### Quality of Life
-- Adjustable font size (`Ctrl++` / `Ctrl+-` / `Ctrl+0`)
-- Status bar with word/character/line counts and reading time
+- Five built-in themes (Light, Dark, Sepia, Nord, Dracula), persisted across
+  sessions, cycled with `Ctrl+T`
+- Recent files (welcome screen), drag-and-drop opening
+- Adjustable font size, status bar with word/character/line counts and
+  reading time
+- Close-confirmation prompt for unsaved changes; draft recovery
 - Shortcuts modal (`Ctrl+/`)
-- Drag-and-drop file opening
 
 ---
 
-## Keyboard Shortcuts
+## Keyboard shortcuts
+
+The authoritative list is the in-app `ShortcutsModal` (`Ctrl+/`,
+`src/components/ShortcutsModal.tsx`) — the table below mirrors it exactly.
 
 | Shortcut | Action |
 |---|---|
@@ -55,16 +50,22 @@ Cycle with `Ctrl+T`.
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save As |
 | `Ctrl+W` | Close file |
-| `Ctrl+P` | Print / export (format-dependent) |
+| `Ctrl+P` | Print / export |
 | `Ctrl+E` | Export menu |
-| `Ctrl+T` | Cycle theme |
-| `Ctrl+B` | Toggle sidebar |
-| `Ctrl+F` | Search in document (Markdown, Text, Code, RTF, ODT) |
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Preview / Split / Editor view (Markdown only) |
-| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Increase / decrease / reset font size |
-| `Ctrl+/` | Show all shortcuts |
+| `Ctrl+B` | Toggle sidebar |
+| `Ctrl+T` | Cycle theme |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Increase / decrease / reset font size |
+| `Ctrl+F` | Find in document (Markdown, Text, Code, RTF, ODT) |
+| `Enter` / `Shift+Enter` | Next / previous find match |
+| `Esc` | Close the open dialog/menu |
+| `Ctrl+/` | Toggle this shortcuts dialog |
 
-While editing a DOCX, its own editor shortcuts (Ctrl+B/I/U/E/L/R/J/P/S/K/F/H, Ctrl+1/2/5 for line spacing, Ctrl+Z/Y for undo/redo) take priority over the shell shortcuts above with the same key.
+While editing a DOCX, its own editor shortcuts (bold/italic/underline,
+alignment, find/replace, line spacing, undo/redo, save, print) take priority
+over the shell shortcuts above with the same key — see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#3-shortcut-dispatcher-precedence)
+for exactly how that precedence works.
 
 ---
 
@@ -72,15 +73,29 @@ While editing a DOCX, its own editor shortcuts (Ctrl+B/I/U/E/L/R/J/P/S/K/F/H, Ct
 
 ```bash
 npm install
-npm run dev          # Vite dev server (browser)
-npm run electron:dev # Electron dev (preferred for save/open)
+npm run dev            # Vite dev server (browser — no file save/open)
+npm run electron:dev   # Electron + Vite dev server (preferred: real file I/O)
 ```
 
 ## Build
 
 ```bash
-npm run build        # Type-check + Vite production build
-npm run electron:build
+npm run build            # prebuild (extension manifest) + tsc -b + vite build
+                          # + postbuild bundle-regression check
+npm run electron:build   # same, then packages a Windows installer
+npm run electron:preview # build + launch the packaged-shape app (no dev server)
+```
+
+## Test
+
+```bash
+npm test              # vitest run — unit + characterization + corpus suites
+npm run test:watch    # vitest watch mode
+npm run coverage       # vitest run --coverage (v8; see vitest.config.ts for
+                        # the enforced threshold floor and how to raise it)
+npx playwright test    # Electron end-to-end smoke suite (run `npx vite build`
+                        # first; workers: 1 — Electron holds a single-instance
+                        # lock, so e2e specs can't run in parallel)
 ```
 
 ## Lint
@@ -91,15 +106,44 @@ npm run lint
 
 ---
 
+## Architecture
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the file-open →
+detect → route → viewer pipeline, the `ViewerContext` document-session
+contract (`setDirty`/`registerSave`/`getExportableContent`), the shortcut
+dispatcher's precedence rules, the Electron IPC trust boundary (preload
+bridge, path allowlist, CSP, atomic writes), the hand-written DOCX engine
+pipeline, and the testing strategy.
+
 ## Stack
 
-- **React 19** + **TypeScript**
-- **Vite** for bundling
-- **Electron 35** for desktop file I/O
-- **docx-preview**, **xlsx**, **papaparse**, **react-pdf**
-- **shiki**, **react-window**, **glide-data-grid**
-- **marked** for parsing
-- **KaTeX** for math
-- **mermaid** for diagrams
-- **docx**, **jspdf**, **html2canvas** for exports
+- **React 19** + **TypeScript 6**, built with **Vite 8**
+- **Electron 35** for desktop file I/O (sandboxed renderer, no Node
+  integration — see `docs/ARCHITECTURE.md`)
+- **DOCX**: a hand-written parser/model/layout/editor/serializer under
+  `src/docx/` (no `docx-preview`, no SDK) — `jszip` + `fast-xml-parser` for
+  the OOXML plumbing; the `docx` package remains only for the
+  markdown→DOCX export path
+- **PDF**: `pdfjs-dist`
+- **Spreadsheets/CSV**: `xlsx` (SheetJS) + `papaparse`, rendered with
+  `@glideapps/glide-data-grid`
+- **PPTX/ODP**: hand-written parsers under `src/viewers/slides/`
+- **ODT**: `odf-kit`
+- **RTF**: `rtf.js`
+- **Code highlighting**: `shiki`
+- **Markdown**: `react-markdown` + `remark-gfm`/`remark-math`, `rehype-katex`
+  for math, `mermaid` for diagrams
+- **Export**: `docx` (DOCX), `jspdf` + `html2canvas-pro` (PDF/screenshot
+  export), `dompurify` for sanitizing library-rendered HTML (RTF/ODT)
+- Virtualized rendering (`react-window`) for large text/code/spreadsheet
+  content
 
+---
+
+## Docs
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — shared-shell design
+- [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md) — per-format gaps
+- [`CHANGELOG.md`](CHANGELOG.md) — what shipped, by wave
+- [`.sisyphus/plans/`](.sisyphus/plans/) — the improvement program's plans,
+  findings register, and execution status
