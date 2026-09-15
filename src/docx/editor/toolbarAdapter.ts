@@ -311,13 +311,13 @@ export function toolbarToCommand(
       const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
-        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document, 'bullet'), level: 0 }
+        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document.numbering, 'bullet'), level: 0 }
     }
     case 'toggle-numbered-list': {
       const paragraphPaths = getParagraphPaths(selection, document)
       return paragraphPaths.length === 0
         ? null
-        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document, 'number'), level: 0 }
+        : { kind: 'insert-list', paragraphPaths, numId: pickListNumId(document.numbering, 'number'), level: 0 }
     }
     case 'change-indent': {
       const paragraphPath = getPrimaryParagraphPath(selection)

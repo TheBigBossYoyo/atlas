@@ -16,7 +16,7 @@
 
 import type { DocxBundle } from '../index'
 import type { AbstractNum, NumberingPart, NumInstance } from '../parser/numbering'
-import type { Document, LvlDef, NumberingDef } from '../model'
+import type { LvlDef, NumberingDef } from '../model'
 
 export type ListKind = 'bullet' | 'number'
 
@@ -44,11 +44,11 @@ const LIST_FORMAT_BY_KIND: Readonly<Record<ListKind, string>> = {
  * own numbering or with a different-kind list Atlas already created in this
  * session.
  */
-export function pickListNumId(document: Document, kind: ListKind): number {
+export function pickListNumId(numbering: ReadonlyMap<string, NumberingDef>, kind: ListKind): number {
   const wantedFormat = LIST_FORMAT_BY_KIND[kind]
   let maxNumId = 0
 
-  for (const [numIdStr, def] of document.numbering) {
+  for (const [numIdStr, def] of numbering) {
     const parsed = Number.parseInt(numIdStr, 10)
     if (Number.isFinite(parsed) && parsed > maxNumId) {
       maxNumId = parsed
