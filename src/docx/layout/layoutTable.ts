@@ -515,6 +515,18 @@ function collectRunsFromParagraphChild(
     for (const hyperlinkChild of child.children) {
       collectRunsFromHyperlinkChild(hyperlinkChild, runs)
     }
+    return
+  }
+
+  if (child.kind === 'field') {
+    // DEFER-5 / DXS-20 — a field's cached `result` IS its visible content
+    // (see the matching case in `paginate.ts`'s `collectParagraphRuns`):
+    // without this, a field inside a table cell (e.g. a DATE/AUTHOR field,
+    // or a cross-reference, in a table) would silently contribute no
+    // visible text at all.
+    for (const resultChild of child.result) {
+      collectRunsFromParagraphChild(resultChild, runs)
+    }
   }
 }
 
@@ -522,14 +534,19 @@ function collectRunsFromHyperlinkChild(
   child: HyperlinkChild,
   runs: LineBreakInput['runs'][number][],
 ): void {
-  if (child.kind !== 'run') {
+  if (child.kind === 'run') {
+    runs.push({
+      run: child,
+      runProps: child.props ?? {},
+    })
     return
   }
 
-  runs.push({
-    run: child,
-    runProps: child.props ?? {},
-  })
+  if (child.kind === 'field') {
+    for (const resultChild of child.result) {
+      collectRunsFromParagraphChild(resultChild, runs)
+    }
+  }
 }
 
 function resolveTabStops(paragraph: Paragraph): ReadonlyArray<TabStop> {

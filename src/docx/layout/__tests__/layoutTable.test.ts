@@ -414,6 +414,73 @@ describe('layoutTable', () => {
       expect(result.shadingFill).toBe('#EEEEEE')
     })
   })
+
+  // DEFER-5 / DXS-20 regression guard: `collectRunsFromParagraphChild`/
+  // `collectRunsFromHyperlinkChild` had no case for the new `'field'`
+  // ParagraphChild kind, so a field's cached result text inside a table
+  // cell (e.g. a DATE/AUTHOR field, or a cross-reference) silently
+  // contributed no content at all.
+  describe('field content in a cell (DEFER-5 / DXS-20)', () => {
+    it('lays out a field\'s cached result text inside a table cell', async () => {
+      const cellParagraph: Paragraph = {
+        kind: 'paragraph',
+        children: [
+          {
+            kind: 'field',
+            fieldType: 'AUTHOR',
+            instruction: 'AUTHOR',
+            result: [{ kind: 'run', children: [{ kind: 'text', value: 'A. Author' }] }],
+          },
+        ],
+      }
+
+      const result = await layoutTable({
+        table: createTable({
+          props: { tblLayout: 'fixed' },
+          tblGrid: [twip(400)],
+          rows: [createRow([createCell([cellParagraph])])],
+        }),
+        availableWidthPt: 100,
+        fontResolver,
+      })
+
+      const items = result.rows[0].cells[0].contentLines.flatMap((line) => line.items)
+      expect(items.some((item) => item.kind === 'word' && item.text === 'A.')).toBe(true)
+    })
+
+    it('lays out a field nested inside a hyperlink inside a table cell', async () => {
+      const cellParagraph: Paragraph = {
+        kind: 'paragraph',
+        children: [
+          {
+            kind: 'hyperlink',
+            anchor: 'Top',
+            children: [
+              {
+                kind: 'field',
+                fieldType: 'PAGE',
+                instruction: 'PAGE',
+                result: [{ kind: 'run', children: [{ kind: 'text', value: '3' }] }],
+              },
+            ],
+          },
+        ],
+      }
+
+      const result = await layoutTable({
+        table: createTable({
+          props: { tblLayout: 'fixed' },
+          tblGrid: [twip(400)],
+          rows: [createRow([createCell([cellParagraph])])],
+        }),
+        availableWidthPt: 100,
+        fontResolver,
+      })
+
+      const items = result.rows[0].cells[0].contentLines.flatMap((line) => line.items)
+      expect(items.some((item) => item.kind === 'word' && item.text === '3')).toBe(true)
+    })
+  })
 })
 
 function createTable(input: {

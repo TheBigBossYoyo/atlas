@@ -736,6 +736,78 @@ describe('paginate', () => {
     expect(pageLineCounts(pages)).toEqual([4, 1])
     expect(paragraphLineCounts(pages, 1)).toEqual([0, 1])
   })
+
+  // DEFER-5 / DXS-20 regression guard: `parser/document.ts` now collapses a
+  // w:fldSimple / complex-field's sibling runs into one `Field`
+  // `ParagraphChild` instead of leaving them as ordinary runs. Before this
+  // paginate.ts fix, `collectParagraphRuns`/`collectHyperlinkRuns` had no
+  // case for `'field'`, so a field's cached `result` text (page numbers,
+  // AUTHOR/DATE, cross-references, ...) silently contributed no line items
+  // at all and vanished from every rendered page.
+  describe('field content (DEFER-5 / DXS-20)', () => {
+    it('lays out a body-level field\'s cached result text as ordinary words', async () => {
+      const paragraph: Paragraph = {
+        kind: 'paragraph',
+        children: [
+          {
+            kind: 'field',
+            fieldType: 'AUTHOR',
+            instruction: 'AUTHOR',
+            result: [{ kind: 'run', children: [{ kind: 'text', value: 'A. Author' }] }],
+          },
+        ],
+      }
+
+      const pages = await paginate({
+        document: createDocument([createSection([paragraph])]),
+        fontResolver: createFontResolver(),
+      })
+
+      expect(firstWordItem(pages)?.text).toBe('A.')
+    })
+
+    it('lays out a field nested inside a hyperlink', async () => {
+      const paragraph: Paragraph = {
+        kind: 'paragraph',
+        children: [
+          {
+            kind: 'hyperlink',
+            anchor: 'Top',
+            children: [
+              {
+                kind: 'field',
+                fieldType: 'PAGE',
+                instruction: 'PAGE',
+                result: [{ kind: 'run', children: [{ kind: 'text', value: '3' }] }],
+              },
+            ],
+          },
+        ],
+      }
+
+      const pages = await paginate({
+        document: createDocument([createSection([paragraph])]),
+        fontResolver: createFontResolver(),
+      })
+
+      expect(firstWordItem(pages)?.text).toBe('3')
+    })
+
+    it('contributes no line items for a field with an empty (not yet calculated) result, without throwing', async () => {
+      const paragraph: Paragraph = {
+        kind: 'paragraph',
+        children: [{ kind: 'field', fieldType: 'REF', instruction: 'REF _Missing', result: [] }],
+      }
+
+      const pages = await paginate({
+        document: createDocument([createSection([paragraph])]),
+        fontResolver: createFontResolver(),
+      })
+
+      expect(pages).toHaveLength(1)
+      expect(firstWordItem(pages)).toBeUndefined()
+    })
+  })
 })
 
 function createFontResolver(): FontResolver {
