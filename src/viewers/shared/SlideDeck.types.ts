@@ -87,6 +87,18 @@ export type SlideTextBox = SlideShapeBase & {
   /** `a:normAutofit`/ODF equivalent — a multiplier applied on top of the shape's own font sizes. */
   readonly fontScale?: number
   readonly placeholderType?: string
+  /** USR-15 — `a:bodyPr` text layout, resolved through the layout/master placeholder chain. */
+  readonly body?: SlideTextBody
+}
+
+export type SlideTextAnchor = 'top' | 'middle' | 'bottom'
+
+export type SlideTextBody = {
+  /** Inner margins in px (OOXML defaults: 0.1in left/right, 0.05in top/bottom). */
+  readonly insets: { readonly top: number; readonly right: number; readonly bottom: number; readonly left: number }
+  readonly anchor: SlideTextAnchor
+  /** `wrap="none"` keeps each paragraph on one line. */
+  readonly wrap: boolean
 }
 
 export type SlideShapeOnly = SlideShapeBase & {

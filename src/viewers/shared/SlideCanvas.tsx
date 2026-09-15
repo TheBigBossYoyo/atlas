@@ -7,7 +7,7 @@
 import { memo, useEffect, useState, type CSSProperties } from 'react'
 import type { SlideData, SlideImage, SlideShape } from './SlideDeck.types'
 import { SlideTableGrid, TextParagraphs } from './SlideShapeContent'
-import { fillToCss, geometryToCss, transformToCss } from './slideStyleHelpers'
+import { fillToCss, geometryToCss, textBodyToCss, transformToCss } from './slideStyleHelpers'
 import { getDownscaledImage } from './downscaleImage'
 
 /** Device pixel ratio at module load — thumbnails stay reasonably crisp on
@@ -139,6 +139,7 @@ function ShapeRenderer({
           style={{
             ...style,
             ...geometryToCss(shape.geometry),
+            ...textBodyToCss(shape.body),
             background: fill,
             border: shape.border ? `${shape.border.widthPx}px solid ${shape.border.color}` : undefined,
             userSelect: interactive ? 'text' : 'none',

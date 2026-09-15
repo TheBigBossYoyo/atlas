@@ -1,10 +1,45 @@
 /** S3/S4/S8 — builds the `SlideShape` for a `p:sp`/`p:cxnSp`: styled text, or a plain fill/border/geometry shape. */
 
 import { getElementsByLocalName, getFirstByLocalName } from '../shared/xmlUtils'
-import type { SlideShape, SlideTransform } from '../../shared/SlideDeck.types'
+import { emuToPx } from '../shared/units'
+import type { SlideShape, SlideTextAnchor, SlideTextBody, SlideTransform } from '../../shared/SlideDeck.types'
 import { resolveBorder, resolveFill, resolveGeometry } from './fills'
-import { getPlaceholderRef, type LayoutChain } from './layout'
+import { findMatchingPlaceholder, getPlaceholderRef, type LayoutChain } from './layout'
 import { parseTextBody, resolveNormAutofitScale } from './text'
+
+/** OOXML `a:bodyPr` default insets: 91440 EMU (0.1in) left/right, 45720 EMU (0.05in) top/bottom. */
+const DEFAULT_INSET_X_PX = 9.6
+const DEFAULT_INSET_Y_PX = 4.8
+
+const ANCHORS: Readonly<Record<string, SlideTextAnchor>> = { t: 'top', ctr: 'middle', b: 'bottom' }
+
+/**
+ * USR-15 — resolves text-box layout from `a:bodyPr` elements ordered slide ->
+ * layout -> master: the first element that sets an attribute wins. Titles
+ * with no explicit anchor anywhere default to centered, as in PowerPoint's
+ * built-in master.
+ */
+export function resolveTextBody(bodyPrs: ReadonlyArray<Element | null>, placeholderType: string | null): SlideTextBody {
+  const read = (name: string): string | null => {
+    for (const bodyPr of bodyPrs) {
+      const value = bodyPr?.getAttribute(name)
+      if (value !== null && value !== undefined) return value
+    }
+    return null
+  }
+  const inset = (name: string, fallback: number): number => emuToPx(read(name)) ?? fallback
+  const isTitle = placeholderType === 'title' || placeholderType === 'ctrTitle'
+  return {
+    insets: {
+      top: inset('tIns', DEFAULT_INSET_Y_PX),
+      right: inset('rIns', DEFAULT_INSET_X_PX),
+      bottom: inset('bIns', DEFAULT_INSET_Y_PX),
+      left: inset('lIns', DEFAULT_INSET_X_PX),
+    },
+    anchor: ANCHORS[read('anchor') ?? ''] ?? (isTitle ? 'middle' : 'top'),
+    wrap: read('wrap') !== 'none',
+  }
+}
 
 /** Builds a text/shape `SlideShape` for `sp`/`cxnSp`, or `null` for a shape with neither visible fill nor text. */
 export function buildShapeElement(
@@ -28,6 +63,11 @@ export function buildShapeElement(
 
   if (text.length > 0) {
     const bodyPr = getFirstByLocalName(getFirstByLocalName(shape, 'txBody') ?? shape, 'bodyPr')
+    const inheritedBodyPrs = ref
+      ? [findMatchingPlaceholder(chain.layoutDocument, ref), findMatchingPlaceholder(chain.masterDocument, ref)].map(
+          (placeholder) => (placeholder ? getFirstByLocalName(placeholder, 'bodyPr') : null),
+        )
+      : []
     return {
       kind: 'text',
       id,
@@ -39,6 +79,7 @@ export function buildShapeElement(
       geometry,
       fontScale: fontScale ?? resolveNormAutofitScale(bodyPr),
       placeholderType: ref?.type ?? undefined,
+      body: resolveTextBody([bodyPr, ...inheritedBodyPrs], ref?.type ?? null),
     }
   }
 

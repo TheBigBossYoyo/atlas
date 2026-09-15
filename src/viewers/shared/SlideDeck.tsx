@@ -22,7 +22,8 @@ type SlideDeckProps = {
 
 type ViewportSize = { readonly width: number; readonly height: number }
 
-const THUMBNAIL_WIDTH = 160
+/** USR-15 — wide enough for slide titles to stay legible in the rail (240px rail minus row chrome). */
+const THUMBNAIL_WIDTH = 200
 /** Padding + border + row gap around each virtualized thumbnail row. */
 const THUMBNAIL_ROW_CHROME = 32
 const MIN_ZOOM = 0.25

@@ -18,8 +18,8 @@
 }
 
 .slide-deck__rail {
-  width: 192px;
-  min-width: 192px;
+  width: 240px;
+  min-width: 240px;
   border-right: 1px solid var(--border-primary);
   background: var(--bg-secondary);
   overflow: hidden;
@@ -192,15 +192,19 @@
   overflow: hidden;
 }
 
+/* USR-15 — PowerPoint's single line spacing is ~1.2x the font size; the old 1.35
+   plus overflow:hidden cut the tops/bottoms of glyphs off in tightly sized boxes.
+   Parsed text boxes override padding/overflow from their a:bodyPr (textBodyToCss). */
 .slide-shape--text {
   padding: 2px;
-  line-height: 1.35;
+  line-height: 1.2;
+  white-space: pre-wrap;
 }
 
 .slide-shape__paragraph {
   margin: 0;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  white-space: inherit;
 }
 
 .slide-shape__bullet {

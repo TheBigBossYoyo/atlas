@@ -1,7 +1,14 @@
 /** CSS-mapping helpers shared by `SlideCanvas` for rendering the parsed `SlideShape[]` model. */
 
 import type { CSSProperties } from 'react'
-import type { SlideBullet, SlideFill, SlideGeometry, SlideTransform } from './SlideDeck.types'
+import type {
+  SlideBullet,
+  SlideFill,
+  SlideGeometry,
+  SlideTextAnchor,
+  SlideTextBody,
+  SlideTransform,
+} from './SlideDeck.types'
 
 export function fillToCss(fill: SlideFill | undefined): string | undefined {
   if (!fill) {
@@ -40,6 +47,33 @@ export function geometryToCss(geometry: SlideGeometry | undefined): CSSPropertie
 
   const clipPath = geometry ? GEOMETRY_CLIP_PATH[geometry] : undefined
   return clipPath ? { clipPath } : {}
+}
+
+const ANCHOR_JUSTIFY: Readonly<Record<SlideTextAnchor, CSSProperties['justifyContent']>> = {
+  top: 'flex-start',
+  middle: 'center',
+  bottom: 'flex-end',
+}
+
+/**
+ * USR-15 — text-box layout: body insets as padding, vertical anchoring, and
+ * PowerPoint's behavior of letting text run past its box instead of cutting
+ * glyphs off (boxes are often sized tighter than their text's line height).
+ */
+export function textBodyToCss(body: SlideTextBody | undefined): CSSProperties {
+  if (!body) {
+    return {}
+  }
+
+  const { top, right, bottom, left } = body.insets
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: ANCHOR_JUSTIFY[body.anchor],
+    padding: `${top}px ${right}px ${bottom}px ${left}px`,
+    overflow: 'visible',
+    whiteSpace: body.wrap ? undefined : 'pre',
+  }
 }
 
 /** `rotate()`/`scale()` for a shape's own rotation and horizontal/vertical flip (S10). */
