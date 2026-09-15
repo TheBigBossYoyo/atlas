@@ -134,12 +134,33 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     [sheets, activeSheet],
   )
 
-  const filteredRows = useMemo(() => {
+  // `filteredRowIndices[i]` is the ACTUAL (unfiltered) sheet row index that
+  // grid-space row `i` corresponds to. When the "Search rows..." filter is
+  // active it drops non-matching rows, so grid row `i` and sheet row `i` are
+  // no longer the same thing — every place below that turns a grid-space row
+  // back into a document edit (cell edit, paste, and the toolbar's
+  // insert/delete row/column, which read `selection.row`) MUST go through
+  // this mapping rather than assuming identity. Getting this wrong doesn't
+  // error — it silently edits a different, arbitrary row than the one the
+  // user is looking at (a confirmed data-corruption bug this fixes: search
+  // for a value, edit what looks like the matching row, and — before this
+  // fix — the edit landed on whatever row shares that same position in the
+  // FILTERED list instead).
+  const filteredRowIndices = useMemo(() => {
     if (!activeSheet) return []
     const q = deferredSearch.toLowerCase()
-    if (!q) return activeSheet.rows
-    return activeSheet.rows.filter((row) => row.some((cell) => cell.toLowerCase().includes(q)))
+    if (!q) return activeSheet.rows.map((_, i) => i)
+    const indices: number[] = []
+    activeSheet.rows.forEach((row, i) => {
+      if (row.some((cell) => cell.toLowerCase().includes(q))) indices.push(i)
+    })
+    return indices
   }, [activeSheet, deferredSearch])
+
+  const filteredRows = useMemo(
+    () => filteredRowIndices.map((i) => activeSheet!.rows[i]),
+    [filteredRowIndices, activeSheet],
+  )
 
   // Frozen ROWS (T4/DAT-10 remainder — see FrozenRowsStrip's header for why
   // this isn't a second DataEditor) are rendered as a fixed strip ABOVE the
@@ -150,6 +171,11 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   // meaningful thing to freeze.
   const frozenRowCount = !deferredSearch ? (activeSheet?.freeze?.rows ?? 0) : 0
   const bodyRows = frozenRowCount > 0 ? filteredRows.slice(frozenRowCount) : filteredRows
+  // Sheet-absolute row index for each row of `bodyRows`, by the same
+  // position — see `filteredRowIndices` above. Slicing this array in lockstep
+  // with `bodyRows` (rather than re-deriving it from `frozenRowCount`
+  // elsewhere) keeps the two arrays' indices aligned by construction.
+  const bodyRowIndices = frozenRowCount > 0 ? filteredRowIndices.slice(frozenRowCount) : filteredRowIndices
   const frozenRowsData = frozenRowCount > 0 ? activeSheet!.rows.slice(0, frozenRowCount) : []
 
   const navItems = useMemo(() => {
@@ -181,9 +207,11 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   const handleCellEdited = useCallback(
     (row: number, col: number, rawText: string) => {
       if (activeSheetIndex < 0) return
-      editor.setCellValue(activeSheetIndex, row + frozenRowCount, col, rawText)
+      const sheetRow = bodyRowIndices[row]
+      if (sheetRow === undefined) return
+      editor.setCellValue(activeSheetIndex, sheetRow, col, rawText)
     },
-    [editor, activeSheetIndex, frozenRowCount],
+    [editor, activeSheetIndex, bodyRowIndices],
   )
 
   const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited } = useSpreadsheetGrid({
@@ -200,29 +228,40 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     return () => registerFind(null)
   }, [registerFind, gridFind.open])
 
-  // The currently-selected cell, sheet-absolute (offset past any frozen
-  // rows) — read straight off gridFind's own selection state rather than
-  // tracking a parallel one, since it already reflects the live selection
-  // regardless of whether Find is open (see that hook's `onGridSelectionChange`).
+  // The currently-selected cell, sheet-absolute (mapped through
+  // `bodyRowIndices`, which already accounts for both frozen rows AND an
+  // active search filter — see that array's own comment) — read straight off
+  // gridFind's own selection state rather than tracking a parallel one, since
+  // it already reflects the live selection regardless of whether Find is open
+  // (see that hook's `onGridSelectionChange`).
   const selection = useMemo(() => {
     const cell = gridFind.gridSelection?.current?.cell
     if (!cell) return null
-    return { row: cell[1] + frozenRowCount, col: cell[0] }
-  }, [gridFind.gridSelection, frozenRowCount])
+    const sheetRow = bodyRowIndices[cell[1]]
+    return sheetRow === undefined ? null : { row: sheetRow, col: cell[0] }
+  }, [gridFind.gridSelection, bodyRowIndices])
 
   const handleGridPaste = useCallback(
     (target: Item, values: readonly (readonly string[])[]): boolean => {
       if (activeSheetIndex < 0) return false
       const [col, row] = target
+      const sheetRow = bodyRowIndices[row]
+      if (sheetRow === undefined) return false
+      // Anchors the paste at the correct sheet row even under an active
+      // search filter (see `bodyRowIndices`). A multi-row paste while
+      // filtered still writes to CONTIGUOUS rows from that anchor — matching
+      // filtered rows are not, in general, contiguous in the sheet — since
+      // `pasteRange` itself has no notion of a non-contiguous target range;
+      // pasting a single row/cell (by far the common case) is unaffected.
       editor.pasteRange(
         activeSheetIndex,
-        row + frozenRowCount,
+        sheetRow,
         col,
         values.map((r) => [...r]),
       )
       return false // handled manually (can grow the sheet) — see DataEditor's onPaste docs.
     },
-    [editor, activeSheetIndex, frozenRowCount],
+    [editor, activeSheetIndex, bodyRowIndices],
   )
 
   const handleVisibleRegionChanged = useCallback((_range: Rectangle, tx: number) => {

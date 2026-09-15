@@ -107,12 +107,27 @@ function CsvViewerBase({ file }: ViewerProps) {
   const editor = useSpreadsheetEditor(initialDocument, file.path, defaultTarget)
   const sheet = editor.document.sheets[0]
 
-  const filteredRows = useMemo(() => {
+  // `filteredRowIndices[i]` is the actual (unfiltered) sheet row index grid
+  // row `i` corresponds to — see SpreadsheetViewer's identical mapping for
+  // why every grid-space row must be translated through this before being
+  // used as a document row index (a confirmed data-corruption bug otherwise:
+  // editing/pasting/inserting-around a row while "Search rows..." has
+  // dropped non-matching rows would silently target the wrong sheet row).
+  const filteredRowIndices = useMemo(() => {
     if (!sheet) return []
     const q = deferredSearch.toLowerCase()
-    if (!q) return sheet.rows
-    return sheet.rows.filter((row) => row.some((cell) => String(cell).toLowerCase().includes(q)))
+    if (!q) return sheet.rows.map((_, i) => i)
+    const indices: number[] = []
+    sheet.rows.forEach((row, i) => {
+      if (row.some((cell) => String(cell).toLowerCase().includes(q))) indices.push(i)
+    })
+    return indices
   }, [sheet, deferredSearch])
+
+  const filteredRows = useMemo(
+    () => filteredRowIndices.map((i) => sheet!.rows[i]),
+    [filteredRowIndices, sheet],
+  )
 
   useEffect(() => {
     if (sheet) {
@@ -129,9 +144,11 @@ function CsvViewerBase({ file }: ViewerProps) {
 
   const handleCellEdited = useCallback(
     (row: number, col: number, rawText: string) => {
-      editor.setCellValue(0, row, col, rawText)
+      const sheetRow = filteredRowIndices[row]
+      if (sheetRow === undefined) return
+      editor.setCellValue(0, sheetRow, col, rawText)
     },
-    [editor],
+    [editor, filteredRowIndices],
   )
 
   const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited } = useSpreadsheetGrid({
@@ -148,16 +165,23 @@ function CsvViewerBase({ file }: ViewerProps) {
 
   const selection = useMemo(() => {
     const cell = gridFind.gridSelection?.current?.cell
-    return cell ? { row: cell[1], col: cell[0] } : null
-  }, [gridFind.gridSelection])
+    if (!cell) return null
+    const sheetRow = filteredRowIndices[cell[1]]
+    return sheetRow === undefined ? null : { row: sheetRow, col: cell[0] }
+  }, [gridFind.gridSelection, filteredRowIndices])
 
   const handleGridPaste = useCallback(
     (target: Item, values: readonly (readonly string[])[]): boolean => {
       const [col, row] = target
-      editor.pasteRange(0, row, col, values.map((r) => [...r]))
+      const sheetRow = filteredRowIndices[row]
+      if (sheetRow === undefined) return false
+      // See SpreadsheetViewer's identical note: anchors correctly under an
+      // active search filter, but a multi-row paste still targets contiguous
+      // rows from that anchor.
+      editor.pasteRange(0, sheetRow, col, values.map((r) => [...r]))
       return false
     },
-    [editor],
+    [editor, filteredRowIndices],
   )
 
   const saveFormats = useMemo(() => CSV_SAVE_FORMATS.map((f) => ({ id: f.id, label: f.label })), [])

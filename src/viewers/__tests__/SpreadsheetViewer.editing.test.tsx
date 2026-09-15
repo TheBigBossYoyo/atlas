@@ -415,6 +415,56 @@ describe('SpreadsheetViewer — undo', () => {
   })
 })
 
+describe('SpreadsheetViewer — search filter + editing (row-index mapping)', () => {
+  it('edits the correct underlying sheet row when the search filter has dropped other rows', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a'], ['b'], ['MATCH']]), 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    fireEvent.change(screen.getByPlaceholderText('Search rows...'), { target: { value: 'MATCH' } })
+    await waitFor(() => expect(lastDataEditorProps!.rows).toBe(1))
+
+    // The only visible row is grid-space row 0 — before the fix this landed
+    // on the sheet's actual row 0 ("a"), not the matched row 2 ("MATCH").
+    act(() => editCell(0, 0, 'Edited'))
+
+    fireEvent.change(screen.getByPlaceholderText('Search rows...'), { target: { value: '' } })
+    await waitFor(() => expect(lastDataEditorProps!.rows).toBe(3))
+    expect(gridRows(lastDataEditorProps!)).toEqual([['a'], ['b'], ['Edited']])
+  })
+
+  it('inserts a row above the correct underlying sheet row via the toolbar when filtered', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a'], ['b'], ['MATCH']]), 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    fireEvent.change(screen.getByPlaceholderText('Search rows...'), { target: { value: 'MATCH' } })
+    await waitFor(() => expect(lastDataEditorProps!.rows).toBe(1))
+
+    act(() => selectCell(0, 0))
+    const insertRowButton = await screen.findByRole('button', { name: 'Insert row above' })
+    await waitFor(() => expect(insertRowButton).not.toBeDisabled())
+    fireEvent.click(insertRowButton)
+
+    fireEvent.change(screen.getByPlaceholderText('Search rows...'), { target: { value: '' } })
+    // Before the fix this inserted above sheet row 0 ("a") instead of the
+    // matched row 2 ("MATCH").
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)).toEqual([['a'], ['b'], [''], ['MATCH']]))
+  })
+})
+
 describe('SpreadsheetViewer — frozen rows (T4/DAT-10 remainder)', () => {
   it('excludes the frozen row(s) from the main grid body and renders the frozen-rows strip', async () => {
     // Hand-built OOXML zip with a state="frozen" pane (ySplit=1) — see

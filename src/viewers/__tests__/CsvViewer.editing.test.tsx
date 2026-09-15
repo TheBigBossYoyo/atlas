@@ -172,6 +172,29 @@ describe('CsvViewer — save round trip', () => {
   })
 })
 
+describe('CsvViewer — search filter + editing (row-index mapping)', () => {
+  it('edits the correct underlying row when the search filter has dropped other rows', async () => {
+    const file: LoadedFile = { kind: 'text', content: 'a\nb\nMATCH\n', path: '/tmp/sample.csv', format: 'csv' }
+    render(
+      <ViewerProvider filePath={file.path}>
+        <CsvViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    fireEvent.change(screen.getByPlaceholderText('Search rows...'), { target: { value: 'MATCH' } })
+    await waitFor(() => expect(lastDataEditorProps!.rows).toBe(1))
+
+    // The only visible row is grid-space row 0 — before the fix this landed
+    // on the actual row 0 ("a"), not the matched row 2 ("MATCH").
+    act(() => editCell(0, 0, 'Edited'))
+
+    fireEvent.change(screen.getByPlaceholderText('Search rows...'), { target: { value: '' } })
+    await waitFor(() => expect(lastDataEditorProps!.rows).toBe(3))
+    expect(gridRows(lastDataEditorProps!)).toEqual([['a'], ['b'], ['Edited']])
+  })
+})
+
 describe('CsvViewer — row insert/delete and undo', () => {
   it('inserts and then undoes a row', async () => {
     const file: LoadedFile = { kind: 'text', content: 'a\nb\nc\n', path: '/tmp/sample.csv', format: 'csv' }
