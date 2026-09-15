@@ -13,19 +13,22 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { xorObfuscatedFontHeader } from '../deobfuscate'
 import { loadEmbeddedFonts } from '../embedded'
 
+// Reading the real on-disk font fixture (below) was observed to
+// intermittently exceed vitest's default 5000ms per-test budget under
+// `--maxWorkers` contention on a loaded machine — a longer default timeout
+// keeps this file deterministic regardless of what else is running
+// concurrently. Memoizing the read (below) also avoids paying the I/O cost
+// more than once per file on top of that.
+vi.setConfig({ testTimeout: 20000 })
+
 const FIXTURE_PATH = path.resolve(process.cwd(), 'public/fonts/Carlito-Regular.ttf')
 const TEST_GUID = '{5F3759DF-0000-0000-0000-000000000001}'
 
-// Memoized: several tests in this file read the same on-disk fixture, and
-// under `--maxWorkers` contention repeating that disk I/O per test was
-// observed to occasionally exceed vitest's default 5000ms per-test budget
-// on a loaded machine — reading it once and reusing the bytes removes the
-// redundant I/O rather than just padding the timeout.
 let fixtureBytesPromise: Promise<Uint8Array> | undefined
 
 async function readFixtureBytes(): Promise<Uint8Array> {
