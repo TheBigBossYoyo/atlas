@@ -21,9 +21,18 @@ import { loadEmbeddedFonts } from '../embedded'
 const FIXTURE_PATH = path.resolve(process.cwd(), 'public/fonts/Carlito-Regular.ttf')
 const TEST_GUID = '{5F3759DF-0000-0000-0000-000000000001}'
 
+// Memoized: several tests in this file read the same on-disk fixture, and
+// under `--maxWorkers` contention repeating that disk I/O per test was
+// observed to occasionally exceed vitest's default 5000ms per-test budget
+// on a loaded machine — reading it once and reusing the bytes removes the
+// redundant I/O rather than just padding the timeout.
+let fixtureBytesPromise: Promise<Uint8Array> | undefined
+
 async function readFixtureBytes(): Promise<Uint8Array> {
-  const buffer = await readFile(FIXTURE_PATH)
-  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+  fixtureBytesPromise ??= readFile(FIXTURE_PATH).then(
+    (buffer) => new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength),
+  )
+  return fixtureBytesPromise
 }
 
 const RELS_XML_TEMPLATE = (target: string) => `<?xml version="1.0"?>
