@@ -160,7 +160,22 @@ export function useSpreadsheetEditor(
 
   const mutate = useCallback(
     (updater: (doc: SpreadsheetDocument) => SpreadsheetDocument) => {
-      history.set(updater(history.present))
+      const current = history.present
+      const next = updater(current)
+      // Every guarded no-op in spreadsheetDocument.ts (deleting a sheet's
+      // last remaining row/column, renaming to an already-used name,
+      // deleting the only sheet, an out-of-bounds cell edit, ...)
+      // deliberately returns the SAME document reference, unchanged, rather
+      // than a structurally-equal copy — specifically so callers can detect
+      // "nothing happened" this cheaply. Without this check, a blocked
+      // action (e.g. clicking "Delete row" on a one-row sheet, which the
+      // toolbar only disables when nothing is selected, not when deleting
+      // would be a no-op) still pushed a duplicate entry onto the undo
+      // stack, breaking useUndoableState's own "one call per discrete,
+      // already-committed edit" contract: the very next Undo would silently
+      // restore the exact same state instead of reverting the last REAL
+      // edit, costing the user an extra, invisible Undo press.
+      if (next !== current) history.set(next)
     },
     [history],
   )

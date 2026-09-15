@@ -234,6 +234,42 @@ describe('useSpreadsheetEditor — undo/redo', () => {
     act(() => getEditor().undo())
     await waitFor(() => expect(getEditor().document.sheets[0].rows[0][0]).toBe('a'))
   })
+
+  it('a blocked/no-op action (deleting the last remaining row) does not push a spurious undo entry', async () => {
+    // The fixture is a 2-row sheet, so first collapse it to exactly one row
+    // — deleteRowAt on a one-row sheet is a documented no-op
+    // (spreadsheetDocument.ts) that the toolbar can still reach (it only
+    // disables "Delete row" when nothing is selected, not when deleting
+    // would be a no-op).
+    const { getEditor } = renderHarness(WORKBOOK_TARGET)
+    await waitFor(() => expect(getEditor().document.sheets[0].rows).toHaveLength(2))
+
+    act(() => getEditor().deleteRowAt(0, 1))
+    await waitFor(() => expect(getEditor().document.sheets[0].rows).toHaveLength(1))
+    expect(getEditor().canUndo).toBe(true)
+
+    act(() => getEditor().undo())
+    await waitFor(() => expect(getEditor().document.sheets[0].rows).toHaveLength(2))
+    expect(getEditor().canUndo).toBe(false)
+
+    // The real edit is now fully undone — canUndo must be false, not "one
+    // more no-op entry away from false". Confirms the guarded no-op below
+    // never reached the history stack.
+    act(() => getEditor().deleteRowAt(0, 0))
+    await waitFor(() => expect(getEditor().document.sheets[0].rows).toHaveLength(1))
+    const docAfterRealDelete = getEditor().document
+
+    // Now try to delete the last remaining row — a genuine no-op.
+    act(() => getEditor().deleteRowAt(0, 0))
+    expect(getEditor().document).toBe(docAfterRealDelete)
+    expect(getEditor().document.sheets[0].rows).toHaveLength(1)
+
+    // A single Undo must revert the one REAL delete above, not silently
+    // consume a spurious entry from the blocked one first.
+    act(() => getEditor().undo())
+    await waitFor(() => expect(getEditor().document.sheets[0].rows).toHaveLength(2))
+    expect(getEditor().canUndo).toBe(false)
+  })
 })
 
 describe('useSpreadsheetEditor — the global Ctrl+S/Save contract still works', () => {
