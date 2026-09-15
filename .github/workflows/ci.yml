@@ -71,7 +71,13 @@ jobs:
   # ubuntu-latest — no Xvfb/virtual-display setup is needed for Electron's
   # BrowserWindow to actually open.
   e2e-windows:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    # A job-level `if` replaces the implicit `success()` gate a `needs`
+    # dependency would otherwise add, so `success()` must be spelled out
+    # here explicitly — otherwise this job would still run (and burn a full
+    # Electron download + build + e2e pass on windows-latest) even when the
+    # `build` job above it failed.
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
     env:
       # Override the workflow-level skip: this job needs the real Electron
