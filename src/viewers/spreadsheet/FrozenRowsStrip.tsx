@@ -37,6 +37,14 @@ const ROW_HEIGHT_PX = 32
 export type FrozenRowsStripProps = {
   /** Just the frozen row(s)' display text — rows[0] is the first frozen row. */
   readonly rows: ReadonlyArray<ReadonlyArray<string>>
+  /**
+   * Per-cell formula text (no leading `=`), same shape as `rows` — see
+   * `useSpreadsheetGrid.ts`'s header for why this matters: without it, an
+   * `<input>` for an existing formula cell would show its computed value,
+   * and committing it unchanged (blur/Enter) would silently replace the
+   * formula with that frozen plain value.
+   */
+  readonly formulas: ReadonlyArray<ReadonlyArray<string | undefined>>
   readonly columnWidthsPx: ReadonlyArray<number>
   readonly rowMarkerWidthPx: number
   /** Horizontal scroll offset (px) to mirror from the main grid — see module header. */
@@ -46,6 +54,7 @@ export type FrozenRowsStripProps = {
 
 export function FrozenRowsStrip({
   rows,
+  formulas,
   columnWidthsPx,
   rowMarkerWidthPx,
   translateXPx,
@@ -62,22 +71,26 @@ export function FrozenRowsStrip({
       >
         {rows.map((row, r) => (
           <div className="spreadsheet-viewer__frozen-row" key={r}>
-            {row.map((text, c) => (
-              <Fragment key={c}>
-                <input
-                  key={`${r}-${c}-${text}`}
-                  defaultValue={text}
-                  style={{ width: columnWidthsPx[c] ?? 120 }}
-                  aria-label={`Frozen row ${r + 1}, column ${c + 1}`}
-                  onBlur={(e) => onCommit(r, c, e.currentTarget.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.currentTarget.blur()
-                    }
-                  }}
-                />
-              </Fragment>
-            ))}
+            {row.map((text, c) => {
+              const formula = formulas[r]?.[c]
+              const editableValue = formula !== undefined ? `=${formula}` : text
+              return (
+                <Fragment key={c}>
+                  <input
+                    key={`${r}-${c}-${editableValue}`}
+                    defaultValue={editableValue}
+                    style={{ width: columnWidthsPx[c] ?? 120 }}
+                    aria-label={`Frozen row ${r + 1}, column ${c + 1}`}
+                    onBlur={(e) => onCommit(r, c, e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.currentTarget.blur()
+                      }
+                    }}
+                  />
+                </Fragment>
+              )
+            })}
           </div>
         ))}
       </div>

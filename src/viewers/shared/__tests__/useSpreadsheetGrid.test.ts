@@ -51,3 +51,51 @@ describe('useSpreadsheetGrid — editable mode (onCellEdited option provided)', 
     expect(onCellEdited).not.toHaveBeenCalled()
   })
 })
+
+describe('useSpreadsheetGrid — formula cells (confirmed data-loss bug: re-editing a formula must not silently delete it)', () => {
+  const ROWS_WITH_FORMULA = [
+    ['1', '2', '3'],
+    ['4', '5', '9'],
+  ]
+  const FORMULAS = [
+    [undefined, undefined, undefined],
+    [undefined, undefined, 'A2+B2'],
+  ]
+
+  it('seeds the edit overlay (`data`) with the literal formula text, while `displayData` stays the computed value', () => {
+    const { result } = renderHook(() =>
+      useSpreadsheetGrid({ rows: ROWS_WITH_FORMULA, colCount: 3, formulas: FORMULAS, onCellEdited: vi.fn() }),
+    )
+
+    const cell = result.current.getCellContent([2, 1]) as { data: string; displayData: string }
+    expect(cell.data).toBe('=A2+B2')
+    expect(cell.displayData).toBe('9')
+  })
+
+  it('leaves a plain-value cell (no formula) with `data` === `displayData`', () => {
+    const { result } = renderHook(() =>
+      useSpreadsheetGrid({ rows: ROWS_WITH_FORMULA, colCount: 3, formulas: FORMULAS, onCellEdited: vi.fn() }),
+    )
+
+    const cell = result.current.getCellContent([0, 0]) as { data: string; displayData: string }
+    expect(cell.data).toBe('1')
+    expect(cell.displayData).toBe('1')
+  })
+
+  it('re-committing a formula cell unchanged sends back the formula text, not the computed value (the bug this closes)', () => {
+    const onCellEdited = vi.fn()
+    const { result } = renderHook(() =>
+      useSpreadsheetGrid({ rows: ROWS_WITH_FORMULA, colCount: 3, formulas: FORMULAS, onCellEdited }),
+    )
+
+    // Simulates glide-data-grid's own text-cell editor: it seeds its input
+    // from `data` (see text-cell.js's `provideEditor`), so committing with
+    // no changes at all sends `data` straight back as `newValue.data`.
+    const seeded = result.current.getCellContent([2, 1]) as { data: string }
+    const item: Item = [2, 1]
+    const newValue = { kind: 'text', data: seeded.data, displayData: seeded.data, allowOverlay: true } as EditableGridCell
+    result.current.onCellEdited?.(item, newValue)
+
+    expect(onCellEdited).toHaveBeenCalledWith(1, 2, '=A2+B2')
+  })
+})

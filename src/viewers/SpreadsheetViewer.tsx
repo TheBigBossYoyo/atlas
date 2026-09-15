@@ -161,6 +161,14 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     () => filteredRowIndices.map((i) => activeSheet!.rows[i]),
     [filteredRowIndices, activeSheet],
   )
+  // Formulas, mapped through the exact same filter as `filteredRows` (see
+  // `useSpreadsheetGrid`'s own header for why this must reach the grid: a
+  // formula cell's edit overlay needs its literal `=<formula>` text, not the
+  // already-computed value `filteredRows` carries).
+  const filteredFormulas = useMemo(
+    () => filteredRowIndices.map((i) => activeSheet!.formulas[i]),
+    [filteredRowIndices, activeSheet],
+  )
 
   // Frozen ROWS (T4/DAT-10 remainder — see FrozenRowsStrip's header for why
   // this isn't a second DataEditor) are rendered as a fixed strip ABOVE the
@@ -176,7 +184,9 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   // with `bodyRows` (rather than re-deriving it from `frozenRowCount`
   // elsewhere) keeps the two arrays' indices aligned by construction.
   const bodyRowIndices = frozenRowCount > 0 ? filteredRowIndices.slice(frozenRowCount) : filteredRowIndices
+  const bodyFormulas = frozenRowCount > 0 ? filteredFormulas.slice(frozenRowCount) : filteredFormulas
   const frozenRowsData = frozenRowCount > 0 ? activeSheet!.rows.slice(0, frozenRowCount) : []
+  const frozenFormulasData = frozenRowCount > 0 ? activeSheet!.formulas.slice(0, frozenRowCount) : []
 
   const navItems = useMemo(() => {
     return visibleSheets.map((sheet) => ({
@@ -220,6 +230,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     colWidthsPx: activeSheet?.colWidthsPx,
     resetKey: activeSheetName ?? undefined,
     onCellEdited: handleCellEdited,
+    formulas: bodyFormulas,
   })
 
   const gridFind = useGridFind(bodyRows)
@@ -371,6 +382,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
       {frozenRowCount > 0 && (
         <FrozenRowsStrip
           rows={frozenRowsData}
+          formulas={frozenFormulasData}
           columnWidthsPx={columns.map(columnWidthOf)}
           rowMarkerWidthPx={ROW_MARKER_WIDTH_PX}
           translateXPx={gridTranslateX}

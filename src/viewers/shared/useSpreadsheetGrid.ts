@@ -15,6 +15,24 @@
  * `useSpreadsheetEditor`) owns turning that into an actual document edit.
  * Omitting `onCellEdited` keeps the grid honestly read-only, exactly like
  * before wave 3.
+ *
+ * `formulas` (wave 3 follow-up — confirmed data-loss bug, not a style nit):
+ * a `TextCell`'s edit overlay seeds its input from `data`, NOT `displayData`
+ * (glide-data-grid's own `text-cell.js`: `provideEditor` reads `value.data`).
+ * Before this option existed, `getCellContent` set both fields to the same
+ * already-computed display text, so double-clicking an EXISTING formula
+ * cell (e.g. one showing "15" for `=SUM(A1:A5)`) opened an editor pre-filled
+ * with "15", not "=SUM(A1:A5)" — and committing that overlay with NO changes
+ * at all (open, press Enter) fed "15" back through `onCellEdited`, which
+ * `spreadsheetDocument.ts`'s `setCellValue` — correctly, given what it was
+ * told — stores as a plain value, silently deleting the formula. `formulas`
+ * lets `getCellContent` seed `data` with the literal `=<formula>` text
+ * instead whenever the cell has one, so re-opening and committing a formula
+ * cell unchanged round-trips it as the same formula. `displayData` (what's
+ * actually drawn, and what Ctrl+C copies — see glide-data-grid's
+ * `copy-paste.js`, which reads `displayData` for `GridCellKind.Text`) is
+ * unaffected either way, so this changes nothing about how a formula cell
+ * looks or copies, only what's pre-filled when you start editing it.
  */
 import { useCallback, useMemo, useState } from 'react'
 import type { EditableGridCell, GridCell, GridColumn, Item, GridMouseEventArgs } from '@glideapps/glide-data-grid'
@@ -46,6 +64,15 @@ export type UseSpreadsheetGridOptions = {
    * grid read-only.
    */
   readonly onCellEdited?: (row: number, col: number, rawText: string) => void
+  /**
+   * Per-cell formula text (no leading `=`), the same shape as `rows` —
+   * `EditableSheet.formulas`, threaded through by the caller. Optional (CSV
+   * sheets before any formula has ever been typed into them have no need to
+   * pass this), but see the module header: omitting it for a sheet that DOES
+   * have formula cells reintroduces the formula-deleting edit bug this option
+   * exists to fix.
+   */
+  readonly formulas?: ReadonlyArray<ReadonlyArray<string | undefined>>
 }
 
 export type UseSpreadsheetGridResult = {
@@ -91,6 +118,7 @@ export function useSpreadsheetGrid({
   colWidthsPx,
   resetKey,
   onCellEdited: onCellEditedOption,
+  formulas,
 }: UseSpreadsheetGridOptions): UseSpreadsheetGridResult {
   const theme = useGridTheme()
   const [hoveredRow, setHoveredRow] = useState<number | undefined>()
@@ -109,6 +137,12 @@ export function useSpreadsheetGrid({
   const getCellContent = useCallback(
     ([col, row]: readonly [number, number]): GridCell => {
       const cellValue = rows[row]?.[col] ?? ''
+      const formula = formulas?.[row]?.[col]
+      // See module header: the edit overlay seeds itself from `data`, so a
+      // formula cell must offer its literal `=<formula>` text there, not the
+      // already-computed `cellValue` — only `displayData` (what's drawn/
+      // copied) stays the computed value.
+      const editableValue = formula !== undefined ? `=${formula}` : cellValue
       const isOdd = row % 2 !== 0
       const isHovered = row === hoveredRow
       let bgCell = isOdd ? theme.bgRowOdd : theme.bgCell
@@ -116,7 +150,7 @@ export function useSpreadsheetGrid({
 
       return {
         kind: 'text' as const,
-        data: cellValue,
+        data: editableValue,
         displayData: cellValue,
         // DAT-06, closed for real (wave 3): an overlay is only opened when
         // the caller actually wired up `onCellEdited` below — otherwise the
@@ -125,7 +159,7 @@ export function useSpreadsheetGrid({
         themeOverride: { bgCell },
       } as GridCell
     },
-    [rows, theme, hoveredRow, onCellEditedOption],
+    [rows, formulas, theme, hoveredRow, onCellEditedOption],
   )
 
   const onCellEdited = useMemo(() => {

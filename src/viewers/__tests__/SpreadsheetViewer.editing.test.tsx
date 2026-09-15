@@ -139,6 +139,43 @@ describe('SpreadsheetViewer — cell editing', () => {
 
     await waitFor(() => expect(gridRows(lastDataEditorProps!)[1][2]).toBe('3'))
   })
+
+  it('re-opening and committing a formula cell UNCHANGED keeps it a live formula, not a frozen value', async () => {
+    // Confirmed data-loss bug this locks in: glide-data-grid's text-cell
+    // editor seeds its input from getCellContent's `data` field, not
+    // `displayData` (see useSpreadsheetGrid.ts's header). Before that fix,
+    // `data` held the already-computed "3", so simply opening this cell and
+    // committing with no changes (the most innocuous possible interaction)
+    // silently replaced the formula with the static value "3" — invisible
+    // in the grid until a dependency changed and the cell no longer updated.
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a', 'b', 'sum'], [1, 2, '']]), 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    act(() => editCell(2, 1, '=A2+B2'))
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[1][2]).toBe('3'))
+
+    // Simulate re-opening the formula cell and committing with NO edits:
+    // read back whatever the edit overlay would have been seeded with (the
+    // real glide-data-grid editor reads `data`, exercised directly here
+    // since DataEditor itself is mocked in this file) and feed it straight
+    // back through onCellEdited, exactly like an untouched Enter/blur would.
+    const seeded = lastDataEditorProps!.getCellContent([2, 1])
+    act(() => editCell(2, 1, seeded.data))
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[1][2]).toBe('3'))
+
+    // The real assertion: the formula must still be LIVE. Changing a
+    // dependency (A2) should still flow through to the sum — which would NOT
+    // happen if the previous step had frozen "sum" into the plain value "3".
+    act(() => editCell(0, 1, '10'))
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[1][2]).toBe('12'))
+  })
 })
 
 describe('SpreadsheetViewer — save', () => {

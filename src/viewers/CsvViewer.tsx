@@ -128,6 +128,13 @@ function CsvViewerBase({ file }: ViewerProps) {
     () => filteredRowIndices.map((i) => sheet!.rows[i]),
     [filteredRowIndices, sheet],
   )
+  // See SpreadsheetViewer's identical mapping and useSpreadsheetGrid's own
+  // header: a CSV/TSV cell can carry a formula too, once the user types
+  // "=..." into it, so this must reach the grid the same way.
+  const filteredFormulas = useMemo(
+    () => filteredRowIndices.map((i) => sheet!.formulas[i]),
+    [filteredRowIndices, sheet],
+  )
 
   useEffect(() => {
     if (sheet) {
@@ -155,6 +162,7 @@ function CsvViewerBase({ file }: ViewerProps) {
     rows: filteredRows,
     colCount: sheet?.colCount ?? 0,
     onCellEdited: handleCellEdited,
+    formulas: filteredFormulas,
   })
 
   const gridFind = useGridFind(filteredRows)
