@@ -11,6 +11,8 @@
 import { useState } from 'react'
 import { ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine, ArrowDownToLine, ClipboardPaste, Redo2, Save, Trash2, Undo2 } from 'lucide-react'
 
+import { tsvToRows } from './spreadsheetClipboard'
+
 export type SaveFormatOption = {
   readonly id: string
   readonly label: string
@@ -32,14 +34,22 @@ export type SpreadsheetEditToolbarProps = {
   readonly onSaveAs: (formatId: string) => void
 }
 
-/** Reads the OS clipboard as TSV/plain text via the async Clipboard API (user-gesture-gated — this is only ever called from a click handler). */
+/**
+ * Reads the OS clipboard as TSV/plain text via the async Clipboard API
+ * (user-gesture-gated — this is only ever called from a click handler), then
+ * hands it to `spreadsheetClipboard.ts`'s own parser — the single source of
+ * truth for TSV parsing, also used directly by its unit tests — rather than
+ * re-implementing the same tab/newline splitting here.
+ */
 async function readClipboardRows(): Promise<string[][] | null> {
   try {
     const text = await navigator.clipboard.readText()
+    // An empty clipboard is treated as "nothing to paste" (a no-op), not as
+    // `tsvToRows`'s own "one empty cell" reading of an empty string — that
+    // reading exists for a genuinely-empty-but-copied cell, not for a
+    // clipboard with nothing in it at all.
     if (!text) return null
-    const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    const trimmed = normalized.endsWith('\n') ? normalized.slice(0, -1) : normalized
-    return trimmed.split('\n').map((line) => line.split('\t'))
+    return tsvToRows(text)
   } catch {
     // Clipboard read denied/unavailable — the grid's own built-in Ctrl+V
     // paste handling (glide-data-grid's `onPaste`) still works either way;
