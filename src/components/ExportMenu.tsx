@@ -68,18 +68,42 @@ export function ExportMenu({ onExport, format, open, onOpenChange, disabled, can
       ] as const;
     }
 
+    // X1 — a passthrough "Save a copy" of the original bytes, unrelated to
+    // the real vector PDF export every other format now gets.
     if (format === 'pdf') {
-      return [{ value: 'pdf', label: 'Save a copy', Icon: FileDown }] as const;
+      return [{ value: 'copy', label: 'Save a copy', Icon: FileDown }] as const;
+    }
+
+    // X1 — a real per-format PDF export now exists for every format (table
+    // PDF for xlsx/ods, from the parsed workbook — see `spreadsheetPdf.ts`),
+    // so xlsx/ods additionally get a native "Save a copy" of their own bytes
+    // alongside the CSV/PDF exports every spreadsheet-shaped format shares.
+    if (format === 'xlsx' || format === 'ods') {
+      return [
+        { value: 'pdf', label: 'Export to PDF', Icon: FileText },
+        { value: 'csv', label: 'Export to CSV', Icon: FileSpreadsheet },
+        { value: 'copy', label: 'Save a copy', Icon: FileDown },
+      ] as const;
     }
 
     // UX-12 — csv/tsv already carry real delimited-text content, so a
-    // faithful "Export to CSV" is always safe to offer alongside the
-    // generic full-panel PDF screenshot. A spreadsheet format only gets it
-    // once its viewer registers real parsed-row content (`canExportCsv`).
+    // faithful "Export to CSV" is always safe to offer alongside the real
+    // table PDF export. A spreadsheet format only gets it once its viewer
+    // registers real parsed-row content (`canExportCsv`).
     if (format === 'csv' || format === 'tsv' || canExportCsv) {
       return [
         { value: 'pdf', label: 'Export to PDF', Icon: FileText },
         { value: 'csv', label: 'Export to CSV', Icon: FileSpreadsheet },
+      ] as const;
+    }
+
+    // X1 — text/code additionally get a standalone HTML export (both are
+    // plain content with no format-specific PDF-vs-HTML distinction the way
+    // markdown has).
+    if (format === 'text' || format === 'code') {
+      return [
+        { value: 'pdf', label: 'Export to PDF', Icon: FileText },
+        { value: 'html', label: 'Export to HTML', Icon: FileCode },
       ] as const;
     }
 

@@ -106,14 +106,75 @@ function backupExisting(targetPath) {
 }
 
 /**
+ * @param {string} targetPath
+ * @returns {boolean}
+ */
+function isExistingDirectory(targetPath) {
+  try {
+    return fs.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {unknown} err
+ * @param {string} [targetPath] the path the failing operation was writing to
+ *   (omitted for the initial temp-file write, which is never `targetPath`
+ *   itself — see call site)
  * @returns {never}
  */
-function rethrowAsFriendlyError(err) {
+function rethrowAsFriendlyError(err, targetPath) {
+  // X5 fix (found during wave3/export review) — on Windows, renaming (or
+  // directly writing, in the EXDEV fallback) ONTO an existing directory
+  // raises EPERM, not EISDIR: verified empirically (`fs.renameSync(tempFile,
+  // existingDir)` -> `err.code === 'EPERM'`). `isLockError` below also
+  // treats EPERM as "another program has this file locked" (Word, etc. —
+  // ELEC-26), so without this check every "you picked a folder, not a file"
+  // mistake was being misreported as a file-lock error instead of
+  // `classifyWriteError`'s intended EISDIR message — the opposite of
+  // actionable. Disambiguate by checking the target's actual type: a real
+  // lock never has a directory sitting at `targetPath`.
+  if (targetPath && isExistingDirectory(targetPath)) {
+    const dirErr = new Error('target path is a directory');
+    dirErr.code = 'EISDIR';
+    throw dirErr;
+  }
   if (isLockError(err)) {
     throw new FileLockedError();
   }
   throw err;
+}
+
+/**
+ * X5/save-error-classification — maps a raw Node `fs` error code to a
+ * friendly, actionable message. `save-file`/`save-binary-file` in `main.cjs`
+ * previously only recognized `FileLockedError` (EBUSY/EPERM, thrown above)
+ * and silently returned `error: undefined` for every other failure class,
+ * leaving the renderer's banner/toast with nothing specific to show. Returns
+ * `undefined` for a code with no friendly mapping so the caller can fall back
+ * to its own generic message rather than this throwing or guessing.
+ * @param {unknown} err
+ * @returns {string | undefined}
+ */
+function classifyWriteError(err) {
+  const code = err && typeof err === 'object' ? /** @type {{code?: unknown}} */ (err).code : undefined;
+  switch (code) {
+    case 'EACCES':
+      return "Permission denied — you don't have access to save to this location.";
+    case 'ENOSPC':
+      return 'Not enough disk space to save this file.';
+    case 'EISDIR':
+      return 'That location is a folder, not a file — choose a different name.';
+    case 'ENOENT':
+      return 'The destination folder no longer exists — choose a different location.';
+    case 'EROFS':
+      return 'That location is read-only — choose a different location.';
+    case 'ENAMETOOLONG':
+      return 'That file name or path is too long — choose a shorter one.';
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -148,14 +209,14 @@ function atomicWriteFile(targetPath, data) {
         writeAndSync(targetPath, buffer);
         return { fallbackUsed: true };
       } catch (fallbackErr) {
-        rethrowAsFriendlyError(fallbackErr);
+        rethrowAsFriendlyError(fallbackErr, targetPath);
       } finally {
         cleanupTemp(tempPath);
       }
     }
     cleanupTemp(tempPath);
-    rethrowAsFriendlyError(err);
+    rethrowAsFriendlyError(err, targetPath);
   }
 }
 
-module.exports = { atomicWriteFile, FileLockedError, LOCK_ERROR_MESSAGE };
+module.exports = { atomicWriteFile, FileLockedError, LOCK_ERROR_MESSAGE, classifyWriteError };

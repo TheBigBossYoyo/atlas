@@ -1,7 +1,10 @@
 export type Theme = 'light' | 'dark' | 'sepia' | 'nord' | 'dracula';
 export type ViewMode = 'preview' | 'editor' | 'split';
 // UX-12 — 'csv' added for spreadsheet/csv/tsv's real delimited-text export.
-export type ExportFormat = 'html' | 'pdf' | 'docx' | 'md' | 'csv';
+// X1 — 'copy' is a format-preserving "Save a copy" passthrough (PDF/XLSX/ODS
+// keep their own original bytes; which extension/MIME to use comes from the
+// active file's own `format`, not from this value).
+export type ExportFormat = 'html' | 'pdf' | 'docx' | 'md' | 'csv' | 'copy';
 
 export interface ThemeMeta {
   id: Theme;

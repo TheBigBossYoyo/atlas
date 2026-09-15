@@ -23,8 +23,25 @@ import { StatusBar } from './components/StatusBar';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { SAMPLE_MARKDOWN } from './constants';
 import { THEMES, type ViewMode, type ExportFormat, type RecentFile } from './types';
-import { exportMarkdown, exportHtml, exportPdf, exportDocx, exportCsv } from './utils/export';
-import type { FormatId, LoadedFile, NavItem } from './formats/types';
+import {
+  exportMarkdown,
+  exportHtml,
+  exportDocx,
+  exportCsv,
+  exportMarkdownPdf,
+  exportDocxPdf,
+  exportRtfPdf,
+  exportOdtPdf,
+  exportPdfCopy,
+  exportSpreadsheetPdf,
+  exportWorkbookCopy,
+  exportSpreadsheetCsvPerSheet,
+  exportDelimitedTablePdf,
+  exportSlidesPdf,
+  exportTextPdf,
+  exportTextHtml,
+} from './utils/export';
+import { assertNever, type FormatId, type LoadedFile, type NavItem } from './formats/types';
 import { resolveDroppedFilePath } from './utils/dragDropPath';
 import { ViewerProvider } from './viewers/shared/ViewerContext';
 import {
@@ -122,18 +139,6 @@ function ViewerSessionBridge({
   }, [exportContentRef, filePath, getExportableContent, onExportableFormatChange]);
 
   return null;
-}
-
-function triggerBinaryDownload(content: ArrayBuffer, fileName: string): void {
-  const url = URL.createObjectURL(new Blob([content]));
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.style.display = 'none';
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 /**
@@ -314,6 +319,13 @@ function AppShell() {
       return true;
     }
     if (result.error) {
+      // X5 — main.cjs now classifies every save failure class (permission
+      // denied, disk full, missing/renamed parent folder, locked file, ...)
+      // into a friendly `error` string (previously only a file lock did),
+      // surfaced here via the same FileStatusBanner every other save/load
+      // error already uses (a second, redundant toast for the identical
+      // event would leave two `role="alert"` regions on screen for one
+      // failure — worse accessibility, not better).
       setSaveError(result.error);
     } else if (hadExistingPath) {
       setSaveError('Failed to save the file. Please try again.');
@@ -467,10 +479,17 @@ function AppShell() {
   );
   const canSave = useMemo(() => isMarkdownDocument && hasContent, [hasContent, isMarkdownDocument]);
   // UX-12 — csv/tsv files always carry real delimited-text content directly;
-  // any other format only gets a real CSV export once its viewer registers
-  // one via getExportableContent (a Phase-3 placeholder today).
+  // X1 adds a real per-sheet CSV export for xlsx/ods (parsed directly from
+  // the file's own bytes — see `exportSpreadsheetCsvPerSheet` — no viewer
+  // involvement needed); any other format only gets one once its viewer
+  // registers it via getExportableContent (a Phase-3 placeholder today).
   const canExportCsv = useMemo(
-    () => currentFormat === 'csv' || currentFormat === 'tsv' || exportableContentFormat === 'csv',
+    () =>
+      currentFormat === 'csv' ||
+      currentFormat === 'tsv' ||
+      currentFormat === 'xlsx' ||
+      currentFormat === 'ods' ||
+      exportableContentFormat === 'csv',
     [currentFormat, exportableContentFormat]
   );
 
@@ -540,33 +559,112 @@ function AppShell() {
     [removeRecent]
   );
 
+  const handleNonMarkdownExport = useCallback(
+    async (format: ExportFormat, baseName: string): Promise<void> => {
+      if (!file) return;
+
+      if (format === 'copy') {
+        // X1/UX-11 — a "Save a copy" passthrough of the file's own original
+        // bytes, always through the native save dialog (never a raw browser
+        // download — see `exportPdfCopy`/`exportWorkbookCopy`).
+        if (file.kind === 'binary' && file.format === 'pdf') {
+          await exportPdfCopy(file.content, baseName);
+        } else if (file.kind === 'binary' && (file.format === 'xlsx' || file.format === 'ods')) {
+          await exportWorkbookCopy(file.content, baseName, file.format);
+        }
+        return;
+      }
+
+      if (format === 'csv') {
+        // UX-12 — prefer a viewer-registered real export payload
+        // (getExportableContent is a Phase-3 placeholder today — see
+        // viewerContextValue.ts).
+        const exportable = exportContentRef.current();
+        if (exportable && exportable.format === 'csv' && typeof exportable.data === 'string') {
+          await exportCsv(exportable.data, exportable.suggestedName || baseName, 'csv');
+          return;
+        }
+        // csv/tsv files already carry their own real delimited-text content
+        // directly, with no viewer needed.
+        if (file.kind === 'text' && (file.format === 'csv' || file.format === 'tsv')) {
+          await exportCsv(file.content, baseName, file.format);
+          return;
+        }
+        // X1 — xlsx/ods are parsed directly from their own bytes (the exact
+        // same shared parser the viewer uses), one CSV per visible sheet.
+        if (file.kind === 'binary' && (file.format === 'xlsx' || file.format === 'ods')) {
+          await exportSpreadsheetCsvPerSheet(file.content, baseName);
+        }
+        return;
+      }
+
+      if (format === 'html') {
+        // X1 — text/code only; every other non-markdown format's ExportMenu
+        // never offers 'html'.
+        if (file.kind === 'text' && (file.format === 'text' || file.format === 'code')) {
+          await exportTextHtml(file.content, baseName);
+        }
+        return;
+      }
+
+      // format === 'pdf' — X1's real per-format export. Each branch reuses
+      // whatever representation of the document already has its FULL
+      // content (the live DOM for formats that render everything up front,
+      // the file's own parsed bytes for virtualized viewers) — see each
+      // module's header comment in `src/utils/export/` for why.
+      switch (file.format) {
+        case 'docx':
+          await exportDocxPdf('viewer-content', baseName);
+          break;
+        case 'rtf':
+          await exportRtfPdf('viewer-content', baseName);
+          break;
+        case 'odt':
+          await exportOdtPdf('viewer-content', baseName);
+          break;
+        case 'pptx':
+          if (file.kind === 'binary') await exportSlidesPdf(file.content, baseName, 'pptx');
+          break;
+        case 'odp':
+          if (file.kind === 'binary') await exportSlidesPdf(file.content, baseName, 'odp');
+          break;
+        case 'xlsx':
+        case 'ods':
+          if (file.kind === 'binary') await exportSpreadsheetPdf(file.content, baseName);
+          break;
+        case 'csv':
+        case 'tsv':
+          if (file.kind === 'text') await exportDelimitedTablePdf(file.content, baseName, file.format);
+          break;
+        case 'text':
+        case 'code':
+          if (file.kind === 'text') await exportTextPdf(file.content, baseName);
+          break;
+        case 'pdf':
+          if (file.kind === 'binary') await exportPdfCopy(file.content, baseName);
+          break;
+        case 'unknown':
+          throw new Error('PDF export failed: this file type is not supported.');
+        case 'markdown':
+          // Unreachable — the caller only reaches `handleNonMarkdownExport`
+          // when `!isMarkdownDocument`. Guarded explicitly (review fix) so
+          // the `default` below stays a true `assertNever` exhaustiveness
+          // check: adding a new FormatId without a case here now fails to
+          // compile instead of silently exporting nothing with no error.
+          throw new Error('PDF export failed: this file type is not supported.');
+        default:
+          assertNever(file.format);
+      }
+    },
+    [exportContentRef, file],
+  );
+
   const handleExport = useCallback(
     async (format: ExportFormat) => {
       const baseName = fileName ?? 'document.md';
       try {
-        if (!isMarkdownDocument && file?.kind === 'binary' && file.format === 'pdf' && format === 'pdf') {
-          triggerBinaryDownload(file.content, baseName);
-          return;
-        }
-
         if (!isMarkdownDocument) {
-          if (format === 'csv') {
-            // UX-12 — prefer a viewer-registered real export payload
-            // (getExportableContent is a Phase-3 placeholder today — see
-            // viewerContextValue.ts); csv/tsv files already carry their own
-            // real delimited-text content directly, with no viewer needed.
-            const exportable = exportContentRef.current();
-            if (exportable && exportable.format === 'csv' && typeof exportable.data === 'string') {
-              await exportCsv(exportable.data, exportable.suggestedName || baseName, 'csv');
-              return;
-            }
-            if (file?.kind === 'text' && (file.format === 'csv' || file.format === 'tsv')) {
-              await exportCsv(file.content, baseName, file.format);
-            }
-            return;
-          }
-
-          await exportPdf('viewer-content', baseName);
+          await handleNonMarkdownExport(format, baseName);
           return;
         }
 
@@ -581,14 +679,17 @@ function AppShell() {
             await exportHtml('markdown-content', baseName, theme);
             break;
           case 'pdf':
-            await exportPdf('markdown-content', baseName);
+            // X1 — vector printToPDF of the live DOM (selectable text)
+            // instead of the old html2canvas-pro raster screenshot.
+            await exportMarkdownPdf('markdown-content', baseName, theme);
             break;
           case 'docx':
             await exportDocx(localMarkdown, baseName);
             break;
           case 'csv':
-            // Never offered for markdown documents — ExportMenu gates its
-            // CSV item on the active (non-markdown) format.
+          case 'copy':
+            // Never offered for markdown documents — ExportMenu gates these
+            // items on the active (non-markdown) format.
             break;
         }
       } catch (err) {
@@ -600,7 +701,7 @@ function AppShell() {
         showToast(err instanceof Error ? err.message : String(err), 'error');
       }
     },
-    [file, fileName, isMarkdownDocument, localMarkdown, showToast, theme]
+    [fileName, handleNonMarkdownExport, isMarkdownDocument, localMarkdown, showToast, theme]
   );
 
   useUniversalShortcuts({

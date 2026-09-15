@@ -5,7 +5,8 @@ const fs = require('fs');
 
 const { createPathAllowlist } = require('./lib/pathAllowlist.cjs');
 const { createRecentFilesStore } = require('./lib/recentFilesStore.cjs');
-const { atomicWriteFile, FileLockedError } = require('./lib/atomicWrite.cjs');
+const { atomicWriteFile, FileLockedError, classifyWriteError } = require('./lib/atomicWrite.cjs');
+const { printHtmlToPdfBuffer, PrintToPdfError } = require('./lib/printToPdf.cjs');
 const { decodeTextBuffer } = require('./lib/textDecoding.cjs');
 const { buildContentSecurityPolicy } = require('./lib/csp.cjs');
 const { logToFile } = require('./lib/crashLog.cjs');
@@ -666,7 +667,10 @@ ipcMain.handle('save-file', async (event, req) => {
     return { saved: true, path: targetPath, name: path.basename(targetPath) };
   } catch (err) {
     logMainEvent('ERROR', 'save-file failed', err);
-    return { saved: false, error: err instanceof FileLockedError ? err.message : undefined };
+    return {
+      saved: false,
+      error: err instanceof FileLockedError ? err.message : classifyWriteError(err),
+    };
   }
 });
 
@@ -698,7 +702,33 @@ ipcMain.handle('save-binary-file', async (event, req) => {
     return { saved: true, path: targetPath, name: path.basename(targetPath) };
   } catch (err) {
     logMainEvent('ERROR', 'save-binary-file failed', err);
-    return { saved: false, error: err instanceof FileLockedError ? err.message : undefined };
+    return {
+      saved: false,
+      error: err instanceof FileLockedError ? err.message : classifyWriteError(err),
+    };
+  }
+});
+
+ipcMain.handle('export:printToPdf', async (event, req) => {
+  if (!isFromMainFrame(event)) return { ok: false, error: SENDER_FRAME_ERROR_MESSAGE };
+  if (!req || typeof req.html !== 'string') {
+    return { ok: false, error: 'Nothing to export.' };
+  }
+
+  try {
+    const buffer = await printHtmlToPdfBuffer(req.html);
+    // `new Uint8Array(buffer)` (buffer is a Node `Buffer`, itself a
+    // `Uint8Array` subclass) copies the bytes into a plain typed array
+    // rather than aliasing Node's (possibly pooled) underlying
+    // `ArrayBuffer` — simplest way to hand back exactly this PDF's bytes.
+    return { ok: true, bytes: new Uint8Array(buffer) };
+  } catch (err) {
+    logMainEvent('ERROR', 'export:printToPdf failed', err);
+    const message =
+      err instanceof PrintToPdfError
+        ? err.message
+        : 'Could not generate the PDF for export. Please try again.';
+    return { ok: false, error: message };
   }
 });
 

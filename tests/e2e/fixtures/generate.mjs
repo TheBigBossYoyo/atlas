@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { Document, Packer, Paragraph, TextRun } from 'docx'
+import { Document, Packer, Paragraph, TextRun, PageBreak } from 'docx'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
 
@@ -124,6 +124,47 @@ async function makeDocxBuffer() {
   return Packer.toBuffer(document)
 }
 
+/** A real 2-page DOCX (an explicit `PageBreak` run, not just enough text to
+ * overflow one page) — X1/export.spec.ts exports this to PDF and asserts
+ * the result has exactly 2 pages, proving `exportDocxPdf` captures every
+ * page rather than whatever the live DOM happened to have on screen. */
+async function makeMultiPageDocxBuffer() {
+  const document = new Document({
+    sections: [
+      {
+        children: [
+          new Paragraph({
+            children: [
+              new TextRun({ text: 'Atlas multipage DOCX fixture — page one', bold: true }),
+              new PageBreak(),
+            ],
+          }),
+          new Paragraph({ children: [new TextRun({ text: 'Page two content' })] }),
+        ],
+      },
+    ],
+  })
+
+  return Packer.toBuffer(document)
+}
+
+/** A real 2-sheet workbook (both visible) — X1/export.spec.ts exports this
+ * to PDF and asserts one page-group per sheet. */
+function makeMultiSheetWorkbookBuffer(bookType) {
+  const workbook = XLSX.utils.book_new()
+  const sheet1 = XLSX.utils.aoa_to_sheet([
+    ['Name', 'Value'],
+    ['Atlas', 2],
+  ])
+  const sheet2 = XLSX.utils.aoa_to_sheet([
+    ['City', 'Country'],
+    ['Berlin', 'Germany'],
+  ])
+  XLSX.utils.book_append_sheet(workbook, sheet1, 'First')
+  XLSX.utils.book_append_sheet(workbook, sheet2, 'Second')
+  return XLSX.write(workbook, { type: 'buffer', bookType })
+}
+
 async function makePptxBuffer() {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -157,6 +198,68 @@ async function makePptxBuffer() {
           <a:bodyPr/>
           <a:lstStyle/>
           <a:p><a:r><a:t>Atlas PPTX fixture</a:t></a:r></a:p>
+        </p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:sld>`)
+  return zip.generateAsync({ type: 'nodebuffer' })
+}
+
+/** A real 2-slide PPTX — X1/export.spec.ts exports this to PDF and asserts
+ * the result has exactly 2 pages (SLD-01/UX-02's actual regression: the old
+ * exporter rasterized whichever single slide the virtualized deck viewport
+ * happened to have mounted). */
+async function makeMultiSlidePptxBuffer() {
+  const zip = new JSZip()
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+  <Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+</Types>`)
+  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+</Relationships>`)
+  zip.file('ppt/presentation.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldSz cx="12192000" cy="6858000"/>
+  <p:sldIdLst>
+    <p:sldId id="256" r:id="rId1"/>
+    <p:sldId id="257" r:id="rId2"/>
+  </p:sldIdLst>
+</p:presentation>`)
+  zip.file('ppt/_rels/presentation.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide2.xml"/>
+</Relationships>`)
+  zip.file('ppt/slides/slide1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:sp>
+        <p:txBody>
+          <a:bodyPr/>
+          <a:lstStyle/>
+          <a:p><a:r><a:t>Atlas multislide fixture — slide one</a:t></a:r></a:p>
+        </p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+</p:sld>`)
+  zip.file('ppt/slides/slide2.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:sp>
+        <p:txBody>
+          <a:bodyPr/>
+          <a:lstStyle/>
+          <a:p><a:r><a:t>Slide two content</a:t></a:r></a:p>
         </p:txBody>
       </p:sp>
     </p:spTree>
@@ -245,6 +348,9 @@ export async function generateFixtures() {
   const odtBuffer = await makeOdtBuffer()
   const pdfBuffer = makePdfBuffer()
   const multiPagePdfBuffer = makeMultiPagePdfBuffer()
+  const multiPageDocxBuffer = await makeMultiPageDocxBuffer()
+  const multiSlidePptxBuffer = await makeMultiSlidePptxBuffer()
+  const multiSheetXlsxBuffer = makeMultiSheetWorkbookBuffer('xlsx')
 
   const writes = [
     writeFixture(
@@ -265,6 +371,9 @@ export async function generateFixtures() {
     writeFixture('sample-multipage.pdf', multiPagePdfBuffer),
     writeFixture('sample.pptx', pptxBuffer),
     writeFixture('sample.odp', odpBuffer),
+    writeFixture('sample-multipage.docx', multiPageDocxBuffer),
+    writeFixture('sample-multislide.pptx', multiSlidePptxBuffer),
+    writeFixture('sample-multisheet.xlsx', multiSheetXlsxBuffer),
   ]
 
   return Promise.all(writes)
