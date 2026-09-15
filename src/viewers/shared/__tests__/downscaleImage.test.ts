@@ -58,4 +58,45 @@ describe('getDownscaledImage', () => {
       'data:image/png;base64,xx',
     )
   })
+
+  it('review regression (wave-3 shell-polish): evicts the oldest cache entry and revokes its object URL once the cache exceeds its cap', async () => {
+    // Simulate real downscaling support end-to-end so `renderDownscaled`
+    // actually reaches `URL.createObjectURL` — without this, jsdom's
+    // missing `createImageBitmap`/`OffscreenCanvas` would take the
+    // no-op fallback path this test isn't meant to exercise.
+    let nextObjectUrlId = 0
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn().mockResolvedValue({ width: 200, height: 200, close: () => {} }),
+    )
+    vi.stubGlobal(
+      'OffscreenCanvas',
+      class {
+        getContext() {
+          return { drawImage: () => {} }
+        }
+        convertToBlob() {
+          return Promise.resolve(new Blob())
+        }
+      } as unknown as typeof OffscreenCanvas,
+    )
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ blob: () => Promise.resolve(new Blob()) }))
+    const createObjectURL = vi.fn(() => `blob:mock-${nextObjectUrlId++}`)
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
+
+    const firstSrc = 'data:image/png;base64,first-thumbnail'
+    const firstUrl = await getDownscaledImage(firstSrc, 16)
+    expect(firstUrl).toBe('blob:mock-0')
+    expect(revokeObjectURL).not.toHaveBeenCalled()
+
+    // Push 200 more distinct (src, size) entries through the cache — one
+    // past its 200-entry cap — so the very first entry above is evicted.
+    for (let i = 0; i < 200; i += 1) {
+      await getDownscaledImage(`data:image/png;base64,filler-${i}`, 16)
+    }
+
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-0')
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1)
+  })
 })

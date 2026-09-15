@@ -81,6 +81,31 @@ describe('UnknownViewer', () => {
     expect(screen.queryByText(/Z/)).not.toBeInTheDocument()
   })
 
+  it('review regression (wave-3 shell-polish): does not mangle the whole preview when the byte cap splits a multi-byte UTF-8 character', () => {
+    const TEXT_PREVIEW_MAX_BYTES = 5 * 1024 * 1024
+    // 'é' (U+00E9) encodes as the two-byte UTF-8 sequence 0xC3 0xA9. Fill
+    // with plain ASCII, then place one *complete* pair right before the cap
+    // boundary followed by a second pair's lead byte with no continuation
+    // byte within the cap — the preview's last kept byte is a lone 0xC3.
+    // Before the fix, `decodeTextBuffer`'s `isValidUtf8` check rejected the
+    // *entire* preview over that one dangling byte and silently fell back
+    // to Windows-1252, turning the complete 'é' pair just before it into
+    // 'Ã©' mojibake too — not just discarding the legitimately truncated
+    // trailing character.
+    const cap = TEXT_PREVIEW_MAX_BYTES
+    const bytes = new Uint8Array(cap + 8).fill(0x61) // 'a'
+    bytes[cap - 3] = 0xc3
+    bytes[cap - 2] = 0xa9
+    bytes[cap - 1] = 0xc3 // incomplete — its continuation byte falls past the cap
+
+    render(<UnknownViewer file={makeBinaryFile(Array.from(bytes), 'C:/docs/accents.txt')} />)
+    fireEvent.click(screen.getByRole('button', { name: /open as text/i }))
+
+    expect(screen.queryByText(/Ã/)).not.toBeInTheDocument()
+    const content = screen.getByText(/^a+é$/)
+    expect(content.textContent?.endsWith('é')).toBe(true)
+  })
+
   it('does not show a truncation notice for a file at or under the cap', () => {
     const bytes = new Uint8Array(1024).fill(0x61)
     render(<UnknownViewer file={makeBinaryFile(Array.from(bytes), 'C:/docs/small.bin')} />)
