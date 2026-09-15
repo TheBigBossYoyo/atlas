@@ -113,3 +113,21 @@
 .docx-page__table-cell-content {
   position: relative;
 }
+
+/* DXE-14 — column resize handle (PageView.tsx's TableColumnResizeHandle):
+   a thin invisible strip straddling the column border, widened visibly only
+   on hover/drag so it doesn't otherwise obscure the table's own borders. */
+.docx-page__table-col-resize {
+  width: 6px;
+  margin-left: -3px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  z-index: 10;
+}
+
+.docx-page__table-col-resize:hover,
+.docx-page__table-col-resize--active {
+  background: var(--accent, #4a90e2);
+  opacity: 0.5;
+}

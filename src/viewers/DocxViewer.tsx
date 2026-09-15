@@ -645,6 +645,17 @@ function DocxEditor({
     [commitState, documentModel, range],
   )
 
+  // DXE-14 — column resize by dragging a table's column border
+  // (PageView.tsx's TableColumnResizeHandle, threaded here through
+  // PageStack). A drag fires this exactly once, on release, with the final
+  // width — never a stream of intermediate commands per pixel moved.
+  const handleResizeTableColumn = useCallback(
+    (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => {
+      applyEditorCommand({ kind: 'resize-table-column', tablePath, columnIndex, widthTwips })
+    },
+    [applyEditorCommand],
+  )
+
   // DXE-02/DXE-17 — a whole command batch (paste, Replace All) is wrapped in
   // one `composite` command instead of applied+pushed one at a time: if any
   // sub-command throws, `applyCommand`'s own composite handling means NOTHING
@@ -1591,6 +1602,7 @@ function DocxEditor({
                 document={documentModel}
                 theme={bundle.theme}
                 relationships={bundle.relationships}
+                onResizeTableColumn={handleResizeTableColumn}
               />
             </MediaContext.Provider>
           ) : paginationError !== null ? (

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { fireEvent, render } from '@testing-library/react';
 
 import { PageView } from '../PageView';
 import { PageStack } from '../PageStack';
 import { paginate } from '../../layout/paginate';
-import type { Document, NumberingDef, Section, ParaProps } from '../../model';
+import type { Document, NumberingDef, Section, ParaProps, Table } from '../../model';
 import { twip } from '../../model';
 import type { Relationship } from '../../parser/relationships';
 import { loadDocx } from '../../index';
@@ -74,6 +74,25 @@ function createParagraph(wordCount: number, props: ParaProps = {}) {
       },
     ],
   };
+}
+
+/** DXE-14 — a simple fixed-layout table: one row, `colCount` equal-width
+ * columns each `colWidthTwips` wide, one word of content per cell. */
+function createTableBlock(colCount: number, colWidthTwips: number): Table {
+  return {
+    kind: 'table',
+    props: { tblLayout: 'fixed' },
+    tblGrid: Array.from({ length: colCount }, () => twip(colWidthTwips)),
+    rows: [
+      {
+        kind: 'table-row',
+        cells: Array.from({ length: colCount }, () => ({
+          kind: 'table-cell' as const,
+          blocks: [createParagraph(1)],
+        })),
+      },
+    ],
+  } as Table;
 }
 
 const mockFontResolver = vi.fn().mockResolvedValue({
@@ -417,5 +436,81 @@ describe('PageView against the real hyperlinks-bookmarks corpus fixture (D6/DXL-
     expect(internalLink).not.toBeUndefined();
     expect(internalLink?.hasAttribute('target')).toBe(false);
     expect(container.querySelector('#docx-bookmark-targetBookmark')).not.toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // DXE-14 — column resize by dragging the border
+  // ---------------------------------------------------------------------------
+
+  describe('table column resize', () => {
+    it('renders one resize handle per column only when onResizeTableColumn is provided', async () => {
+      const table = createTableBlock(2, 2000);
+      const doc = createDocument([createSection([table], { pageWidthPt: 500 })]);
+      const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+
+      const withHandles = render(
+        <PageView page={pages[0]} zoom={1} document={doc} onResizeTableColumn={vi.fn()} />,
+      );
+      expect(withHandles.container.querySelectorAll('.docx-page__table-col-resize')).toHaveLength(2);
+
+      const withoutHandles = render(<PageView page={pages[0]} zoom={1} document={doc} />);
+      expect(withoutHandles.container.querySelectorAll('.docx-page__table-col-resize')).toHaveLength(0);
+    });
+
+    it('dragging a handle calls onResizeTableColumn exactly once, on release, with the resulting width', async () => {
+      const table = createTableBlock(2, 2000); // 2000 twips = 100pt per column
+      const doc = createDocument([createSection([table], { pageWidthPt: 500 })]);
+      const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+      const onResize = vi.fn();
+
+      const { container } = render(
+        <PageView page={pages[0]} zoom={1} document={doc} onResizeTableColumn={onResize} />,
+      );
+
+      const initialWidthPt = Number.parseFloat(
+        (container.querySelector('col') as HTMLElement).style.width.replace('px', ''),
+      );
+      expect(initialWidthPt).toBeGreaterThan(0);
+
+      const handles = container.querySelectorAll<HTMLElement>('.docx-page__table-col-resize');
+      expect(handles).toHaveLength(2);
+
+      fireEvent.pointerDown(handles[0], { button: 0, clientX: 100 });
+      fireEvent.pointerMove(window, { clientX: 150 }); // +50 client px
+      expect(onResize).not.toHaveBeenCalled(); // no commit mid-drag
+
+      fireEvent.pointerUp(window, { clientX: 150 });
+
+      expect(onResize).toHaveBeenCalledTimes(1);
+      const [tablePath, columnIndex, widthTwips] = onResize.mock.calls[0] as [
+        ReadonlyArray<number>,
+        number,
+        number,
+      ];
+      expect(Array.isArray(tablePath)).toBe(true);
+      expect(columnIndex).toBe(0);
+      // scale = zoom(1) * PT_TO_PX(4/3); a 50px drag is 50/(4/3) = 37.5pt.
+      const expectedWidthTwips = Math.round((initialWidthPt + 50 / (4 / 3)) * 20);
+      expect(widthTwips).toBe(expectedWidthTwips);
+    });
+
+    it('a right-click on the handle does not start a drag or fire onResizeTableColumn', async () => {
+      const table = createTableBlock(1, 2000);
+      const doc = createDocument([createSection([table], { pageWidthPt: 500 })]);
+      const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+      const onResize = vi.fn();
+
+      const { container } = render(
+        <PageView page={pages[0]} zoom={1} document={doc} onResizeTableColumn={onResize} />,
+      );
+      const handle = container.querySelector<HTMLElement>('.docx-page__table-col-resize');
+      expect(handle).not.toBeNull();
+
+      fireEvent.pointerDown(handle as HTMLElement, { button: 2, clientX: 100 });
+      fireEvent.pointerMove(window, { clientX: 150 });
+      fireEvent.pointerUp(window, { clientX: 150 });
+
+      expect(onResize).not.toHaveBeenCalled();
+    });
   });
 });
