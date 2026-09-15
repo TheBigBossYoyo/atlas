@@ -33,6 +33,8 @@ import {
   type DrawingAnchorChild,
   type Endnote,
   type EndnoteReference,
+  type Field,
+  type FieldType,
   type Footer,
   type FooterReference,
   type FontSet,
@@ -108,6 +110,26 @@ const xmlBuilder = new XMLBuilder({
   suppressEmptyNode: true,
 })
 
+/**
+ * D19 / DXS-16 — raw-substring context for the document XML currently being
+ * parsed, consulted by `parseUnknownNode` so an unsupported element's
+ * captured `xml` is the exact source text (byte-faithful, including exotic
+ * formatting fast-xml-parser's builder wouldn't reproduce) rather than a
+ * tree-rebuilt approximation, with any namespace prefix it relies on that's
+ * declared by a non-root ancestor re-declared locally so the fragment stays
+ * valid wherever the serializer splices it back in (see `computeRawNodeInfo`'s
+ * doc comment for why that specific gap is the one worth closing here).
+ *
+ * Module-level rather than threaded as a parameter through every one of
+ * `parseUnknownNode`'s ~10 call sites: `parseDocument` is this module's only
+ * export and is never reentered mid-parse (no `await`, and nothing else in
+ * this file calls back into it), so there is exactly one active parse at a
+ * time — set at entry, read throughout, cleared in `finally` so a thrown
+ * parse error never leaves a stale context (holding a potentially large
+ * string) for a later call to accidentally reuse.
+ */
+let sourceRangeContext: SourceRangeContext | undefined
+
 export function parseDocument(xml: string): DocxDocument {
   assertXmlPartSizeWithinLimit(xml, 'word/document.xml')
   let raw: OrderedXmlNode[]
@@ -118,6 +140,15 @@ export function parseDocument(xml: string): DocxDocument {
     throw new DocxParseError(`Failed to parse document XML: ${msg}`)
   }
 
+  sourceRangeContext = computeSourceRangeContext(xml, raw)
+  try {
+    return parseDocumentTree(raw)
+  } finally {
+    sourceRangeContext = undefined
+  }
+}
+
+function parseDocumentTree(raw: ReadonlyArray<OrderedXmlNode>): DocxDocument {
   const documentElement = findElement(raw, 'w:document')
   const bodyElement = child(documentElement, 'w:body')
   const body = parseBody(bodyElement)
@@ -307,7 +338,12 @@ function parseParagraph(element: OrderedXmlNode): Block {
   const props = parseParaProps(child(element, 'w:pPr'))
   const children: ParagraphChild[] = []
 
-  for (const entry of expandWrapperNodes(nodeChildren(element))) {
+  for (const entry of groupComplexFieldRuns(expandWrapperNodes(nodeChildren(element)))) {
+    if (isComplexFieldGroup(entry)) {
+      children.push(parseComplexField(entry.runs))
+      continue
+    }
+
     if (isIgnorableText(entry)) {
       continue
     }
@@ -364,6 +400,8 @@ function parseParagraphChild(element: OrderedXmlNode): ParagraphChild | null {
       return parseRevision(element, 'ins')
     case 'w:del':
       return parseRevision(element, 'del')
+    case 'w:fldSimple':
+      return parseSimpleField(element)
     default:
       return parseUnknownNode(element)
   }
@@ -432,7 +470,12 @@ function parseHyperlink(element: OrderedXmlNode): Hyperlink {
   const history = parseOnOff(attr(element, 'w:history'))
   const children: HyperlinkChild[] = []
 
-  for (const entry of expandWrapperNodes(nodeChildren(element))) {
+  for (const entry of groupComplexFieldRuns(expandWrapperNodes(nodeChildren(element)))) {
+    if (isComplexFieldGroup(entry)) {
+      children.push(parseComplexField(entry.runs))
+      continue
+    }
+
     if (isIgnorableText(entry)) {
       continue
     }
@@ -462,6 +505,9 @@ function parseHyperlink(element: OrderedXmlNode): Hyperlink {
       case 'w:endnoteReference':
         children.push(parseEndnoteReference(entry))
         break
+      case 'w:fldSimple':
+        children.push(parseSimpleField(entry))
+        break
       default:
         children.push(parseUnknownNode(entry))
         break
@@ -476,6 +522,258 @@ function parseHyperlink(element: OrderedXmlNode): Hyperlink {
     ...(targetFrame !== undefined ? { targetFrame } : {}),
     ...(history !== undefined ? { history } : {}),
     children,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DEFER-5 / DXS-20 — field parsing (w:fldSimple, and complex fields built
+// from w:fldChar begin/separate/end + w:instrText)
+// ---------------------------------------------------------------------------
+
+/**
+ * A complex field's begin/instrText/separate/result/end pieces are SIBLING
+ * `w:r` elements at the paragraph/hyperlink level, not nested inside one —
+ * unlike every other `ParagraphChild`, one `Field` model node has to be
+ * assembled from a whole RUN of sibling entries rather than a single one.
+ * `groupComplexFieldRuns` does that grouping as a preprocessing pass over
+ * an already `expandWrapperNodes`-flattened sibling list, so
+ * `parseParagraph`/`parseHyperlink`'s loops can treat a whole field like
+ * any other single child once grouped.
+ */
+interface ComplexFieldGroup {
+  readonly kind: 'complex-field-group'
+  /** Only the `w:r` entries from the begin run through the end run, inclusive — see `groupComplexFieldRuns`'s doc comment on why non-run siblings in between are dropped from this list (though not from the field's raw byte span). */
+  readonly runs: ReadonlyArray<OrderedXmlNode>
+}
+
+function isComplexFieldGroup(
+  entry: OrderedXmlNode | ComplexFieldGroup,
+): entry is ComplexFieldGroup {
+  return (entry as ComplexFieldGroup).kind === 'complex-field-group'
+}
+
+/**
+ * Scans `entries` for `w:r`-begin ... `w:r`-end runs (a "complex field")
+ * and replaces each whole span with one `ComplexFieldGroup`, tracking
+ * nesting depth so a field whose instruction or result legitimately
+ * contains another field (rare, but valid — e.g. an `IF` field nesting a
+ * `REF`) doesn't have its outer span cut short at the FIRST `end` it finds.
+ * Every other entry (including a truncated field with no matching `end`,
+ * left as ordinary `w:r` content) passes through unchanged.
+ */
+function groupComplexFieldRuns(
+  entries: ReadonlyArray<OrderedXmlNode>,
+): ReadonlyArray<OrderedXmlNode | ComplexFieldGroup> {
+  const result: Array<OrderedXmlNode | ComplexFieldGroup> = []
+  let index = 0
+
+  while (index < entries.length) {
+    const entry = entries[index]
+
+    if (entry !== undefined && nodeName(entry) === 'w:r' && fldCharTypeOf(entry) === 'begin') {
+      const group = collectComplexFieldGroup(entries, index)
+      if (group !== undefined) {
+        result.push(group.value)
+        index = group.nextIndex
+        continue
+      }
+    }
+
+    if (entry !== undefined) {
+      result.push(entry)
+    }
+    index += 1
+  }
+
+  return result
+}
+
+function collectComplexFieldGroup(
+  entries: ReadonlyArray<OrderedXmlNode>,
+  beginIndex: number,
+): { readonly value: ComplexFieldGroup; readonly nextIndex: number } | undefined {
+  const beginEntry = entries[beginIndex]
+  if (beginEntry === undefined) {
+    return undefined
+  }
+
+  const runs: OrderedXmlNode[] = [beginEntry]
+  let depth = 1
+
+  for (let i = beginIndex + 1; i < entries.length; i += 1) {
+    const entry = entries[i]
+    if (entry === undefined || nodeName(entry) !== 'w:r') {
+      // Non-run content inside a field's span (a bookmark, stray whitespace
+      // text, ...) still belongs to the field's raw byte range (captured
+      // separately via `captureFieldRawSpan`'s begin/end anchors) but has no
+      // structural role in `Field.result` — skip it from `runs` without
+      // abandoning the scan.
+      continue
+    }
+
+    runs.push(entry)
+    const type = fldCharTypeOf(entry)
+    if (type === 'begin') {
+      depth += 1
+    } else if (type === 'end') {
+      depth -= 1
+      if (depth === 0) {
+        return { value: { kind: 'complex-field-group', runs }, nextIndex: i + 1 }
+      }
+    }
+  }
+
+  // No matching end (truncated/malformed field): let the caller fall back
+  // to treating the begin run as ordinary content instead of silently
+  // consuming the rest of the paragraph looking for an end that isn't there.
+  return undefined
+}
+
+function fldCharTypeOf(runEntry: OrderedXmlNode): string | undefined {
+  const fldChar = child(runEntry, 'w:fldChar')
+  return fldChar !== undefined ? attr(fldChar, 'w:fldCharType') : undefined
+}
+
+const KNOWN_FIELD_TYPES: ReadonlySet<string> = new Set([
+  'DATE',
+  'TIME',
+  'AUTHOR',
+  'TITLE',
+  'REF',
+  'PAGEREF',
+  'SEQ',
+  'NUMPAGES',
+  'PAGE',
+  'HYPERLINK',
+  'TOC',
+])
+
+function parseFieldInstructionType(instruction: string): FieldType {
+  const token = /^([A-Za-z]+)/.exec(instruction)?.[1]?.toUpperCase()
+  return token !== undefined && KNOWN_FIELD_TYPES.has(token) ? (token as FieldType) : 'unknown'
+}
+
+/**
+ * Assembles a `Field` from a `ComplexFieldGroup`'s `w:r` runs: everything
+ * before the `separate` fldChar is instruction text (`w:instrText`
+ * content, concatenated across every run — Word sometimes splits a long
+ * instruction across several runs); everything after is the cached
+ * display content, parsed as ordinary runs. A field with no `separate` at
+ * all (legal — an unresolved field can be just begin/instrText/end) has no
+ * cached result runs, matching Word's own "not yet calculated" state.
+ */
+function parseComplexField(runs: ReadonlyArray<OrderedXmlNode>): Field {
+  let phase: 'instruction' | 'result' = 'instruction'
+  let instruction = ''
+  const result: ParagraphChild[] = []
+  let locked: OnOff | undefined
+  let dirty: OnOff | undefined
+
+  for (const run of runs) {
+    const fldChar = child(run, 'w:fldChar')
+    if (fldChar !== undefined) {
+      const type = attr(fldChar, 'w:fldCharType')
+      if (type === 'begin') {
+        locked = parseOnOff(attr(fldChar, 'w:fldLock'))
+        dirty = parseOnOff(attr(fldChar, 'w:dirty'))
+      } else if (type === 'separate') {
+        phase = 'result'
+      }
+      continue
+    }
+
+    if (phase === 'instruction') {
+      instruction += extractInstrText(run)
+    } else {
+      result.push(parseRun(run))
+    }
+  }
+
+  const trimmedInstruction = instruction.trim()
+  const firstRun = runs[0]
+  const lastRun = runs[runs.length - 1]
+  const raw = firstRun !== undefined && lastRun !== undefined
+    ? captureRawSpan(firstRun, lastRun)
+    : undefined
+
+  return {
+    kind: 'field',
+    fieldType: parseFieldInstructionType(trimmedInstruction),
+    instruction: trimmedInstruction,
+    result,
+    ...(locked !== undefined ? { locked } : {}),
+    ...(dirty !== undefined ? { dirty } : {}),
+    ...(raw !== undefined ? { raw } : {}),
+  }
+}
+
+function extractInstrText(run: OrderedXmlNode): string {
+  let text = ''
+  for (const entry of nodeChildren(run)) {
+    if (nodeName(entry) === 'w:instrText') {
+      text += textValue(entry)
+    }
+  }
+  return text
+}
+
+/**
+ * Byte-faithful passthrough for an unmodified field (D19 / DXS-16's
+ * infrastructure, reused here): slices the exact source text spanning
+ * `startNode` through `endNode` inclusive, from the same raw-range index
+ * `parseUnknownNode` uses. `undefined` only when one of the anchors has no
+ * indexed range (lookup miss, or this ran outside a `parseDocument` call,
+ * as unit tests calling this file's helpers directly do) — the field is
+ * still fully usable (`instruction`/`result` are always populated), it
+ * just gets structurally rebuilt on save instead of passed through
+ * verbatim (same fallback shape as `parseUnknownNode`'s).
+ */
+function captureRawSpan(startNode: OrderedXmlNode, endNode: OrderedXmlNode): string | undefined {
+  const startInfo = sourceRangeContext?.info.get(startNode)
+  const endInfo = sourceRangeContext?.info.get(endNode)
+  if (startInfo === undefined || endInfo === undefined) {
+    return undefined
+  }
+  return sourceRangeContext!.xml.slice(startInfo.start, endInfo.end)
+}
+
+/**
+ * `w:fldSimple` is the "simple field" form: a single element carrying the
+ * instruction as its own `w:instr` attribute, wrapping its cached result
+ * directly as normal paragraph-child content (most commonly one or more
+ * `w:r` runs) — no `fldChar`/`instrText` machinery needed. Dispatches its
+ * children through the same `parseParagraphChild` every paragraph uses, so
+ * a simple field's result can contain anything a paragraph can (bookmarks,
+ * even a nested field).
+ */
+function parseSimpleField(element: OrderedXmlNode): Field {
+  const instruction = (attr(element, 'w:instr') ?? '').trim()
+  const result: ParagraphChild[] = []
+
+  for (const entry of expandWrapperNodes(nodeChildren(element))) {
+    if (isIgnorableText(entry)) {
+      continue
+    }
+    const parsedChild = parseParagraphChild(entry)
+    if (parsedChild !== null) {
+      result.push(parsedChild)
+    }
+  }
+
+  const info = sourceRangeContext?.info.get(element)
+  const raw = info !== undefined ? sourceRangeContext!.xml.slice(info.start, info.end) : undefined
+  const locked = parseOnOff(attr(element, 'w:fldLock'))
+  const dirty = parseOnOff(attr(element, 'w:dirty'))
+
+  return {
+    kind: 'field',
+    fieldType: parseFieldInstructionType(instruction),
+    instruction,
+    result,
+    simple: true,
+    ...(locked !== undefined ? { locked } : {}),
+    ...(dirty !== undefined ? { dirty } : {}),
+    ...(raw !== undefined ? { raw } : {}),
   }
 }
 
@@ -1608,11 +1906,296 @@ function parseLineNumberType(element: OrderedXmlNode | undefined): LineNumberTyp
   return hasProps(lineNumberType) ? lineNumberType : undefined
 }
 
+/**
+ * D19 / DXS-16 — reconstructing an unsupported element from the parsed tree
+ * (`xmlBuilder.build([element])`) only re-emits attributes that element
+ * itself (or one of its own descendants) carries. A namespace prefix the
+ * element or a descendant USES but that a non-root ANCESTOR declared — most
+ * commonly `w:sdt`/`mc:AlternateContent`/`mc:Choice` unwrapping (see
+ * `expandWrapperNodes`) discarding a wrapper that declared the extension
+ * namespace its unwrapped content still refers to — never appears anywhere
+ * in the rebuild, producing schema-invalid XML (an undeclared prefix) on
+ * save. Slicing the exact source substring instead fixes formatting fidelity
+ * (attribute order, self-closing style, entity spelling, etc.) but not this
+ * specific gap by itself, since the substring doesn't include the ancestor's
+ * declaration either — so `sourceRangeContext` additionally tracks, per
+ * node, which namespaces a non-root ancestor made available, and
+ * `injectMissingNamespaces` re-declares locally whichever of those the
+ * captured fragment actually references and doesn't already redeclare
+ * itself. A prefix declared on the document root itself is deliberately
+ * excluded from this tracking: `rootNamespaces`/`mcIgnorable` (DXS-15)
+ * already re-emit the source root's full namespace set unconditionally, so
+ * every root-declared prefix is already in scope everywhere in the output
+ * without any per-node help, and re-injecting it here on top would just be
+ * redundant (and break byte-identical round-trip for the overwhelmingly
+ * common case where an unknown node only ever uses namespaces the root
+ * itself already declares, e.g. plain `w:*`).
+ */
 function parseUnknownNode(element: OrderedXmlNode): UnknownNode {
+  const info = sourceRangeContext?.info.get(element)
+  if (info === undefined) {
+    // No raw range available (lookup miss — e.g. the source tag couldn't be
+    // relocated in the text, or this ran outside a `parseDocument` call, as
+    // every unit test that calls the file's other parse helpers directly
+    // does): fall back to the previous tree-rebuild behavior rather than
+    // producing no output at all.
+    return {
+      kind: 'unknown',
+      xml: xmlBuilder.build([element]),
+    }
+  }
+
+  const rawXml = sourceRangeContext!.xml.slice(info.start, info.end)
   return {
     kind: 'unknown',
-    xml: xmlBuilder.build([element]),
+    xml: injectMissingNamespaces(rawXml, info.inheritedNamespaces),
   }
+}
+
+// ---------------------------------------------------------------------------
+// D19 / DXS-16 — raw source-substring range tracking for unknown nodes
+// ---------------------------------------------------------------------------
+
+interface RawNodeInfo {
+  readonly start: number
+  readonly end: number
+  /** xmlns:prefix -> uri available from a non-root ancestor at this node's position. */
+  readonly inheritedNamespaces: ReadonlyMap<string, string>
+}
+
+interface SourceRangeContext {
+  readonly xml: string
+  readonly info: WeakMap<OrderedXmlNode, RawNodeInfo>
+}
+
+const EMPTY_NAMESPACE_SCOPE: ReadonlyMap<string, string> = new Map()
+
+/**
+ * Builds the raw-range/namespace-scope index for one `parseDocument` call.
+ * Walks `raw` (the exact tree `xmlParser.parse(xml)` produced) depth-first
+ * in document order, alongside a forward-only cursor into `xml` — the same
+ * order the semantic parse functions below (`parseBody`, `parseParagraph`,
+ * `parseRun`, ...) independently traverse this same tree in, so a node's
+ * entry lands in `info` before anything in this file ever needs to look it
+ * up. A tag that can't be relocated (should not happen for well-formed XML
+ * fast-xml-parser itself just parsed, but never trusted to be impossible)
+ * simply gets no entry — `parseUnknownNode` degrades to tree-rebuild for
+ * that one node rather than the whole parse failing.
+ */
+function computeSourceRangeContext(
+  xml: string,
+  raw: ReadonlyArray<OrderedXmlNode>,
+): SourceRangeContext {
+  const info = new WeakMap<OrderedXmlNode, RawNodeInfo>()
+  // The root level's own namespace declarations are intentionally excluded
+  // from what gets tracked as "inherited" (see `parseUnknownNode`'s doc
+  // comment) — `mergeOwnNamespaces: false` only for this outermost call.
+  computeRawNodeInfo(raw, xml, 0, EMPTY_NAMESPACE_SCOPE, info, false)
+  return { xml, info }
+}
+
+function computeRawNodeInfo(
+  nodes: ReadonlyArray<OrderedXmlNode>,
+  xml: string,
+  cursor: number,
+  inheritedScope: ReadonlyMap<string, string>,
+  info: WeakMap<OrderedXmlNode, RawNodeInfo>,
+  mergeOwnNamespaces: boolean,
+): number {
+  let position = cursor
+
+  for (const node of nodes) {
+    const name = nodeName(node)
+    // Text/comment/processing-instruction pseudo-nodes ('#text', '#comment',
+    // '?xml', ...) have no tag to relocate and are never individually passed
+    // to `parseUnknownNode` — skip without advancing the cursor; the next
+    // real element's own forward search naturally skips over them.
+    if (name === undefined || name.startsWith('#') || name.startsWith('?')) {
+      continue
+    }
+
+    const tagStart = findRawTagStart(xml, position, name)
+    if (tagStart === -1) {
+      continue
+    }
+
+    const openTag = findRawTagOpenEnd(xml, tagStart)
+    if (openTag === undefined) {
+      continue
+    }
+
+    if (openTag.selfClosing) {
+      info.set(node, { start: tagStart, end: openTag.end, inheritedNamespaces: inheritedScope })
+      position = openTag.end
+      continue
+    }
+
+    const childScope = mergeOwnNamespaces
+      ? mergeNamespaceScopes(inheritedScope, collectLocalNamespaces(node))
+      : inheritedScope
+
+    const childrenEnd = computeRawNodeInfo(nodeChildren(node), xml, openTag.end, childScope, info, true)
+    const closeEnd = findRawTagCloseEnd(xml, childrenEnd, name)
+    if (closeEnd === undefined) {
+      position = childrenEnd
+      continue
+    }
+
+    info.set(node, { start: tagStart, end: closeEnd, inheritedNamespaces: inheritedScope })
+    position = closeEnd
+  }
+
+  return position
+}
+
+/** Finds the next `<name` at or after `fromIndex` whose name isn't a longer identifier's prefix (e.g. searching `w:p` must not match `w:pPr`). */
+function findRawTagStart(xml: string, fromIndex: number, name: string): number {
+  const needle = `<${name}`
+  let index = fromIndex
+
+  for (;;) {
+    index = xml.indexOf(needle, index)
+    if (index === -1) {
+      return -1
+    }
+
+    const after = xml.charAt(index + needle.length)
+    if (after === '' || /[\s/>]/.test(after)) {
+      return index
+    }
+
+    index += needle.length
+  }
+}
+
+/** From a tag's `<` at `tagStart`, finds the unquoted `>` that closes the start tag. */
+function findRawTagOpenEnd(
+  xml: string,
+  tagStart: number,
+): { readonly end: number; readonly selfClosing: boolean } | undefined {
+  let quote: string | undefined
+  for (let i = tagStart; i < xml.length; i += 1) {
+    const c = xml.charAt(i)
+    if (quote !== undefined) {
+      if (c === quote) {
+        quote = undefined
+      }
+      continue
+    }
+    if (c === '"' || c === "'") {
+      quote = c
+      continue
+    }
+    if (c === '>') {
+      return { end: i + 1, selfClosing: xml.charAt(i - 1) === '/' }
+    }
+  }
+  return undefined
+}
+
+function findRawTagCloseEnd(xml: string, fromIndex: number, name: string): number | undefined {
+  const needle = `</${name}>`
+  const index = xml.indexOf(needle, fromIndex)
+  return index === -1 ? undefined : index + needle.length
+}
+
+const XMLNS_ATTR_PREFIX = '@_xmlns:'
+
+function collectLocalNamespaces(node: OrderedXmlNode): ReadonlyMap<string, string> {
+  const attributes = node[':@']
+  if (attributes === undefined) {
+    return EMPTY_NAMESPACE_SCOPE
+  }
+
+  let namespaces: Map<string, string> | undefined
+  for (const [key, value] of Object.entries(attributes)) {
+    if (key.startsWith(XMLNS_ATTR_PREFIX) && value !== undefined) {
+      namespaces ??= new Map()
+      namespaces.set(key.slice(XMLNS_ATTR_PREFIX.length), value)
+    }
+  }
+
+  return namespaces ?? EMPTY_NAMESPACE_SCOPE
+}
+
+function mergeNamespaceScopes(
+  base: ReadonlyMap<string, string>,
+  overrides: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  if (overrides.size === 0) {
+    return base
+  }
+  return new Map([...base, ...overrides])
+}
+
+/**
+ * Referenced-prefix detection is a plain substring scan across the whole
+ * fragment (tag names, attribute names, AND ordinary text content) rather
+ * than a full tokenizer: a false positive — plain text that happens to
+ * contain a `word:word` pattern (e.g. "Ratio a:b") — only ever causes a
+ * harmless redundant `xmlns:` re-declaration (still valid XML), never a
+ * missed one, so erring toward over-matching here is the safe direction.
+ */
+const PREFIX_REFERENCE_RE = /[<\s/]([A-Za-z_][\w.-]*):[A-Za-z_]/g
+const NAMESPACE_DECLARATION_RE = /\bxmlns:([A-Za-z_][\w.-]*)\s*=/g
+
+function collectMatches(xml: string, pattern: RegExp): ReadonlySet<string> {
+  const matches = new Set<string>()
+  pattern.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(xml)) !== null) {
+    matches.add(match[1])
+  }
+  return matches
+}
+
+/**
+ * Re-declares, on `fragment`'s own outermost tag, whichever namespace
+ * prefixes it references but doesn't already declare itself, out of the
+ * ones `inheritedNamespaces` says a (non-root) ancestor made available —
+ * see `parseUnknownNode`'s doc comment for why this is needed at all.
+ */
+function injectMissingNamespaces(
+  fragment: string,
+  inheritedNamespaces: ReadonlyMap<string, string>,
+): string {
+  if (inheritedNamespaces.size === 0) {
+    return fragment
+  }
+
+  const referenced = collectMatches(fragment, PREFIX_REFERENCE_RE)
+  const declared = collectMatches(fragment, NAMESPACE_DECLARATION_RE)
+
+  const missing: Array<readonly [string, string]> = []
+  for (const prefix of referenced) {
+    if (declared.has(prefix)) {
+      continue
+    }
+    const uri = inheritedNamespaces.get(prefix)
+    if (uri !== undefined) {
+      missing.push([prefix, uri])
+    }
+  }
+
+  if (missing.length === 0) {
+    return fragment
+  }
+
+  const openTag = findRawTagOpenEnd(fragment, 0)
+  if (openTag === undefined) {
+    return fragment
+  }
+
+  const insertPos = openTag.selfClosing ? openTag.end - 2 : openTag.end - 1
+  const declarations = missing
+    .map(([prefix, uri]) => ` xmlns:${prefix}="${escapeXmlAttributeValue(uri)}"`)
+    .join('')
+
+  return fragment.slice(0, insertPos) + declarations + fragment.slice(insertPos)
+}
+
+function escapeXmlAttributeValue(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
 }
 
 function attr(element: OrderedXmlNode | undefined, name: string): string | undefined {

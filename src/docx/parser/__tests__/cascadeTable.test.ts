@@ -156,6 +156,36 @@ describe('resolveTableCellStyle', () => {
     expect(resolved.cell?.shd?.fill).toBe('333333')
   })
 
+  it(
+    'treats an explicit rowBandSize/colBandSize of 0 as "no banding" rather than a band size of 1 '
+      + '(MS-OI29500 2.1.251 — 0 is a documented explicit opt-out, distinct from the unset default of 1)',
+    () => {
+      const styles = makeStyles([
+        {
+          id: 'NoBanding',
+          type: 'table',
+          table: { rowBandSize: 0, colBandSize: 0 },
+          conditionalFormats: new Map([
+            ['band1Horz', { cell: { shd: { fill: hexColor('AAAAAA') } } }],
+            ['band1Vert', { cell: { shd: { fill: hexColor('CCCCCC') } } }],
+          ]),
+        },
+      ])
+      const look = { noHBand: false, noVBand: false }
+
+      // Every row/column would land in stripe 0 (band1Horz/band1Vert) under
+      // the old "0 falls back to 1" behavior; with real 0-means-off banding
+      // neither conditional format is active anywhere.
+      const resolved = resolveTableCellStyle(
+        'NoBanding',
+        styles,
+        look,
+        { rowIndex: 0, rowCount: 2, columnStart: 0, gridSpan: 1, columnCount: 2 },
+      )
+      expect(resolved.cell?.shd).toBeUndefined()
+    },
+  )
+
   it('throws DocxParseError on a circular basedOn chain instead of recursing forever', () => {
     const circular = makeStyles([
       { id: 'A', type: 'table', basedOn: 'B' },

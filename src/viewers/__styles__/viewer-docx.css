@@ -135,6 +135,38 @@
   background: var(--bg-secondary, #f6f8fa);
 }
 
+/* DEFER-5 / DXS-20 — Update Fields / Update TOC */
+.docx-viewer__update-fields-button,
+.docx-viewer__update-toc-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.docx-viewer__update-fields-button:hover,
+.docx-viewer__update-toc-button:hover {
+  background: var(--bg-secondary, #f6f8fa);
+}
+
+.docx-viewer__field-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-primary, #1f2328);
+  background: var(--bg-secondary, #f6f8fa);
+  border: 1px solid var(--border-primary, #d0d7de);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
 /* ------------------------------------------------------------------ */
 /* Wave F.1 — Print preview / native print                             */
 /* ------------------------------------------------------------------ */
@@ -146,6 +178,9 @@
   .docx-viewer__save-button,
   .docx-viewer__save-as-button,
   .docx-viewer__print-button,
+  .docx-viewer__update-fields-button,
+  .docx-viewer__update-toc-button,
+  .docx-viewer__field-status,
   .comments-pane,
   .docx-find-replace,
   .spellcheck-menu {

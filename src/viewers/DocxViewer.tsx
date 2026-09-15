@@ -18,7 +18,25 @@ import { loadDocx, saveDocx, type DocxBundle } from '../docx'
 import { paginate, PaginationCancelledError } from '../docx/layout'
 import type { Page, PaginationProgress } from '../docx/layout'
 import type { FontResolver } from '../docx/layout/types'
-import { FONT_FAMILIES, loadFontMetrics, resolveFontFamily, wrapWithCanvasAdvance, type FontMetrics, type FontVariant } from '../docx/fonts'
+import {
+  buildMetrics,
+  FONT_FAMILIES,
+  loadEmbeddedFonts,
+  loadFontMetrics,
+  parseTtf,
+  resolveFontFamily,
+  wrapWithCanvasAdvance,
+  type EmbeddedFontFamily,
+  type FontMetrics,
+  type FontVariant,
+} from '../docx/fonts'
+import {
+  collectBookmarkMaps,
+  parseCoreProps,
+  updateFields,
+  updateTableOfContents,
+  type FieldEvaluationContext,
+} from '../docx/fields'
 import { type Document as DocxDocument, type Paragraph, type ParagraphChild, type Run, type RunChild } from '../docx/model'
 import { resolveParaProps } from '../docx/parser/cascade'
 import { MediaContext, PageStack } from '../docx/render'
@@ -159,10 +177,105 @@ async function preloadDocxFonts(): Promise<void> {
   }
 }
 
-function createFontResolver(): FontResolver {
+/**
+ * DEFER-4 / DXP-13 — registers a document's own embedded fonts (already
+ * de-obfuscated by `loadEmbeddedFonts`) via the same `FontFace` API used for
+ * the bundled substitutes, under the font's real Word name so runs that
+ * reference it paint with the actual embedded typeface instead of falling
+ * back to a metric-substitute or the OS default. Unlike `preloadDocxFonts`
+ * (a one-time, app-lifetime registration of the 5 bundled families), this
+ * runs per document — callers are responsible for un-registering the
+ * returned faces (via `unregisterEmbeddedFonts`) when the document changes,
+ * since two different documents can embed two different fonts under the
+ * same family name.
+ *
+ * A face that fails to parse/load (corrupt data, unsupported table format)
+ * is skipped individually rather than failing the whole document — the
+ * family's other faces, or the bundled-substitute fallback, still work.
+ */
+async function registerEmbeddedFonts(
+  families: ReadonlyArray<EmbeddedFontFamily>,
+): Promise<ReadonlyArray<FontFace>> {
+  if (typeof document === 'undefined' || document.fonts === undefined || families.length === 0) {
+    return []
+  }
+
+  const registered: FontFace[] = []
+  for (const family of families) {
+    for (const descriptor of FONT_VARIANT_DESCRIPTORS) {
+      const data = family.faces[descriptor.variant]
+      if (data === undefined) {
+        continue
+      }
+
+      try {
+        const face = new FontFace(family.name, toArrayBuffer(data), {
+          weight: descriptor.weight,
+          style: descriptor.style,
+          display: 'block',
+        })
+        const loaded = await face.load()
+        document.fonts.add(loaded)
+        registered.push(loaded)
+      } catch {
+        // Corrupt/unsupported embedded font data: leave this face
+        // unregistered so it falls back to the bundled substitute (or OS
+        // default), same as an unresolvable font family today.
+      }
+    }
+  }
+
+  return registered
+}
+
+function unregisterEmbeddedFonts(faces: ReadonlyArray<FontFace>): void {
+  if (typeof document === 'undefined' || document.fonts === undefined) {
+    return
+  }
+  for (const face of faces) {
+    document.fonts.delete(face)
+  }
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  // `.slice()` always allocates a fresh, non-shared ArrayBuffer (unlike
+  // `.buffer.slice()`, whose return type widens to ArrayBufferLike because the
+  // source buffer could in principle be a SharedArrayBuffer).
+  return bytes.slice().buffer
+}
+
+function createFontResolver(embeddedFonts: ReadonlyArray<EmbeddedFontFamily> = []): FontResolver {
+  const embeddedByName = new Map<string, EmbeddedFontFamily>()
+  for (const family of embeddedFonts) {
+    embeddedByName.set(family.name.trim().toLowerCase(), family)
+  }
+
   const cache = new Map<string, Promise<FontMetrics>>()
 
   return async (family: string, variant: FontVariant): Promise<FontMetrics> => {
+    const embeddedFace = embeddedByName.get(family.trim().toLowerCase())?.faces[variant]
+    if (embeddedFace !== undefined) {
+      const cacheKey = `embedded:${family.trim().toLowerCase()}@${variant}`
+      const existing = cache.get(cacheKey)
+      if (existing !== undefined) {
+        return existing
+      }
+
+      const promise = (async () => {
+        try {
+          const tables = parseTtf(toArrayBuffer(embeddedFace))
+          return wrapWithCanvasAdvance(buildMetrics(tables), family, variant)
+        } catch {
+          // Corrupt embedded font data: fall back to a neutral synthetic
+          // base measured under the requested name, same treatment an
+          // unresolvable bundled family gets below.
+          return wrapWithCanvasAdvance(DEFAULT_FONT_METRICS, family, variant)
+        }
+      })()
+      cache.set(cacheKey, promise)
+      return promise
+    }
+
     const resolved = resolveFontFamily(family)
     if (resolved === null) {
       // Unknown family: still measure via canvas under the requested name so the
@@ -474,6 +587,42 @@ function getReplaceValue(root: HTMLElement | null): string {
   return input?.value ?? ''
 }
 
+/**
+ * DEFER-5 / DXS-20 — builds a `(sectionIndex, blockIndex) -> 1-based page`
+ * lookup from the already-computed pagination result, for PAGE/NUMPAGES
+ * field evaluation and TOC page numbers. Reads only `Page`'s already-public
+ * shape (`PageLineRef.paragraphPath`'s first element is the paragraph's
+ * index among its section's direct blocks, matching the addressing
+ * `updateFields`/`collectTocEntries` use) — this stays a read-only consumer
+ * of pagination's output, not a change to pagination itself (paginate.ts/
+ * breakLines.ts are out of this branch's scope). A paragraph spanning
+ * several pages resolves to the EARLIEST page it appears on.
+ */
+function buildPageOfParagraph(
+  pages: ReadonlyArray<Page>,
+): (sectionIndex: number, blockIndex: number) => number | undefined {
+  const pageByKey = new Map<string, number>()
+
+  for (const page of pages) {
+    const pageNumber = page.pageIndex + 1
+    for (const column of page.columns) {
+      for (const line of column.lines) {
+        const blockIndex = line.paragraphPath[0]
+        if (blockIndex === undefined) {
+          continue
+        }
+        const key = `${page.sectionIndex}:${blockIndex}`
+        const existing = pageByKey.get(key)
+        if (existing === undefined || pageNumber < existing) {
+          pageByKey.set(key, pageNumber)
+        }
+      }
+    }
+  }
+
+  return (sectionIndex, blockIndex) => pageByKey.get(`${sectionIndex}:${blockIndex}`)
+}
+
 function DocxEditor({
   bundle,
   file,
@@ -487,7 +636,23 @@ function DocxEditor({
 }) {
   const editorRootRef = useRef<HTMLDivElement | null>(null)
   const historyRef = useRef(new History())
-  const fontResolver = useMemo(() => createFontResolver(), [])
+  // DEFER-4 / DXP-13 — this document's own embedded fonts (already
+  // de-obfuscated), keyed off the raw archive so switching to a different
+  // document (a new `bundle.rawArchive`) re-derives them.
+  const embeddedFonts = useMemo(() => loadEmbeddedFonts(bundle.rawArchive), [bundle.rawArchive])
+  const fontResolver = useMemo(() => createFontResolver(embeddedFonts), [embeddedFonts])
+  // Resolves once the current document's embedded fonts have finished
+  // registering via FontFace — the pagination effect awaits this so canvas
+  // measurement (which reads what the browser has actually registered)
+  // never races the registration it depends on.
+  const embeddedFontsReadyRef = useRef<Promise<void>>(Promise.resolve())
+  // DEFER-5 / DXS-20 — feedback for "Update Fields"/"Update TOC" below.
+  // Not the shared app-wide toast system (`useToast`): that requires a
+  // `<ToastProvider>` ancestor the isolated viewer-level tests that mount
+  // `DocxEditor`/`DocxViewer` directly don't set up, and this file already
+  // has its own established pattern (see `saveError`) for a dismissible
+  // inline status message instead.
+  const [fieldUpdateMessage, setFieldUpdateMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
   const [range, setRange] = useState<Range | null>(null)
   const [pages, setPages] = useState<ReadonlyArray<Page> | null>(null)
@@ -1363,9 +1528,96 @@ function DocxEditor({
     handlePrintRef.current = handlePrint
   }, [handlePrint])
 
+  /**
+   * DEFER-5 / DXS-20 — "Update field(s)": recalculates every resolvable
+   * field's cached display text (DATE/TIME/AUTHOR/TITLE/REF/PAGEREF/SEQ/
+   * PAGE/NUMPAGES; HYPERLINK/TOC/unknown fields are never touched here —
+   * see `updateFields`'s doc comment). Author/title come from a light
+   * regex read of `docProps/core.xml` (`parseCoreProps`) — Atlas has no
+   * broader docProps model to draw on. Bookmark text/page maps come from
+   * `collectBookmarkMaps` walking the current `documentModel` (see that
+   * module's doc comment on scope — a bookmark inside a table cell or a
+   * header/footer/footnote/endnote gets its text but no page). Applied
+   * directly to `documentModel`, bypassing History/undo: a follow-up could
+   * route it through a `replace-blocks`-shaped command instead, but wiring
+   * into the shared editor Command/History system
+   * (`docx/editor/commandTypes.ts`) is left to wave3/docx-editing's scope.
+   */
+  const handleUpdateFields = useCallback(() => {
+    const coreXmlBytes = bundle.rawArchive?.get('docProps/core.xml')
+    const coreXml = coreXmlBytes !== undefined ? new TextDecoder().decode(coreXmlBytes) : undefined
+    const { author, title } = parseCoreProps(coreXml)
+    const pageOfParagraph = pages !== null ? buildPageOfParagraph(pages) : undefined
+    const { bookmarkText, bookmarkPage } = collectBookmarkMaps(documentModel, pageOfParagraph)
+
+    const context: FieldEvaluationContext = {
+      ...(author !== undefined ? { author } : {}),
+      ...(title !== undefined ? { title } : {}),
+      bookmarkText,
+      bookmarkPage,
+      ...(pages !== null ? { pageCount: pages.length } : {}),
+      ...(pageOfParagraph !== undefined
+        ? { currentPageOf: (path: ReadonlyArray<number>) => (path[1] !== undefined ? pageOfParagraph(path[0], path[1]) : undefined) }
+        : {}),
+      sequenceCounters: new Map(),
+    }
+
+    const { document: updated, updatedCount } = updateFields(documentModel, context)
+    if (updatedCount === 0) {
+      setFieldUpdateMessage('No fields needed updating.')
+      return
+    }
+
+    setDocumentModel(updated)
+    setFieldUpdateMessage(`Updated ${updatedCount} field${updatedCount === 1 ? '' : 's'}.`)
+  }, [bundle.rawArchive, documentModel, pages])
+
+  /**
+   * DEFER-5 / DXS-20 — "Update table of contents": regenerates a
+   * single-paragraph TOC field's entries from the document's current
+   * headings (see `toc.ts`'s doc comment on that scope). No-ops with a
+   * status message when the document has no such field, matching Word's
+   * own behavior of the command doing nothing without a TOC.
+   */
+  const handleUpdateTableOfContents = useCallback(() => {
+    const pageOfParagraph = pages !== null ? buildPageOfParagraph(pages) : undefined
+    const { document: updated, updated: didUpdate } = updateTableOfContents(documentModel, pageOfParagraph)
+
+    if (!didUpdate) {
+      setFieldUpdateMessage('No table of contents found to update.')
+      return
+    }
+
+    setDocumentModel(updated)
+    setFieldUpdateMessage('Table of contents updated.')
+  }, [documentModel, pages])
+
   useEffect(() => {
     handleToolbarCommandRef.current = handleToolbarCommand
   }, [handleToolbarCommand])
+
+  // DEFER-4 / DXP-13 — register this document's embedded fonts (if any) via
+  // FontFace whenever it changes, and un-register the previous document's
+  // faces on cleanup so a family name embedded differently by two different
+  // documents never bleeds from one into the other.
+  useEffect(() => {
+    let cancelled = false
+    let registeredFaces: ReadonlyArray<FontFace> = []
+
+    const readyPromise = registerEmbeddedFonts(embeddedFonts).then((loaded) => {
+      if (cancelled) {
+        unregisterEmbeddedFonts(loaded)
+        return
+      }
+      registeredFaces = loaded
+    })
+    embeddedFontsReadyRef.current = readyPromise
+
+    return () => {
+      cancelled = true
+      unregisterEmbeddedFonts(registeredFaces)
+    }
+  }, [embeddedFonts])
 
   useEffect(() => {
     let cancelled = false
@@ -1378,8 +1630,10 @@ function DocxEditor({
       // substitute fonts BEFORE we measure-and-paint. Otherwise pagination
       // computes widths from real TTF metrics while the DOM still renders with
       // a fallback font, producing accumulated drift -> mid-line gaps and
-      // right-edge clipping.
+      // right-edge clipping. This document's own embedded fonts (DEFER-4) must
+      // finish registering for the same reason.
       await preloadDocxFonts()
+      await embeddedFontsReadyRef.current
 
       if (cancelled) {
         return
@@ -1456,6 +1710,24 @@ function DocxEditor({
         >
           <Printer size={16} aria-hidden="true" />
           <span>Print</span>
+        </button>
+        <button
+          className="docx-viewer__update-fields-button"
+          type="button"
+          onClick={handleUpdateFields}
+          aria-label="Update fields"
+          title="Recalculate DATE/TIME/AUTHOR/TITLE/REF/PAGEREF/SEQ/PAGE/NUMPAGES fields to their current values"
+        >
+          <span>Update Fields</span>
+        </button>
+        <button
+          className="docx-viewer__update-toc-button"
+          type="button"
+          onClick={handleUpdateTableOfContents}
+          aria-label="Update table of contents"
+          title="Regenerate the table of contents from the document's current headings"
+        >
+          <span>Update TOC</span>
         </button>
       </div>
       <FindReplace
@@ -1557,6 +1829,19 @@ function DocxEditor({
             className="docx-viewer__error-dismiss"
             onClick={() => setSaveError(null)}
             aria-label="Dismiss error"
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      {fieldUpdateMessage !== null ? (
+        <div className="docx-viewer__field-status" role="status">
+          <span>{fieldUpdateMessage}</span>
+          <button
+            type="button"
+            className="docx-viewer__error-dismiss"
+            onClick={() => setFieldUpdateMessage(null)}
+            aria-label="Dismiss message"
           >
             <X size={14} aria-hidden="true" />
           </button>

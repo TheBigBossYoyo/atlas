@@ -1174,6 +1174,22 @@ function collectParagraphRuns(
       continue
     }
 
+    if (child.kind === 'field') {
+      // DEFER-5 / DXS-20 — a field's cached `result` IS its visible
+      // content (the same treatment `docx/fields/paragraphText.ts` gives
+      // it for TOC heading text): recurse through the same dispatch so a
+      // field's result can itself contain anything a paragraph can (a run,
+      // a hyperlink, even another field), exactly like Word only ever
+      // shows a field's last-computed display text until it's updated.
+      // Without this, the field's `w:r`/`w:fldChar`/`w:instrText` sibling
+      // runs — which used to reach this function individually as ordinary
+      // runs before `groupComplexFieldRuns` (parser/document.ts) started
+      // collapsing them into one `Field` node — would vanish from layout
+      // entirely instead of contributing the runs they always did.
+      runs.push(...collectParagraphRuns(child.result, paraStyleId, document, styleCache))
+      continue
+    }
+
     if (child.kind === 'ins-revision' || child.kind === 'del-revision') {
       const tag: 'ins' | 'del' = child.kind === 'ins-revision' ? 'ins' : 'del'
       for (const run of child.children) {
@@ -1209,6 +1225,14 @@ function collectHyperlinkRuns(
         run: child,
         runProps: resolveEffectiveRunProps(child.props, paraStyleId, document, styleCache),
       })
+      continue
+    }
+
+    if (child.kind === 'field') {
+      // See the matching case in `collectParagraphRuns` — a field nested
+      // inside a hyperlink (e.g. a HYPERLINK field's own display run, or a
+      // different field type nested in one) needs the same treatment.
+      runs.push(...collectParagraphRuns(child.result, paraStyleId, document, styleCache))
     }
   }
 
