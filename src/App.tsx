@@ -41,7 +41,7 @@ import {
   exportTextPdf,
   exportTextHtml,
 } from './utils/export';
-import type { FormatId, LoadedFile, NavItem } from './formats/types';
+import { assertNever, type FormatId, type LoadedFile, type NavItem } from './formats/types';
 import { resolveDroppedFilePath } from './utils/dragDropPath';
 import { ViewerProvider } from './viewers/shared/ViewerContext';
 import {
@@ -645,6 +645,15 @@ function AppShell() {
           break;
         case 'unknown':
           throw new Error('PDF export failed: this file type is not supported.');
+        case 'markdown':
+          // Unreachable — the caller only reaches `handleNonMarkdownExport`
+          // when `!isMarkdownDocument`. Guarded explicitly (review fix) so
+          // the `default` below stays a true `assertNever` exhaustiveness
+          // check: adding a new FormatId without a case here now fails to
+          // compile instead of silently exporting nothing with no error.
+          throw new Error('PDF export failed: this file type is not supported.');
+        default:
+          assertNever(file.format);
       }
     },
     [exportContentRef, file],
