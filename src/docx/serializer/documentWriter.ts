@@ -12,7 +12,13 @@ import {
   type Document,
   type Drawing,
   type DrawingAnchorChild,
+  type DrawingCrop,
+  type DrawingEffectExtent,
   type DrawingExtent,
+  type DrawingPositionH,
+  type DrawingPositionV,
+  type DrawingTransform,
+  type DrawingWrap,
   type EndnoteReference,
   type Field,
   type FooterReference,
@@ -499,7 +505,7 @@ function buildBreakNode(breakNode: BreakNode): OrderedXmlNode {
 
 function buildDrawingNode(drawing: Drawing, state: SerializeState): OrderedXmlNode {
   const layoutName = drawing.layout === 'anchor' ? 'wp:anchor' : 'wp:inline'
-  const layoutAttributes = drawing.layout === 'anchor' ? buildAnchorAttributes() : undefined
+  const layoutAttributes = drawing.layout === 'anchor' ? buildAnchorAttributes(drawing) : undefined
   const layoutChildren =
     drawing.layout === 'anchor' && drawing.anchorChildren !== undefined
       ? buildAnchorChildrenNodes(drawing, drawing.anchorChildren, state)
@@ -515,10 +521,14 @@ function buildInlineDrawingChildren(drawing: Drawing): OrderedXmlNode[] {
     children.push(buildExtentNode(drawing.extent))
   }
 
+  if (drawing.effectExtent !== undefined) {
+    children.push(buildEffectExtentNode(drawing.effectExtent))
+  }
+
   children.push(buildDocPrNode(drawing))
 
   if (drawing.relationshipId !== undefined) {
-    children.push(buildGraphicNode(drawing.relationshipId))
+    children.push(buildGraphicNode(drawing))
   }
 
   return children
@@ -526,11 +536,13 @@ function buildInlineDrawingChildren(drawing: Drawing): OrderedXmlNode[] {
 
 /**
  * Rebuilds `wp:anchor`'s children from the original captured order (DXS-03):
- * the extent/docPr/graphic slots come from current model state (so an
- * in-app edit to e.g. alt text is reflected), while every other captured
- * child — position, wrap choice, effectExtent, cNvGraphicFramePr — is
- * unmodeled and replayed verbatim via the same raw-XML placeholder
- * mechanism `buildUnknownPlaceholder` uses elsewhere.
+ * the extent/effectExtent/positionH/positionV/wrap/docPr/graphic slots come
+ * from current model state (so an in-app edit — alt text, or a future
+ * reposition/rewrap command — is reflected instead of replaying stale
+ * captured XML; DXP-09 moved position/wrap from raw capture to these typed
+ * slots), and every other captured child — `wp:simplePos`,
+ * `wp:cNvGraphicFramePr` — is unmodeled and replayed verbatim via the same
+ * raw-XML placeholder mechanism `buildUnknownPlaceholder` uses elsewhere.
  */
 function buildAnchorChildrenNodes(
   drawing: Drawing,
@@ -551,12 +563,30 @@ function buildAnchorChildrenNodes(
           children.push(buildExtentNode(drawing.extent))
         }
         break
+      case 'effectExtent':
+        if (drawing.effectExtent !== undefined) {
+          children.push(buildEffectExtentNode(drawing.effectExtent))
+        }
+        break
+      case 'positionH':
+        if (drawing.positionH !== undefined) {
+          children.push(buildPositionHNode(drawing.positionH))
+        }
+        break
+      case 'positionV':
+        if (drawing.positionV !== undefined) {
+          children.push(buildPositionVNode(drawing.positionV))
+        }
+        break
+      case 'wrap':
+        children.push(buildWrapNode(drawing.wrap))
+        break
       case 'docPr':
         children.push(buildDocPrNode(drawing))
         break
       case 'graphic':
         if (drawing.relationshipId !== undefined) {
-          children.push(buildGraphicNode(drawing.relationshipId))
+          children.push(buildGraphicNode(drawing))
         }
         break
       default:
@@ -574,6 +604,72 @@ function buildExtentNode(extent: DrawingExtent): OrderedXmlNode {
   })
 }
 
+function buildEffectExtentNode(effectExtent: DrawingEffectExtent): OrderedXmlNode {
+  return createElement('wp:effectExtent', [], {
+    '@_l': String(effectExtent.l),
+    '@_t': String(effectExtent.t),
+    '@_r': String(effectExtent.r),
+    '@_b': String(effectExtent.b),
+  })
+}
+
+function buildPositionHNode(positionH: DrawingPositionH): OrderedXmlNode {
+  return createElement(
+    'wp:positionH',
+    [buildPositionChild(positionH.align, positionH.offsetEmu)],
+    { '@_relativeFrom': positionH.relativeFrom },
+  )
+}
+
+function buildPositionVNode(positionV: DrawingPositionV): OrderedXmlNode {
+  return createElement(
+    'wp:positionV',
+    [buildPositionChild(positionV.align, positionV.offsetEmu)],
+    { '@_relativeFrom': positionV.relativeFrom },
+  )
+}
+
+/**
+ * `wp:positionH`/`wp:positionV` each carry exactly one child: `wp:align`
+ * (text content, e.g. "center") or `wp:posOffset` (text content, EMU). A
+ * schema-valid document always has one; if a hand-built `Drawing` somehow
+ * has neither, default to a zero offset rather than emitting an
+ * (invalid) childless position element.
+ */
+function buildPositionChild(align: string | undefined, offsetEmu: number | undefined): OrderedXmlNode {
+  if (align !== undefined) {
+    return createElement('wp:align', [createText(align)])
+  }
+  return createElement('wp:posOffset', [createText(String(offsetEmu ?? 0))])
+}
+
+/** Maps a `DrawingWrap.mode` back to its `wp:wrap*` element name. */
+const WRAP_MODE_ELEMENT_NAMES: Readonly<Record<DrawingWrap['mode'], string>> = {
+  none: 'wp:wrapNone',
+  square: 'wp:wrapSquare',
+  tight: 'wp:wrapTight',
+  through: 'wp:wrapThrough',
+  topAndBottom: 'wp:wrapTopAndBottom',
+}
+
+/**
+ * Rebuilds the anchor's required wrap-choice element. `wrap` is normally
+ * always present (a schema-valid `wp:anchor` requires one) — the `undefined`
+ * case only guards a hand-built `Drawing`, falling back to `wrapNone` (no
+ * wrap, matching the safest "just show it, don't blank out text" default).
+ */
+function buildWrapNode(wrap: DrawingWrap | undefined): OrderedXmlNode {
+  const mode = wrap?.mode ?? 'none'
+  const elementName = WRAP_MODE_ELEMENT_NAMES[mode]
+  const attributes = createAttributes()
+  appendAttribute(attributes, '@_wrapText', wrap?.side)
+  appendAttribute(attributes, '@_distT', stringifyNumber(wrap?.distTEmu))
+  appendAttribute(attributes, '@_distB', stringifyNumber(wrap?.distBEmu))
+  appendAttribute(attributes, '@_distL', stringifyNumber(wrap?.distLEmu))
+  appendAttribute(attributes, '@_distR', stringifyNumber(wrap?.distREmu))
+  return createElement(elementName, [], attributes)
+}
+
 function buildDocPrNode(drawing: Drawing): OrderedXmlNode {
   const attributes = createAttributes()
   attributes['@_id'] = '1'
@@ -583,23 +679,50 @@ function buildDocPrNode(drawing: Drawing): OrderedXmlNode {
   return createElement('wp:docPr', [], attributes)
 }
 
-function buildGraphicNode(relationshipId: string): OrderedXmlNode {
+function buildGraphicNode(drawing: Drawing): OrderedXmlNode {
+  if (drawing.relationshipId === undefined) {
+    throw new Error('buildGraphicNode requires a relationshipId')
+  }
+
+  const blipFillChildren: OrderedXmlNode[] = [
+    createElement('a:blip', [], { '@_r:embed': drawing.relationshipId }),
+  ]
+  if (drawing.crop !== undefined) {
+    blipFillChildren.push(buildSrcRectNode(drawing.crop))
+  }
+
+  const picChildren: OrderedXmlNode[] = [createElement('pic:blipFill', blipFillChildren)]
+  if (drawing.transform !== undefined) {
+    picChildren.push(
+      createElement('pic:spPr', [buildXfrmNode(drawing.transform)]),
+    )
+  }
+
   return createElement('a:graphic', [
-    createElement('a:graphicData', [
-      createElement('pic:pic', [
-        createElement('pic:blipFill', [
-          createElement('a:blip', [], {
-            '@_r:embed': relationshipId,
-          }),
-        ]),
-      ]),
-    ], {
+    createElement('a:graphicData', [createElement('pic:pic', picChildren)], {
       '@_uri': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
     }),
   ])
 }
 
-function buildAnchorAttributes(): XmlAttributes {
+function buildSrcRectNode(crop: DrawingCrop): OrderedXmlNode {
+  const attributes = createAttributes()
+  appendAttribute(attributes, '@_l', stringifyNumber(crop.l))
+  appendAttribute(attributes, '@_t', stringifyNumber(crop.t))
+  appendAttribute(attributes, '@_r', stringifyNumber(crop.r))
+  appendAttribute(attributes, '@_b', stringifyNumber(crop.b))
+  return createElement('a:srcRect', [], attributes)
+}
+
+function buildXfrmNode(transform: DrawingTransform): OrderedXmlNode {
+  const attributes = createAttributes()
+  appendAttribute(attributes, '@_rot', stringifyNumber(transform.rotation))
+  appendAttribute(attributes, '@_flipH', buildOnOffAttribute(transform.flipH))
+  appendAttribute(attributes, '@_flipV', buildOnOffAttribute(transform.flipV))
+  return createElement('a:xfrm', [], attributes)
+}
+
+function buildAnchorAttributes(drawing: Drawing): XmlAttributes {
   const attributes = createAttributes()
   attributes['@_distT'] = '0'
   attributes['@_distB'] = '0'
@@ -607,10 +730,10 @@ function buildAnchorAttributes(): XmlAttributes {
   attributes['@_distR'] = '0'
   attributes['@_simplePos'] = '0'
   attributes['@_relativeHeight'] = '0'
-  attributes['@_behindDoc'] = '0'
+  attributes['@_behindDoc'] = buildOnOffAttribute(drawing.behindDoc) ?? '0'
   attributes['@_locked'] = '0'
   attributes['@_layoutInCell'] = '1'
-  attributes['@_allowOverlap'] = '1'
+  attributes['@_allowOverlap'] = buildOnOffAttribute(drawing.allowOverlap) ?? '1'
   return attributes
 }
 

@@ -358,7 +358,7 @@ describe('writeDocumentXml', () => {
       <w:p>
         <w:r>
           <w:drawing>
-            <wp:anchor>
+            <wp:anchor behindDoc="1" allowOverlap="0">
               <wp:simplePos x="0" y="0"/>
               <wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>
               <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
@@ -392,6 +392,53 @@ describe('writeDocumentXml', () => {
     expect(written).toContain('wp:wrapSquare')
     expect(written).toContain('wp:cNvGraphicFramePr')
     expect(written).toContain('rIdImage2')
+    // DXP-09: position/wrap now come from typed model fields, not a raw
+    // XML replay — the written output must still carry the actual parsed
+    // values (not just the element names above).
+    expect(written).toContain('behindDoc="1"')
+    expect(written).toContain('allowOverlap="0"')
+    expect(written).toContain('relativeFrom="column"')
+    expect(written).toContain('relativeFrom="paragraph"')
+    expect(written).toContain('914400')
+    expect(written).toContain('wrapText="bothSides"')
+  })
+
+  it('round-trips picture crop/rotation/flip through the pic:spPr/pic:blipFill subtree (DXS-09)', () => {
+    const xml = documentXml(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:inline>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:docPr id="1" name="Picture 1"/>
+              <a:graphic>
+                <a:graphicData>
+                  <pic:pic>
+                    <pic:blipFill>
+                      <a:blip r:embed="rIdImage3"/>
+                      <a:srcRect l="10000" t="5000" r="10000" b="5000"/>
+                    </pic:blipFill>
+                    <pic:spPr>
+                      <a:xfrm rot="2700000" flipH="1" flipV="0"/>
+                    </pic:spPr>
+                  </pic:pic>
+                </a:graphicData>
+              </a:graphic>
+            </wp:inline>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    expectRoundTrip(xml)
+
+    const written = writeDocumentXml(parseDocument(xml))
+    expect(written).toContain('a:srcRect')
+    expect(written).toContain('l="10000"')
+    expect(written).toContain('a:xfrm')
+    expect(written).toContain('rot="2700000"')
+    expect(written).toContain('flipH="1"')
+    expect(written).toContain('rIdImage3')
   })
 
   it('preserves a non-picture graphicFrame (chart) verbatim instead of emitting an empty wrapper (P1.7 / DXS-04)', () => {

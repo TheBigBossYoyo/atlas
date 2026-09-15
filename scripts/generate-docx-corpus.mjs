@@ -339,6 +339,57 @@ function fixtureImageAnchoredFloating() {
 }
 
 // ---------------------------------------------------------------------------
+// 7b. Picture crop / rotation / flip (DXS-09)
+// ---------------------------------------------------------------------------
+/**
+ * The `docx` package can express rotation/flip via `ImageRun`'s
+ * `transformation.rotation`/`flip` (it emits `pic:spPr/a:xfrm`'s
+ * `rot`/`flipH`/`flipV` attributes directly — same units Atlas parses), but
+ * has no option for `a:srcRect` (crop): `postProcess` splices that in by
+ * hand, right after the fixture's single `<a:blip .../>` (safe as a global
+ * marker since this fixture has exactly one picture).
+ */
+function fixtureImageCropRotationFlip() {
+  const id = 'image-crop-rotation-flip'
+  const png = createSolidPng(64, 64, [0x35, 0x8f, 0x4a])
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [
+      {
+        children: [
+          introParagraph(id),
+          new Paragraph({
+            children: [
+              new ImageRun({
+                type: 'png',
+                data: png,
+                transformation: { width: 64, height: 64, rotation: 30, flip: { horizontal: true } },
+              }),
+            ],
+          }),
+        ],
+      },
+    ],
+  })
+
+  const postProcess = (files) => {
+    const documentPath = 'word/document.xml'
+    const xml = files.get(documentPath)
+    if (typeof xml !== 'string' || !xml.includes('<a:blip')) {
+      throw new Error(`${id}: expected ${documentPath} to contain an <a:blip>`)
+    }
+    // 10% cropped off each edge (thousandths of a percent, per ST_Percentage).
+    files.set(
+      documentPath,
+      xml.replace(/(<a:blip[^>]*\/>)/, '$1<a:srcRect l="10000" t="10000" r="10000" b="10000"/>'),
+    )
+  }
+
+  return { id, document, postProcess }
+}
+
+// ---------------------------------------------------------------------------
 // 8. Bullets + numbered multi-level list
 // ---------------------------------------------------------------------------
 function fixtureListsBulletsNumbered() {
@@ -622,6 +673,7 @@ const FIXTURES = [
   fixtureTableStyledBanded,
   fixtureImageInline,
   fixtureImageAnchoredFloating,
+  fixtureImageCropRotationFlip,
   fixtureListsBulletsNumbered,
   fixtureHyperlinksBookmarks,
   fixtureCommentsWithReply,

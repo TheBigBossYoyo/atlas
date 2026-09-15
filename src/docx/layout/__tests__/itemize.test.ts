@@ -173,13 +173,20 @@ describe('itemizeRuns', () => {
     expect(items.some((item) => item.kind === 'word' && item.text.includes('￼'))).toBe(false)
   })
 
-  it('itemizes anchored drawings as drawing items too', async () => {
+  it('itemizes anchored drawings as drawing items too, with zero flow width/height (D4/DXL-03)', async () => {
+    // A floating (anchor) drawing is positioned independently by
+    // `floats.ts`/`AnchoredDrawing`, not by its place in the text flow — so
+    // unlike an inline drawing (see the intrinsic-size test above), its item
+    // carries zero width/height: it must not widen its line or reserve
+    // clearance above the text baseline the way an inline picture does. The
+    // item is still emitted (not dropped) so the anchor keeps its one
+    // character offset for the editor's position model.
     const items = await itemizeRuns(
       [wrapRun([{ kind: 'drawing', layout: 'anchor', relationshipId: 'rId2', extent: { cx: 127000, cy: 254000 } }])],
       fontResolver,
     )
 
-    expect(items[0]).toMatchObject({ kind: 'drawing', width: 10, height: 20 })
+    expect(items[0]).toMatchObject({ kind: 'drawing', width: 0, height: 0, charStart: 0, charEnd: 1 })
     expect(items[0]?.kind === 'drawing' ? items[0].drawing.layout : undefined).toBe('anchor')
   })
 

@@ -53,6 +53,7 @@ const FIXTURE_IDS = [
   'header-footer-page-numbers',
   'hyperlinks-bookmarks',
   'image-anchored-floating',
+  'image-crop-rotation-flip',
   'image-inline',
   'lists-bullets-numbered',
   'plain-paragraphs-styles',
@@ -167,6 +168,46 @@ describe('DOCX round-trip fidelity corpus (P0.5 / QA-09 / DXS-17)', () => {
       })
       expect(style?.conditionalFormats?.get('band1Horz')).toMatchObject({
         cell: { shd: { fill: 'D9E2F3' } },
+      })
+    })
+  })
+
+  // D4/DXS-09: `word/document.xml` is an owned/rewritten part, so the
+  // generic round trip above (structural counts only) can't tell a correct
+  // crop/rotation/flip round trip from one that silently zeroed them out
+  // while keeping the same drawing count. This asserts the actual crop
+  // rectangle and transform values survive a save unchanged.
+  describe('image-crop-rotation-flip preserves crop/rotation/flip on save (DXS-09)', () => {
+    it('keeps a:srcRect and a:xfrm rot/flipH values through a save + reparse', async () => {
+      const originalBuffer = await readCorpusFixture('image-crop-rotation-flip')
+      const bundle = await loadDocx(originalBuffer)
+
+      const findDrawing = (doc: DocxBundle['document']) => {
+        for (const block of doc.sections[0].blocks) {
+          if (block.kind !== 'paragraph') continue
+          for (const child of block.children) {
+            if (child.kind !== 'run') continue
+            for (const runChild of child.children) {
+              if (runChild.kind === 'drawing') return runChild
+            }
+          }
+        }
+        return undefined
+      }
+
+      const original = findDrawing(bundle.document)
+      expect(original).toMatchObject({
+        crop: { l: 10000, t: 10000, r: 10000, b: 10000 },
+        transform: { rotation: 1800000, flipH: true },
+      })
+
+      const savedBytes = await saveDocx(bundle)
+      const reparsed = await loadDocx(Uint8Array.from(savedBytes).buffer)
+      const roundTripped = findDrawing(reparsed.document)
+
+      expect(roundTripped).toMatchObject({
+        crop: { l: 10000, t: 10000, r: 10000, b: 10000 },
+        transform: { rotation: 1800000, flipH: true },
       })
     })
   })

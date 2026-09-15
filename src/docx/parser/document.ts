@@ -31,6 +31,18 @@ import {
   type Document as DocxDocument,
   type Drawing,
   type DrawingAnchorChild,
+  type DrawingCrop,
+  type DrawingEffectExtent,
+  type DrawingHorizontalAlign,
+  type DrawingPositionH,
+  type DrawingPositionV,
+  type DrawingRelativeFromH,
+  type DrawingRelativeFromV,
+  type DrawingTransform,
+  type DrawingVerticalAlign,
+  type DrawingWrap,
+  type DrawingWrapMode,
+  type DrawingWrapSide,
   type Endnote,
   type EndnoteReference,
   type Field,
@@ -898,6 +910,7 @@ function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
   }
 
   const extentElement = findDescendant(layoutElement, 'wp:extent')
+  const effectExtentElement = child(layoutElement, 'wp:effectExtent')
   const relationshipId =
     attr(blip, 'r:embed') ?? attr(blip, 'r:link')
   const title = attr(docPr, 'title')
@@ -907,6 +920,13 @@ function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
     extentElement !== undefined
       ? parseDrawingExtent(extentElement)
       : undefined
+  const effectExtent =
+    effectExtentElement !== undefined ? parseDrawingEffectExtent(effectExtentElement) : undefined
+  // a:srcRect (crop) and a:xfrm (rotation/flip) live inside the pic:pic
+  // subtree regardless of inline/anchor layout (DXS-09).
+  const crop = parseDrawingCrop(findDescendant(layoutElement, 'a:srcRect'))
+  const transform = parseDrawingTransform(findDescendant(layoutElement, 'a:xfrm'))
+  const anchorPosition = anchor !== undefined ? parseAnchorPosition(anchor) : undefined
   const anchorChildren = anchor !== undefined ? parseAnchorChildren(anchor) : undefined
 
   return {
@@ -917,18 +937,179 @@ function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
     ...(description !== undefined ? { description } : {}),
     ...(name !== undefined ? { name } : {}),
     ...(extent !== undefined ? { extent } : {}),
+    ...(effectExtent !== undefined ? { effectExtent } : {}),
+    ...(crop !== undefined ? { crop } : {}),
+    ...(transform !== undefined ? { transform } : {}),
+    ...(anchorPosition ?? {}),
     ...(anchorChildren !== undefined ? { anchorChildren } : {}),
   }
 }
 
 /**
- * Captures `wp:anchor`'s direct children in original order: the three Atlas
- * models (`wp:extent`/`wp:docPr`/`a:graphic`) become slot markers the
- * serializer rebuilds from live model state, and everything else — position
- * (`wp:simplePos`, `wp:positionH`/`wp:positionV`), the required wrap choice,
- * `wp:effectExtent`, `wp:cNvGraphicFramePr` — is preserved as raw
- * `UnknownNode` XML so a save emits schema-valid `wp:anchor` output (DXS-03)
- * instead of silently dropping whichever of those Atlas doesn't model.
+ * Parses `wp:anchor`'s own attributes (`behindDoc`/`allowOverlap`) and its
+ * `wp:positionH`/`wp:positionV`/wrap-choice children into typed `Drawing`
+ * fields (DXP-09/DXL-03) — the model the layout engine (`floats.ts`)
+ * consumes to place a floating image and compute text-wrap exclusions.
+ * Returns only the fields found; `parseDrawing` spreads the result onto the
+ * `Drawing` it builds.
+ */
+function parseAnchorPosition(
+  anchorElement: OrderedXmlNode,
+): Pick<Drawing, 'behindDoc' | 'allowOverlap' | 'positionH' | 'positionV' | 'wrap'> {
+  const behindDoc = parseOnOff(attr(anchorElement, 'behindDoc'))
+  const allowOverlap = parseOnOff(attr(anchorElement, 'allowOverlap'))
+  const positionH = parseDrawingPositionH(child(anchorElement, 'wp:positionH'))
+  const positionV = parseDrawingPositionV(child(anchorElement, 'wp:positionV'))
+  const wrap = parseDrawingWrap(anchorElement)
+
+  return {
+    ...(behindDoc !== undefined ? { behindDoc } : {}),
+    ...(allowOverlap !== undefined ? { allowOverlap } : {}),
+    ...(positionH !== undefined ? { positionH } : {}),
+    ...(positionV !== undefined ? { positionV } : {}),
+    ...(wrap !== undefined ? { wrap } : {}),
+  }
+}
+
+const DRAWING_RELATIVE_FROM_H: ReadonlySet<string> = new Set([
+  'page',
+  'margin',
+  'column',
+  'character',
+  'leftMargin',
+  'rightMargin',
+  'insideMargin',
+  'outsideMargin',
+])
+
+const DRAWING_RELATIVE_FROM_V: ReadonlySet<string> = new Set([
+  'page',
+  'margin',
+  'paragraph',
+  'line',
+  'topMargin',
+  'bottomMargin',
+  'insideMargin',
+  'outsideMargin',
+])
+
+const DRAWING_HORIZONTAL_ALIGN: ReadonlySet<string> = new Set([
+  'left',
+  'center',
+  'right',
+  'inside',
+  'outside',
+])
+
+const DRAWING_VERTICAL_ALIGN: ReadonlySet<string> = new Set([
+  'top',
+  'center',
+  'bottom',
+  'inside',
+  'outside',
+])
+
+function parseDrawingPositionH(element: OrderedXmlNode | undefined): DrawingPositionH | undefined {
+  if (element === undefined) {
+    return undefined
+  }
+
+  const relativeFromRaw = attr(element, 'relativeFrom')
+  const relativeFrom: DrawingRelativeFromH = DRAWING_RELATIVE_FROM_H.has(relativeFromRaw ?? '')
+    ? (relativeFromRaw as DrawingRelativeFromH)
+    : 'page'
+  const alignElement = child(element, 'wp:align')
+  const offsetElement = child(element, 'wp:posOffset')
+  const alignRaw = alignElement !== undefined ? textValue(alignElement) : undefined
+  const align: DrawingHorizontalAlign | undefined = DRAWING_HORIZONTAL_ALIGN.has(alignRaw ?? '')
+    ? (alignRaw as DrawingHorizontalAlign)
+    : undefined
+  const offsetEmu = offsetElement !== undefined ? parseInteger(textValue(offsetElement)) : undefined
+
+  return {
+    relativeFrom,
+    ...(align !== undefined ? { align } : {}),
+    ...(offsetEmu !== undefined ? { offsetEmu } : {}),
+  }
+}
+
+function parseDrawingPositionV(element: OrderedXmlNode | undefined): DrawingPositionV | undefined {
+  if (element === undefined) {
+    return undefined
+  }
+
+  const relativeFromRaw = attr(element, 'relativeFrom')
+  const relativeFrom: DrawingRelativeFromV = DRAWING_RELATIVE_FROM_V.has(relativeFromRaw ?? '')
+    ? (relativeFromRaw as DrawingRelativeFromV)
+    : 'page'
+  const alignElement = child(element, 'wp:align')
+  const offsetElement = child(element, 'wp:posOffset')
+  const alignRaw = alignElement !== undefined ? textValue(alignElement) : undefined
+  const align: DrawingVerticalAlign | undefined = DRAWING_VERTICAL_ALIGN.has(alignRaw ?? '')
+    ? (alignRaw as DrawingVerticalAlign)
+    : undefined
+  const offsetEmu = offsetElement !== undefined ? parseInteger(textValue(offsetElement)) : undefined
+
+  return {
+    relativeFrom,
+    ...(align !== undefined ? { align } : {}),
+    ...(offsetEmu !== undefined ? { offsetEmu } : {}),
+  }
+}
+
+const DRAWING_WRAP_ELEMENT_MODES: ReadonlyArray<readonly [string, DrawingWrapMode]> = [
+  ['wp:wrapNone', 'none'],
+  ['wp:wrapSquare', 'square'],
+  ['wp:wrapTight', 'tight'],
+  ['wp:wrapThrough', 'through'],
+  ['wp:wrapTopAndBottom', 'topAndBottom'],
+]
+
+const DRAWING_WRAP_SIDES: ReadonlySet<string> = new Set(['bothSides', 'left', 'right', 'largest'])
+
+/**
+ * `wp:anchor`'s wrap choice is one required element out of five alternatives
+ * (`wp:wrapNone`/`Square`/`Tight`/`Through`/`TopAndBottom`) — finds whichever
+ * is present and normalizes it to one `DrawingWrap` shape.
+ */
+function parseDrawingWrap(anchorElement: OrderedXmlNode): DrawingWrap | undefined {
+  for (const [elementName, mode] of DRAWING_WRAP_ELEMENT_MODES) {
+    const wrapElement = child(anchorElement, elementName)
+    if (wrapElement === undefined) {
+      continue
+    }
+
+    const sideRaw = attr(wrapElement, 'wrapText')
+    const side: DrawingWrapSide | undefined = DRAWING_WRAP_SIDES.has(sideRaw ?? '')
+      ? (sideRaw as DrawingWrapSide)
+      : undefined
+    const distTEmu = parseInteger(attr(wrapElement, 'distT'))
+    const distBEmu = parseInteger(attr(wrapElement, 'distB'))
+    const distLEmu = parseInteger(attr(wrapElement, 'distL'))
+    const distREmu = parseInteger(attr(wrapElement, 'distR'))
+
+    return {
+      mode,
+      ...(side !== undefined ? { side } : {}),
+      ...(distTEmu !== undefined ? { distTEmu } : {}),
+      ...(distBEmu !== undefined ? { distBEmu } : {}),
+      ...(distLEmu !== undefined ? { distLEmu } : {}),
+      ...(distREmu !== undefined ? { distREmu } : {}),
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Captures `wp:anchor`'s direct children in original order: the Atlas-
+ * modeled ones (`wp:extent`/`wp:effectExtent`/`wp:positionH`/`wp:positionV`/
+ * the wrap choice/`wp:docPr`/`a:graphic`) become slot markers the serializer
+ * rebuilds from live model state (DXP-09's position/wrap fields, parsed
+ * above, join the pre-existing extent/docPr/graphic slots), and everything
+ * else Atlas still doesn't model — `wp:simplePos`, `wp:cNvGraphicFramePr` —
+ * is preserved as raw `UnknownNode` XML so a save emits schema-valid
+ * `wp:anchor` output (DXS-03) instead of silently dropping it.
  */
 function parseAnchorChildren(anchorElement: OrderedXmlNode): ReadonlyArray<DrawingAnchorChild> {
   const result: DrawingAnchorChild[] = []
@@ -941,6 +1122,22 @@ function parseAnchorChildren(anchorElement: OrderedXmlNode): ReadonlyArray<Drawi
     switch (nodeName(entry)) {
       case 'wp:extent':
         result.push({ kind: 'anchor-slot', slot: 'extent' })
+        break
+      case 'wp:effectExtent':
+        result.push({ kind: 'anchor-slot', slot: 'effectExtent' })
+        break
+      case 'wp:positionH':
+        result.push({ kind: 'anchor-slot', slot: 'positionH' })
+        break
+      case 'wp:positionV':
+        result.push({ kind: 'anchor-slot', slot: 'positionV' })
+        break
+      case 'wp:wrapNone':
+      case 'wp:wrapSquare':
+      case 'wp:wrapTight':
+      case 'wp:wrapThrough':
+      case 'wp:wrapTopAndBottom':
+        result.push({ kind: 'anchor-slot', slot: 'wrap' })
         break
       case 'wp:docPr':
         result.push({ kind: 'anchor-slot', slot: 'docPr' })
@@ -969,6 +1166,61 @@ function parseDrawingExtent(element: OrderedXmlNode): {
   }
 
   return { cx, cy }
+}
+
+function parseDrawingEffectExtent(element: OrderedXmlNode): DrawingEffectExtent | undefined {
+  const l = parseInteger(attr(element, 'l'))
+  const t = parseInteger(attr(element, 't'))
+  const r = parseInteger(attr(element, 'r'))
+  const b = parseInteger(attr(element, 'b'))
+
+  if (l === undefined || t === undefined || r === undefined || b === undefined) {
+    return undefined
+  }
+
+  return { l, t, r, b }
+}
+
+function parseDrawingCrop(element: OrderedXmlNode | undefined): DrawingCrop | undefined {
+  if (element === undefined) {
+    return undefined
+  }
+
+  const l = parseInteger(attr(element, 'l'))
+  const t = parseInteger(attr(element, 't'))
+  const r = parseInteger(attr(element, 'r'))
+  const b = parseInteger(attr(element, 'b'))
+
+  return {
+    ...(l !== undefined ? { l } : {}),
+    ...(t !== undefined ? { t } : {}),
+    ...(r !== undefined ? { r } : {}),
+    ...(b !== undefined ? { b } : {}),
+  }
+}
+
+function parseDrawingTransform(element: OrderedXmlNode | undefined): DrawingTransform | undefined {
+  if (element === undefined) {
+    return undefined
+  }
+
+  const rotation = parseInteger(attr(element, 'rot'))
+  const flipH = parseOnOff(attr(element, 'flipH'))
+  const flipV = parseOnOff(attr(element, 'flipV'))
+
+  if (rotation === undefined && flipH === undefined && flipV === undefined) {
+    // An `a:xfrm` present solely for its (unmodeled) `a:off`/`a:ext`
+    // children carries no information Atlas's Drawing model represents —
+    // treat it the same as no `a:xfrm` at all rather than emitting a
+    // meaningless empty `transform: {}`.
+    return undefined
+  }
+
+  return {
+    ...(rotation !== undefined ? { rotation } : {}),
+    ...(flipH !== undefined ? { flipH } : {}),
+    ...(flipV !== undefined ? { flipV } : {}),
+  }
 }
 
 function parseBookmark(
