@@ -60,6 +60,15 @@ export type InsertTableCommand = {
   readonly at: Position
   readonly rows: number
   readonly cols: number
+  /**
+   * DXE-19 — paste fidelity: a fully-built table (real cell content, and
+   * merged cells via `gridSpan`) to insert verbatim instead of the empty
+   * `rows` x `cols` grid of blank cells `rows`/`cols` would otherwise
+   * build. When present, `rows`/`cols` are ignored for the table's actual
+   * shape — kept required so the toolbar's table-size picker (which never
+   * sets `table`) doesn't need its own separate command shape.
+   */
+  readonly table?: Table
 }
 
 export type InsertHyperlinkCommand = {

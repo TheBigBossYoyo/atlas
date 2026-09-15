@@ -353,11 +353,36 @@ function applyInsertHyperlink(
   }
 }
 
+/** DXE-19 — builds the default empty `rows` x `cols` grid `applyInsertTable`
+ * uses when the caller (the toolbar's table-size picker) doesn't supply a
+ * fully-built `table` of its own (paste fidelity's own content-bearing
+ * table, inserted verbatim instead — see `InsertTableCommand`'s doc
+ * comment). */
+function buildEmptyTable(rows: number, cols: number): Table {
+  const TOTAL_WIDTH_TWIPS = 9000
+  const columnWidth = twip(Math.max(1, Math.floor(TOTAL_WIDTH_TWIPS / cols)))
+  const tblGrid = freezeArray(Array.from({ length: cols }, () => columnWidth))
+
+  const makeCell = (): TableCell =>
+    Object.freeze({ kind: 'table-cell', blocks: freezeArray<Block>([emptyParagraph()]) })
+  const makeRow = (): TableRow =>
+    Object.freeze({ kind: 'table-row', cells: freezeArray(Array.from({ length: cols }, makeCell)) })
+
+  return Object.freeze({
+    kind: 'table',
+    tblGrid,
+    rows: freezeArray(Array.from({ length: rows }, makeRow)),
+  })
+}
+
 function applyInsertTable(
   doc: Document,
   cmd: Extract<Command, { kind: 'insert-table' }>,
 ): { document: Document; inverse: Command; range: Range } {
-  if (cmd.rows < 1 || cmd.cols < 1) {
+  if (cmd.table === undefined && (cmd.rows < 1 || cmd.cols < 1)) {
+    throw new Error('InsertTable requires at least one row and one column')
+  }
+  if (cmd.table !== undefined && cmd.table.rows.length < 1) {
     throw new Error('InsertTable requires at least one row and one column')
   }
 
@@ -365,19 +390,7 @@ function applyInsertTable(
   const editableRuns = requireEditableRuns(paragraph)
   const split = splitEntriesAtPosition(editableRuns, cmd.at)
 
-  const TOTAL_WIDTH_TWIPS = 9000
-  const columnWidth = twip(Math.max(1, Math.floor(TOTAL_WIDTH_TWIPS / cmd.cols)))
-  const tblGrid = freezeArray(Array.from({ length: cmd.cols }, () => columnWidth))
-
-  const makeCell = (): TableCell =>
-    Object.freeze({ kind: 'table-cell', blocks: freezeArray<Block>([emptyParagraph()]) })
-  const makeRow = (): TableRow =>
-    Object.freeze({ kind: 'table-row', cells: freezeArray(Array.from({ length: cmd.cols }, makeCell)) })
-  const table: Table = Object.freeze({
-    kind: 'table',
-    tblGrid,
-    rows: freezeArray(Array.from({ length: cmd.rows }, makeRow)),
-  })
+  const table: Table = cmd.table ?? buildEmptyTable(cmd.rows, cmd.cols)
 
   const beforeParagraph = cloneParagraph(paragraph, buildParagraphChildren(split.beforeEntries))
   const afterParagraph = cloneParagraph(paragraph, buildParagraphChildren(split.afterEntries))
