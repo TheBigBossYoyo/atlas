@@ -577,4 +577,127 @@ describe('writeDocumentXml', () => {
     expect(xml).not.toContain('w14:paraId')
     expect(xml).not.toContain('w:rsid')
   })
+
+  // DEFER-5 / DXS-20 — field serialization (`buildFieldNodes` and friends in
+  // documentWriter.ts) had no direct test coverage: the pre-existing DOCX
+  // round-trip corpus (src/docx/__tests__/roundtrip.corpus.test.ts) happens
+  // to exercise the RAW-PASSTHROUGH path via header-footer-page-numbers.docx's
+  // real PAGE/NUMPAGES fields, but nothing exercised the STRUCTURAL-REBUILD
+  // path (`raw` cleared by "Update field(s)"/"Update table of contents") at
+  // all, nor gave an isolated, fast, field-focused regression test for
+  // either path. These close that gap.
+  describe('field serialization (DEFER-5 / DXS-20)', () => {
+    it('round-trips an unmodified w:fldSimple field byte-for-byte via raw passthrough', () => {
+      expectRoundTrip(
+        documentXml(
+          '<w:p><w:fldSimple w:instr="PAGE \\* MERGEFORMAT"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:sectPr/>',
+        ),
+      )
+    })
+
+    it('round-trips an unmodified complex field (fldChar begin/separate/end + instrText) byte-for-byte via raw passthrough', () => {
+      expectRoundTrip(
+        documentXml(
+          '<w:p>'
+            + '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            + '<w:r><w:instrText xml:space="preserve">AUTHOR</w:instrText></w:r>'
+            + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            + '<w:r><w:t>A. Author</w:t></w:r>'
+            + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+            + '</w:p><w:sectPr/>',
+        ),
+      )
+    })
+
+    it('structurally rebuilds a regenerated (raw-cleared) simple field as a valid w:fldSimple', () => {
+      const document = createDocument([
+        {
+          kind: 'section',
+          props: {},
+          blocks: [{
+            kind: 'paragraph',
+            children: [{
+              kind: 'field',
+              fieldType: 'AUTHOR',
+              instruction: 'AUTHOR',
+              simple: true,
+              result: [{ kind: 'run', children: [{ kind: 'text', value: 'New Author' }] }],
+            }],
+          }],
+        },
+      ])
+
+      const xml = writeDocumentXml(document)
+      expect(xml).toContain('<w:fldSimple w:instr="AUTHOR">')
+      expect(xml).toContain('New Author')
+
+      const reparsed = parseDocument(xml)
+      const block = reparsed.sections[0]?.blocks[0]
+      const field = block?.kind === 'paragraph' ? block.children[0] : undefined
+      expect(field?.kind === 'field' && field.fieldType).toBe('AUTHOR')
+      expect(field?.kind === 'field' && field.simple).toBe(true)
+      expect(field?.kind === 'field' && field.result).toEqual([
+        { kind: 'run', children: [{ kind: 'text', value: 'New Author', preserveSpace: true }] },
+      ])
+    })
+
+    it('structurally rebuilds a regenerated (raw-cleared) complex field as a valid begin/instrText/separate/result/end run sequence', () => {
+      const document = createDocument([
+        {
+          kind: 'section',
+          props: {},
+          blocks: [{
+            kind: 'paragraph',
+            children: [{
+              kind: 'field',
+              fieldType: 'REF',
+              instruction: 'REF _Ref1 \\h',
+              result: [{ kind: 'run', children: [{ kind: 'text', value: 'Section One' }] }],
+            }],
+          }],
+        },
+      ])
+
+      const xml = writeDocumentXml(document)
+      // Exactly 5 sibling <w:r> elements: begin, instrText, separate, result, end.
+      expect(xml.match(/<w:r>/g)).toHaveLength(5)
+      expect(xml).toContain('fldCharType="begin"')
+      expect(xml).toContain('<w:instrText xml:space="preserve">REF _Ref1 \\h</w:instrText>')
+      expect(xml).toContain('fldCharType="separate"')
+      expect(xml).toContain('Section One')
+      expect(xml).toContain('fldCharType="end"')
+
+      const reparsed = parseDocument(xml)
+      const block = reparsed.sections[0]?.blocks[0]
+      const field = block?.kind === 'paragraph' ? block.children[0] : undefined
+      expect(field?.kind === 'field' && field.fieldType).toBe('REF')
+      expect(field?.kind === 'field' && field.instruction).toBe('REF _Ref1 \\h')
+      expect(field?.kind === 'field' && field.simple).toBeUndefined()
+      expect(field?.kind === 'field' && field.result).toEqual([
+        { kind: 'run', children: [{ kind: 'text', value: 'Section One', preserveSpace: true }] },
+      ])
+    })
+
+    it('preserves run formatting (props) on a regenerated complex field\'s result', () => {
+      const document = createDocument([
+        {
+          kind: 'section',
+          props: {},
+          blocks: [{
+            kind: 'paragraph',
+            children: [{
+              kind: 'field',
+              fieldType: 'AUTHOR',
+              instruction: 'AUTHOR',
+              result: [{ kind: 'run', props: { bold: true }, children: [{ kind: 'text', value: 'Bold Author' }] }],
+            }],
+          }],
+        },
+      ])
+
+      const xml = writeDocumentXml(document)
+      expect(xml).toContain('<w:b/>')
+      expect(xml).toContain('Bold Author')
+    })
+  })
 })
