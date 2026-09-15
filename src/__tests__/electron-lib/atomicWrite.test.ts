@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { FileLockedError, atomicWriteFile } from '../../../electron/lib/atomicWrite.cjs'
+import { FileLockedError, atomicWriteFile, classifyWriteError } from '../../../electron/lib/atomicWrite.cjs'
 
 let tempDir: string
 
@@ -135,5 +135,75 @@ describe('atomicWriteFile', () => {
     expect(() => atomicWriteFile(target, 'new content')).toThrow(FileLockedError)
     const entries = fs.readdirSync(tempDir).filter((entry) => entry.includes('.tmp-'))
     expect(entries).toEqual([])
+  })
+
+  it('classifies a rename onto an existing directory as EISDIR, not a file lock (X5 fix — Windows raises EPERM for this, same code isLockError treats as "locked")', () => {
+    // Empirically verified on Windows: `fs.renameSync(tempFile, existingDir)`
+    // throws with `code: 'EPERM'` — indistinguishable from a real file lock
+    // by code alone, so without the target-is-a-directory check this used to
+    // surface the misleading "this file is open in another program" message
+    // instead of `classifyWriteError`'s intended "that's a folder" one.
+    const target = path.join(tempDir, 'a-folder')
+    fs.mkdirSync(target)
+
+    let thrown: unknown
+    try {
+      atomicWriteFile(target, 'new content')
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(thrown).not.toBeInstanceOf(FileLockedError)
+    expect((thrown as { code?: string } | undefined)?.code).toBe('EISDIR')
+    expect(classifyWriteError(thrown)).toBe('That location is a folder, not a file — choose a different name.')
+    // The directory itself must be left alone.
+    expect(fs.statSync(target).isDirectory()).toBe(true)
+  })
+
+  it('classifies the EXDEV fallback writing onto an existing directory as EISDIR too', () => {
+    const target = path.join(tempDir, 'a-folder')
+    fs.mkdirSync(target)
+
+    vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+      const err = Object.assign(new Error('cross-device link'), { code: 'EXDEV' })
+      throw err
+    })
+
+    let thrown: unknown
+    try {
+      atomicWriteFile(target, 'new content')
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(thrown).not.toBeInstanceOf(FileLockedError)
+    expect((thrown as { code?: string } | undefined)?.code).toBe('EISDIR')
+  })
+})
+
+describe('classifyWriteError', () => {
+  function withCode(code: string): unknown {
+    return Object.assign(new Error('boom'), { code })
+  }
+
+  it.each([
+    ['EACCES', "Permission denied — you don't have access to save to this location."],
+    ['ENOSPC', 'Not enough disk space to save this file.'],
+    ['EISDIR', 'That location is a folder, not a file — choose a different name.'],
+    ['ENOENT', 'The destination folder no longer exists — choose a different location.'],
+    ['EROFS', 'That location is read-only — choose a different location.'],
+    ['ENAMETOOLONG', 'That file name or path is too long — choose a shorter one.'],
+  ])('maps %s to a friendly message', (code, expected) => {
+    expect(classifyWriteError(withCode(code))).toBe(expected)
+  })
+
+  it('returns undefined for an unrecognized error code, so the caller can fall back to its own message', () => {
+    expect(classifyWriteError(withCode('EWEIRD'))).toBeUndefined()
+  })
+
+  it('returns undefined for a non-Error value with no code', () => {
+    expect(classifyWriteError('just a string')).toBeUndefined()
+    expect(classifyWriteError(null)).toBeUndefined()
+    expect(classifyWriteError(undefined)).toBeUndefined()
   })
 })

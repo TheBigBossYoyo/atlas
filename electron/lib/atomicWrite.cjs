@@ -106,10 +106,40 @@ function backupExisting(targetPath) {
 }
 
 /**
+ * @param {string} targetPath
+ * @returns {boolean}
+ */
+function isExistingDirectory(targetPath) {
+  try {
+    return fs.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {unknown} err
+ * @param {string} [targetPath] the path the failing operation was writing to
+ *   (omitted for the initial temp-file write, which is never `targetPath`
+ *   itself — see call site)
  * @returns {never}
  */
-function rethrowAsFriendlyError(err) {
+function rethrowAsFriendlyError(err, targetPath) {
+  // X5 fix (found during wave3/export review) — on Windows, renaming (or
+  // directly writing, in the EXDEV fallback) ONTO an existing directory
+  // raises EPERM, not EISDIR: verified empirically (`fs.renameSync(tempFile,
+  // existingDir)` -> `err.code === 'EPERM'`). `isLockError` below also
+  // treats EPERM as "another program has this file locked" (Word, etc. —
+  // ELEC-26), so without this check every "you picked a folder, not a file"
+  // mistake was being misreported as a file-lock error instead of
+  // `classifyWriteError`'s intended EISDIR message — the opposite of
+  // actionable. Disambiguate by checking the target's actual type: a real
+  // lock never has a directory sitting at `targetPath`.
+  if (targetPath && isExistingDirectory(targetPath)) {
+    const dirErr = new Error('target path is a directory');
+    dirErr.code = 'EISDIR';
+    throw dirErr;
+  }
   if (isLockError(err)) {
     throw new FileLockedError();
   }
@@ -179,13 +209,13 @@ function atomicWriteFile(targetPath, data) {
         writeAndSync(targetPath, buffer);
         return { fallbackUsed: true };
       } catch (fallbackErr) {
-        rethrowAsFriendlyError(fallbackErr);
+        rethrowAsFriendlyError(fallbackErr, targetPath);
       } finally {
         cleanupTemp(tempPath);
       }
     }
     cleanupTemp(tempPath);
-    rethrowAsFriendlyError(err);
+    rethrowAsFriendlyError(err, targetPath);
   }
 }
 

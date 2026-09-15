@@ -29,6 +29,29 @@ type IpcHandler = (event: unknown, ...args: unknown[]) => unknown
 const nodeRequire = createRequire(import.meta.url)
 const ELECTRON_MODULE_PATH = nodeRequire.resolve('electron')
 const MAIN_CJS_PATH = nodeRequire.resolve('../../../electron/main.cjs')
+const PRINT_TO_PDF_MODULE_PATH = nodeRequire.resolve('../../../electron/lib/printToPdf.cjs')
+
+// A real `BrowserWindow`/`webContents.printToPDF` round trip is exercised by
+// `tests/e2e/export.spec.ts` (real Electron, real hidden window); faking
+// that lifecycle here (did-finish-load, printToPDF, destroy, ...) through
+// this suite's single shared `fakeWindow` would only test the fake, not
+// `main.cjs`. Instead this fakes `electron/lib/printToPdf.cjs` itself (the
+// same require.cache-injection trick as `electron` above, applied to a
+// second local module) so the `export:printToPdf` HANDLER's own
+// validation/error-mapping logic — the sender-frame check, the `req.html`
+// guard, and the `PrintToPdfError`-vs-generic-error branching — gets real
+// unit coverage independent of the rendering pipeline underneath it.
+class FakePrintToPdfError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PrintToPdfError'
+  }
+}
+
+function createPrintToPdfMock() {
+  const printHtmlToPdfBuffer = vi.fn().mockResolvedValue(Buffer.from([1, 2, 3]))
+  return { printHtmlToPdfBuffer, PrintToPdfError: FakePrintToPdfError }
+}
 
 const FAKE_MAIN_FRAME = { id: 'main-frame' }
 const OTHER_FRAME = { id: 'other-frame' }
@@ -124,6 +147,7 @@ function createElectronMock(tempDir: string) {
 describe('electron/main.cjs IPC handlers', () => {
   let tempDir: string
   let mocks: ReturnType<typeof createElectronMock>
+  let printToPdfMock: ReturnType<typeof createPrintToPdfMock>
   // main.cjs registers `process.on('uncaughtException'/'unhandledRejection', ...)`
   // at module scope (P1.15/ELEC-13) with no matching removeListener — it's
   // designed as a singleton app entry point, not something re-required many
@@ -158,6 +182,16 @@ describe('electron/main.cjs IPC handlers', () => {
       paths: [],
     } as unknown as NodeJS.Module
 
+    printToPdfMock = createPrintToPdfMock()
+    nodeRequire.cache[PRINT_TO_PDF_MODULE_PATH] = {
+      id: PRINT_TO_PDF_MODULE_PATH,
+      filename: PRINT_TO_PDF_MODULE_PATH,
+      loaded: true,
+      exports: printToPdfMock,
+      children: [],
+      paths: [],
+    } as unknown as NodeJS.Module
+
     delete nodeRequire.cache[MAIN_CJS_PATH]
     nodeRequire(MAIN_CJS_PATH)
     process.argv = originalArgv;
@@ -172,6 +206,7 @@ describe('electron/main.cjs IPC handlers', () => {
 
   afterEach(() => {
     delete nodeRequire.cache[ELECTRON_MODULE_PATH]
+    delete nodeRequire.cache[PRINT_TO_PDF_MODULE_PATH]
     delete nodeRequire.cache[MAIN_CJS_PATH]
     fs.rmSync(tempDir, { recursive: true, force: true })
 
@@ -393,6 +428,34 @@ describe('electron/main.cjs IPC handlers', () => {
       }
       expect(result.saved).toBe(false)
     })
+
+    it('surfaces a friendly, specific error when the destination folder no longer exists (X5 — classifyWriteError/ENOENT)', async () => {
+      const filePath = path.join(tempDir, 'gone-folder', 'a.md')
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath })
+
+      const result = (await handler('save-file')(ALLOWED_EVENT, { content: 'x', suggestedName: 'a.md' })) as {
+        saved: boolean
+        error?: string
+      }
+
+      expect(result.saved).toBe(false)
+      expect(result.error).toMatch(/destination folder no longer exists/i)
+    })
+
+    it('surfaces "that location is a folder" instead of a misleading lock message when the chosen path is itself a directory (X5 — Windows raises EPERM here, same as a real lock)', async () => {
+      const dirPath = path.join(tempDir, 'a-folder')
+      fs.mkdirSync(dirPath)
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dirPath })
+
+      const result = (await handler('save-file')(ALLOWED_EVENT, { content: 'x', suggestedName: 'a.md' })) as {
+        saved: boolean
+        error?: string
+      }
+
+      expect(result.saved).toBe(false)
+      expect(result.error).toMatch(/folder, not a file/i)
+      expect(result.error).not.toMatch(/open in another program/i)
+    })
   })
 
   describe('save-binary-file', () => {
@@ -418,6 +481,88 @@ describe('electron/main.cjs IPC handlers', () => {
 
       expect(result.saved).toBe(true)
       expect([...fs.readFileSync(filePath)]).toEqual([1, 2, 3, 4])
+    })
+
+    it('surfaces a friendly, specific error when the destination folder no longer exists (X5 — classifyWriteError/ENOENT)', async () => {
+      const filePath = path.join(tempDir, 'gone-folder', 'a.docx')
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath })
+
+      const result = (await handler('save-binary-file')(ALLOWED_EVENT, {
+        content: new Uint8Array([1, 2, 3]),
+        suggestedName: 'a.docx',
+      })) as { saved: boolean; error?: string }
+
+      expect(result.saved).toBe(false)
+      expect(result.error).toMatch(/destination folder no longer exists/i)
+    })
+  })
+
+  describe('export:printToPdf (X1)', () => {
+    it('rejects a request not from the main frame', async () => {
+      const result = (await handler('export:printToPdf')(REJECTED_EVENT, { html: '<p>x</p>' })) as {
+        ok: boolean
+        error?: string
+      }
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/could not be verified/i)
+      expect(printToPdfMock.printHtmlToPdfBuffer).not.toHaveBeenCalled()
+    })
+
+    it('rejects a request with no html string, without calling the renderer', async () => {
+      const result = (await handler('export:printToPdf')(ALLOWED_EVENT, {})) as { ok: boolean; error?: string }
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/nothing to export/i)
+      expect(printToPdfMock.printHtmlToPdfBuffer).not.toHaveBeenCalled()
+    })
+
+    it('rejects a malformed request (no body at all)', async () => {
+      const result = (await handler('export:printToPdf')(ALLOWED_EVENT, undefined)) as {
+        ok: boolean
+        error?: string
+      }
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/nothing to export/i)
+    })
+
+    it('returns the rendered bytes as a Uint8Array on success', async () => {
+      printToPdfMock.printHtmlToPdfBuffer.mockResolvedValueOnce(Buffer.from([0x25, 0x50, 0x44, 0x46]))
+
+      const result = (await handler('export:printToPdf')(ALLOWED_EVENT, { html: '<p>hi</p>' })) as {
+        ok: boolean
+        bytes?: Uint8Array
+      }
+
+      expect(printToPdfMock.printHtmlToPdfBuffer).toHaveBeenCalledWith('<p>hi</p>')
+      expect(result.ok).toBe(true)
+      expect(result.bytes).toBeInstanceOf(Uint8Array)
+      expect([...(result.bytes ?? [])]).toEqual([0x25, 0x50, 0x44, 0x46])
+    })
+
+    it('passes a PrintToPdfError message straight through', async () => {
+      printToPdfMock.printHtmlToPdfBuffer.mockRejectedValueOnce(
+        new printToPdfMock.PrintToPdfError('This document is too large to export to PDF.'),
+      )
+
+      const result = (await handler('export:printToPdf')(ALLOWED_EVENT, { html: '<p>hi</p>' })) as {
+        ok: boolean
+        error?: string
+      }
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('This document is too large to export to PDF.')
+    })
+
+    it('maps an unrecognized failure to a generic message instead of leaking it', async () => {
+      printToPdfMock.printHtmlToPdfBuffer.mockRejectedValueOnce(new Error('some internal Chromium detail'))
+
+      const result = (await handler('export:printToPdf')(ALLOWED_EVENT, { html: '<p>hi</p>' })) as {
+        ok: boolean
+        error?: string
+      }
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('Could not generate the PDF for export. Please try again.')
+      expect(result.error).not.toContain('Chromium')
     })
   })
 
