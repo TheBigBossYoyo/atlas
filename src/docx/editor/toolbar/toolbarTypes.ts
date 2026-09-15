@@ -10,6 +10,21 @@ export type ToolbarCommand =
   | { kind: 'apply-style'; styleId: string }
   | { kind: 'insert-table'; rows: number; cols: number }
   | { kind: 'insert-image' | 'insert-hyperlink' | 'insert-header' | 'insert-footer' | 'insert-page-break' | 'insert-comment' }
+  | {
+      // DXE-14 — resolved against the cursor's current cell (see
+      // toolbarAdapter.ts's `resolveTableCommand`); disabled in the UI
+      // whenever `ToolbarState.insideTable` is false.
+      kind:
+        | 'insert-table-row-above'
+        | 'insert-table-row-below'
+        | 'insert-table-column-left'
+        | 'insert-table-column-right'
+        | 'delete-table-row'
+        | 'delete-table-column'
+        | 'delete-table'
+        | 'merge-table-cell-right'
+        | 'split-table-cell'
+    }
   | { kind: 'set-margins'; preset: 'normal' | 'narrow' | 'moderate' | 'wide' }
   | { kind: 'set-orientation'; orientation: 'portrait' | 'landscape' }
   | { kind: 'set-page-size'; preset: 'letter' | 'a4' | 'legal' }
@@ -35,4 +50,7 @@ export type ToolbarState = Readonly<{
   styleId: string | null;
   trackChanges: boolean;
   spellCheck: boolean;
+  /** DXE-14 — true when the cursor sits inside a table cell; gates the
+   * table-editing button group. */
+  insideTable: boolean;
 }>;

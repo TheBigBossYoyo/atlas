@@ -1,6 +1,6 @@
 import { halfPoint, hexColor, twip, type Document, type HighlightColor, type JustifyContent } from '../model'
 
-import { findParagraph } from './commands'
+import { findEnclosingTable, findParagraph } from './commands'
 import type { Command, Range } from './commandTypes'
 import { normalizeRange } from './Selection'
 import type { ToolbarCommand } from './toolbar/toolbarTypes'
@@ -201,6 +201,67 @@ function findRevisionAtSelection(
   return childIndex === -1 ? null : { paragraphPath, childIndex }
 }
 
+/**
+ * DXE-14 — resolves a table-editing toolbar/context-menu command against the
+ * cell the cursor is currently in. There's no rectangular multi-cell mouse
+ * selection yet (documented remaining scope for DXE-14), so "merge" acts on
+ * the current cell and its immediate right-hand neighbor — the single most
+ * common real case (merging a header cell with the one beside it) — and
+ * "split" reverses a merge on the current cell back into single-column
+ * cells. Returns `null` when the cursor isn't inside a table at all, or
+ * (merge/split) when the specific operation isn't valid at that cell, so the
+ * UI's disabled state (`ToolbarState.insideTable`) and this resolution never
+ * disagree about *whether* a table command can run, only about the finer
+ * per-command validity `applyCommand` itself already enforces.
+ */
+function resolveTableCommand(
+  kind:
+    | 'insert-table-row-above'
+    | 'insert-table-row-below'
+    | 'insert-table-column-left'
+    | 'insert-table-column-right'
+    | 'delete-table-row'
+    | 'delete-table-column'
+    | 'delete-table'
+    | 'merge-table-cell-right'
+    | 'split-table-cell',
+  selection: Range | null,
+  document: Document,
+): Command | null {
+  const paragraphPath = getPrimaryParagraphPath(selection)
+  if (paragraphPath === null) {
+    return null
+  }
+
+  const enclosing = findEnclosingTable(document, paragraphPath)
+  if (enclosing === null) {
+    return null
+  }
+
+  const { tablePath, rowIndex, cellIndex } = enclosing
+
+  switch (kind) {
+    case 'insert-table-row-above':
+      return { kind: 'insert-table-row', tablePath, at: rowIndex }
+    case 'insert-table-row-below':
+      return { kind: 'insert-table-row', tablePath, at: rowIndex + 1 }
+    case 'insert-table-column-left':
+      return { kind: 'insert-table-column', tablePath, at: cellIndex }
+    case 'insert-table-column-right':
+      return { kind: 'insert-table-column', tablePath, at: cellIndex + 1 }
+    case 'delete-table-row':
+      return { kind: 'delete-table-row', tablePath, rowIndex }
+    case 'delete-table-column':
+      return { kind: 'delete-table-column', tablePath, columnIndex: cellIndex }
+    case 'delete-table':
+      return { kind: 'delete-table', tablePath }
+    case 'merge-table-cell-right':
+      return { kind: 'merge-table-cells', tablePath, rowIndex, fromCellIndex: cellIndex, toCellIndex: cellIndex + 1 }
+    case 'split-table-cell':
+      return { kind: 'split-table-cell', tablePath, rowIndex, cellIndex }
+  }
+}
+
 export function toolbarToCommand(
   toolbarCmd: ToolbarCommand,
   selection: Range | null,
@@ -340,6 +401,16 @@ export function toolbarToCommand(
         ? null
         : { kind: 'insert-table', at: focus, rows: toolbarCmd.rows, cols: toolbarCmd.cols }
     }
+    case 'insert-table-row-above':
+    case 'insert-table-row-below':
+    case 'insert-table-column-left':
+    case 'insert-table-column-right':
+    case 'delete-table-row':
+    case 'delete-table-column':
+    case 'delete-table':
+    case 'merge-table-cell-right':
+    case 'split-table-cell':
+      return resolveTableCommand(toolbarCmd.kind, selection, document)
     case 'insert-image':
       return null
     case 'insert-hyperlink':

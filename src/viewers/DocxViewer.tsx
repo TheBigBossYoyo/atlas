@@ -36,6 +36,7 @@ import {
   ensureListNumbering,
   findAll,
   findNext,
+  findEnclosingTable,
   findParagraph,
   findPrev,
   handleBeforeInput,
@@ -275,6 +276,8 @@ function createToolbarState(
 ): ToolbarState {
   const paragraph = range ? findParagraph(document, range.focus.paragraphPath) : null
   const activeFormats = new Set<'bold' | 'italic' | 'underline' | 'strike' | 'subscript' | 'superscript'>()
+  // DXE-14 — gates the table-editing button group.
+  const insideTable = range !== null && findEnclosingTable(document, range.focus.paragraphPath) !== null
 
   if (paragraph !== null && range !== null) {
     const run = getEditableRuns(paragraph)[range.focus.runIndex]
@@ -314,6 +317,7 @@ function createToolbarState(
       styleId: paragraph.props?.pStyle ?? null,
       spellCheck: liveState.spellCheck,
       trackChanges: liveState.trackChanges,
+      insideTable,
     }
   }
 
@@ -325,6 +329,7 @@ function createToolbarState(
     styleId: null,
     spellCheck: liveState.spellCheck,
     trackChanges: liveState.trackChanges,
+    insideTable,
   }
 }
 

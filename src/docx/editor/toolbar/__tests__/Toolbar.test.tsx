@@ -11,6 +11,7 @@ const defaultState: ToolbarState = {
   styleId: null,
   trackChanges: false,
   spellCheck: false,
+  insideTable: false,
 };
 
 describe('Toolbar', () => {
