@@ -205,6 +205,23 @@ describe('PdfViewer', () => {
     expect(await screen.findByText(/PdfViewer expected a binary file/)).toBeInTheDocument()
   })
 
+  it('wraps a raw pdf.js load failure in a friendly message instead of showing it verbatim (RUN-14)', async () => {
+    getDocumentMock.mockImplementationOnce(() => ({
+      promise: Promise.reject(new Error('Invalid PDF structure')),
+      destroy: destroyMock,
+      onPassword: undefined as unknown,
+    }))
+
+    render(
+      <ViewerProvider filePath="/fixtures/sample.pdf">
+        <PdfViewer file={binaryFile()} />
+      </ViewerProvider>,
+    )
+
+    expect(await screen.findByText(/the PDF file appears to be corrupted or malformed/)).toBeInTheDocument()
+    expect(screen.queryByText('Invalid PDF structure')).not.toBeInTheDocument()
+  })
+
   it('opens the find bar on Ctrl+F while the viewer is focused', async () => {
     render(
       <ViewerProvider filePath="/fixtures/sample.pdf">

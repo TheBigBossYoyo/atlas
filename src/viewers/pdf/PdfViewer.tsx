@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import type { NavItem, ViewerProps } from '../../formats/types'
 import { useSetNavItems, useSetViewerStats } from '../shared/useViewerContext'
+import { toFriendlyError } from '../../utils/friendlyLibraryError'
 import '../__styles__/viewer-pdf.css'
 
 import { buildFallbackNavItems, buildOutlineNavItems } from './outline'
@@ -494,7 +495,10 @@ function PdfViewerBase({ file }: ViewerProps) {
           setNavItems([])
           setStats(null)
           if (!cancelledPasswordRef.current) {
-            setErrorMessage(err instanceof Error ? err.message : 'Failed to render PDF.')
+            // RUN-14 — pdfjs-dist throws developer-facing raw messages
+            // ("Invalid PDF structure", a bare "FormatError: ...", etc.);
+            // wrap them the same way DOCX/export errors already are.
+            setErrorMessage(toFriendlyError(err, 'Failed to render PDF').message)
           }
         }
       }

@@ -41,12 +41,24 @@ interface RegisterPathResult {
   readonly ok: boolean;
 }
 
+/** Result of `export:printToPdf` — X1's real per-format PDF export. */
+type PrintToPdfResult =
+  | { readonly ok: true; readonly bytes: Uint8Array }
+  | { readonly ok: false; readonly error: string };
+
 interface ElectronAPI {
   getInitialFile: () => Promise<ElectronFileData | { path: string } | null>;
   openFileDialog: () => Promise<ElectronFileData | null>;
   openFileByPath: (path: string) => Promise<ElectronFileData | null>;
   saveFile: (req: SaveFileRequest) => Promise<SaveFileResult>;
   saveBinaryFile: (req: BinarySaveFileRequest) => Promise<SaveFileResult>;
+  /**
+   * X1 — renders a self-contained HTML document (the caller must sanitize it
+   * first — see `src/utils/export/sanitizeExportHtml.ts`) to a vector PDF via
+   * a hidden, script-disabled `BrowserWindow`. Optional so existing test
+   * doubles that only implement the file-open/save surface keep compiling.
+   */
+  printToPdf?: (html: string) => Promise<PrintToPdfResult>;
   onFileOpened: (callback: (data: ElectronFileData) => void) => () => void;
   setTheme: (theme: Theme) => void;
   /**

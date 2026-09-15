@@ -6,6 +6,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openFileByPath: (path) => ipcRenderer.invoke('open-file-by-path', path),
   saveFile: (req) => ipcRenderer.invoke('save-file', req),
   saveBinaryFile: (req) => ipcRenderer.invoke('save-binary-file', req),
+  // X1 — renders a self-contained (already-sanitized) HTML document to a
+  // vector PDF in a hidden, script-disabled window. See
+  // `electron/lib/printToPdf.cjs` for the full security rationale.
+  printToPdf: (html) => ipcRenderer.invoke('export:printToPdf', { html }),
   onFileOpened: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('file-opened', handler);

@@ -37,6 +37,7 @@ exports[`exportHtml > snapshots the full generated HTML document (theme attribut
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: https:; style-src 'unsafe-inline' https://cdn.jsdelivr.net; font-src data: https://cdn.jsdelivr.net;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>My &lt;Notes&gt; &amp; Ideas</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" crossorigin="anonymous" />
@@ -191,7 +192,7 @@ body {
 <body data-theme="dracula">
 <div class="markdown-body" id="markdown-content"><h1 id="heading-one">Heading One</h1>
 <h2 id="heading-two-with-bold">Heading <strong>Two</strong> with Bold</h2>
-<h3 id="heading-three-with-code">Heading <code node="[object Object]">Three</code> with Code</h3>
+<h3 id="heading-three-with-code">Heading <code>Three</code> with Code</h3>
 <h4 id="heading-four-with-italic">Heading <em>Four</em> with Italic</h4>
 <h5 id="heading-five-with-link">Heading <a href="https://example.com">Five</a> with Link</h5>
 <h6 id="heading-six-with-strikethrough">Heading <del>Six</del> with Strikethrough</h6>
@@ -214,11 +215,11 @@ exports[`exportHtml > snapshots the serialized live-DOM body for the "blockquote
 
 exports[`exportHtml > snapshots the serialized live-DOM body for the "code-fence" fixture > code-fence body 1`] = `
 "<div class="markdown-body" id="markdown-content"><h2 id="example">Example</h2>
-<pre><code class="hljs language-ts" node="[object Object]"><span class="hljs-keyword">function</span> <span class="hljs-title function_">greet</span>(<span class="hljs-params"><span class="hljs-attr">name</span>: <span class="hljs-built_in">string</span></span>): <span class="hljs-built_in">string</span> {
+<pre><code class="hljs language-ts"><span class="hljs-keyword">function</span> <span class="hljs-title function_">greet</span>(<span class="hljs-params"><span class="hljs-attr">name</span>: <span class="hljs-built_in">string</span></span>): <span class="hljs-built_in">string</span> {
   <span class="hljs-keyword">return</span> <span class="hljs-string">\`Hello, <span class="hljs-subst">\${name}</span>!\`</span>;
 }
 </code></pre>
-<p>Inline code like <code node="[object Object]">const x = 1;</code> should stay inline.</p></div>"
+<p>Inline code like <code>const x = 1;</code> should stay inline.</p></div>"
 `;
 
 exports[`exportHtml > snapshots the serialized live-DOM body for the "gfm-table" fixture > gfm-table body 1`] = `
@@ -254,7 +255,7 @@ exports[`exportHtml > snapshots the serialized live-DOM body for the "gfm-table"
 exports[`exportHtml > snapshots the serialized live-DOM body for the "headings" fixture > headings body 1`] = `
 "<div class="markdown-body" id="markdown-content"><h1 id="heading-one">Heading One</h1>
 <h2 id="heading-two-with-bold">Heading <strong>Two</strong> with Bold</h2>
-<h3 id="heading-three-with-code">Heading <code node="[object Object]">Three</code> with Code</h3>
+<h3 id="heading-three-with-code">Heading <code>Three</code> with Code</h3>
 <h4 id="heading-four-with-italic">Heading <em>Four</em> with Italic</h4>
 <h5 id="heading-five-with-link">Heading <a href="https://example.com">Five</a> with Link</h5>
 <h6 id="heading-six-with-strikethrough">Heading <del>Six</del> with Strikethrough</h6>
@@ -265,7 +266,7 @@ exports[`exportHtml > snapshots the serialized live-DOM body for the "kitchen-si
 "<div class="markdown-body" id="markdown-content"><h1 id="atlas-characterization-fixture">Atlas Characterization Fixture</h1>
 <p>A single document exercising every markdown feature the P0.4 guardrail freezes.</p>
 <h2 id="heading-two-with-bold">Heading <strong>Two</strong> with Bold</h2>
-<h3 id="heading-three-with-code">Heading <code node="[object Object]">Three</code> with Code</h3>
+<h3 id="heading-three-with-code">Heading <code>Three</code> with Code</h3>
 <h4 id="heading-four-with-italic">Heading <em>Four</em> with Italic</h4>
 <h5 id="heading-five-with-link">Heading <a href="https://example.com">Five</a> with Link</h5>
 <h6 id="heading-six-with-strikethrough">Heading <del>Six</del> with Strikethrough</h6>
@@ -305,11 +306,11 @@ exports[`exportHtml > snapshots the serialized live-DOM body for the "kitchen-si
 <p>This is <del>struck through</del> text.</p>
 <p>Visit <a href="https://example.com">https://example.com</a> for details, or email <a href="mailto:test@example.com">test@example.com</a> with questions.</p>
 <h2 id="example">Example</h2>
-<pre><code class="hljs language-ts" node="[object Object]"><span class="hljs-keyword">function</span> <span class="hljs-title function_">greet</span>(<span class="hljs-params"><span class="hljs-attr">name</span>: <span class="hljs-built_in">string</span></span>): <span class="hljs-built_in">string</span> {
+<pre><code class="hljs language-ts"><span class="hljs-keyword">function</span> <span class="hljs-title function_">greet</span>(<span class="hljs-params"><span class="hljs-attr">name</span>: <span class="hljs-built_in">string</span></span>): <span class="hljs-built_in">string</span> {
   <span class="hljs-keyword">return</span> <span class="hljs-string">\`Hello, <span class="hljs-subst">\${name}</span>!\`</span>;
 }
 </code></pre>
-<p>Inline code like <code node="[object Object]">const x = 1;</code> should stay inline.</p>
+<p>Inline code like <code>const x = 1;</code> should stay inline.</p>
 <h2 id="math">Math</h2>
 <p>Inline math: <span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">E = mc^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height: 0.6833em;"></span><span class="mord mathnormal" style="margin-right: 0.0576em;">E</span><span class="mspace" style="margin-right: 0.2778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right: 0.2778em;"></span></span><span class="base"><span class="strut" style="height: 0.8141em;"></span><span class="mord mathnormal">m</span><span class="mord"><span class="mord mathnormal">c</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height: 0.8141em;"><span style="top: -3.063em; margin-right: 0.05em;"><span class="pstrut" style="height: 2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span> is Einstein's mass-energy equivalence.</p>
 <p>Block math:</p>

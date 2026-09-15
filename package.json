@@ -28,7 +28,6 @@
     "dompurify": "^3.4.15",
     "fast-xml-parser": "^5.8.0",
     "html2canvas-pro": "^2.0.2",
-    "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
     "lucide-react": "^1.8.0",
     "marked": "^18.0.3",

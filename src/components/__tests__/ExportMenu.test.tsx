@@ -32,13 +32,36 @@ describe('ExportMenu', () => {
   });
 
   it('offers "Export to CSV" for another format only when canExportCsv is true (UX-12)', () => {
+    // xlsx/ods themselves are exempted from this gate by X1 (see the next
+    // test) — pptx has no native CSV-shaped content, so it only offers one
+    // if a future viewer registers it via `getExportableContent`.
     const { rerender } = render(
-      <ExportMenu onExport={() => {}} format="xlsx" open={true} onOpenChange={() => {}} canExportCsv={false} />,
+      <ExportMenu onExport={() => {}} format="pptx" open={true} onOpenChange={() => {}} canExportCsv={false} />,
     );
     expect(screen.queryByRole('button', { name: 'Export to CSV' })).not.toBeInTheDocument();
 
-    rerender(<ExportMenu onExport={() => {}} format="xlsx" open={true} onOpenChange={() => {}} canExportCsv={true} />);
+    rerender(<ExportMenu onExport={() => {}} format="pptx" open={true} onOpenChange={() => {}} canExportCsv={true} />);
     expect(screen.getByRole('button', { name: 'Export to CSV' })).toBeInTheDocument();
+  });
+
+  it('offers PDF/CSV/"Save a copy" for xlsx/ods unconditionally (X1 — parsed directly from the file\'s own bytes, no viewer registration needed)', () => {
+    render(<ExportMenu onExport={() => {}} format="xlsx" open={true} onOpenChange={() => {}} canExportCsv={false} />);
+    expect(screen.getByRole('button', { name: 'Export to PDF' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export to CSV' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save a copy' })).toBeInTheDocument();
+  });
+
+  it('offers a "Save a copy" passthrough (value "copy") for a pdf document', () => {
+    const onExport = vi.fn();
+    render(<ExportMenu onExport={onExport} format="pdf" open={true} onOpenChange={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Save a copy' }));
+    expect(onExport).toHaveBeenCalledWith('copy');
+  });
+
+  it('offers "Export to HTML" alongside "Export to PDF" for text/code', () => {
+    render(<ExportMenu onExport={() => {}} format="code" open={true} onOpenChange={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Export to PDF' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export to HTML' })).toBeInTheDocument();
   });
 
   it('calls onExport with the chosen format and closes the menu', () => {

@@ -89,7 +89,7 @@ const { html2canvasMock, jsPdfCtorMock, jsPdfAddImageMock, jsPdfAddPageMock, jsP
 vi.mock('html2canvas-pro', () => ({ default: html2canvasMock }));
 vi.mock('jspdf', () => ({ default: jsPdfCtorMock }));
 
-import { exportMarkdown, exportHtml, exportPdf, exportDocx } from '../export';
+import { exportMarkdown, exportHtml, exportMarkdownPdf, exportDocx } from '../export';
 
 import headingsFixture from '../../__tests__/fixtures/markdown/headings.md?raw';
 import gfmTableFixture from '../../__tests__/fixtures/markdown/gfm-table.md?raw';
@@ -327,6 +327,19 @@ describe('exportHtml', () => {
     );
     expect(createObjectURLMock).not.toHaveBeenCalled();
   });
+
+  it('strips a <script> tag and an onerror handler embedded via raw HTML in the markdown source, and adds a restrictive CSP meta tag (X5)', async () => {
+    await renderMarkdownContent('# Hi');
+    const live = document.getElementById('markdown-content')!;
+    live.innerHTML += '<script>window.pwned = true</script><img src="x" onerror="window.pwned = true">';
+
+    await exportHtml('markdown-content', 'doc.md', 'light');
+
+    const html = await getDownloadedBlob().text();
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('onerror');
+    expect(html).toContain('Content-Security-Policy');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -415,89 +428,85 @@ describe('exportDocx', () => {
 });
 
 // ---------------------------------------------------------------------------
-// exportPdf
+// exportMarkdownPdf (X1 — printToPDF-based vector export, replacing the old
+// html2canvas-pro + jsPDF raster pipeline exercised above pre-X1)
 // ---------------------------------------------------------------------------
 
-describe('exportPdf', () => {
+describe('exportMarkdownPdf', () => {
   function mountTarget(id: string): HTMLElement {
     const el = document.createElement('div');
     el.id = id;
-    el.textContent = 'content to rasterize';
+    el.textContent = 'content to export';
     document.body.appendChild(el);
     return el;
   }
 
-  beforeEach(() => {
-    // jsdom has no canvas backend (no `canvas` npm package installed), so
-    // `HTMLCanvasElement.prototype.toDataURL` returns null instead of a real
-    // data URI. exportPdf's page-slicing loop creates its own <canvas> per
-    // page internally, so this stub keeps that codepath's output realistic.
-    vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,SLICE');
-  });
-
-  it('drives html2canvas with the target element and jsPDF with the resulting image, then downloads a .pdf', async () => {
-    const target = mountTarget('markdown-content');
-
-    await exportPdf('markdown-content', 'report.md');
-
-    expect(html2canvasMock).toHaveBeenCalledTimes(1);
-    const [calledElement, options] = html2canvasMock.mock.calls[0]!;
-    expect(calledElement).toBe(target);
-    expect(options).toMatchObject({ scale: 2, useCORS: true, logging: false });
-
-    expect(jsPdfCtorMock).toHaveBeenCalledWith({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    expect(jsPdfAddImageMock).toHaveBeenCalledTimes(1);
-    expect(jsPdfAddImageMock).toHaveBeenCalledWith(expect.any(String), 'PNG', 0, 0, 210, expect.any(Number));
-    expect(jsPdfAddPageMock).not.toHaveBeenCalled();
-    expect(jsPdfOutputMock).toHaveBeenCalledWith('arraybuffer');
-
-    expect(anchorClicks).toEqual([{ download: 'report.pdf', href: 'blob:mock-url' }]);
-  });
-
-  it('slices a tall canvas across multiple A4 pages', async () => {
+  it('sends a self-contained HTML document to window.electronAPI.printToPdf and saves the returned bytes as a .pdf', async () => {
     mountTarget('markdown-content');
-    html2canvasMock.mockResolvedValueOnce({
-      width: 800,
-      height: 3000,
-      toDataURL: () => 'data:image/png;base64,MOCK',
-    });
-
-    await exportPdf('markdown-content', 'long-doc.md');
-
-    // canvasHeightMm = (3000/800)*210 = 787.5mm over three A4 (297mm) pages.
-    expect(jsPdfAddImageMock).toHaveBeenCalledTimes(3);
-    expect(jsPdfAddPageMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('rejects with a friendly, id-specific error when the target element does not exist', async () => {
-    await expect(exportPdf('does-not-exist', 'doc.md')).rejects.toThrow(
-      'PDF export failed: element #does-not-exist not found',
-    );
-    expect(anchorClicks).toHaveLength(0);
-  });
-
-  it('routes through the Electron save dialog (UX-11) with a .pdf filter when window.electronAPI is present', async () => {
-    mountTarget('markdown-content');
+    const pdfBytes = new Uint8Array([1, 2, 3]);
+    const printToPdfMock = vi.fn().mockResolvedValue({ ok: true, bytes: pdfBytes });
     const saveBinaryFileMock = vi.fn().mockResolvedValue({ saved: true });
-    window.electronAPI = { saveBinaryFile: saveBinaryFileMock } as unknown as typeof window.electronAPI;
+    window.electronAPI = {
+      printToPdf: printToPdfMock,
+      saveBinaryFile: saveBinaryFileMock,
+    } as unknown as typeof window.electronAPI;
 
-    await exportPdf('markdown-content', 'report.md');
+    await exportMarkdownPdf('markdown-content', 'report.md', 'dracula');
+
+    expect(printToPdfMock).toHaveBeenCalledTimes(1);
+    const html = printToPdfMock.mock.calls[0]![0] as string;
+    expect(html).toContain('content to export');
+    expect(html).toContain('data-theme="dracula"');
+    expect(html).toContain('Content-Security-Policy');
 
     expect(saveBinaryFileMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        content: pdfBytes,
         suggestedName: 'report.pdf',
         filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
       }),
     );
-    expect(createObjectURLMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects with a friendly, id-specific error when the target element does not exist', async () => {
+    await expect(exportMarkdownPdf('does-not-exist', 'doc.md', 'light')).rejects.toThrow(
+      'PDF export failed: element #does-not-exist not found',
+    );
+  });
+
+  it('rejects with a friendly error when running outside Electron (no printToPdf bridge)', async () => {
+    mountTarget('markdown-content');
+    await expect(exportMarkdownPdf('markdown-content', 'report.md', 'light')).rejects.toThrow(
+      'PDF export failed: PDF export requires the desktop app.',
+    );
   });
 
   it('wraps a thrown library error in a friendly, format-specific message (RUN-14)', async () => {
     mountTarget('markdown-content');
-    html2canvasMock.mockRejectedValueOnce(new Error('out of memory'));
+    window.electronAPI = {
+      printToPdf: vi.fn().mockResolvedValue({ ok: false, error: 'out of memory' }),
+    } as unknown as typeof window.electronAPI;
 
-    await expect(exportPdf('markdown-content', 'report.md')).rejects.toThrow(
+    await expect(exportMarkdownPdf('markdown-content', 'report.md', 'light')).rejects.toThrow(
       'PDF export failed: the document is too large to process',
     );
+  });
+
+  it('strips a <script> tag and an onerror handler embedded via raw HTML in the markdown source (X5)', async () => {
+    await renderMarkdownContent('# Hi');
+    const live = document.getElementById('markdown-content')!;
+    live.innerHTML += '<script>window.pwned = true</script><img src="x" onerror="window.pwned = true">';
+
+    const printToPdfMock = vi.fn().mockResolvedValue({ ok: true, bytes: new Uint8Array([1]) });
+    window.electronAPI = {
+      printToPdf: printToPdfMock,
+      saveBinaryFile: vi.fn().mockResolvedValue({ saved: true }),
+    } as unknown as typeof window.electronAPI;
+
+    await exportMarkdownPdf('markdown-content', 'doc.md', 'light');
+
+    const html = printToPdfMock.mock.calls[0]![0] as string;
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain('onerror');
   });
 });

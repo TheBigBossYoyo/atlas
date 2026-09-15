@@ -145,3 +145,30 @@ describe('App — export failure surfaces as a toast, not a blocking alert() (UX
     expect(alertSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('App — PDF "Save a copy" (X1 — this used to bypass the native save dialog entirely with a raw browser download, even inside Electron)', () => {
+  it('copies the original bytes through window.electronAPI.saveBinaryFile, not a synthetic <a download> click', async () => {
+    const pdfBytes = new TextEncoder().encode('%PDF-1.4 fake pdf bytes').buffer;
+    window.electronAPI!.openFileBinary = vi.fn().mockResolvedValue({
+      canceled: false,
+      path: '/abs/report.pdf',
+      buffer: pdfBytes,
+    });
+    const saveBinaryFileMock = vi.fn().mockResolvedValue({ saved: true });
+    window.electronAPI!.saveBinaryFile = saveBinaryFileMock;
+    const anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click');
+
+    render(<App />);
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('report.pdf'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save a copy' }));
+
+    await waitFor(() => expect(saveBinaryFileMock).toHaveBeenCalled());
+    expect(saveBinaryFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ suggestedName: 'report.pdf' }),
+    );
+    expect(anchorClickSpy).not.toHaveBeenCalled();
+  });
+});

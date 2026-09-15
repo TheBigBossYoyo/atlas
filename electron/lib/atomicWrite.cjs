@@ -117,6 +117,37 @@ function rethrowAsFriendlyError(err) {
 }
 
 /**
+ * X5/save-error-classification — maps a raw Node `fs` error code to a
+ * friendly, actionable message. `save-file`/`save-binary-file` in `main.cjs`
+ * previously only recognized `FileLockedError` (EBUSY/EPERM, thrown above)
+ * and silently returned `error: undefined` for every other failure class,
+ * leaving the renderer's banner/toast with nothing specific to show. Returns
+ * `undefined` for a code with no friendly mapping so the caller can fall back
+ * to its own generic message rather than this throwing or guessing.
+ * @param {unknown} err
+ * @returns {string | undefined}
+ */
+function classifyWriteError(err) {
+  const code = err && typeof err === 'object' ? /** @type {{code?: unknown}} */ (err).code : undefined;
+  switch (code) {
+    case 'EACCES':
+      return "Permission denied — you don't have access to save to this location.";
+    case 'ENOSPC':
+      return 'Not enough disk space to save this file.';
+    case 'EISDIR':
+      return 'That location is a folder, not a file — choose a different name.';
+    case 'ENOENT':
+      return 'The destination folder no longer exists — choose a different location.';
+    case 'EROFS':
+      return 'That location is read-only — choose a different location.';
+    case 'ENAMETOOLONG':
+      return 'That file name or path is too long — choose a shorter one.';
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Atomically writes `data` to `targetPath`.
  * @param {string} targetPath
  * @param {string | Uint8Array} data
@@ -158,4 +189,4 @@ function atomicWriteFile(targetPath, data) {
   }
 }
 
-module.exports = { atomicWriteFile, FileLockedError, LOCK_ERROR_MESSAGE };
+module.exports = { atomicWriteFile, FileLockedError, LOCK_ERROR_MESSAGE, classifyWriteError };
