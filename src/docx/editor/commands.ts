@@ -14,6 +14,7 @@ import type {
   Table,
   TableCell,
   TableCellProps,
+  TableProps,
   TableRow,
   TextNode,
   Twip,
@@ -165,6 +166,8 @@ export function applyCommand(
       return applyResizeTableColumn(doc, cmd)
     case 'replace-table':
       return applyReplaceTable(doc, cmd)
+    case 'apply-table-props':
+      return applyTableProps(doc, cmd)
   }
 }
 
@@ -935,6 +938,31 @@ function applyReplaceTable(
   return {
     document: nextDocument,
     inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table: original },
+  }
+}
+
+/** See `commandTypes.ts`'s `ApplyTablePropsCommand` doc comment for why this
+ * replaces `props` wholesale rather than merging like the run/paragraph
+ * format commands do. */
+function withTableProps(table: Table, props: TableProps | undefined): Table {
+  return Object.freeze({
+    kind: 'table',
+    ...(props !== undefined ? { props } : {}),
+    ...(table.tblGrid !== undefined ? { tblGrid: table.tblGrid } : {}),
+    rows: table.rows,
+  })
+}
+
+function applyTableProps(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'apply-table-props' }>,
+): { document: Document; inverse: Command } {
+  const original = requireTableAt(doc, cmd.tablePath)
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => withTableProps(t, cmd.props))
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'apply-table-props', tablePath: cmd.tablePath, props: original.props },
   }
 }
 

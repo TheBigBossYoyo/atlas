@@ -1,4 +1,4 @@
-import type { Block, ParaProps, RunChild, RunProps, Table } from '../model'
+import type { Block, ParaProps, RunChild, RunProps, Table, TableProps } from '../model'
 
 export type Position = {
   readonly paragraphPath: ReadonlyArray<number>
@@ -221,6 +221,20 @@ export type ReplaceTableCommand = {
   readonly table: Table
 }
 
+/**
+ * DXE-14 — table properties dialog (width/alignment/borders basics).
+ * Replaces the table's whole `props` object outright rather than merging
+ * (like `apply-run-format`/`apply-para-format` do): the dialog always
+ * submits every field it shows, so a full replacement — inverting to the
+ * exact original `props` — is simpler and just as exact as computing a
+ * field-by-field merge inverse would be.
+ */
+export type ApplyTablePropsCommand = {
+  readonly kind: 'apply-table-props'
+  readonly tablePath: ReadonlyArray<number>
+  readonly props: TableProps | undefined
+}
+
 type RevisionTarget =
   | {
       readonly id: string
@@ -273,6 +287,7 @@ export type Command =
   | SplitTableCellCommand
   | ResizeTableColumnCommand
   | ReplaceTableCommand
+  | ApplyTablePropsCommand
 
 export function acceptRevision(id: string): AcceptRevisionCommand {
   return {

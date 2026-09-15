@@ -284,6 +284,44 @@ describe('DXE-14 — resize a column', () => {
   })
 })
 
+describe('DXE-14 — table properties (apply-table-props)', () => {
+  it("replaces the table's props wholesale and restores the original verbatim on undo", () => {
+    const original = createDocumentWithTable(createGrid(1, 1))
+
+    const result = applyCommand(original, {
+      kind: 'apply-table-props',
+      tablePath: [0],
+      props: { jc: 'center', tblW: { type: 'dxa', value: twip(5000) } },
+    })
+
+    const table = tableAt(result.document, [0])
+    expect(table.props).toEqual({ jc: 'center', tblW: { type: 'dxa', value: twip(5000) } })
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('clears props entirely when given undefined, and undo restores the prior props', () => {
+    const withProps: Table = { ...createGrid(1, 1), props: { jc: 'end' } }
+    const original = createDocumentWithTable(withProps)
+
+    const result = applyCommand(original, { kind: 'apply-table-props', tablePath: [0], props: undefined })
+
+    expect(tableAt(result.document, [0]).props).toBeUndefined()
+
+    const reverted = applyCommand(result.document, result.inverse)
+    expect(reverted.document).toEqual(original)
+  })
+
+  it('throws when the table path does not resolve', () => {
+    const original = createDocumentWithTable(createGrid(1, 1))
+
+    expect(() =>
+      applyCommand(original, { kind: 'apply-table-props', tablePath: [9], props: { jc: 'center' } }),
+    ).toThrow()
+  })
+})
+
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 function createGrid(rows: number, cols: number): Table {

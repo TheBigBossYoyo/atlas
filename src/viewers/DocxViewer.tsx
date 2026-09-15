@@ -51,6 +51,7 @@ import {
   useComposition,
   useSpellCheck,
   type Command,
+  type EnclosingTable,
   type FindOptions,
   type ImageMimeType,
   type Range,
@@ -269,6 +270,30 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<Run> {
   })
 }
 
+/**
+ * DXE-14 — seed values for the table properties dialog, read straight off
+ * the enclosing table's own `props` so opening the dialog shows what the
+ * table actually has rather than a fixed default. `null` fields mean "not
+ * inside a table" (the dialog stays disabled) or "no explicit value set on
+ * this table" (the dialog falls back to its own placeholder default).
+ * `tableBordersOn` only inspects the top border as a representative sample —
+ * a table with a genuinely mixed on/off border set is a finer distinction
+ * this basic on/off toggle doesn't attempt to preserve, matching Word's own
+ * "Borders" quick-toggle rather than its full per-edge borders dialog.
+ */
+function tableToolbarFields(
+  enclosing: EnclosingTable | null,
+): Pick<ToolbarState, 'insideTable' | 'tableWidthTwips' | 'tableAlignment' | 'tableBordersOn'> {
+  const props = enclosing?.table.props
+
+  return {
+    insideTable: enclosing !== null,
+    tableWidthTwips: props?.tblW?.type === 'dxa' && typeof props.tblW.value === 'number' ? props.tblW.value : null,
+    tableAlignment: props?.jc === 'center' ? 'center' : props?.jc === 'end' ? 'right' : props?.jc === 'start' ? 'left' : null,
+    tableBordersOn: props?.tblBorders?.top?.style !== 'none' && props?.tblBorders?.top?.style !== 'nil',
+  }
+}
+
 function createToolbarState(
   document: DocxDocument,
   range: Range | null,
@@ -276,8 +301,10 @@ function createToolbarState(
 ): ToolbarState {
   const paragraph = range ? findParagraph(document, range.focus.paragraphPath) : null
   const activeFormats = new Set<'bold' | 'italic' | 'underline' | 'strike' | 'subscript' | 'superscript'>()
-  // DXE-14 — gates the table-editing button group.
-  const insideTable = range !== null && findEnclosingTable(document, range.focus.paragraphPath) !== null
+  // DXE-14 — gates the table-editing button group and seeds the table
+  // properties dialog.
+  const enclosingTable = range !== null ? findEnclosingTable(document, range.focus.paragraphPath) : null
+  const tableFields = tableToolbarFields(enclosingTable)
 
   if (paragraph !== null && range !== null) {
     const run = getEditableRuns(paragraph)[range.focus.runIndex]
@@ -317,7 +344,7 @@ function createToolbarState(
       styleId: paragraph.props?.pStyle ?? null,
       spellCheck: liveState.spellCheck,
       trackChanges: liveState.trackChanges,
-      insideTable,
+      ...tableFields,
     }
   }
 
@@ -329,7 +356,7 @@ function createToolbarState(
     styleId: null,
     spellCheck: liveState.spellCheck,
     trackChanges: liveState.trackChanges,
-    insideTable,
+    ...tableFields,
   }
 }
 

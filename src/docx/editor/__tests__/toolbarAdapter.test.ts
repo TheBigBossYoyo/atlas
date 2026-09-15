@@ -211,6 +211,60 @@ describe('toolbarToCommand — DXE-14 table structural editing', () => {
       cellIndex: 1,
     })
   })
+
+  it('set-table-properties returns null when the selection is outside a table', () => {
+    const document = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('plain')]) }) as Paragraph,
+    ])
+    const command = toolbarToCommand(
+      { kind: 'set-table-properties', widthTwips: 5000, alignment: 'center', bordersOn: true },
+      collapsed(pos([0], 0, 0)),
+      document,
+    )
+
+    expect(command).toBeNull()
+  })
+
+  it('set-table-properties builds an apply-table-props command with an explicit width, alignment and borders on', () => {
+    const document = createTableDocument(1, 1)
+    const command = toolbarToCommand(
+      { kind: 'set-table-properties', widthTwips: 5000, alignment: 'center', bordersOn: true },
+      cellPos(0, 0),
+      document,
+    )
+
+    expect(command).toEqual({
+      kind: 'apply-table-props',
+      tablePath: [0, 0],
+      props: {
+        tblW: { type: 'dxa', value: 5000 },
+        jc: 'center',
+        tblBorders: {
+          top: { style: 'single', size: 4, color: '#000000' },
+          bottom: { style: 'single', size: 4, color: '#000000' },
+          left: { style: 'single', size: 4, color: '#000000' },
+          right: { style: 'single', size: 4, color: '#000000' },
+          insideH: { style: 'single', size: 4, color: '#000000' },
+          insideV: { style: 'single', size: 4, color: '#000000' },
+        },
+      },
+    })
+  })
+
+  it('set-table-properties omits tblW and turns every border off when widthTwips is null and bordersOn is false', () => {
+    const document = createTableDocument(1, 1)
+    const command = toolbarToCommand(
+      { kind: 'set-table-properties', widthTwips: null, alignment: 'left', bordersOn: false },
+      cellPos(0, 0),
+      document,
+    )
+
+    expect(command).toMatchObject({ kind: 'apply-table-props', tablePath: [0, 0] })
+    const props = (command as { props: { tblW?: unknown; jc: string; tblBorders: { top: { style: string } } } }).props
+    expect(props.tblW).toBeUndefined()
+    expect(props.jc).toBe('start')
+    expect(props.tblBorders.top.style).toBe('none')
+  })
 })
 
 describe('toolbarToCommand', () => {

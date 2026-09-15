@@ -12,6 +12,9 @@ const defaultState: ToolbarState = {
   trackChanges: false,
   spellCheck: false,
   insideTable: false,
+  tableWidthTwips: null,
+  tableAlignment: null,
+  tableBordersOn: true,
 };
 
 describe('Toolbar', () => {

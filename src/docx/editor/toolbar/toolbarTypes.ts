@@ -25,6 +25,16 @@ export type ToolbarCommand =
         | 'merge-table-cell-right'
         | 'split-table-cell'
     }
+  | {
+      // DXE-14 — table properties dialog basics: width/alignment/borders.
+      // Resolved the same way as the row/column commands above (against
+      // the cursor's enclosing table); `widthTwips: null` clears any
+      // explicit width instead of setting one (Word's own "Auto" option).
+      kind: 'set-table-properties'
+      widthTwips: number | null
+      alignment: 'left' | 'center' | 'right'
+      bordersOn: boolean
+    }
   | { kind: 'set-margins'; preset: 'normal' | 'narrow' | 'moderate' | 'wide' }
   | { kind: 'set-orientation'; orientation: 'portrait' | 'landscape' }
   | { kind: 'set-page-size'; preset: 'letter' | 'a4' | 'legal' }
@@ -53,4 +63,11 @@ export type ToolbarState = Readonly<{
   /** DXE-14 — true when the cursor sits inside a table cell; gates the
    * table-editing button group. */
   insideTable: boolean;
+  /** DXE-14 — table properties dialog seed values, read off the enclosing
+   * table (see `DocxViewer.tsx`'s `tableToolbarFields`); `null` when not
+   * inside a table, or (for `tableWidthTwips`/`tableAlignment`) when the
+   * table has no explicit value for that field. */
+  tableWidthTwips: number | null;
+  tableAlignment: 'left' | 'center' | 'right' | null;
+  tableBordersOn: boolean;
 }>;

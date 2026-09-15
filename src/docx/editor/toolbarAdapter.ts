@@ -1,4 +1,15 @@
-import { halfPoint, hexColor, twip, type Document, type HighlightColor, type JustifyContent } from '../model'
+import {
+  eighthPoint,
+  halfPoint,
+  hexColor,
+  twip,
+  type Border,
+  type BorderSet,
+  type Document,
+  type HighlightColor,
+  type JustifyContent,
+  type TableProps,
+} from '../model'
 
 import { findEnclosingTable, findParagraph } from './commands'
 import type { Command, Range } from './commandTypes'
@@ -262,6 +273,22 @@ function resolveTableCommand(
   }
 }
 
+/**
+ * DXE-14 — the two border sets the properties dialog's on/off checkbox
+ * toggles between. `'single'`/half-point 4 (2pt in eighth-points) mirrors
+ * Word's own default table border when one is turned on from scratch;
+ * `'none'` (rather than `'nil'`, which means "unset — inherit") explicitly
+ * suppresses every edge, matching what "no borders" means to a user picking
+ * it from a dialog.
+ */
+const TABLE_BORDER_ON: Border = Object.freeze({ style: 'single', size: eighthPoint(4), color: hexColor('#000000') })
+const TABLE_BORDER_OFF: Border = Object.freeze({ style: 'none' })
+
+function buildTableBorderSet(bordersOn: boolean): BorderSet {
+  const edge = bordersOn ? TABLE_BORDER_ON : TABLE_BORDER_OFF
+  return Object.freeze({ top: edge, bottom: edge, left: edge, right: edge, insideH: edge, insideV: edge })
+}
+
 export function toolbarToCommand(
   toolbarCmd: ToolbarCommand,
   selection: Range | null,
@@ -411,6 +438,21 @@ export function toolbarToCommand(
     case 'merge-table-cell-right':
     case 'split-table-cell':
       return resolveTableCommand(toolbarCmd.kind, selection, document)
+    case 'set-table-properties': {
+      const paragraphPath = getPrimaryParagraphPath(selection)
+      const enclosing = paragraphPath === null ? null : findEnclosingTable(document, paragraphPath)
+      if (enclosing === null) {
+        return null
+      }
+
+      const props: TableProps = {
+        ...(toolbarCmd.widthTwips !== null ? { tblW: { type: 'dxa' as const, value: twip(toolbarCmd.widthTwips) } } : {}),
+        jc: toAlignment(toolbarCmd.alignment),
+        tblBorders: buildTableBorderSet(toolbarCmd.bordersOn),
+      }
+
+      return { kind: 'apply-table-props', tablePath: enclosing.tablePath, props }
+    }
     case 'insert-image':
       return null
     case 'insert-hyperlink':
