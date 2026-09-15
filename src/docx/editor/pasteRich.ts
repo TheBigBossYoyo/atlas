@@ -242,6 +242,11 @@ export async function buildRichPasteCommands(
       const textResult = applyCommand(workingDocument, textCmd)
       commands.push(textCmd)
       workingDocument = textResult.document
+      // Tracks the run's own end position separately from the streaming
+      // `pos` cursor: `apply-run-format`/`insert-hyperlink` below each need
+      // the *original* (pre-their-own-restructuring) span every time, so
+      // reassigning `pos` after one must never feed into the other's `range`
+      // — each is computed from `textStart`/`textEnd` directly instead.
       const textEnd = textResult.range?.focus ?? textStart
       pos = textEnd
 
@@ -254,6 +259,15 @@ export async function buildRichPasteCommands(
         const formatResult = applyCommand(workingDocument, formatCmd)
         commands.push(formatCmd)
         workingDocument = formatResult.document
+        // `apply-run-format` can split the single run `insert-text` just
+        // created into several (e.g. isolating a bolded word from its
+        // plain-text neighbors), which shifts every run index after the
+        // split — `pos` must follow the command's own returned range
+        // (already recomputed against the *new* run layout by
+        // `applyRunFormatSingleParagraph`/`applyRunFormatAcrossParagraphs`)
+        // rather than the pre-split `textEnd`, or the next run's insert
+        // addresses a run index that no longer means what it did.
+        pos = formatResult.range?.focus ?? pos
       }
 
       if (run.href !== undefined) {
@@ -261,13 +275,17 @@ export async function buildRichPasteCommands(
         if (relationshipId !== null) {
           const linkCmd: Command = {
             kind: 'insert-hyperlink',
-            range: { anchor: textStart, focus: textEnd },
+            range: { anchor: textStart, focus: pos },
             url: run.href,
             relationshipId,
           }
           const linkResult = applyCommand(workingDocument, linkCmd)
           commands.push(linkCmd)
           workingDocument = linkResult.document
+          // `insert-hyperlink` wraps the run(s) in that range in a new
+          // `w:hyperlink` element — like `apply-run-format` above, this
+          // command's own returned range is the one to trust afterward.
+          pos = linkResult.range?.focus ?? pos
         }
       }
     }

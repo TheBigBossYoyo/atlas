@@ -1139,4 +1139,96 @@ describe('DocxViewer editor', () => {
     expect(contextMenuEvent.defaultPrevented).toBe(false)
     expect(screen.queryByRole('menu', { name: 'Table editing' })).not.toBeInTheDocument()
   })
+
+  // ---------------------------------------------------------------------------
+  // DXE-19 — rich HTML paste (tables/hyperlinks/formatting) wired into the
+  // real `onPaste` handler, going through the async bundle-patch path.
+  // ---------------------------------------------------------------------------
+
+  it('pastes rich HTML as formatted text and records an external hyperlink relationship', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+        <ViewerDirtyProbe />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    // Establishes a real, non-null cursor via a genuine find/replace command
+    // (see `replaceFirstMatch`'s own doc comment above) rather than
+    // fabricating a DOM selection the mocked PageStack can't render — paste
+    // needs `range?.focus` populated just like hyperlink insertion does.
+    replaceFirstMatch('Hello', 'Howdy')
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (format: string) =>
+          format === 'text/html'
+            ? '<p>Pasted <b>bold</b> and <a href="https://example.com">a link</a></p>'
+            : '',
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedBundle = saveDocxMock.mock.calls[0][0] as {
+      document: DocxDocument
+      relationships?: ReadonlyArray<{ target: string; targetMode?: string }>
+    }
+    expect(collectText(savedBundle.document)).toBe('HowdyPasted bold and a link DOCX')
+    expect(
+      savedBundle.relationships?.some(
+        (rel) => rel.target === 'https://example.com' && rel.targetMode === 'External',
+      ),
+    ).toBe(true)
+  })
+
+  it('falls back to plain-text paste when the clipboard carries no parseable HTML blocks', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+        <ViewerDirtyProbe />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello DOCX', 'Howdy ')
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (format: string) => (format === 'text/plain' ? 'plain paste' : ''),
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(collectText(savedDocument)).toBe('Howdy plain paste')
+  })
 })

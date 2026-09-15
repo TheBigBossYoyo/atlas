@@ -45,8 +45,11 @@ import {
   insertHyperlinkIntoBundle,
   insertImageIntoBundle,
   buildPasteCommands,
+  buildRichPasteCommands,
+  bundleContextFor,
   friendlyDocxErrorMessage,
   htmlToParagraphs,
+  htmlToPasteBlocks,
   textToParagraphs,
   toolbarToCommand,
   useComposition,
@@ -55,6 +58,8 @@ import {
   type EnclosingTable,
   type FindOptions,
   type ImageMimeType,
+  type PasteBlock,
+  type Position,
   type Range,
   type TrackChangesContext,
 } from '../docx/editor'
@@ -831,6 +836,50 @@ function DocxEditor({
     [bundle, commitState, documentModel, onBundleChange, range],
   )
 
+  // DXE-19 — rich HTML paste (tables/hyperlinks/images/colors/lists) is
+  // async (image natural-size decoding needs it), unlike every other
+  // editor command, so it can't reuse `applyEditorCommands` directly: it
+  // applies its own composite command once `buildRichPasteCommands`
+  // resolves, folding in a bundle patch (new relationships/media/numbering)
+  // in the same `onBundleChange` as the document update, matching
+  // `handleInsertImage`/`handleInsertHyperlink`'s own bundle+document
+  // pairing above. `documentModel`/`bundle` are captured at call time (the
+  // same closure-capture hazard those two helpers already accept for their
+  // own async picker/decode work), so a paste started just before another
+  // edit lands could in principle race it — acceptable for a user-initiated,
+  // effectively-instantaneous paste.
+  const handleRichPaste = useCallback(
+    (blocks: ReadonlyArray<PasteBlock>, focus: Position, selection: Range | null) => {
+      void (async () => {
+        try {
+          const result = await buildRichPasteCommands(
+            documentModel,
+            bundleContextFor(bundle),
+            blocks,
+            focus,
+            selection,
+          )
+          if (result === null) {
+            return
+          }
+
+          const batch: Command =
+            result.commands.length === 1 ? result.commands[0] : { kind: 'composite', commands: result.commands }
+          const applied = applyCommand(documentModel, batch)
+          historyRef.current.push(applied.inverse)
+          const finalRange: Range = { anchor: result.finalCursor, focus: result.finalCursor }
+          if (result.bundlePatch !== null) {
+            onBundleChange({ ...bundle, ...result.bundlePatch, document: applied.document })
+          }
+          commitState(applied.document, finalRange)
+        } catch (error) {
+          setSaveError(error instanceof Error ? error.message : String(error))
+        }
+      })()
+    },
+    [bundle, commitState, documentModel, onBundleChange],
+  )
+
   const handlePaste = useCallback(
     (event: ReactClipboardEvent<HTMLDivElement>) => {
       const clipboard = event.clipboardData
@@ -844,8 +893,17 @@ function DocxEditor({
       }
 
       const html = clipboard.getData('text/html')
-      const text = clipboard.getData('text/plain')
 
+      if (html.length > 0) {
+        const blocks = htmlToPasteBlocks(html)
+        if (blocks.length > 0) {
+          event.preventDefault()
+          handleRichPaste(blocks, focus, range)
+          return
+        }
+      }
+
+      const text = clipboard.getData('text/plain')
       const paragraphs =
         html.length > 0 ? htmlToParagraphs(html) : textToParagraphs(text)
 
@@ -859,7 +917,7 @@ function DocxEditor({
       const finalRange: Range = { anchor: finalCursor, focus: finalCursor }
       applyEditorCommands(commands, finalRange)
     },
-    [applyEditorCommands, range],
+    [applyEditorCommands, handleRichPaste, range],
   )
 
   const handleBeforeInputEvent = useCallback(
