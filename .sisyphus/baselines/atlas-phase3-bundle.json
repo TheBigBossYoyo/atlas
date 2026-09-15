@@ -1,0 +1,1778 @@
+{
+  "capturedAt": "2026-09-15",
+  "packageVersion": "3.0.9",
+  "chunkCount": 442,
+  "totalBytes": 19464434,
+  "totalGzipBytes": 4915451,
+  "chunks": {
+    "abap.js": {
+      "bytes": 15845,
+      "gzipBytes": 5898
+    },
+    "abnfDiagram-VCTEODGH.js": {
+      "bytes": 1846,
+      "gzipBytes": 893
+    },
+    "actionscript-3.js": {
+      "bytes": 15198,
+      "gzipBytes": 2656
+    },
+    "ada.js": {
+      "bytes": 48075,
+      "gzipBytes": 6023
+    },
+    "andromeeda.js": {
+      "bytes": 9012,
+      "gzipBytes": 2359
+    },
+    "angular-html.js": {
+      "bytes": 24249,
+      "gzipBytes": 3994
+    },
+    "angular-ts.js": {
+      "bytes": 183731,
+      "gzipBytes": 16580
+    },
+    "apache.js": {
+      "bytes": 12449,
+      "gzipBytes": 3715
+    },
+    "apex.js": {
+      "bytes": 46978,
+      "gzipBytes": 6756
+    },
+    "apl.js": {
+      "bytes": 24029,
+      "gzipBytes": 4190
+    },
+    "applescript.js": {
+      "bytes": 29564,
+      "gzipBytes": 5922
+    },
+    "ara.js": {
+      "bytes": 6355,
+      "gzipBytes": 1805
+    },
+    "arc.js": {
+      "bytes": 3474,
+      "gzipBytes": 1462
+    },
+    "architecture-7GRP2DOG.js": {
+      "bytes": 131,
+      "gzipBytes": 133
+    },
+    "architectureDiagram-5GKGNRK7.js": {
+      "bytes": 148904,
+      "gzipBytes": 40891
+    },
+    "array.js": {
+      "bytes": 107,
+      "gzipBytes": 112
+    },
+    "asciidoc.js": {
+      "bytes": 131520,
+      "gzipBytes": 9332
+    },
+    "asm.js": {
+      "bytes": 40710,
+      "gzipBytes": 8199
+    },
+    "astro.js": {
+      "bytes": 24025,
+      "gzipBytes": 7549
+    },
+    "aurora-x.js": {
+      "bytes": 13656,
+      "gzipBytes": 2278
+    },
+    "awk.js": {
+      "bytes": 5454,
+      "gzipBytes": 1377
+    },
+    "ayu-dark.js": {
+      "bytes": 20078,
+      "gzipBytes": 3939
+    },
+    "ayu-light.js": {
+      "bytes": 20149,
+      "gzipBytes": 3922
+    },
+    "ayu-mirage.js": {
+      "bytes": 20082,
+      "gzipBytes": 3931
+    },
+    "ballerina.js": {
+      "bytes": 58686,
+      "gzipBytes": 8143
+    },
+    "bat.js": {
+      "bytes": 12881,
+      "gzipBytes": 3216
+    },
+    "beancount.js": {
+      "bytes": 10366,
+      "gzipBytes": 1431
+    },
+    "berry.js": {
+      "bytes": 2998,
+      "gzipBytes": 808
+    },
+    "bibtex.js": {
+      "bytes": 4788,
+      "gzipBytes": 828
+    },
+    "bicep.js": {
+      "bytes": 5375,
+      "gzipBytes": 1145
+    },
+    "bird2.js": {
+      "bytes": 22936,
+      "gzipBytes": 4645
+    },
+    "blade.js": {
+      "bytes": 104976,
+      "gzipBytes": 28187
+    },
+    "blockDiagram-I7D4REHJ.js": {
+      "bytes": 41446,
+      "gzipBytes": 13333
+    },
+    "bsl.js": {
+      "bytes": 33864,
+      "gzipBytes": 8344
+    },
+    "c.js": {
+      "bytes": 72179,
+      "gzipBytes": 10557
+    },
+    "c3.js": {
+      "bytes": 25624,
+      "gzipBytes": 3867
+    },
+    "c4Diagram-7LVT6UL2.js": {
+      "bytes": 64740,
+      "gzipBytes": 18383
+    },
+    "cadence.js": {
+      "bytes": 23662,
+      "gzipBytes": 3657
+    },
+    "cairo.js": {
+      "bytes": 2933,
+      "gzipBytes": 804
+    },
+    "catppuccin-frappe.js": {
+      "bytes": 47255,
+      "gzipBytes": 8011
+    },
+    "catppuccin-latte.js": {
+      "bytes": 47253,
+      "gzipBytes": 7996
+    },
+    "catppuccin-macchiato.js": {
+      "bytes": 47260,
+      "gzipBytes": 8004
+    },
+    "catppuccin-mocha.js": {
+      "bytes": 47252,
+      "gzipBytes": 7996
+    },
+    "channel.js": {
+      "bytes": 114,
+      "gzipBytes": 124
+    },
+    "chunk-2Q5K7J3B.js": {
+      "bytes": 191,
+      "gzipBytes": 164
+    },
+    "chunk-4HAMMTFA.js": {
+      "bytes": 104855,
+      "gzipBytes": 25563
+    },
+    "chunk-5VM5RSS4.js": {
+      "bytes": 362,
+      "gzipBytes": 271
+    },
+    "chunk-75Z2AOVW.js": {
+      "bytes": 30811,
+      "gzipBytes": 8496
+    },
+    "chunk-DU6HZSFF.js": {
+      "bytes": 208849,
+      "gzipBytes": 25021
+    },
+    "chunk-F27PBJKO.js": {
+      "bytes": 1972,
+      "gzipBytes": 885
+    },
+    "chunk-FOHPRMQF.js": {
+      "bytes": 662109,
+      "gzipBytes": 142203
+    },
+    "chunk-GMAD6QVW.js": {
+      "bytes": 51840,
+      "gzipBytes": 16598
+    },
+    "chunk-GVQU2GXP.js": {
+      "bytes": 1416,
+      "gzipBytes": 794
+    },
+    "chunk-IMKFNOWR.js": {
+      "bytes": 37672,
+      "gzipBytes": 12242
+    },
+    "chunk-JWPE2WC7.js": {
+      "bytes": 223,
+      "gzipBytes": 172
+    },
+    "chunk-L3NEJ4N5.js": {
+      "bytes": 9686,
+      "gzipBytes": 2920
+    },
+    "chunk-OSK3NFVY.js": {
+      "bytes": 36469,
+      "gzipBytes": 7965
+    },
+    "chunk-P2QGCYS3.js": {
+      "bytes": 1947,
+      "gzipBytes": 955
+    },
+    "chunk-POPQ4Y6H.js": {
+      "bytes": 574,
+      "gzipBytes": 398
+    },
+    "chunk-PWAF6VOD.js": {
+      "bytes": 5833,
+      "gzipBytes": 2678
+    },
+    "chunk-SHT3W25Y.js": {
+      "bytes": 61232,
+      "gzipBytes": 19517
+    },
+    "chunk-SVP7TREG.js": {
+      "bytes": 15644,
+      "gzipBytes": 4339
+    },
+    "chunk-TICWLB2K.js": {
+      "bytes": 48812,
+      "gzipBytes": 15511
+    },
+    "chunk-XXDRQBXY.js": {
+      "bytes": 262,
+      "gzipBytes": 225
+    },
+    "chunk-Y2CYZVJY.js": {
+      "bytes": 155,
+      "gzipBytes": 143
+    },
+    "clarity.js": {
+      "bytes": 14268,
+      "gzipBytes": 2456
+    },
+    "classDiagram-v2-VYDZK3BY.js": {
+      "bytes": 778,
+      "gzipBytes": 451
+    },
+    "classDiagram-ZZMXUADV.js": {
+      "bytes": 778,
+      "gzipBytes": 451
+    },
+    "click-outside-container.js": {
+      "bytes": 18496,
+      "gzipBytes": 6439
+    },
+    "clojure.js": {
+      "bytes": 6406,
+      "gzipBytes": 1413
+    },
+    "cmake.js": {
+      "bytes": 9848,
+      "gzipBytes": 3365
+    },
+    "cobol.js": {
+      "bytes": 39072,
+      "gzipBytes": 10832
+    },
+    "codeowners.js": {
+      "bytes": 540,
+      "gzipBytes": 312
+    },
+    "codeql.js": {
+      "bytes": 26876,
+      "gzipBytes": 3783
+    },
+    "CodeViewer.js": {
+      "bytes": 3002,
+      "gzipBytes": 1517
+    },
+    "CodeViewer.css": {
+      "bytes": 791,
+      "gzipBytes": 361
+    },
+    "coffee.js": {
+      "bytes": 27424,
+      "gzipBytes": 6351
+    },
+    "common-lisp.js": {
+      "bytes": 22574,
+      "gzipBytes": 6054
+    },
+    "coq.js": {
+      "bytes": 5547,
+      "gzipBytes": 1910
+    },
+    "cose-bilkent-JH36ORCC.js": {
+      "bytes": 81251,
+      "gzipBytes": 21383
+    },
+    "cpp.js": {
+      "bytes": 626137,
+      "gzipBytes": 44843
+    },
+    "createLucideIcon.js": {
+      "bytes": 1416,
+      "gzipBytes": 795
+    },
+    "crystal.js": {
+      "bytes": 29410,
+      "gzipBytes": 4445
+    },
+    "csharp.js": {
+      "bytes": 89680,
+      "gzipBytes": 10684
+    },
+    "css.js": {
+      "bytes": 49107,
+      "gzipBytes": 11910
+    },
+    "csv.js": {
+      "bytes": 1136,
+      "gzipBytes": 363
+    },
+    "CsvViewer.js": {
+      "bytes": 22906,
+      "gzipBytes": 8471
+    },
+    "cue.js": {
+      "bytes": 16197,
+      "gzipBytes": 2050
+    },
+    "cynefin-OW5HDTMX.js": {
+      "bytes": 126,
+      "gzipBytes": 131
+    },
+    "cynefinDiagram-5FMLGOSQ.js": {
+      "bytes": 9943,
+      "gzipBytes": 3505
+    },
+    "cypher.js": {
+      "bytes": 5949,
+      "gzipBytes": 1718
+    },
+    "cytoscape.esm.js": {
+      "bytes": 434855,
+      "gzipBytes": 136818
+    },
+    "d.js": {
+      "bytes": 43788,
+      "gzipBytes": 8463
+    },
+    "dagre.js": {
+      "bytes": 36852,
+      "gzipBytes": 13114
+    },
+    "dagre-GXQ25YYZ.js": {
+      "bytes": 10974,
+      "gzipBytes": 4142
+    },
+    "dark-plus.js": {
+      "bytes": 9094,
+      "gzipBytes": 2095
+    },
+    "dart.js": {
+      "bytes": 8616,
+      "gzipBytes": 1993
+    },
+    "data-grid-overlay-editor.js": {
+      "bytes": 3600,
+      "gzipBytes": 1786
+    },
+    "dax.js": {
+      "bytes": 5358,
+      "gzipBytes": 2219
+    },
+    "defaultLocale.js": {
+      "bytes": 4634,
+      "gzipBytes": 2118
+    },
+    "desktop.js": {
+      "bytes": 1826,
+      "gzipBytes": 757
+    },
+    "diagram-S7CK7UJ4.js": {
+      "bytes": 8197,
+      "gzipBytes": 3641
+    },
+    "diagram-UQ7AKVKN.js": {
+      "bytes": 6074,
+      "gzipBytes": 2561
+    },
+    "diagram-VSXAHHWV.js": {
+      "bytes": 10652,
+      "gzipBytes": 4109
+    },
+    "diagram-VX7I27RA.js": {
+      "bytes": 15755,
+      "gzipBytes": 5496
+    },
+    "diagram-Z3DM3KII.js": {
+      "bytes": 4280,
+      "gzipBytes": 1842
+    },
+    "diff.js": {
+      "bytes": 2562,
+      "gzipBytes": 687
+    },
+    "dist.js": {
+      "bytes": 141969,
+      "gzipBytes": 42712
+    },
+    "dist.css": {
+      "bytes": 8107,
+      "gzipBytes": 2012
+    },
+    "docker.js": {
+      "bytes": 1734,
+      "gzipBytes": 594
+    },
+    "DocxViewer.js": {
+      "bytes": 333883,
+      "gzipBytes": 93593
+    },
+    "DocxViewer.css": {
+      "bytes": 14853,
+      "gzipBytes": 3112
+    },
+    "dotenv.js": {
+      "bytes": 1415,
+      "gzipBytes": 528
+    },
+    "dracula.js": {
+      "bytes": 21063,
+      "gzipBytes": 3999
+    },
+    "dracula-soft.js": {
+      "bytes": 21073,
+      "gzipBytes": 4031
+    },
+    "dream-maker.js": {
+      "bytes": 10462,
+      "gzipBytes": 2244
+    },
+    "ebnfDiagram-PWID7BFC.js": {
+      "bytes": 2059,
+      "gzipBytes": 887
+    },
+    "edge.js": {
+      "bytes": 2306,
+      "gzipBytes": 674
+    },
+    "elixir.js": {
+      "bytes": 16264,
+      "gzipBytes": 2759
+    },
+    "elm.js": {
+      "bytes": 10946,
+      "gzipBytes": 2105
+    },
+    "emacs-lisp.js": {
+      "bytes": 779873,
+      "gzipBytes": 196040
+    },
+    "erb.js": {
+      "bytes": 2136,
+      "gzipBytes": 622
+    },
+    "erDiagram-RLTQ6QDP.js": {
+      "bytes": 30690,
+      "gzipBytes": 10505
+    },
+    "erlang.js": {
+      "bytes": 37477,
+      "gzipBytes": 4402
+    },
+    "eventmodeling-NTZA5JFV.js": {
+      "bytes": 132,
+      "gzipBytes": 133
+    },
+    "everforest-dark.js": {
+      "bytes": 53742,
+      "gzipBytes": 8415
+    },
+    "everforest-light.js": {
+      "bytes": 53745,
+      "gzipBytes": 8414
+    },
+    "fennel.js": {
+      "bytes": 4761,
+      "gzipBytes": 1526
+    },
+    "fish.js": {
+      "bytes": 13031,
+      "gzipBytes": 1728
+    },
+    "flowDiagram-HODETNUW.js": {
+      "bytes": 575,
+      "gzipBytes": 314
+    },
+    "fluent.js": {
+      "bytes": 3603,
+      "gzipBytes": 893
+    },
+    "fortran-fixed-form.js": {
+      "bytes": 1662,
+      "gzipBytes": 687
+    },
+    "fortran-free-form.js": {
+      "bytes": 88962,
+      "gzipBytes": 11256
+    },
+    "fsharp.js": {
+      "bytes": 25302,
+      "gzipBytes": 4131
+    },
+    "ganttDiagram-EL5Y4UJY.js": {
+      "bytes": 69352,
+      "gzipBytes": 22555
+    },
+    "gdresource.js": {
+      "bytes": 5282,
+      "gzipBytes": 1333
+    },
+    "gdscript.js": {
+      "bytes": 18985,
+      "gzipBytes": 3741
+    },
+    "gdshader.js": {
+      "bytes": 6319,
+      "gzipBytes": 1723
+    },
+    "genie.js": {
+      "bytes": 3349,
+      "gzipBytes": 1202
+    },
+    "gherkin.js": {
+      "bytes": 11939,
+      "gzipBytes": 5045
+    },
+    "git-commit.js": {
+      "bytes": 1227,
+      "gzipBytes": 522
+    },
+    "git-rebase.js": {
+      "bytes": 985,
+      "gzipBytes": 441
+    },
+    "gitGraph-4MIJSDKK.js": {
+      "bytes": 127,
+      "gzipBytes": 130
+    },
+    "gitGraphDiagram-WWUBYQGX.js": {
+      "bytes": 29008,
+      "gzipBytes": 8517
+    },
+    "github-dark.js": {
+      "bytes": 11402,
+      "gzipBytes": 2547
+    },
+    "github-dark-default.js": {
+      "bytes": 14432,
+      "gzipBytes": 3126
+    },
+    "github-dark-dimmed.js": {
+      "bytes": 14430,
+      "gzipBytes": 3120
+    },
+    "github-dark-high-contrast.js": {
+      "bytes": 14592,
+      "gzipBytes": 3083
+    },
+    "github-light-default.js": {
+      "bytes": 14153,
+      "gzipBytes": 3035
+    },
+    "github-light.js": {
+      "bytes": 11181,
+      "gzipBytes": 2504
+    },
+    "github-light-high-contrast.js": {
+      "bytes": 14272,
+      "gzipBytes": 3017
+    },
+    "gleam.js": {
+      "bytes": 2570,
+      "gzipBytes": 814
+    },
+    "glimmer-js.js": {
+      "bytes": 20083,
+      "gzipBytes": 2947
+    },
+    "glimmer-ts.js": {
+      "bytes": 20083,
+      "gzipBytes": 2941
+    },
+    "glsl.js": {
+      "bytes": 3699,
+      "gzipBytes": 1446
+    },
+    "gn.js": {
+      "bytes": 3995,
+      "gzipBytes": 1481
+    },
+    "gnuplot.js": {
+      "bytes": 14776,
+      "gzipBytes": 3263
+    },
+    "go.js": {
+      "bytes": 46811,
+      "gzipBytes": 5170
+    },
+    "graphlib.js": {
+      "bytes": 23904,
+      "gzipBytes": 8276
+    },
+    "graphql.js": {
+      "bytes": 18087,
+      "gzipBytes": 2563
+    },
+    "groovy.js": {
+      "bytes": 19172,
+      "gzipBytes": 3592
+    },
+    "gruvbox-dark-hard.js": {
+      "bytes": 22630,
+      "gzipBytes": 4170
+    },
+    "gruvbox-dark-medium.js": {
+      "bytes": 22634,
+      "gzipBytes": 4173
+    },
+    "gruvbox-dark-soft.js": {
+      "bytes": 22630,
+      "gzipBytes": 4169
+    },
+    "gruvbox-light-hard.js": {
+      "bytes": 22633,
+      "gzipBytes": 4179
+    },
+    "gruvbox-light-medium.js": {
+      "bytes": 22637,
+      "gzipBytes": 4179
+    },
+    "gruvbox-light-soft.js": {
+      "bytes": 22633,
+      "gzipBytes": 4178
+    },
+    "hack.js": {
+      "bytes": 80184,
+      "gzipBytes": 26169
+    },
+    "haml.js": {
+      "bytes": 8338,
+      "gzipBytes": 1852
+    },
+    "handlebars.js": {
+      "bytes": 12162,
+      "gzipBytes": 2376
+    },
+    "haskell.js": {
+      "bytes": 41483,
+      "gzipBytes": 6429
+    },
+    "haxe.js": {
+      "bytes": 35157,
+      "gzipBytes": 5903
+    },
+    "hcl.js": {
+      "bytes": 10046,
+      "gzipBytes": 1925
+    },
+    "hjson.js": {
+      "bytes": 12046,
+      "gzipBytes": 1635
+    },
+    "hlsl.js": {
+      "bytes": 7257,
+      "gzipBytes": 2181
+    },
+    "horizon-bright.js": {
+      "bytes": 8784,
+      "gzipBytes": 1962
+    },
+    "horizon.js": {
+      "bytes": 8777,
+      "gzipBytes": 1951
+    },
+    "houston.js": {
+      "bytes": 35419,
+      "gzipBytes": 5778
+    },
+    "html.js": {
+      "bytes": 57322,
+      "gzipBytes": 11728
+    },
+    "html-derivative.js": {
+      "bytes": 843,
+      "gzipBytes": 457
+    },
+    "html2canvas.js": {
+      "bytes": 199494,
+      "gzipBytes": 46560
+    },
+    "http.js": {
+      "bytes": 4416,
+      "gzipBytes": 1058
+    },
+    "hurl.js": {
+      "bytes": 3514,
+      "gzipBytes": 1098
+    },
+    "hxml.js": {
+      "bytes": 1740,
+      "gzipBytes": 877
+    },
+    "hy.js": {
+      "bytes": 2641,
+      "gzipBytes": 1175
+    },
+    "imba.js": {
+      "bytes": 49923,
+      "gzipBytes": 9447
+    },
+    "index.js": {
+      "bytes": 2073797,
+      "gzipBytes": 616861
+    },
+    "index.css": {
+      "bytes": 59945,
+      "gzipBytes": 14619
+    },
+    "index.es.js": {
+      "bytes": 151296,
+      "gzipBytes": 48490
+    },
+    "info-A6RAGUB7.js": {
+      "bytes": 123,
+      "gzipBytes": 128
+    },
+    "infoDiagram-27XIBGKW.js": {
+      "bytes": 656,
+      "gzipBytes": 419
+    },
+    "ini.js": {
+      "bytes": 1518,
+      "gzipBytes": 493
+    },
+    "init.js": {
+      "bytes": 140,
+      "gzipBytes": 125
+    },
+    "ishikawaDiagram-5VMMS53U.js": {
+      "bytes": 17311,
+      "gzipBytes": 6505
+    },
+    "java.js": {
+      "bytes": 27285,
+      "gzipBytes": 4317
+    },
+    "javascript.js": {
+      "bytes": 174893,
+      "gzipBytes": 16566
+    },
+    "jinja.js": {
+      "bytes": 5628,
+      "gzipBytes": 1360
+    },
+    "jison.js": {
+      "bytes": 9692,
+      "gzipBytes": 1851
+    },
+    "journeyDiagram-3NMN7TZE.js": {
+      "bytes": 23158,
+      "gzipBytes": 8132
+    },
+    "json.js": {
+      "bytes": 2890,
+      "gzipBytes": 826
+    },
+    "json5.js": {
+      "bytes": 3247,
+      "gzipBytes": 826
+    },
+    "jsonc.js": {
+      "bytes": 3102,
+      "gzipBytes": 789
+    },
+    "jsonl.js": {
+      "bytes": 3004,
+      "gzipBytes": 785
+    },
+    "jsonnet.js": {
+      "bytes": 3611,
+      "gzipBytes": 1038
+    },
+    "jssm.js": {
+      "bytes": 2231,
+      "gzipBytes": 615
+    },
+    "jsx.js": {
+      "bytes": 177858,
+      "gzipBytes": 16660
+    },
+    "jszip.min.js": {
+      "bytes": 95809,
+      "gzipBytes": 28260
+    },
+    "julia.js": {
+      "bytes": 30998,
+      "gzipBytes": 4286
+    },
+    "just.js": {
+      "bytes": 10769,
+      "gzipBytes": 2595
+    },
+    "kanagawa-dragon.js": {
+      "bytes": 17124,
+      "gzipBytes": 2943
+    },
+    "kanagawa-lotus.js": {
+      "bytes": 17123,
+      "gzipBytes": 2927
+    },
+    "kanagawa-wave.js": {
+      "bytes": 17120,
+      "gzipBytes": 2924
+    },
+    "kanban-definition-UXKFOSKX.js": {
+      "bytes": 20262,
+      "gzipBytes": 7125
+    },
+    "kdl.js": {
+      "bytes": 3622,
+      "gzipBytes": 1036
+    },
+    "kotlin.js": {
+      "bytes": 8778,
+      "gzipBytes": 2124
+    },
+    "kusto.js": {
+      "bytes": 15166,
+      "gzipBytes": 3912
+    },
+    "laserwave.js": {
+      "bytes": 11496,
+      "gzipBytes": 2572
+    },
+    "latex.js": {
+      "bytes": 72617,
+      "gzipBytes": 6702
+    },
+    "lean.js": {
+      "bytes": 5777,
+      "gzipBytes": 1908
+    },
+    "less.js": {
+      "bytes": 97626,
+      "gzipBytes": 14689
+    },
+    "light-plus.js": {
+      "bytes": 9938,
+      "gzipBytes": 2270
+    },
+    "line.js": {
+      "bytes": 943,
+      "gzipBytes": 471
+    },
+    "linear.js": {
+      "bytes": 5517,
+      "gzipBytes": 2251
+    },
+    "liquid.js": {
+      "bytes": 18101,
+      "gzipBytes": 3154
+    },
+    "llvm.js": {
+      "bytes": 5043,
+      "gzipBytes": 2005
+    },
+    "log.js": {
+      "bytes": 2845,
+      "gzipBytes": 891
+    },
+    "logo.js": {
+      "bytes": 3120,
+      "gzipBytes": 1462
+    },
+    "lua.js": {
+      "bytes": 15600,
+      "gzipBytes": 3202
+    },
+    "luau.js": {
+      "bytes": 13957,
+      "gzipBytes": 3172
+    },
+    "make.js": {
+      "bytes": 8954,
+      "gzipBytes": 1759
+    },
+    "markdown.js": {
+      "bytes": 59328,
+      "gzipBytes": 5635
+    },
+    "MarkdownViewer.js": {
+      "bytes": 783,
+      "gzipBytes": 503
+    },
+    "marko.js": {
+      "bytes": 25486,
+      "gzipBytes": 3590
+    },
+    "material-theme.js": {
+      "bytes": 18612,
+      "gzipBytes": 3109
+    },
+    "material-theme-darker.js": {
+      "bytes": 18626,
+      "gzipBytes": 3109
+    },
+    "material-theme-lighter.js": {
+      "bytes": 18631,
+      "gzipBytes": 3109
+    },
+    "material-theme-ocean.js": {
+      "bytes": 18626,
+      "gzipBytes": 3130
+    },
+    "material-theme-palenight.js": {
+      "bytes": 18632,
+      "gzipBytes": 3123
+    },
+    "matlab.js": {
+      "bytes": 16079,
+      "gzipBytes": 3057
+    },
+    "mdc.js": {
+      "bytes": 19543,
+      "gzipBytes": 6621
+    },
+    "mdx.js": {
+      "bytes": 136107,
+      "gzipBytes": 23343
+    },
+    "mermaid.js": {
+      "bytes": 29504,
+      "gzipBytes": 3652
+    },
+    "mermaid-parser.core.js": {
+      "bytes": 16747,
+      "gzipBytes": 3929
+    },
+    "mermaid.core.js": {
+      "bytes": 95099,
+      "gzipBytes": 32383
+    },
+    "min-dark.js": {
+      "bytes": 6288,
+      "gzipBytes": 1705
+    },
+    "min-light.js": {
+      "bytes": 6966,
+      "gzipBytes": 1885
+    },
+    "mindmap-definition-YA3MSWOX.js": {
+      "bytes": 23440,
+      "gzipBytes": 7969
+    },
+    "mipsasm.js": {
+      "bytes": 3252,
+      "gzipBytes": 1170
+    },
+    "mojo.js": {
+      "bytes": 69792,
+      "gzipBytes": 9258
+    },
+    "monokai.js": {
+      "bytes": 7881,
+      "gzipBytes": 1904
+    },
+    "moonbit.js": {
+      "bytes": 5893,
+      "gzipBytes": 1672
+    },
+    "move.js": {
+      "bytes": 17498,
+      "gzipBytes": 3060
+    },
+    "narrat.js": {
+      "bytes": 3665,
+      "gzipBytes": 1099
+    },
+    "nextflow.js": {
+      "bytes": 4507,
+      "gzipBytes": 1162
+    },
+    "nextflow-groovy.js": {
+      "bytes": 10431,
+      "gzipBytes": 2135
+    },
+    "nginx.js": {
+      "bytes": 35352,
+      "gzipBytes": 4410
+    },
+    "night-owl.js": {
+      "bytes": 28910,
+      "gzipBytes": 5151
+    },
+    "night-owl-light.js": {
+      "bytes": 25899,
+      "gzipBytes": 4253
+    },
+    "nim.js": {
+      "bytes": 22455,
+      "gzipBytes": 3145
+    },
+    "nix.js": {
+      "bytes": 15504,
+      "gzipBytes": 2475
+    },
+    "nord.js": {
+      "bytes": 26720,
+      "gzipBytes": 4389
+    },
+    "number-overlay-editor.js": {
+      "bytes": 16084,
+      "gzipBytes": 6071
+    },
+    "nushell.js": {
+      "bytes": 20406,
+      "gzipBytes": 5210
+    },
+    "objective-c.js": {
+      "bytes": 105406,
+      "gzipBytes": 23316
+    },
+    "objective-cpp.js": {
+      "bytes": 171965,
+      "gzipBytes": 30614
+    },
+    "ocaml.js": {
+      "bytes": 62442,
+      "gzipBytes": 5011
+    },
+    "odin.js": {
+      "bytes": 16506,
+      "gzipBytes": 2931
+    },
+    "OdpViewer.js": {
+      "bytes": 11629,
+      "gzipBytes": 4283
+    },
+    "OdsViewer.js": {
+      "bytes": 75,
+      "gzipBytes": 86
+    },
+    "OdtViewer.js": {
+      "bytes": 2274,
+      "gzipBytes": 1184
+    },
+    "OdtViewer.css": {
+      "bytes": 827,
+      "gzipBytes": 389
+    },
+    "one-dark-pro.js": {
+      "bytes": 33784,
+      "gzipBytes": 5514
+    },
+    "one-light.js": {
+      "bytes": 25297,
+      "gzipBytes": 3668
+    },
+    "openscad.js": {
+      "bytes": 2817,
+      "gzipBytes": 1003
+    },
+    "ordinal.js": {
+      "bytes": 1174,
+      "gzipBytes": 563
+    },
+    "packet-AYTQ26CC.js": {
+      "bytes": 125,
+      "gzipBytes": 128
+    },
+    "pascal.js": {
+      "bytes": 4143,
+      "gzipBytes": 1664
+    },
+    "path.js": {
+      "bytes": 2278,
+      "gzipBytes": 977
+    },
+    "pdf.js": {
+      "bytes": 487967,
+      "gzipBytes": 146991
+    },
+    "PdfViewer.css": {
+      "bytes": 8707,
+      "gzipBytes": 1981
+    },
+    "PdfViewer.js": {
+      "bytes": 28796,
+      "gzipBytes": 9570
+    },
+    "pegDiagram-XKGWAZYB.js": {
+      "bytes": 2011,
+      "gzipBytes": 939
+    },
+    "perl.js": {
+      "bytes": 43146,
+      "gzipBytes": 4656
+    },
+    "php.js": {
+      "bytes": 111314,
+      "gzipBytes": 28520
+    },
+    "pie-WAS4IAKB.js": {
+      "bytes": 122,
+      "gzipBytes": 127
+    },
+    "pieDiagram-E7YTZNPT.js": {
+      "bytes": 6226,
+      "gzipBytes": 2593
+    },
+    "pkl.js": {
+      "bytes": 10365,
+      "gzipBytes": 1375
+    },
+    "plastic.js": {
+      "bytes": 9292,
+      "gzipBytes": 1973
+    },
+    "plsql.js": {
+      "bytes": 8505,
+      "gzipBytes": 2988
+    },
+    "po.js": {
+      "bytes": 3232,
+      "gzipBytes": 903
+    },
+    "poimandres.js": {
+      "bytes": 33491,
+      "gzipBytes": 5493
+    },
+    "polar.js": {
+      "bytes": 4664,
+      "gzipBytes": 1119
+    },
+    "postcss.js": {
+      "bytes": 6410,
+      "gzipBytes": 1907
+    },
+    "powerquery.js": {
+      "bytes": 5896,
+      "gzipBytes": 1514
+    },
+    "powershell.js": {
+      "bytes": 20144,
+      "gzipBytes": 4060
+    },
+    "PptxViewer.js": {
+      "bytes": 18416,
+      "gzipBytes": 6741
+    },
+    "printer.js": {
+      "bytes": 319,
+      "gzipBytes": 236
+    },
+    "prisma.js": {
+      "bytes": 6323,
+      "gzipBytes": 1384
+    },
+    "prolog.js": {
+      "bytes": 11349,
+      "gzipBytes": 3826
+    },
+    "proto.js": {
+      "bytes": 6541,
+      "gzipBytes": 1409
+    },
+    "pug.js": {
+      "bytes": 13849,
+      "gzipBytes": 2578
+    },
+    "puppet.js": {
+      "bytes": 11430,
+      "gzipBytes": 2108
+    },
+    "purescript.js": {
+      "bytes": 24679,
+      "gzipBytes": 3239
+    },
+    "purify.es.js": {
+      "bytes": 26928,
+      "gzipBytes": 10648
+    },
+    "python.js": {
+      "bytes": 69945,
+      "gzipBytes": 9124
+    },
+    "qml.js": {
+      "bytes": 5338,
+      "gzipBytes": 1380
+    },
+    "qmldir.js": {
+      "bytes": 995,
+      "gzipBytes": 445
+    },
+    "qss.js": {
+      "bytes": 7465,
+      "gzipBytes": 2567
+    },
+    "quadrantDiagram-AXDQQJYC.js": {
+      "bytes": 33515,
+      "gzipBytes": 9704
+    },
+    "r.js": {
+      "bytes": 6607,
+      "gzipBytes": 1830
+    },
+    "racket.js": {
+      "bytes": 92382,
+      "gzipBytes": 15010
+    },
+    "radar-RG4KPBEZ.js": {
+      "bytes": 124,
+      "gzipBytes": 128
+    },
+    "railroad-74A4TZTK.js": {
+      "bytes": 127,
+      "gzipBytes": 130
+    },
+    "railroad-abnf-HS5TGJTU.js": {
+      "bytes": 131,
+      "gzipBytes": 134
+    },
+    "railroad-ebnf-LZEXJU2U.js": {
+      "bytes": 131,
+      "gzipBytes": 133
+    },
+    "railroad-peg-WCYAUIDC.js": {
+      "bytes": 130,
+      "gzipBytes": 132
+    },
+    "railroadDiagram-O6MQD6OU.js": {
+      "bytes": 1659,
+      "gzipBytes": 766
+    },
+    "raku.js": {
+      "bytes": 10465,
+      "gzipBytes": 2937
+    },
+    "razor.js": {
+      "bytes": 27453,
+      "gzipBytes": 3530
+    },
+    "react.js": {
+      "bytes": 7532,
+      "gzipBytes": 2885
+    },
+    "react-window.js": {
+      "bytes": 8588,
+      "gzipBytes": 3252
+    },
+    "reader.js": {
+      "bytes": 26382,
+      "gzipBytes": 8112
+    },
+    "red.js": {
+      "bytes": 6259,
+      "gzipBytes": 1596
+    },
+    "reg.js": {
+      "bytes": 2338,
+      "gzipBytes": 691
+    },
+    "regexp.js": {
+      "bytes": 8054,
+      "gzipBytes": 1468
+    },
+    "rel.js": {
+      "bytes": 3361,
+      "gzipBytes": 1101
+    },
+    "requirementDiagram-BXWQKSXE.js": {
+      "bytes": 31000,
+      "gzipBytes": 9709
+    },
+    "riscv.js": {
+      "bytes": 6907,
+      "gzipBytes": 1972
+    },
+    "rolldown-runtime.js": {
+      "bytes": 1106,
+      "gzipBytes": 627
+    },
+    "ron.js": {
+      "bytes": 3907,
+      "gzipBytes": 975
+    },
+    "rose-pine.js": {
+      "bytes": 21740,
+      "gzipBytes": 3865
+    },
+    "rose-pine-dawn.js": {
+      "bytes": 21751,
+      "gzipBytes": 3883
+    },
+    "rose-pine-moon.js": {
+      "bytes": 21750,
+      "gzipBytes": 3884
+    },
+    "rosmsg.js": {
+      "bytes": 4516,
+      "gzipBytes": 1052
+    },
+    "rough.esm.js": {
+      "bytes": 27109,
+      "gzipBytes": 8785
+    },
+    "rst.js": {
+      "bytes": 10310,
+      "gzipBytes": 2242
+    },
+    "rtf.js.js": {
+      "bytes": 2236438,
+      "gzipBytes": 841149
+    },
+    "RtfViewer.css": {
+      "bytes": 266,
+      "gzipBytes": 193
+    },
+    "RtfViewer.js": {
+      "bytes": 1664,
+      "gzipBytes": 928
+    },
+    "ruby.js": {
+      "bytes": 46603,
+      "gzipBytes": 5761
+    },
+    "rust.js": {
+      "bytes": 15062,
+      "gzipBytes": 2709
+    },
+    "sankeyDiagram-P5KCCOFB.js": {
+      "bytes": 22792,
+      "gzipBytes": 8216
+    },
+    "sas.js": {
+      "bytes": 9064,
+      "gzipBytes": 3813
+    },
+    "sass.js": {
+      "bytes": 9282,
+      "gzipBytes": 2485
+    },
+    "scala.js": {
+      "bytes": 28877,
+      "gzipBytes": 3928
+    },
+    "scheme.js": {
+      "bytes": 7162,
+      "gzipBytes": 2046
+    },
+    "scss.js": {
+      "bytes": 27269,
+      "gzipBytes": 4241
+    },
+    "sdbl.js": {
+      "bytes": 4695,
+      "gzipBytes": 2003
+    },
+    "sequenceDiagram-WJ2MYXX4.js": {
+      "bytes": 115744,
+      "gzipBytes": 30378
+    },
+    "shaderlab.js": {
+      "bytes": 5919,
+      "gzipBytes": 2077
+    },
+    "shellscript.js": {
+      "bytes": 41545,
+      "gzipBytes": 6144
+    },
+    "shellsession.js": {
+      "bytes": 713,
+      "gzipBytes": 430
+    },
+    "sizeCapture-INFHLROL.js": {
+      "bytes": 875,
+      "gzipBytes": 511
+    },
+    "sizeThresholds.js": {
+      "bytes": 59,
+      "gzipBytes": 71
+    },
+    "slack-dark.js": {
+      "bytes": 9114,
+      "gzipBytes": 1963
+    },
+    "slack-ochin.js": {
+      "bytes": 9428,
+      "gzipBytes": 2091
+    },
+    "smalltalk.js": {
+      "bytes": 6580,
+      "gzipBytes": 1615
+    },
+    "snazzy-light.js": {
+      "bytes": 20770,
+      "gzipBytes": 3826
+    },
+    "solarized-dark.js": {
+      "bytes": 6843,
+      "gzipBytes": 1792
+    },
+    "solarized-light.js": {
+      "bytes": 6477,
+      "gzipBytes": 1726
+    },
+    "solidity.js": {
+      "bytes": 16067,
+      "gzipBytes": 3103
+    },
+    "soy.js": {
+      "bytes": 6924,
+      "gzipBytes": 1617
+    },
+    "sparql.js": {
+      "bytes": 1477,
+      "gzipBytes": 810
+    },
+    "splunk.js": {
+      "bytes": 3429,
+      "gzipBytes": 1513
+    },
+    "SpreadsheetViewer.js": {
+      "bytes": 367778,
+      "gzipBytes": 123671
+    },
+    "spreadsheetWorker.worker.js": {
+      "bytes": 364355,
+      "gzipBytes": 122136
+    },
+    "sql.js": {
+      "bytes": 23473,
+      "gzipBytes": 7452
+    },
+    "src.js": {
+      "bytes": 45680,
+      "gzipBytes": 15908
+    },
+    "ssh-config.js": {
+      "bytes": 3610,
+      "gzipBytes": 1594
+    },
+    "stata.js": {
+      "bytes": 56993,
+      "gzipBytes": 12363
+    },
+    "stateDiagram-D77RDMKH.js": {
+      "bytes": 10644,
+      "gzipBytes": 3732
+    },
+    "stateDiagram-v2-MP3YSRHH.js": {
+      "bytes": 781,
+      "gzipBytes": 451
+    },
+    "stylus.js": {
+      "bytes": 31067,
+      "gzipBytes": 7978
+    },
+    "surrealql.js": {
+      "bytes": 22585,
+      "gzipBytes": 4315
+    },
+    "svelte.js": {
+      "bytes": 18249,
+      "gzipBytes": 3141
+    },
+    "swift.js": {
+      "bytes": 86680,
+      "gzipBytes": 14724
+    },
+    "swimlanes-42K2YHIH.js": {
+      "bytes": 111119,
+      "gzipBytes": 37570
+    },
+    "swimlanesDiagram-VR7AAH4N.js": {
+      "bytes": 834,
+      "gzipBytes": 484
+    },
+    "synthwave-84.js": {
+      "bytes": 14033,
+      "gzipBytes": 2862
+    },
+    "system-verilog.js": {
+      "bytes": 26196,
+      "gzipBytes": 4844
+    },
+    "systemd.js": {
+      "bytes": 7862,
+      "gzipBytes": 2539
+    },
+    "table.js": {
+      "bytes": 256,
+      "gzipBytes": 202
+    },
+    "talonscript.js": {
+      "bytes": 6750,
+      "gzipBytes": 1484
+    },
+    "tasl.js": {
+      "bytes": 3281,
+      "gzipBytes": 841
+    },
+    "tcl.js": {
+      "bytes": 4422,
+      "gzipBytes": 1506
+    },
+    "templ.js": {
+      "bytes": 24066,
+      "gzipBytes": 5395
+    },
+    "terraform.js": {
+      "bytes": 11382,
+      "gzipBytes": 2502
+    },
+    "tex.js": {
+      "bytes": 9671,
+      "gzipBytes": 3058
+    },
+    "textStats.js": {
+      "bytes": 1217,
+      "gzipBytes": 741
+    },
+    "TextViewer.js": {
+      "bytes": 710,
+      "gzipBytes": 418
+    },
+    "timeline-definition-24CTP7MA.js": {
+      "bytes": 30373,
+      "gzipBytes": 9926
+    },
+    "tokyo-night.js": {
+      "bytes": 35662,
+      "gzipBytes": 6230
+    },
+    "toml.js": {
+      "bytes": 6419,
+      "gzipBytes": 1275
+    },
+    "treemap-WGGIJYW6.js": {
+      "bytes": 126,
+      "gzipBytes": 129
+    },
+    "treeView-Q6P3EWNA.js": {
+      "bytes": 127,
+      "gzipBytes": 130
+    },
+    "ts-tags.js": {
+      "bytes": 16547,
+      "gzipBytes": 2046
+    },
+    "tsv.js": {
+      "bytes": 732,
+      "gzipBytes": 335
+    },
+    "TsvViewer.js": {
+      "bytes": 75,
+      "gzipBytes": 77
+    },
+    "tsx.js": {
+      "bytes": 175602,
+      "gzipBytes": 16560
+    },
+    "turtle.js": {
+      "bytes": 3693,
+      "gzipBytes": 971
+    },
+    "twig.js": {
+      "bytes": 20903,
+      "gzipBytes": 3655
+    },
+    "typescript.js": {
+      "bytes": 181146,
+      "gzipBytes": 16092
+    },
+    "typespec.js": {
+      "bytes": 25038,
+      "gzipBytes": 2620
+    },
+    "typst.js": {
+      "bytes": 8380,
+      "gzipBytes": 1662
+    },
+    "units.css": {
+      "bytes": 4110,
+      "gzipBytes": 1029
+    },
+    "units.js": {
+      "bytes": 12445,
+      "gzipBytes": 4359
+    },
+    "UnknownViewer.css": {
+      "bytes": 1616,
+      "gzipBytes": 593
+    },
+    "UnknownViewer.js": {
+      "bytes": 4111,
+      "gzipBytes": 1763
+    },
+    "v.js": {
+      "bytes": 13207,
+      "gzipBytes": 2735
+    },
+    "vala.js": {
+      "bytes": 3363,
+      "gzipBytes": 1182
+    },
+    "vb.js": {
+      "bytes": 6086,
+      "gzipBytes": 2332
+    },
+    "vennDiagram-4TSXK5OY.js": {
+      "bytes": 41157,
+      "gzipBytes": 15006
+    },
+    "verilog.js": {
+      "bytes": 5924,
+      "gzipBytes": 1886
+    },
+    "vesper.js": {
+      "bytes": 12689,
+      "gzipBytes": 1969
+    },
+    "vhdl.js": {
+      "bytes": 24257,
+      "gzipBytes": 3866
+    },
+    "viewer-spreadsheet.js": {
+      "bytes": 231184,
+      "gzipBytes": 74669
+    },
+    "viewer-spreadsheet.css": {
+      "bytes": 2981,
+      "gzipBytes": 753
+    },
+    "viml.js": {
+      "bytes": 20358,
+      "gzipBytes": 6719
+    },
+    "VirtualizedPlainText.js": {
+      "bytes": 922,
+      "gzipBytes": 526
+    },
+    "vitesse-black.js": {
+      "bytes": 13674,
+      "gzipBytes": 3055
+    },
+    "vitesse-dark.js": {
+      "bytes": 13756,
+      "gzipBytes": 3058
+    },
+    "vitesse-light.js": {
+      "bytes": 13613,
+      "gzipBytes": 3031
+    },
+    "vue.js": {
+      "bytes": 24489,
+      "gzipBytes": 2962
+    },
+    "vue-html.js": {
+      "bytes": 8474,
+      "gzipBytes": 1675
+    },
+    "vue-vine.js": {
+      "bytes": 190058,
+      "gzipBytes": 17988
+    },
+    "vyper.js": {
+      "bytes": 74641,
+      "gzipBytes": 10725
+    },
+    "wardley-WFR3VGLG.js": {
+      "bytes": 126,
+      "gzipBytes": 130
+    },
+    "wardleyDiagram-VM6X3IG4.js": {
+      "bytes": 25207,
+      "gzipBytes": 6538
+    },
+    "wasm.js": {
+      "bytes": 634325,
+      "gzipBytes": 232461
+    },
+    "wenyan.js": {
+      "bytes": 2150,
+      "gzipBytes": 1083
+    },
+    "wgsl.js": {
+      "bytes": 5137,
+      "gzipBytes": 1384
+    },
+    "wikitext.js": {
+      "bytes": 55878,
+      "gzipBytes": 4752
+    },
+    "wit.js": {
+      "bytes": 21460,
+      "gzipBytes": 2881
+    },
+    "wolfram.js": {
+      "bytes": 262384,
+      "gzipBytes": 77130
+    },
+    "XlsxViewer.js": {
+      "bytes": 76,
+      "gzipBytes": 87
+    },
+    "xml.js": {
+      "bytes": 5449,
+      "gzipBytes": 1252
+    },
+    "xsl.js": {
+      "bytes": 1360,
+      "gzipBytes": 500
+    },
+    "xychartDiagram-S5SC5T6Z.js": {
+      "bytes": 44147,
+      "gzipBytes": 12169
+    },
+    "yaml.js": {
+      "bytes": 10572,
+      "gzipBytes": 2321
+    },
+    "zenscript.js": {
+      "bytes": 3905,
+      "gzipBytes": 1277
+    },
+    "zig.js": {
+      "bytes": 5333,
+      "gzipBytes": 1547
+    },
+    "zoom-out.js": {
+      "bytes": 497,
+      "gzipBytes": 233
+    }
+  },
+  "notes": "Phase 3 baseline (post wave1+wave2), captured by scripts/capture-bundle-baseline.mjs. Superseded atlas-phase0.json, which only tracked the single main entry chunk and predated the DOCX/PDF/slides/spreadsheet viewer engines and full shiki grammar set. Chunk names are stripped of their Vite content hash (see bundleChunks.mjs) so they compare release over release."
+}

@@ -50,7 +50,27 @@ const OVERLAY_COLORS = {
 /** @type {{ color: string; symbolColor: string }} */
 let currentOverlayColors = OVERLAY_COLORS.light;
 
-const isDev = !app.isPackaged;
+// ---- Dev/prod detection (RUN-12) ---- //
+//
+// `app.isPackaged` alone used to decide this, but it only reflects whether
+// Electron was launched from an asar/packaged app — it's still `false` for
+// `npm run electron:preview` (`npm run build && electron .`), which runs the
+// unpackaged CLI against a freshly-built `dist/`. That made "preview" load
+// `http://localhost:5173` instead, silently falling back to a dev server
+// that isn't even guaranteed to be running. Key it instead on whether a
+// production build actually exists on disk, with an explicit env override
+// for the rare case a caller wants to force one mode or the other (e.g. a
+// packaged debug build that should still point at a local dev server, or
+// vice versa).
+const DIST_INDEX_PATH = path.join(app.getAppPath(), 'dist', 'index.html');
+
+function resolveIsDev() {
+  if (process.env.ATLAS_DEV === '1') return true;
+  if (process.env.ATLAS_DEV === '0') return false;
+  return !fs.existsSync(DIST_INDEX_PATH);
+}
+
+const isDev = resolveIsDev();
 
 // ---- Path allowlist (P1.2 / ELEC-02, ELEC-03, ELEC-25) ---- //
 //
@@ -498,8 +518,7 @@ function createWindow() {
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
   } else {
-    const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
-    mainWindow.loadFile(indexPath);
+    mainWindow.loadFile(DIST_INDEX_PATH);
   }
 
   // Fallback: show window after 5s even if ready-to-show never fires (e.g. loadFile failure)

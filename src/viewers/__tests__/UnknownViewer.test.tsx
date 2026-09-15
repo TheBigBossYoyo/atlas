@@ -10,6 +10,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 import { UnknownViewer } from '../UnknownViewer'
 import type { LoadedFile } from '../../formats/types'
+import { createMockElectronAPI } from '../../__tests__/mocks/electronAPI'
 
 function makeBinaryFile(bytes: ReadonlyArray<number>, path = 'C:/Users/test/mystery.bin'): LoadedFile {
   return {
@@ -65,7 +66,7 @@ describe('UnknownViewer', () => {
 
   it('reveal in folder calls the IPC bridge with the file path', async () => {
     const revealInFolder = vi.fn().mockResolvedValue({ ok: true })
-    window.electronAPI = { revealInFolder } as unknown as typeof window.electronAPI
+    window.electronAPI = createMockElectronAPI({ revealInFolder })
 
     render(<UnknownViewer file={makeBinaryFile([1, 2, 3], 'C:/docs/weird.xyz')} />)
     fireEvent.click(screen.getByRole('button', { name: /reveal in folder/i }))
@@ -77,7 +78,7 @@ describe('UnknownViewer', () => {
 
   it('shows a friendly error when reveal in folder fails', async () => {
     const revealInFolder = vi.fn().mockResolvedValue({ ok: false })
-    window.electronAPI = { revealInFolder } as unknown as typeof window.electronAPI
+    window.electronAPI = createMockElectronAPI({ revealInFolder })
 
     render(<UnknownViewer file={makeBinaryFile([1, 2, 3], 'C:/docs/weird.xyz')} />)
     fireEvent.click(screen.getByRole('button', { name: /reveal in folder/i }))

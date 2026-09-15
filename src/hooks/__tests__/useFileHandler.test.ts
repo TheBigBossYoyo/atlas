@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useFileHandler, type UseFileHandlerOptions } from '../useFileHandler';
+import { createMockElectronAPI } from '../../__tests__/mocks/electronAPI';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -33,34 +34,15 @@ function renderFileHandler(overrides: Partial<UseFileHandlerOptions> = {}) {
 
 // ---------------------------------------------------------------------------
 // Default mock factory — override per test as needed
+//
+// P4.8/QA-25 — this used to be a hand-rolled literal local to this file;
+// it's now the shared `createMockElectronAPI()` fixture (this file is where
+// that fixture's shape was lifted from, being the most-representative
+// consumer). Kept as a thin local alias so the many call sites below didn't
+// all need renaming.
 // ---------------------------------------------------------------------------
 
-function buildElectronAPI(overrides: Partial<typeof window.electronAPI> = {}): typeof window.electronAPI {
-  return {
-    getInitialFile: vi.fn().mockResolvedValue(null),
-    openFileDialog: vi.fn().mockResolvedValue(null),
-    openFileByPath: vi.fn().mockResolvedValue({ content: '', name: 'file', path: '' }),
-    saveFile: vi.fn().mockResolvedValue({ saved: false }),
-    onFileOpened: vi.fn().mockReturnValue(() => {}),
-    setTheme: vi.fn(),
-    openFileBinary: vi.fn().mockResolvedValue({ canceled: true, path: '', buffer: new ArrayBuffer(0) }),
-    readBinaryByPath: vi.fn().mockResolvedValue({ path: '', buffer: new ArrayBuffer(0) }),
-    onFileOpenedPath: vi.fn().mockReturnValue(() => {}),
-    getPathForFile: vi.fn(),
-    registerDroppedPath: vi.fn().mockResolvedValue({ ok: true }),
-    requestOpenRecent: vi.fn().mockResolvedValue({ ok: true }),
-    revealInFolder: vi.fn().mockResolvedValue({ ok: true }),
-    image: { pick: vi.fn() },
-    spellcheck: {
-      onContextMenu: vi.fn().mockReturnValue(() => {}),
-      replaceMisspelling: vi.fn(),
-      addWord: vi.fn(),
-      getLanguages: vi.fn().mockResolvedValue({ available: [], enabled: [] }),
-      setLanguages: vi.fn().mockResolvedValue({ ok: true }),
-    },
-    ...overrides,
-  } as typeof window.electronAPI;
-}
+const buildElectronAPI = createMockElectronAPI;
 
 // ---------------------------------------------------------------------------
 // Setup / teardown
