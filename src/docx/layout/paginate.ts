@@ -497,6 +497,15 @@ function resolveFullContentWidthPt(sectionLayout: ResolvedSectionLayout): number
  * a header/footer's content isn't subject to page breaking, so it doesn't
  * need `ParagraphUnit`'s keep-together/leading-gap bookkeeping, just the
  * same itemize/measure pipeline body paragraphs go through.
+ *
+ * Each returned line still carries its own `leftOffsetPt` (indent +
+ * center/right alignment — see `computeParagraphLineOffsetPt`): unlike body
+ * content, this flat line list never passes through `placeLineSlice`'s
+ * per-line placement (the only other place that offset gets computed), so
+ * without it every header/footer paragraph would render flush left
+ * regardless of its own indent or `w:jc` — silently dropping a `center`- or
+ * `right`-aligned header/footer paragraph's alignment (a common real-world
+ * case: e.g. a simple centered or right-aligned page-number footer).
  */
 async function buildBlockGroupLines(
   input: PaginatorInput,
@@ -517,20 +526,32 @@ async function buildBlockGroupLines(
     )
     const tabStops = buildTabStops(paraProps, false)
 
-    lines.push(
-      ...(await breakLines({
-        paragraph: block,
-        paraProps,
-        runs: collectParagraphRuns(block.children, block.props?.pStyle, input.document, styleCache),
-        availableWidth: contentWidthPt,
-        fontResolver: input.fontResolver,
-        tabStops,
-        theme: input.theme,
-      })),
-    )
+    const paragraphLines = await breakLines({
+      paragraph: block,
+      paraProps,
+      runs: collectParagraphRuns(block.children, block.props?.pStyle, input.document, styleCache),
+      availableWidth: contentWidthPt,
+      fontResolver: input.fontResolver,
+      tabStops,
+      theme: input.theme,
+    })
+
+    lines.push(...attachParagraphLineOffsets(paragraphLines, paraProps, contentWidthPt))
   }
 
   return lines
+}
+
+/** Stashes each line's `leftOffsetPt` (see `LineBox`'s own doc comment) for content that renders its lines directly instead of through `placeLineSlice`. */
+function attachParagraphLineOffsets(
+  lines: ReadonlyArray<LineBox>,
+  paraProps: EffectiveParaProps,
+  columnWidthPt: number,
+): ReadonlyArray<LineBox> {
+  return lines.map((line, lineIndex) => ({
+    ...line,
+    leftOffsetPt: computeParagraphLineOffsetPt(paraProps, columnWidthPt, lineIndex, line),
+  }))
 }
 
 /**
@@ -1384,10 +1405,29 @@ function placeLineSlice(
  * see D5).
  */
 function computeLineLeftOffsetPt(unit: ParagraphUnit, lineIndex: number, line: LineBox): number {
-  const leftIndentPt = resolveLeftIndentPt(unit.paraProps.ind)
-  const lineIndentExtraPt = resolveLineIndentExtraPt(unit.paraProps.ind, lineIndex)
-  const lineLimitPt = Math.max(0, unit.columnWidthPt - leftIndentPt - lineIndentExtraPt)
-  const alignmentOffsetPt = resolveAlignmentOffsetPt(unit.paraProps.jc, lineLimitPt, line.width)
+  return computeParagraphLineOffsetPt(unit.paraProps, unit.columnWidthPt, lineIndex, line)
+}
+
+/**
+ * Same computation as `computeLineLeftOffsetPt`, but taking `paraProps`/
+ * `columnWidthPt` directly instead of a `ParagraphUnit` — reused by
+ * `buildBlockGroupLines` (header/footer content) and
+ * `buildFootnoteContentLines` (footnote body content), neither of which
+ * builds a `ParagraphUnit` or flows through `placeLineSlice`'s per-line
+ * placement, but both of which still need each line's indent/alignment
+ * offset (stashed on the `LineBox` itself as `leftOffsetPt` — see its own
+ * doc comment) since their lines render directly rather than being placed.
+ */
+function computeParagraphLineOffsetPt(
+  paraProps: EffectiveParaProps,
+  columnWidthPt: number,
+  lineIndex: number,
+  line: LineBox,
+): number {
+  const leftIndentPt = resolveLeftIndentPt(paraProps.ind)
+  const lineIndentExtraPt = resolveLineIndentExtraPt(paraProps.ind, lineIndex)
+  const lineLimitPt = Math.max(0, columnWidthPt - leftIndentPt - lineIndentExtraPt)
+  const alignmentOffsetPt = resolveAlignmentOffsetPt(paraProps.jc, lineLimitPt, line.width)
 
   return leftIndentPt + lineIndentExtraPt + alignmentOffsetPt
 }
@@ -1882,18 +1922,25 @@ async function buildFootnoteContentLines(
       paragraphIndex === 0 ? await buildNoteMarkerLeadingItems(input, 'footnote', footnote.id, mark) : []
     const tabStops = buildTabStops(paraProps, leadingItems.length > 0)
 
-    lines.push(
-      ...(await breakLines({
-        paragraph,
-        paraProps,
-        runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, input.document, styleCache),
-        availableWidth: contentWidthPt,
-        fontResolver: input.fontResolver,
-        tabStops,
-        theme: input.theme,
-        ...(leadingItems.length > 0 ? { leadingItems } : {}),
-      })),
-    )
+    const paragraphLines = await breakLines({
+      paragraph,
+      paraProps,
+      runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, input.document, styleCache),
+      availableWidth: contentWidthPt,
+      fontResolver: input.fontResolver,
+      tabStops,
+      theme: input.theme,
+      ...(leadingItems.length > 0 ? { leadingItems } : {}),
+    })
+
+    // See `buildBlockGroupLines`'s doc comment on `leftOffsetPt` — footnote
+    // content is rendered directly from this flat line list
+    // (`buildPageFootnoteLines`), never through `placeLineSlice`, so
+    // without this every footnote paragraph (including a hanging indent
+    // that aligns a wrapped line's continuation under the marker's own
+    // text, exactly like a list marker's hanging indent) would render
+    // flush left instead.
+    lines.push(...attachParagraphLineOffsets(paragraphLines, paraProps, contentWidthPt))
   }
 
   return lines
@@ -2396,7 +2443,7 @@ function buildPageFootnoteLines(currentPage: ActivePage): ReadonlyArray<PageFoot
     topPt += noteIndex === 0 ? FOOTNOTE_SEPARATOR_RESERVE_PT : FOOTNOTE_INTER_NOTE_GAP_PT
 
     for (const line of content) {
-      result.push({ noteId, line, topPt, leftPt: 0 })
+      result.push({ noteId, line, topPt, leftPt: line.leftOffsetPt ?? 0 })
       topPt += line.lineHeight
     }
   })

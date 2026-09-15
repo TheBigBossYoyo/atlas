@@ -790,6 +790,40 @@ describe('paginate — headers/footers/vAlign (D11 milestone 1, D24/DXL-17)', ()
     expect(lineText(withSetting[1]?.headerLines[0])).toBe('Even')
   })
 
+  it("honors a header/footer paragraph's own alignment (D11 milestone 1) instead of always rendering flush left", async () => {
+    // Regression test: header/footer content used to render every line
+    // flush left (`leftPt`/`leftOffsetPt` hardcoded to 0 at both build and
+    // render time), silently dropping a header/footer paragraph's own
+    // `w:jc` — a common real case (e.g. a simple centered or right-aligned
+    // page-number footer created via Word's own "Insert Page Number" UI).
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([createParagraph(1)], {
+            headerReferences: [{ id: 'h1', type: 'default' }],
+            footerReferences: [{ id: 'f1', type: 'default' }],
+            pageWidthPt: 200,
+          }),
+        ],
+        undefined,
+        undefined,
+        {
+          headers: new Map([['h1', { kind: 'header', id: 'h1', blocks: [createTextParagraph('aaaa', { jc: 'center' })] }]]),
+          footers: new Map([['f1', { kind: 'footer', id: 'f1', blocks: [createTextParagraph('aaaa', { jc: 'end' })] }]]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    const headerLine = pages[0]?.headerLines[0]
+    const footerLine = pages[0]?.footerLines[0]
+    expect(headerLine?.leftOffsetPt).toBeGreaterThan(0)
+    expect(footerLine?.leftOffsetPt).toBeGreaterThan(0)
+    // Right-aligned ("end") content should land further right than
+    // center-aligned content of the same width on the same page width.
+    expect(footerLine?.leftOffsetPt ?? 0).toBeGreaterThan(headerLine?.leftOffsetPt ?? 0)
+  })
+
   it('lays out the same reused header id separately per section content width (e.g. a landscape section sharing a portrait header)', async () => {
     // Regression test: `buildDefaultHeaderFooterLines` used to build each
     // header/footer id's content ONCE, measured against only the first
@@ -1017,6 +1051,37 @@ describe('paginate — footnotes (D11 milestones 2-3, 5)', () => {
     expect(pages).toHaveLength(2)
     expect(paragraphLineCounts(pages, 0)).toEqual([3, 3])
     expect(pages[0]?.hasFootnoteSeparator).toBe(true)
+  })
+
+  it("applies a footnote paragraph's own left indent instead of always rendering flush left", async () => {
+    // Regression test: footnote body content used to render every line
+    // flush left (`PageFootnoteLineRef.leftPt` hardcoded to 0), silently
+    // dropping the footnote paragraph's own indent — including the hanging
+    // indent that, in many real "Footnote Text" styles, aligns a wrapped
+    // continuation line under the marker's own text rather than under the
+    // marker itself.
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([createFootnoteRefParagraph('See note', 'fn1')], { pageHeightPt: 200 })],
+        undefined,
+        undefined,
+        {
+          footnotes: new Map([
+            [
+              'fn1',
+              {
+                kind: 'footnote',
+                id: 'fn1',
+                blocks: [createTextParagraph('Indented footnote body', { ind: { left: twip(200) } })],
+              },
+            ],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(findFootnoteAreaLines(pages, 0)[0]?.leftPt).toBeGreaterThan(0)
   })
 })
 

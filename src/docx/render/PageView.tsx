@@ -499,7 +499,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
           >
             {page.headerLines.map((line, idx) => {
               const top = page.headerLines.slice(0, idx).reduce((sum, l) => sum + l.lineHeight, 0);
-              return renderLine(line, top, 0, `header-${idx}`);
+              return renderLine(line, top, line.leftOffsetPt ?? 0, `header-${idx}`);
             })}
           </div>
         )}
@@ -581,7 +581,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
           >
             {page.footerLines.map((line, idx) => {
               const top = page.footerLines.slice(0, idx).reduce((sum, l) => sum + l.lineHeight, 0);
-              return renderLine(line, top, 0, `footer-${idx}`);
+              return renderLine(line, top, line.leftOffsetPt ?? 0, `footer-${idx}`);
             })}
           </div>
         )}

@@ -110,6 +110,18 @@ export type LineBox = {
    * ordinary line break.
    */
   endsWithColumnBreak?: boolean
+  /**
+   * Precomputed horizontal offset (indent + center/right alignment) for
+   * content that renders its lines directly rather than going through
+   * `paginate.ts`'s body-content placement pass (`placeLineSlice` /
+   * `computeLineLeftOffsetPt`, whose result instead lives on the placed
+   * `PageLineRef.leftPt`) — currently header/footer content
+   * (`buildBlockGroupLines`) and footnote body content
+   * (`buildFootnoteContentLines`); endnotes flow through the ordinary body
+   * pipeline and so never set this. Omitted (treat as 0, flush with the
+   * container's own left edge) for any line that doesn't need it.
+   */
+  leftOffsetPt?: number
 }
 
 export type FontResolver = (
