@@ -13,8 +13,10 @@ import type {
   Section,
   Table,
   TableCell,
+  TableCellProps,
   TableRow,
   TextNode,
+  Twip,
 } from '../model'
 import { twip } from '../model'
 
@@ -145,6 +147,24 @@ export function applyCommand(
       return applyAllRevisions(doc, 'accept')
     case 'reject-all-revisions':
       return applyAllRevisions(doc, 'reject')
+    case 'insert-table-row':
+      return applyInsertTableRow(doc, cmd)
+    case 'delete-table-row':
+      return applyDeleteTableRow(doc, cmd)
+    case 'insert-table-column':
+      return applyInsertTableColumn(doc, cmd)
+    case 'delete-table-column':
+      return applyDeleteTableColumn(doc, cmd)
+    case 'delete-table':
+      return applyDeleteTable(doc, cmd)
+    case 'merge-table-cells':
+      return applyMergeTableCells(doc, cmd)
+    case 'split-table-cell':
+      return applySplitTableCell(doc, cmd)
+    case 'resize-table-column':
+      return applyResizeTableColumn(doc, cmd)
+    case 'replace-table':
+      return applyReplaceTable(doc, cmd)
   }
 }
 
@@ -399,6 +419,522 @@ function applyInsertTable(
       cursor: { anchor: cmd.at, focus: cmd.at },
     },
     range: { anchor: cursor, focus: cursor },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Table structural editing (DXE-14) — see commandTypes.ts's module doc
+// comment above the command shapes for the addressing/inverse design.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_COLUMN_WIDTH_TWIPS = 1440
+const MIN_COLUMN_WIDTH_TWIPS = 180
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function requireTableAt(doc: Document, tablePath: ReadonlyArray<number>): Table {
+  const resolved = resolveParagraphPath(doc, tablePath)
+  if (resolved === null || resolved.blockPath.length === 0) {
+    throw new Error('Table not found')
+  }
+
+  const section = doc.sections[resolved.sectionIndex]
+  if (section === undefined) {
+    throw new Error('Table not found')
+  }
+
+  const prefix = resolved.blockPath.slice(0, -1)
+  const index = resolved.blockPath[resolved.blockPath.length - 1]
+  const siblingBlocks = getBlocksAtPrefix(section.blocks, prefix)
+  const block = siblingBlocks?.[index]
+  if (block === undefined || block.kind !== 'table') {
+    throw new Error('Table not found')
+  }
+
+  return block
+}
+
+/** Replaces the table at `tablePath` with whatever `transform` returns (or
+ * removes it entirely when `transform` returns `null`), reusing the same
+ * generic block-path walk `updateDocumentAtParagraphPath` already uses for
+ * paragraph edits — it works unchanged for a table nested inside a cell. */
+function updateTable(
+  doc: Document,
+  tablePath: ReadonlyArray<number>,
+  transform: (table: Table) => Table | null,
+): Document {
+  const nextDocument = updateDocumentAtParagraphPath(doc, tablePath, (blocks, blockIndex) => {
+    const table = blocks[blockIndex]
+    if (table === undefined || table.kind !== 'table') {
+      return null
+    }
+
+    const nextTable = transform(table)
+    if (nextTable === null) {
+      return freezeArray([...blocks.slice(0, blockIndex), ...blocks.slice(blockIndex + 1)])
+    }
+
+    return replaceArrayItem(blocks, blockIndex, nextTable)
+  })
+
+  if (nextDocument === null) {
+    throw new Error('Table not found')
+  }
+
+  return nextDocument
+}
+
+function cloneTableFull(
+  table: Table,
+  rows: ReadonlyArray<Table['rows'][number]>,
+  tblGrid: ReadonlyArray<Twip> | undefined,
+): Table {
+  return Object.freeze({
+    kind: 'table',
+    ...(table.props !== undefined ? { props: table.props } : {}),
+    ...(tblGrid !== undefined ? { tblGrid } : {}),
+    rows,
+  })
+}
+
+function createEmptyTableCell(): TableCell {
+  return Object.freeze({ kind: 'table-cell', blocks: freezeArray<Block>([emptyParagraph()]) })
+}
+
+function createEmptyTableRow(columnCount: number): TableRow {
+  return Object.freeze({
+    kind: 'table-row',
+    cells: freezeArray(Array.from({ length: columnCount }, createEmptyTableCell)),
+  })
+}
+
+/** The number of grid columns a table has — `tblGrid` when present (the
+ * common, schema-required case), otherwise the first row's total cell
+ * `gridSpan`. */
+function tableColumnCount(table: Table): number {
+  if (table.tblGrid !== undefined) {
+    return table.tblGrid.length
+  }
+
+  const firstRow = table.rows.find((row): row is TableRow => row.kind === 'table-row')
+  if (firstRow === undefined) {
+    return 1
+  }
+
+  return firstRow.cells.reduce(
+    (sum, cell) => sum + (cell.kind === 'table-cell' ? cell.props?.gridSpan ?? 1 : 1),
+    0,
+  )
+}
+
+function insertGridColumn(
+  tblGrid: ReadonlyArray<Twip> | undefined,
+  at: number,
+  width: Twip,
+): ReadonlyArray<Twip> | undefined {
+  if (tblGrid === undefined) {
+    return undefined
+  }
+
+  return freezeArray([...tblGrid.slice(0, at), width, ...tblGrid.slice(at)])
+}
+
+function deleteGridColumn(
+  tblGrid: ReadonlyArray<Twip> | undefined,
+  columnIndex: number,
+): ReadonlyArray<Twip> | undefined {
+  if (tblGrid === undefined) {
+    return undefined
+  }
+
+  return freezeArray([...tblGrid.slice(0, columnIndex), ...tblGrid.slice(columnIndex + 1)])
+}
+
+function withTableCellProps(cell: TableCell, props: TableCellProps | undefined): TableCell {
+  return Object.freeze({
+    kind: 'table-cell',
+    ...(props !== undefined ? { props } : {}),
+    blocks: cell.blocks,
+  })
+}
+
+/**
+ * Inserts a new cell before grid column `columnIndex`, walking the row's
+ * cells while tracking accumulated `gridSpan` so the index is interpreted in
+ * *grid-column* space, not cell-array space. `columnIndex` landing strictly
+ * inside an existing merged cell's span widens that cell by one column
+ * instead (matching Word: inserting a column through a merged header cell
+ * grows the merge rather than splitting it); landing exactly on a cell
+ * boundary — including at the very start or end of the row — inserts a new
+ * standalone cell there.
+ */
+function insertColumnIntoRow(row: TableRow, columnIndex: number, makeCell: () => TableCell): TableRow {
+  const nextCells: Array<TableRow['cells'][number]> = []
+  let accumulated = 0
+  let inserted = false
+
+  for (const cell of row.cells) {
+    if (!inserted && columnIndex === accumulated) {
+      nextCells.push(makeCell())
+      inserted = true
+    }
+
+    if (cell.kind !== 'table-cell') {
+      nextCells.push(cell)
+      accumulated += 1
+      continue
+    }
+
+    const span = cell.props?.gridSpan ?? 1
+    if (!inserted && columnIndex > accumulated && columnIndex < accumulated + span) {
+      nextCells.push(withTableCellProps(cell, { ...cell.props, gridSpan: span + 1 }))
+      inserted = true
+      accumulated += span
+      continue
+    }
+
+    nextCells.push(cell)
+    accumulated += span
+  }
+
+  if (!inserted) {
+    nextCells.push(makeCell())
+  }
+
+  return cloneTableRow(row, freezeArray(nextCells))
+}
+
+/**
+ * Removes grid column `columnIndex` from a row: a cell exactly one column
+ * wide covering it is dropped entirely; a merged cell spanning it is
+ * narrowed by one column instead (the mirror image of
+ * `insertColumnIntoRow`'s widen case).
+ */
+function deleteColumnFromRow(row: TableRow, columnIndex: number): TableRow {
+  const nextCells: Array<TableRow['cells'][number]> = []
+  let accumulated = 0
+  let handled = false
+
+  for (const cell of row.cells) {
+    if (cell.kind !== 'table-cell') {
+      nextCells.push(cell)
+      accumulated += 1
+      continue
+    }
+
+    const span = cell.props?.gridSpan ?? 1
+    if (!handled && columnIndex >= accumulated && columnIndex < accumulated + span) {
+      handled = true
+      if (span > 1) {
+        nextCells.push(withTableCellProps(cell, { ...cell.props, gridSpan: span - 1 }))
+      }
+      accumulated += span
+      continue
+    }
+
+    nextCells.push(cell)
+    accumulated += span
+  }
+
+  return cloneTableRow(row, freezeArray(nextCells))
+}
+
+function resizeColumnInRow(row: TableRow, columnIndex: number, width: Twip): TableRow {
+  let accumulated = 0
+  const nextCells = row.cells.map((cell) => {
+    if (cell.kind !== 'table-cell') {
+      accumulated += 1
+      return cell
+    }
+
+    const span = cell.props?.gridSpan ?? 1
+    const covers = columnIndex >= accumulated && columnIndex < accumulated + span
+    accumulated += span
+
+    // A merged cell's own width is the sum of every grid column it spans;
+    // resizing one of those columns without re-deriving every affected
+    // cell's total width is a documented gap (see DXE-14's remaining-work
+    // note) — only an unspanned (single-column) cell's `tcW` is updated here.
+    if (!covers || span !== 1) {
+      return cell
+    }
+
+    return withTableCellProps(cell, { ...cell.props, tcW: { type: 'dxa', value: width } })
+  })
+
+  return cloneTableRow(row, freezeArray(nextCells))
+}
+
+function evenlyDistributeSpan(total: number, into: number): ReadonlyArray<number> {
+  const base = Math.floor(total / into)
+  const remainder = total % into
+  return Array.from({ length: into }, (_, index) => base + (index < remainder ? 1 : 0))
+}
+
+function withoutGridSpan(props: TableCellProps | undefined): TableCellProps | undefined {
+  if (props === undefined || props.gridSpan === undefined) {
+    return props
+  }
+
+  const rest = Object.fromEntries(
+    Object.entries(props).filter(([key]) => key !== 'gridSpan'),
+  ) as TableCellProps
+  return Object.keys(rest).length > 0 ? rest : undefined
+}
+
+function applyInsertTableRow(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'insert-table-row' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const at = clamp(cmd.at, 0, table.rows.length)
+  const newRow = createEmptyTableRow(tableColumnCount(table))
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) =>
+    cloneTableFull(t, freezeArray([...t.rows.slice(0, at), newRow, ...t.rows.slice(at)]), t.tblGrid),
+  )
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'delete-table-row', tablePath: cmd.tablePath, rowIndex: at },
+  }
+}
+
+function applyDeleteTableRow(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'delete-table-row' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  if (cmd.rowIndex < 0 || cmd.rowIndex >= table.rows.length) {
+    throw new Error('DeleteTableRow row index is out of range')
+  }
+  if (table.rows.length <= 1) {
+    throw new Error('Cannot delete a table\'s last row — delete the table instead')
+  }
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) =>
+    cloneTableFull(
+      t,
+      freezeArray([...t.rows.slice(0, cmd.rowIndex), ...t.rows.slice(cmd.rowIndex + 1)]),
+      t.tblGrid,
+    ),
+  )
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+function applyInsertTableColumn(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'insert-table-column' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const at = clamp(cmd.at, 0, tableColumnCount(table))
+  const width = twip(cmd.widthTwips ?? DEFAULT_COLUMN_WIDTH_TWIPS)
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextRows = t.rows.map((row) =>
+      row.kind === 'table-row' ? insertColumnIntoRow(row, at, createEmptyTableCell) : row,
+    )
+    return cloneTableFull(t, freezeArray(nextRows), insertGridColumn(t.tblGrid, at, width))
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'delete-table-column', tablePath: cmd.tablePath, columnIndex: at },
+  }
+}
+
+function applyDeleteTableColumn(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'delete-table-column' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const columnCount = tableColumnCount(table)
+  if (cmd.columnIndex < 0 || cmd.columnIndex >= columnCount) {
+    throw new Error('DeleteTableColumn column index is out of range')
+  }
+  if (columnCount <= 1) {
+    throw new Error('Cannot delete a table\'s last column — delete the table instead')
+  }
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextRows = t.rows.map((row) =>
+      row.kind === 'table-row' ? deleteColumnFromRow(row, cmd.columnIndex) : row,
+    )
+    return cloneTableFull(t, freezeArray(nextRows), deleteGridColumn(t.tblGrid, cmd.columnIndex))
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+/** Deletes the whole table — a thin, table-specific entry point over the
+ * same general `replace-blocks` primitive cross-paragraph delete already
+ * uses, so its inverse (re-inserting the exact table verbatim) comes for
+ * free rather than needing its own command kind. */
+function applyDeleteTable(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'delete-table' }>,
+): { document: Document; inverse: Command; range?: Range } {
+  return applyReplaceBlocks(doc, { kind: 'replace-blocks', at: cmd.tablePath, count: 1, blocks: [] })
+}
+
+/**
+ * Merges cells `fromCellIndex..toCellIndex` (inclusive) of one row into a
+ * single cell: `gridSpan` becomes the sum of the merged cells' spans, and
+ * the resulting cell's content is every merged cell's paragraphs
+ * concatenated in order (Word has no more principled way to combine them
+ * either). Horizontal-only — see commandTypes.ts's module doc comment for
+ * why a vertical (`vMerge`, across rows) merge is a documented follow-up
+ * rather than implemented here.
+ */
+function applyMergeTableCells(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'merge-table-cells' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const row = table.rows[cmd.rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    throw new Error('MergeTableCells target row not found')
+  }
+  if (
+    cmd.fromCellIndex < 0 ||
+    cmd.toCellIndex >= row.cells.length ||
+    cmd.fromCellIndex >= cmd.toCellIndex
+  ) {
+    throw new Error('MergeTableCells requires at least two cells in range')
+  }
+
+  const targetCells = row.cells.slice(cmd.fromCellIndex, cmd.toCellIndex + 1)
+  if (targetCells.some((cell) => cell.kind !== 'table-cell')) {
+    throw new Error('MergeTableCells range includes an unsupported cell')
+  }
+  const cells = targetCells as ReadonlyArray<TableCell>
+
+  const totalSpan = cells.reduce((sum, cell) => sum + (cell.props?.gridSpan ?? 1), 0)
+  const mergedCell: TableCell = Object.freeze({
+    kind: 'table-cell',
+    props: { ...cells[0].props, gridSpan: totalSpan },
+    blocks: freezeArray(cells.flatMap((cell) => cell.blocks)),
+  })
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextRow = cloneTableRow(
+      row,
+      freezeArray([
+        ...row.cells.slice(0, cmd.fromCellIndex),
+        mergedCell,
+        ...row.cells.slice(cmd.toCellIndex + 1),
+      ]),
+    )
+    return cloneTableFull(t, replaceArrayItem(t.rows, cmd.rowIndex, nextRow), t.tblGrid)
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+/**
+ * Splits a merged cell back into `into` (default: its full `gridSpan`)
+ * side-by-side cells, distributing the original span as evenly as possible.
+ * All of the original cell's content goes into the first resulting cell —
+ * matching Word, which has no principled way to redistribute paragraphs
+ * across the new cells either — leaving the rest empty.
+ */
+function applySplitTableCell(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'split-table-cell' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const row = table.rows[cmd.rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    throw new Error('SplitTableCell target row not found')
+  }
+  const cell = row.cells[cmd.cellIndex]
+  if (cell === undefined || cell.kind !== 'table-cell') {
+    throw new Error('SplitTableCell target cell not found')
+  }
+
+  const span = cell.props?.gridSpan ?? 1
+  const into = cmd.into ?? span
+  if (into < 2 || into > span) {
+    throw new Error("SplitTableCell must split into 2..the cell's current column span")
+  }
+
+  const spans = evenlyDistributeSpan(span, into)
+  const newCells: TableCell[] = spans.map((cellSpan, index) => {
+    const baseProps = index === 0 ? cell.props : undefined
+    const props = cellSpan > 1 ? { ...baseProps, gridSpan: cellSpan } : withoutGridSpan(baseProps)
+    return withTableCellProps(
+      { kind: 'table-cell', blocks: index === 0 ? cell.blocks : freezeArray<Block>([emptyParagraph()]) },
+      props,
+    )
+  })
+
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextRow = cloneTableRow(
+      row,
+      freezeArray([...row.cells.slice(0, cmd.cellIndex), ...newCells, ...row.cells.slice(cmd.cellIndex + 1)]),
+    )
+    return cloneTableFull(t, replaceArrayItem(t.rows, cmd.rowIndex, nextRow), t.tblGrid)
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+function applyResizeTableColumn(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'resize-table-column' }>,
+): { document: Document; inverse: Command } {
+  const table = requireTableAt(doc, cmd.tablePath)
+  const columnCount = tableColumnCount(table)
+  if (cmd.columnIndex < 0 || cmd.columnIndex >= columnCount) {
+    throw new Error('ResizeTableColumn column index is out of range')
+  }
+  if (cmd.widthTwips < MIN_COLUMN_WIDTH_TWIPS) {
+    throw new Error('ResizeTableColumn width is too small')
+  }
+
+  const width = twip(cmd.widthTwips)
+  const nextDocument = updateTable(doc, cmd.tablePath, (t) => {
+    const nextGrid =
+      t.tblGrid !== undefined
+        ? freezeArray(t.tblGrid.map((w, index) => (index === cmd.columnIndex ? width : w)))
+        : t.tblGrid
+    const nextRows = t.rows.map((row) =>
+      row.kind === 'table-row' ? resizeColumnInRow(row, cmd.columnIndex, width) : row,
+    )
+    return cloneTableFull(t, freezeArray(nextRows), nextGrid)
+  })
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table },
+  }
+}
+
+function applyReplaceTable(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'replace-table' }>,
+): { document: Document; inverse: Command } {
+  const original = requireTableAt(doc, cmd.tablePath)
+  const nextDocument = updateTable(doc, cmd.tablePath, () => cmd.table)
+
+  return {
+    document: nextDocument,
+    inverse: { kind: 'replace-table', tablePath: cmd.tablePath, table: original },
   }
 }
 
@@ -760,6 +1296,69 @@ export function findParagraph(
   }
 
   return findParagraphInBlocks(section.blocks, resolvedPath.blockPath)
+}
+
+export type EnclosingTable = {
+  readonly tablePath: ReadonlyArray<number>
+  readonly table: Table
+  readonly rowIndex: number
+  readonly cellIndex: number
+}
+
+/**
+ * DXE-14 — given any paragraph path, finds the *innermost* table cell it
+ * sits directly inside (`null` when it isn't inside one at all). Used by
+ * Input.ts's Tab/Shift+Tab cell navigation and by the toolbar's table
+ * commands to resolve "the table/row/cell the cursor is currently in"
+ * without duplicating the block-path recursion `updateBlocksAtPath` already
+ * walks for edits.
+ */
+export function findEnclosingTable(
+  doc: Document,
+  paragraphPath: ReadonlyArray<number>,
+): EnclosingTable | null {
+  const resolved = resolveParagraphPath(doc, paragraphPath)
+  if (resolved === null) {
+    return null
+  }
+
+  const section = doc.sections[resolved.sectionIndex]
+  if (section === undefined) {
+    return null
+  }
+
+  return findEnclosingTableInBlocks(section.blocks, [resolved.sectionIndex], resolved.blockPath)
+}
+
+function findEnclosingTableInBlocks(
+  blocks: ReadonlyArray<Block>,
+  pathPrefix: ReadonlyArray<number>,
+  blockPath: ReadonlyArray<number>,
+): EnclosingTable | null {
+  if (blockPath.length === 0) {
+    return null
+  }
+
+  const [blockIndex, ...rest] = blockPath
+  const block = blocks[blockIndex]
+  if (block === undefined || rest.length === 0 || block.kind !== 'table') {
+    return null
+  }
+
+  const tablePath = freezeArray([...pathPrefix, blockIndex])
+  const [rowIndex, cellIndex, ...childPath] = rest
+  const row = block.rows[rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    return null
+  }
+  const cell = row.cells[cellIndex]
+  if (cell === undefined || cell.kind !== 'table-cell') {
+    return null
+  }
+
+  // Prefer a more deeply nested table when the path reaches into one.
+  const nested = findEnclosingTableInBlocks(cell.blocks, freezeArray([...tablePath, rowIndex, cellIndex]), childPath)
+  return nested ?? { tablePath, table: block, rowIndex, cellIndex }
 }
 
 export function replaceParagraph(

@@ -1,6 +1,7 @@
 import type { Document, Paragraph, Run, RunProps, Underline } from '../model'
 import type { Command, Position, Range, TrackChangesContext } from './commandTypes'
-import { applyCommand, findParagraph, getFlatTextRuns } from './commands'
+import { applyCommand, findEnclosingTable, findParagraph, getFlatTextRuns } from './commands'
+import type { EnclosingTable } from './commands'
 import type { History } from './History'
 
 // ─── Public interfaces ───────────────────────────────────────────────────────
@@ -530,6 +531,98 @@ export function handleBeforeInput(
   }
 }
 
+// ─── Table cell navigation (DXE-14) ──────────────────────────────────────────
+
+function tableCellStartPath(tablePath: ReadonlyArray<number>, rowIndex: number, cellIndex: number): ReadonlyArray<number> {
+  return Object.freeze([...tablePath, rowIndex, cellIndex, 0])
+}
+
+/**
+ * The selection Tab/Shift+Tab lands on: the *entire* content of the
+ * destination cell (mirroring Word, whose Tab both moves focus and primes
+ * the cell for immediate overtype) — from the start of its first paragraph
+ * to the end of its last.
+ */
+function tableCellSelectionRange(
+  enclosing: EnclosingTable,
+  rowIndex: number,
+  cellIndex: number,
+): Range | null {
+  const row = enclosing.table.rows[rowIndex]
+  if (row === undefined || row.kind !== 'table-row') return null
+  const cell = row.cells[cellIndex]
+  if (cell === undefined || cell.kind !== 'table-cell') return null
+
+  const startPath = tableCellStartPath(enclosing.tablePath, rowIndex, cellIndex)
+  const anchor = makePos(startPath, 0, 0)
+
+  const lastBlockIndex = cell.blocks.length - 1
+  const lastBlock = cell.blocks[lastBlockIndex]
+  const endPath = Object.freeze([...enclosing.tablePath, rowIndex, cellIndex, lastBlockIndex])
+  const focus = lastBlock?.kind === 'paragraph' ? paragraphEndPos(endPath, lastBlock) : makePos(endPath, 0, 0)
+
+  return { anchor, focus }
+}
+
+/**
+ * `undefined` when `range.focus` isn't inside a table at all (caller should
+ * fall through to its own non-table Tab handling); otherwise the navigation
+ * result to return directly from `handleKeyDown` — including `null` for "no
+ * further cell to move to" (e.g. Shift+Tab at the table's first cell), which
+ * must NOT fall through to inserting a literal tab character the way a
+ * non-table Tab press would.
+ */
+function handleTableTab(
+  range: Range,
+  document: Document,
+  history: History,
+  shift: boolean,
+): InputResult | null | undefined {
+  const enclosing = findEnclosingTable(document, range.focus.paragraphPath)
+  if (enclosing === null) {
+    return undefined
+  }
+
+  const { table, tablePath, rowIndex, cellIndex } = enclosing
+  const row = table.rows[rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    return undefined
+  }
+
+  if (!shift) {
+    if (cellIndex + 1 < row.cells.length) {
+      return { document, range: tableCellSelectionRange(enclosing, rowIndex, cellIndex + 1) ?? range }
+    }
+    if (rowIndex + 1 < table.rows.length) {
+      return { document, range: tableCellSelectionRange(enclosing, rowIndex + 1, 0) ?? range }
+    }
+
+    // Last cell of the last row: append a new row and move into it.
+    const cmd: Command = { kind: 'insert-table-row', tablePath, at: table.rows.length }
+    const result = applyCommand(document, cmd)
+    history.push(result.inverse)
+    const nextPos = makePos(tableCellStartPath(tablePath, table.rows.length, 0), 0, 0)
+    return { document: result.document, range: { anchor: nextPos, focus: nextPos } }
+  }
+
+  if (cellIndex > 0) {
+    return { document, range: tableCellSelectionRange(enclosing, rowIndex, cellIndex - 1) ?? range }
+  }
+  if (rowIndex > 0) {
+    const previousRow = table.rows[rowIndex - 1]
+    if (previousRow === undefined || previousRow.kind !== 'table-row') {
+      return null
+    }
+    return {
+      document,
+      range: tableCellSelectionRange(enclosing, rowIndex - 1, previousRow.cells.length - 1) ?? range,
+    }
+  }
+
+  // Already at the table's first cell — Shift+Tab has nowhere to go.
+  return null
+}
+
 // ─── handleKeyDown ────────────────────────────────────────────────────────────
 
 export function handleKeyDown(
@@ -644,6 +737,18 @@ export function handleKeyDown(
     }
 
     if (key === 'Tab') {
+      // DXE-14 — Tab/Shift+Tab inside a table cell moves between cells
+      // instead (mirrors Word, and takes priority over the list-indent and
+      // plain-tab-character behavior below, which only apply outside a
+      // table). Tab in the last cell of the last row appends a new row and
+      // moves into it; Shift+Tab at the very first cell is a no-op.
+      if (range) {
+        const tableResult = handleTableTab(range, document, history, shift)
+        if (tableResult !== undefined) {
+          return tableResult
+        }
+      }
+
       // D18 — Tab/Shift+Tab at the very start of a list paragraph changes its
       // outline level (mirrors Word); anywhere else Tab still inserts a
       // literal tab character, and Shift+Tab outside a list is a no-op.

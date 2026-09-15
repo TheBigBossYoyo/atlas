@@ -1,4 +1,4 @@
-import type { Block, ParaProps, RunChild, RunProps } from '../model'
+import type { Block, ParaProps, RunChild, RunProps, Table } from '../model'
 
 export type Position = {
   readonly paragraphPath: ReadonlyArray<number>
@@ -133,6 +133,94 @@ export type ChangeListLevelCommand = {
   readonly delta: 1 | -1
 }
 
+// ---------------------------------------------------------------------------
+// DXE-14 — table structural editing
+// ---------------------------------------------------------------------------
+//
+// Every command below addresses the table itself with `tablePath`: a
+// paragraphPath-shaped `[sectionIndex, ...blockPath]` ending exactly at the
+// table's own block index (the same addressing `insert-table`'s cursor
+// position resolves to, and what `resolveParagraphPath`/`updateBlocksAtPath`
+// already walk generically for a *nested* table inside a cell). Structural
+// removals (`delete-table-row`/`delete-table-column`, merge, split, resize)
+// all invert via `replace-table`, an exact verbatim snapshot of the table
+// before the change — the same "capture the original, don't try to compute a
+// symmetric inverse operation" philosophy `replace-blocks` already uses for
+// paragraph-level structural edits. A pure structural *insert* (a fresh,
+// empty row/column) has nothing worth preserving, so its own inverse is just
+// the matching delete at the same index.
+
+export type InsertTableRowCommand = {
+  readonly kind: 'insert-table-row'
+  readonly tablePath: ReadonlyArray<number>
+  /** Row index the new row is inserted before; `rows.length` appends. */
+  readonly at: number
+}
+
+export type DeleteTableRowCommand = {
+  readonly kind: 'delete-table-row'
+  readonly tablePath: ReadonlyArray<number>
+  readonly rowIndex: number
+}
+
+export type InsertTableColumnCommand = {
+  readonly kind: 'insert-table-column'
+  readonly tablePath: ReadonlyArray<number>
+  /** Grid column index the new column is inserted before; the column count
+   * appends. Falling inside an existing merged (`gridSpan > 1`) cell widens
+   * that cell by one column instead of splitting it. */
+  readonly at: number
+  readonly widthTwips?: number
+}
+
+export type DeleteTableColumnCommand = {
+  readonly kind: 'delete-table-column'
+  readonly tablePath: ReadonlyArray<number>
+  readonly columnIndex: number
+}
+
+export type DeleteTableCommand = {
+  readonly kind: 'delete-table'
+  readonly tablePath: ReadonlyArray<number>
+}
+
+export type MergeTableCellsCommand = {
+  readonly kind: 'merge-table-cells'
+  readonly tablePath: ReadonlyArray<number>
+  readonly rowIndex: number
+  /** Inclusive cell-index range within the row to merge into one cell
+   * (horizontal merge only — see the module doc comment for the vertical/
+   * `vMerge` follow-up this intentionally leaves out). */
+  readonly fromCellIndex: number
+  readonly toCellIndex: number
+}
+
+export type SplitTableCellCommand = {
+  readonly kind: 'split-table-cell'
+  readonly tablePath: ReadonlyArray<number>
+  readonly rowIndex: number
+  readonly cellIndex: number
+  /** Number of cells to split into, from 2 up to the cell's current
+   * `gridSpan`. Omitted defaults to the full `gridSpan` (undo a merge back
+   * into single-column cells). */
+  readonly into?: number
+}
+
+export type ResizeTableColumnCommand = {
+  readonly kind: 'resize-table-column'
+  readonly tablePath: ReadonlyArray<number>
+  readonly columnIndex: number
+  readonly widthTwips: number
+}
+
+/** The universal exact inverse for a destructive table-structure edit — see
+ * the module doc comment above. */
+export type ReplaceTableCommand = {
+  readonly kind: 'replace-table'
+  readonly tablePath: ReadonlyArray<number>
+  readonly table: Table
+}
+
 type RevisionTarget =
   | {
       readonly id: string
@@ -176,6 +264,15 @@ export type Command =
   | RejectRevisionCommand
   | AcceptAllRevisionsCommand
   | RejectAllRevisionsCommand
+  | InsertTableRowCommand
+  | DeleteTableRowCommand
+  | InsertTableColumnCommand
+  | DeleteTableColumnCommand
+  | DeleteTableCommand
+  | MergeTableCellsCommand
+  | SplitTableCellCommand
+  | ResizeTableColumnCommand
+  | ReplaceTableCommand
 
 export function acceptRevision(id: string): AcceptRevisionCommand {
   return {

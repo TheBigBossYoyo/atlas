@@ -2,7 +2,8 @@ export type { Command } from './commandTypes'
 export * from './commandTypes'
 
 export { applyCommand } from './commands'
-export { findParagraph } from './commands'
+export { findParagraph, findEnclosingTable } from './commands'
+export type { EnclosingTable } from './commands'
 export { History } from './History'
 
 export {
