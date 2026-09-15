@@ -988,21 +988,59 @@ function placeUnit(
       return currentPage
     }
 
+    // D24b/DXL-15 fix — a table row that doesn't fit is handled entirely
+    // separately from a paragraph's lines below: place whatever rows DO
+    // fit as-is (possibly zero — `fitCount` can be 0 even for the very
+    // first candidate row, e.g. right after a preceding paragraph already
+    // used up most of the page), then try splitting the very next
+    // unplaced row across the page boundary using THIS page's own
+    // remaining space (which is the FULL page when `fitCount` is 0)
+    // before ever moving a row wholesale to a new page.
+    //
+    // The original implementation only ever attempted a split when
+    // `fitCount` was 0 AND the page was already completely empty — i.e.
+    // only for a row too tall to fit on any single page at all. That
+    // covers the extreme case, but misses the ordinary, common one this
+    // task actually targets: a moderately sized row that simply doesn't
+    // fit in whatever space is LEFT on a page that already has other
+    // content (or other rows) on it, but that would fit on a fresh page.
+    // The old code just moved such a row whole to the next page (matching
+    // this page's own `fitCount` bookkeeping, but not what Word itself
+    // does — Word splits it there, using the leftover space, rather than
+    // leaving that space blank). See `trySplitTableRowAtOffset`'s own doc
+    // comment for exactly when it declines (cantSplit, a merged cell, or
+    // no cell can fit even one more line) — every decline case here falls
+    // through to the pre-existing move-whole-row-to-a-new-page (or, on an
+    // already-empty page, force-place/clip) behavior, unchanged.
+    if (unit.kind === 'table') {
+      if (fitCount > 0) {
+        placeLineSlice(unit, lineOffset, fitCount, currentPage)
+        lineOffset += fitCount
+      }
+
+      if (lineOffset >= unit.lines.length) {
+        return currentPage
+      }
+
+      if (trySplitTableRowAtOffset(unit, lineOffset, currentPage)) {
+        continue
+      }
+
+      if (fitCount === 0 && isPageEmpty(currentPage)) {
+        placeLineSlice(unit, lineOffset, 1, currentPage)
+        lineOffset += 1
+      }
+
+      if (lineOffset < unit.lines.length && !isPageEmpty(currentPage)) {
+        pages.push(finalizePage(currentPage, pages.length))
+        currentPage = openNewPage()
+      }
+
+      continue
+    }
+
     if (fitCount === 0) {
       if (isPageEmpty(currentPage)) {
-        // D24b/DXL-15 — before force-placing (and visually clipping) a row
-        // too tall for even a completely empty page, see if it can be
-        // split across the page boundary instead. On success this mutates
-        // `unit.lines`/`unit.laidOutTable` in place (inserting a
-        // continuation piece right after the original row) and re-runs
-        // this iteration — `continue` — so the loop measures the now-
-        // shorter first piece fresh; on failure (cantSplit, a merged cell,
-        // or nothing fits at all) it falls through to the original
-        // clip-on-empty-page behavior, unchanged.
-        if (unit.kind === 'table' && trySplitTableRowAtOffset(unit, lineOffset, currentPage)) {
-          continue
-        }
-
         placeLineSlice(unit, lineOffset, 1, currentPage)
         lineOffset += 1
       } else {
@@ -1048,7 +1086,14 @@ function findForcedBreakLineOffset(lines: ReadonlyArray<LineBox>): number | unde
 
 /**
  * D24b/DXL-15 — attempts to split the table row backing `unit.lines[rowLineIndex]`
- * across the page boundary. On success, mutates `unit.lines` and
+ * across the page boundary, using `currentPage`'s CURRENT remaining space
+ * (`effectiveContentHeightPt(currentPage) - column.usedHeightPt`) — whatever
+ * that happens to be at the call site: the page's full height when nothing
+ * has been placed on it yet, or whatever is left after other content
+ * (earlier rows of this same table, or a preceding paragraph) already
+ * consumed some of it. Called from `placeUnit`'s table-specific branch for
+ * every row that doesn't fit as-is, not only when the row is too tall for
+ * an entirely empty page. On success, mutates `unit.lines` and
  * `unit.laidOutTable.rows` in place, replacing that one entry with two
  * (first piece, continuation) so every later index in both arrays shifts by
  * one but STAYS 1:1 aligned with each other — the exact invariant
@@ -1063,7 +1108,8 @@ function findForcedBreakLineOffset(lines: ReadonlyArray<LineBox>): number | unde
  * every later index and corrupt `repeatHeaderRowCount`'s "first N rows"
  * assumption — a rare enough case to just keep the old force-place
  * behavior for), or `splitTableRowForPage` itself declines (see its own
- * doc comment).
+ * doc comment) — in every decline case the caller falls back to moving the
+ * whole row to a new page (or, on an already-empty page, force-placing it).
  */
 function trySplitTableRowAtOffset(unit: TableUnit, rowLineIndex: number, currentPage: ActivePage): boolean {
   const laidOutTable = unit.laidOutTable

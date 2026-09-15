@@ -1043,6 +1043,75 @@ describe('paginate — table row splitting across page breaks (D24b/DXL-15)', ()
     expect(tableRef?.rows[0]?.row.cells[0].contentLines).toHaveLength(20)
   })
 
+  it('splits a moderately tall row that overflows the space LEFT on a page, not just one too tall for an empty page', async () => {
+    // Regression test: the original implementation only ever attempted a
+    // split when a row didn't fit even on a completely empty page. A row
+    // that merely overflows the space remaining after earlier content
+    // (but would fit fine on its own fresh page) was instead moved whole
+    // to the next page, leaving the first page's remaining space
+    // (~2 lines' worth here) unused — not what Word itself does. Row 1
+    // (3 lines) uses most of a 50pt page, leaving room for only ~2 more
+    // lines; row 2 (also 3 lines) must therefore split across the
+    // boundary rather than move over entirely.
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        { kind: 'table-row', cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(3)] }] },
+        { kind: 'table-row', cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(3)] }] },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages.length).toBeGreaterThan(1)
+
+    const allTableRefs = allPageTableRefs(pages)
+    const totalContentLines = allTableRefs.reduce(
+      (total, tableRef) =>
+        total + tableRef.rows.reduce((sum, rowRef) => sum + rowRef.row.cells[0].contentLines.length, 0),
+      0,
+    )
+    // No content lost or duplicated across the split.
+    expect(totalContentLines).toBe(6)
+
+    // Row 2 actually split (rather than moving whole to page 2): the
+    // first page's table ref carries MORE than just row 1's 3 lines.
+    const firstPageRowLineCounts = allTableRefs[0]?.rows.map((rowRef) => rowRef.row.cells[0].contentLines.length)
+    expect(firstPageRowLineCounts?.reduce((sum, count) => sum + count, 0)).toBeGreaterThan(3)
+  })
+
+  it('moves a row whole to the next page when there is no usable room left to split into (not a bogus empty split)', async () => {
+    // Row 1 (4 lines = 44pt) leaves only 6pt on a 50pt page — less than
+    // one more line (11pt) — so row 2 can't be split even partially; it
+    // must move whole to page 2 rather than leaving a content-less first
+    // fragment behind.
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        { kind: 'table-row', cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(4)] }] },
+        { kind: 'table-row', cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(2)] }] },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    const allTableRefs = allPageTableRefs(pages)
+    expect(allTableRefs[0]?.rows.map((rowRef) => rowRef.row.cells[0].contentLines.length)).toEqual([4])
+    // Row 2 landed on page 2 whole (its full 2 lines, not a shorter
+    // fragment) — `isContinuation` is still true here because it's simply
+    // not the table's first row (see `buildPageTableRefFromSlice`), not
+    // because a split happened.
+    expect(allTableRefs[1]?.rows.map((rowRef) => rowRef.row.cells[0].contentLines.length)).toEqual([2])
+    expect(allTableRefs[1]?.isContinuation).toBe(true)
+  })
+
   it('never splits a repeated header row, but still splits and repeats it above a later giant body row', async () => {
     const table: Table = {
       kind: 'table',
