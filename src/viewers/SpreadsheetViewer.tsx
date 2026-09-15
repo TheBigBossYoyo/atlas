@@ -290,11 +290,28 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   const commitRename = useCallback(
     (sheetName: string, newName: string) => {
       const idx = sheets.findIndex((s) => s.name === sheetName)
-      if (idx >= 0 && newName.trim() && newName.trim() !== sheetName) {
-        editor.renameSheet(idx, newName)
+      const trimmed = newName.trim()
+      if (idx < 0 || !trimmed || trimmed === sheetName) return
+      // Mirrors `renameSheetOp`'s own duplicate-name guard (spreadsheetDocument.ts)
+      // so this only follows the active-tab pointer when the rename will
+      // actually take effect — see the comment below on why this pointer
+      // must move at all.
+      if (sheets.some((s, i) => i !== idx && s.name === trimmed)) return
+      editor.renameSheet(idx, trimmed)
+      // The active sheet is tracked by NAME (`activeSheetName`), and a
+      // rename changes exactly that key out from under it. Without this, the
+      // render-time "pick a fallback active sheet" adjustment above (which
+      // only knows "the current activeSheetName no longer exists", not "it
+      // was renamed") falls back to `visibleSheets[0]` — silently switching
+      // the visible sheet to whichever tab happens to be first, unless the
+      // renamed sheet already WAS the first one (the only case the original
+      // single-sheet test for this happened to cover). Renaming the active
+      // sheet must keep IT active, under its new name.
+      if (sheetName === activeSheetName) {
+        setActiveSheetName(trimmed)
       }
     },
-    [sheets, editor],
+    [sheets, editor, activeSheetName],
   )
 
   const saveFormats = useMemo(

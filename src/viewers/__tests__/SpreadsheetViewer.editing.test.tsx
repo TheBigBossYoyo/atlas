@@ -12,6 +12,7 @@ import * as XLSX from 'xlsx'
 import { CompactSelection, type EditableGridCell, type GridSelection, type Item } from '@glideapps/glide-data-grid'
 
 import type { LoadedFile } from '../../formats/types'
+import { ShortcutManagerProvider } from '../../hooks/ShortcutManagerProvider'
 import { ViewerProvider } from '../shared/ViewerContext'
 import { SpreadsheetViewer } from '../SpreadsheetViewer'
 import { OdsViewer } from '../OdsViewer'
@@ -428,6 +429,38 @@ describe('SpreadsheetViewer — sheet management', () => {
 
     await waitFor(() => expect(screen.queryByText('Sheet2')).not.toBeInTheDocument())
   })
+
+  // Regression: `commitRename` never told `activeSheetName` about the new
+  // name, so renaming a sheet other than the FIRST one left that piece of
+  // state pointing at a name that no longer existed. The render-time
+  // "pick a fallback active sheet" adjustment then silently jumped to
+  // `visibleSheets[0]` — switching the visible grid to a completely
+  // different sheet than the one the user just renamed. The original rename
+  // test above only covered a single-sheet workbook, where sheet 0 IS the
+  // renamed sheet, masking the bug entirely.
+  it('keeps the renamed sheet active (and its own content visible) when it is not the first tab', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a']]), 'Sheet1')
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['b']]), 'Sheet2')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sheet2' }))
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('b'))
+
+    fireEvent.doubleClick(screen.getByRole('button', { name: 'Sheet2' }))
+    const input = screen.getByLabelText('Rename sheet Sheet2')
+    fireEvent.change(input, { target: { value: 'Budget' } })
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Budget' })).toHaveClass('spreadsheet-viewer__tab--active'))
+    expect(gridRows(lastDataEditorProps!)[0][0]).toBe('b')
+  })
 })
 
 describe('SpreadsheetViewer — undo', () => {
@@ -449,6 +482,37 @@ describe('SpreadsheetViewer — undo', () => {
     fireEvent.click(undoButton)
 
     await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('a'))
+  })
+
+  it('Ctrl+Z / Ctrl+Y perform undo/redo, matching the toolbar buttons', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a']]), 'Sheet1')
+    })
+    render(
+      <ShortcutManagerProvider>
+        <ViewerProvider filePath={file.path}>
+          <SpreadsheetViewer file={file} />
+        </ViewerProvider>
+      </ShortcutManagerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    act(() => editCell(0, 0, 'changed'))
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('changed'))
+
+    const ctrlZ = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true })
+    act(() => {
+      window.dispatchEvent(ctrlZ)
+    })
+    expect(ctrlZ.defaultPrevented).toBe(true)
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('a'))
+
+    const ctrlY = new KeyboardEvent('keydown', { key: 'y', ctrlKey: true, bubbles: true, cancelable: true })
+    act(() => {
+      window.dispatchEvent(ctrlY)
+    })
+    expect(ctrlY.defaultPrevented).toBe(true)
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('changed'))
   })
 })
 
