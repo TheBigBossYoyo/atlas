@@ -24,6 +24,9 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { CLOSE_PROMPT_CHOICE } from '../../../electron/lib/closeGuard.cjs'
+import { STATE_FILE_NAME, loadWindowState } from '../../../electron/lib/windowState.cjs'
+
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown
 
 const nodeRequire = createRequire(import.meta.url)
@@ -38,6 +41,11 @@ const REJECTED_EVENT = { senderFrame: OTHER_FRAME }
 function createElectronMock(tempDir: string) {
   const ipcHandlers = new Map<string, IpcHandler>()
   const onceHandlers = new Map<string, IpcHandler[]>()
+  // Every `mainWindow.on(event, fn)` registration, in registration order —
+  // main.cjs registers more than one listener for the same event (e.g. both
+  // `persistWindowState` and `handleWindowCloseRequest` on 'close'), so
+  // tests need every listener for an event, not just the last.
+  const windowOnHandlers = new Map<string, IpcHandler[]>()
 
   const fakeWindow = {
     isDestroyed: () => false,
@@ -54,7 +62,11 @@ function createElectronMock(tempDir: string) {
     getNormalBounds: vi.fn(() => ({ x: 10, y: 20, width: 1200, height: 800 })),
     loadURL: vi.fn(),
     loadFile: vi.fn(),
-    on: vi.fn(),
+    on: vi.fn((event: string, fn: IpcHandler) => {
+      const list = windowOnHandlers.get(event) ?? []
+      list.push(fn)
+      windowOnHandlers.set(event, list)
+    }),
     // Invoke the 'ready-to-show' callback immediately (synchronously) so
     // createWindow()'s real code path — including its own
     // `clearTimeout(showTimeout)` — runs to completion without leaving a
@@ -150,9 +162,47 @@ function createElectronMock(tempDir: string) {
     screen,
     ipcHandlers,
     onceHandlers,
+    windowOnHandlers,
     browserWindowCalls,
     fakeWindow,
   }
+}
+
+/**
+ * Injects the fake `electron` module into Node's own require cache and
+ * requires a fresh `main.cjs` against it (see file header for why), then
+ * flushes the `app.whenReady().then(() => { createWindow(); ... })`
+ * microtask chain so `mainWindow` is populated before the caller touches
+ * anything. Stubs `process.argv` for the duration of the require only — see
+ * the inline comment below for why.
+ */
+async function loadMainCjs(mocks: ReturnType<typeof createElectronMock>): Promise<void> {
+  // main.cjs's `extractFilePath(process.argv)` runs at module scope to
+  // support the real "OS Open With" launch path — but vitest's own argv
+  // (a real, existing .mjs script path) can spuriously match its known-
+  // extensions heuristic. Stub argv to an innocuous shape (matching a
+  // plain "no file argument" launch) for the duration of the require.
+  const originalArgv = process.argv
+  process.argv = ['node', 'main.cjs']
+
+  // Inject the fake `electron` module into Node's own require cache so
+  // main.cjs's `require('electron')` resolves to it (see file header).
+  nodeRequire.cache[ELECTRON_MODULE_PATH] = {
+    id: ELECTRON_MODULE_PATH,
+    filename: ELECTRON_MODULE_PATH,
+    loaded: true,
+    exports: mocks,
+    children: [],
+    paths: [],
+  } as unknown as NodeJS.Module
+
+  delete nodeRequire.cache[MAIN_CJS_PATH]
+  nodeRequire(MAIN_CJS_PATH)
+  process.argv = originalArgv
+
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 describe('electron/main.cjs IPC handlers', () => {
@@ -165,43 +215,13 @@ describe('electron/main.cjs IPC handlers', () => {
   // listeners on the real shared `process` object across the whole suite.
   let uncaughtBefore: number
   let unhandledBefore: number
-  let originalArgv: string[]
 
   beforeEach(async () => {
     uncaughtBefore = process.listenerCount('uncaughtException')
     unhandledBefore = process.listenerCount('unhandledRejection')
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-main-ipc-'))
     mocks = createElectronMock(tempDir)
-
-    // main.cjs's `extractFilePath(process.argv)` runs at module scope to
-    // support the real "OS Open With" launch path — but vitest's own argv
-    // (a real, existing .mjs script path) can spuriously match its known-
-    // extensions heuristic. Stub argv to an innocuous shape (matching a
-    // plain "no file argument" launch) for the duration of the require.
-    originalArgv = process.argv;
-    process.argv = ['node', 'main.cjs'];
-
-    // Inject the fake `electron` module into Node's own require cache so
-    // main.cjs's `require('electron')` resolves to it (see file header).
-    nodeRequire.cache[ELECTRON_MODULE_PATH] = {
-      id: ELECTRON_MODULE_PATH,
-      filename: ELECTRON_MODULE_PATH,
-      loaded: true,
-      exports: mocks,
-      children: [],
-      paths: [],
-    } as unknown as NodeJS.Module
-
-    delete nodeRequire.cache[MAIN_CJS_PATH]
-    nodeRequire(MAIN_CJS_PATH)
-    process.argv = originalArgv;
-
-    // Flush the `app.whenReady().then(() => { createWindow(); ... })`
-    // microtask chain so `mainWindow` (private to main.cjs) is populated
-    // before any handler that checks it runs.
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    await loadMainCjs(mocks)
   })
 
   afterEach(() => {
@@ -223,6 +243,11 @@ describe('electron/main.cjs IPC handlers', () => {
     const fn = mocks.ipcHandlers.get(channel)
     if (!fn) throw new Error(`no handler registered for "${channel}"`)
     return fn
+  }
+
+  /** Every `mainWindow.on(event, ...)` listener registered for `event`, in registration order. */
+  function windowHandlers(event: string): IpcHandler[] {
+    return mocks.windowOnHandlers.get(event) ?? []
   }
 
   it('creates the window and registers the expected IPC channels', () => {
@@ -528,5 +553,236 @@ describe('electron/main.cjs IPC handlers', () => {
       expect(result.ok).toBe(true)
       expect(mocks.shell.showItemInFolder).toHaveBeenCalledWith(filePath)
     })
+  })
+
+  // wave-3 shell-polish follow-up — window bounds/maximized state is saved on
+  // every resize/move (debounced, not exercised here) and on every close
+  // attempt (immediate). These drive the real `mainWindow.on(...)` listeners
+  // captured by the mock, not an IPC channel.
+  describe('window state persistence (P5.2/ELEC-11)', () => {
+    it('persists the current bounds/maximized state to disk on a close attempt', () => {
+      const closeListeners = windowHandlers('close')
+      expect(closeListeners.length).toBeGreaterThan(0)
+
+      // Every 'close' listener runs on a real close attempt (main.cjs
+      // registers persistWindowState AND handleWindowCloseRequest on the
+      // same event) — invoke them all, exactly as Electron would.
+      for (const listener of closeListeners) {
+        listener({ preventDefault: vi.fn() })
+      }
+
+      const saved = loadWindowState(tempDir)
+      expect(saved).toEqual({ x: 10, y: 20, width: 1200, height: 800, isMaximized: false })
+    })
+
+    it('reflects isMaximized:true when the window is maximized at close time', () => {
+      mocks.fakeWindow.isMaximized.mockReturnValue(true)
+
+      for (const listener of windowHandlers('close')) {
+        listener({ preventDefault: vi.fn() })
+      }
+
+      expect(loadWindowState(tempDir)?.isMaximized).toBe(true)
+    })
+
+    it('registers resize/move listeners that schedule a persist (debounced, so no file yet)', () => {
+      const resizeListeners = windowHandlers('resize')
+      const moveListeners = windowHandlers('move')
+      expect(resizeListeners.length).toBeGreaterThan(0)
+      expect(moveListeners.length).toBeGreaterThan(0)
+
+      for (const listener of resizeListeners) listener(undefined)
+
+      // Debounced (WINDOW_STATE_SAVE_DEBOUNCE_MS) — nothing written yet.
+      expect(fs.existsSync(path.join(tempDir, STATE_FILE_NAME))).toBe(false)
+    })
+  })
+
+  // wave-3 shell-polish follow-up — a repeated close attempt while a
+  // Save-before-close round trip is already pending (waiting on the
+  // renderer's own save) must reuse that same round trip instead of showing
+  // a second stacked confirmation dialog or registering a second
+  // `ipcMain.once('save-before-close-result', ...)` listener.
+  describe('close in-flight guard (wave-3 shell-polish follow-up)', () => {
+    function markDirty() {
+      handler('renderer:dirty-state')(ALLOWED_EVENT, true)
+    }
+
+    function triggerClose() {
+      const event = { preventDefault: vi.fn() }
+      // handleWindowCloseRequest is whichever 'close' listener isn't the
+      // window-state persist callback — both run on a real close, but only
+      // this one can call `event.preventDefault()`, so drive them all like
+      // Electron would and let the assertions below observe the effect.
+      for (const listener of windowHandlers('close')) {
+        listener(event)
+      }
+      return event
+    }
+
+    it('shows exactly one dialog and registers exactly one save-result listener across two rapid close attempts', () => {
+      markDirty()
+      mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.SAVE)
+
+      const first = triggerClose()
+      const second = triggerClose()
+
+      expect(first.preventDefault).toHaveBeenCalledTimes(1)
+      expect(second.preventDefault).toHaveBeenCalledTimes(1)
+      expect(mocks.dialog.showMessageBoxSync).toHaveBeenCalledTimes(1)
+      expect(mocks.onceHandlers.get('save-before-close-result')?.length ?? 0).toBe(1)
+      expect(mocks.fakeWindow.destroy).not.toHaveBeenCalled()
+    })
+
+    it('destroys the window once the pending save reports success, and allows a fresh attempt afterward', () => {
+      markDirty()
+      mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.SAVE)
+
+      triggerClose()
+      const [saveResultListener] = mocks.onceHandlers.get('save-before-close-result') ?? []
+      expect(saveResultListener).toBeDefined()
+      saveResultListener?.(ALLOWED_EVENT, { saved: true })
+
+      expect(mocks.fakeWindow.destroy).toHaveBeenCalledTimes(1)
+
+      // The guard is released — a later close attempt (a fresh window,
+      // hypothetically) is free to show its own dialog again.
+      mocks.dialog.showMessageBoxSync.mockClear()
+      handler('renderer:dirty-state')(ALLOWED_EVENT, false)
+      triggerClose()
+      expect(mocks.dialog.showMessageBoxSync).not.toHaveBeenCalled()
+    })
+
+    it('a failed save leaves the guard released so the user can retry', () => {
+      markDirty()
+      mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.SAVE)
+
+      triggerClose()
+      const [saveResultListener] = mocks.onceHandlers.get('save-before-close-result') ?? []
+      saveResultListener?.(ALLOWED_EVENT, { saved: false })
+
+      expect(mocks.fakeWindow.destroy).not.toHaveBeenCalled()
+
+      // A second attempt now shows a fresh dialog rather than silently
+      // no-oping forever.
+      mocks.dialog.showMessageBoxSync.mockClear()
+      triggerClose()
+      expect(mocks.dialog.showMessageBoxSync).toHaveBeenCalledTimes(1)
+    })
+
+    it('Discard destroys the window immediately with no in-flight round trip', () => {
+      markDirty()
+      mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.DISCARD)
+
+      triggerClose()
+
+      expect(mocks.fakeWindow.destroy).toHaveBeenCalledTimes(1)
+      expect(mocks.onceHandlers.get('save-before-close-result')?.length ?? 0).toBe(0)
+    })
+
+    it('Cancel releases the guard immediately, allowing a fresh close attempt', () => {
+      markDirty()
+      mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.CANCEL)
+
+      triggerClose()
+      expect(mocks.fakeWindow.destroy).not.toHaveBeenCalled()
+
+      mocks.dialog.showMessageBoxSync.mockClear()
+      triggerClose()
+      expect(mocks.dialog.showMessageBoxSync).toHaveBeenCalledTimes(1)
+    })
+
+    it('a clean (non-dirty) document closes immediately with no dialog at all', () => {
+      handler('renderer:dirty-state')(ALLOWED_EVENT, false)
+
+      const event = triggerClose()
+
+      expect(event.preventDefault).not.toHaveBeenCalled()
+      expect(mocks.dialog.showMessageBoxSync).not.toHaveBeenCalled()
+    })
+  })
+})
+
+// wave-3 shell-polish follow-up — restoring saved window bounds happens at
+// `createWindow()` time (the `BrowserWindow` constructor call itself), which
+// the outer suite's shared `beforeEach` already requires main.cjs through
+// before any test body runs. These need the state file seeded BEFORE that
+// require, so they manage their own require lifecycle instead.
+describe('electron/main.cjs — window state restore on create (P5.2/ELEC-11)', () => {
+  let tempDir: string
+  let mocks: ReturnType<typeof createElectronMock>
+  let uncaughtBefore: number
+  let unhandledBefore: number
+
+  beforeEach(() => {
+    uncaughtBefore = process.listenerCount('uncaughtException')
+    unhandledBefore = process.listenerCount('unhandledRejection')
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-main-ipc-winstate-'))
+    mocks = createElectronMock(tempDir)
+  })
+
+  afterEach(() => {
+    delete nodeRequire.cache[ELECTRON_MODULE_PATH]
+    delete nodeRequire.cache[MAIN_CJS_PATH]
+    fs.rmSync(tempDir, { recursive: true, force: true })
+    for (const listener of process.listeners('uncaughtException').slice(uncaughtBefore)) {
+      process.removeListener('uncaughtException', listener)
+    }
+    for (const listener of process.listeners('unhandledRejection').slice(unhandledBefore)) {
+      process.removeListener('unhandledRejection', listener)
+    }
+  })
+
+  it('restores saved bounds and applies them to the BrowserWindow constructor', async () => {
+    fs.writeFileSync(
+      path.join(tempDir, STATE_FILE_NAME),
+      JSON.stringify({ x: 50, y: 60, width: 1000, height: 700, isMaximized: false }),
+      'utf-8',
+    )
+
+    await loadMainCjs(mocks)
+
+    const options = mocks.browserWindowCalls[0]
+    expect(options).toMatchObject({ x: 50, y: 60, width: 1000, height: 700 })
+    expect(mocks.fakeWindow.maximize).not.toHaveBeenCalled()
+  })
+
+  it('maximizes the window when the saved state was maximized', async () => {
+    fs.writeFileSync(
+      path.join(tempDir, STATE_FILE_NAME),
+      JSON.stringify({ x: 0, y: 0, width: 1920, height: 1080, isMaximized: true }),
+      'utf-8',
+    )
+
+    await loadMainCjs(mocks)
+
+    expect(mocks.fakeWindow.maximize).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the default size (no x/y) when the saved position is off every current display', async () => {
+    fs.writeFileSync(
+      path.join(tempDir, STATE_FILE_NAME),
+      JSON.stringify({ x: 5000, y: 5000, width: 800, height: 600, isMaximized: false }),
+      'utf-8',
+    )
+    // The mock's default `screen.getAllDisplays()` is a single 1920x1080
+    // display at the origin — (5000, 5000) is off it entirely.
+
+    await loadMainCjs(mocks)
+
+    const options = mocks.browserWindowCalls[0]
+    expect(options?.x).toBeUndefined()
+    expect(options?.y).toBeUndefined()
+    expect(options?.width).toBe(1200)
+    expect(options?.height).toBe(800)
+  })
+
+  it('falls back to the default size on first launch (no saved state file at all)', async () => {
+    await loadMainCjs(mocks)
+
+    const options = mocks.browserWindowCalls[0]
+    expect(options?.x).toBeUndefined()
+    expect(options?.width).toBe(1200)
+    expect(options?.height).toBe(800)
   })
 })
