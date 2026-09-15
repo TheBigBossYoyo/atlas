@@ -52,42 +52,29 @@ vi.mock('mermaid', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// html2canvas-pro / jsPDF mocks — jsdom has no canvas backend, so neither
-// exportPdf's screenshot pipeline nor docxMedia.ts's math/Mermaid
-// rasterization can run for real here. `html2canvasMock` backs both.
+// html2canvas-pro mock — jsdom has no canvas backend, so docxMedia.ts's
+// math/Mermaid rasterization (still the live dependency post-X1 — see
+// pdf.ts's module header) can't run for real here.
+//
+// P4.4 note: `jspdf` (the old raster-PDF pipeline's PDF-assembly step,
+// alongside html2canvas-pro's screenshot) is gone as of X1 — every PDF
+// export now goes through `printToPdf`/`window.electronAPI.printToPdf`
+// instead, mocked per-test below. There is nothing left to mock it for.
 // ---------------------------------------------------------------------------
 
-const { html2canvasMock, jsPdfCtorMock, jsPdfAddImageMock, jsPdfAddPageMock, jsPdfOutputMock } = vi.hoisted(() => {
-  const addImageMock = vi.fn();
-  const addPageMock = vi.fn();
-  const outputMock = vi.fn(() => new Uint8Array([1, 2, 3]).buffer);
-  return {
-    html2canvasMock: vi.fn(async (element: HTMLElement, options?: Record<string, unknown>) => {
-      void element;
-      void options;
-      return {
-        width: 800,
-        height: 600,
-        toDataURL: () => 'data:image/png;base64,MOCK',
-      };
-    }),
-    // A plain function (not an arrow) — jsPDF is invoked with `new`, and an
-    // arrow-returning mockImplementation fails with "is not a constructor".
-    jsPdfCtorMock: vi.fn().mockImplementation(function jsPDF() {
-      return {
-        addPage: addPageMock,
-        addImage: addImageMock,
-        output: outputMock,
-      };
-    }),
-    jsPdfAddImageMock: addImageMock,
-    jsPdfAddPageMock: addPageMock,
-    jsPdfOutputMock: outputMock,
-  };
-});
+const { html2canvasMock } = vi.hoisted(() => ({
+  html2canvasMock: vi.fn(async (element: HTMLElement, options?: Record<string, unknown>) => {
+    void element;
+    void options;
+    return {
+      width: 800,
+      height: 600,
+      toDataURL: () => 'data:image/png;base64,MOCK',
+    };
+  }),
+}));
 
 vi.mock('html2canvas-pro', () => ({ default: html2canvasMock }));
-vi.mock('jspdf', () => ({ default: jsPdfCtorMock }));
 
 import { exportMarkdown, exportHtml, exportMarkdownPdf, exportDocx } from '../export';
 
@@ -143,10 +130,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   html2canvasMock.mockClear();
-  jsPdfCtorMock.mockClear();
-  jsPdfAddImageMock.mockClear();
-  jsPdfAddPageMock.mockClear();
-  jsPdfOutputMock.mockClear();
   mermaidRenderMock.mockClear();
   mermaidInitializeMock.mockClear();
   delete (window as { electronAPI?: unknown }).electronAPI;
