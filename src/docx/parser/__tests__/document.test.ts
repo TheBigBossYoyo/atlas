@@ -607,7 +607,7 @@ describe('parseDocument', () => {
       <w:p>
         <w:r>
           <w:drawing>
-            <wp:anchor>
+            <wp:anchor behindDoc="1" allowOverlap="0">
               <wp:simplePos x="0" y="0"/>
               <wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>
               <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
@@ -635,7 +635,18 @@ describe('parseDocument', () => {
     const run = expectRun(paragraph.children[0])
     const drawing = run.children[0]
 
-    expect(drawing).toMatchObject({ kind: 'drawing', layout: 'anchor', relationshipId: 'rIdImage2' })
+    expect(drawing).toMatchObject({
+      kind: 'drawing',
+      layout: 'anchor',
+      relationshipId: 'rIdImage2',
+      behindDoc: true,
+      allowOverlap: false,
+      // DXP-09: position/wrap are now parsed into typed fields instead of
+      // captured as raw, unmodeled XML.
+      positionH: { relativeFrom: 'column', offsetEmu: 914400 },
+      positionV: { relativeFrom: 'paragraph', offsetEmu: 0 },
+      wrap: { mode: 'square', side: 'bothSides' },
+    })
     if (drawing.kind !== 'drawing') {
       throw new Error('Expected drawing child')
     }
@@ -644,14 +655,16 @@ describe('parseDocument', () => {
       entry.kind === 'anchor-slot' ? entry.slot : 'unknown',
     )
     // Original order preserved: simplePos, positionH, positionV, extent,
-    // effectExtent, wrapSquare, docPr, cNvGraphicFramePr, graphic.
+    // effectExtent, wrapSquare, docPr, cNvGraphicFramePr, graphic. Only
+    // wp:simplePos and wp:cNvGraphicFramePr remain unmodeled (Atlas hard-codes
+    // simplePos="0" on save and never repositions a shape's frame directly).
     expect(slots).toEqual([
       'unknown',
-      'unknown',
-      'unknown',
+      'positionH',
+      'positionV',
       'extent',
-      'unknown',
-      'unknown',
+      'effectExtent',
+      'wrap',
       'docPr',
       'unknown',
       'graphic',
@@ -662,10 +675,129 @@ describe('parseDocument', () => {
       .map((entry) => entry.xml)
       .join('')
     expect(unknownXml).toContain('wp:simplePos')
-    expect(unknownXml).toContain('wp:positionH')
-    expect(unknownXml).toContain('wp:positionV')
-    expect(unknownXml).toContain('wp:wrapSquare')
     expect(unknownXml).toContain('wp:cNvGraphicFramePr')
+  })
+
+  it('parses picture crop/rotation/flip from the pic:spPr/pic:blipFill subtree (DXS-09)', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:inline>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:docPr id="1" name="Picture 1"/>
+              <a:graphic>
+                <a:graphicData>
+                  <pic:pic>
+                    <pic:blipFill>
+                      <a:blip r:embed="rIdImage3"/>
+                      <a:srcRect l="10000" t="5000" r="10000" b="5000"/>
+                    </pic:blipFill>
+                    <pic:spPr>
+                      <a:xfrm rot="2700000" flipH="1">
+                        <a:off x="0" y="0"/>
+                        <a:ext cx="914400" cy="457200"/>
+                      </a:xfrm>
+                    </pic:spPr>
+                  </pic:pic>
+                </a:graphicData>
+              </a:graphic>
+            </wp:inline>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+    const drawing = run.children[0]
+
+    expect(drawing).toMatchObject({
+      kind: 'drawing',
+      layout: 'inline',
+      relationshipId: 'rIdImage3',
+      crop: { l: 10000, t: 5000, r: 10000, b: 5000 },
+      transform: { rotation: 2700000, flipH: true },
+    })
+  })
+
+  it('models a bare (all-zero) a:srcRect as an empty crop object, not undefined (DXS-09)', () => {
+    // Real Word (and the `docx` npm package) always emits `<a:srcRect/>` on
+    // every picture, cropped or not. Treating its *presence* as `crop: {}`
+    // (distinct from no element at all) means the serializer still emits
+    // the element on save — previously it was dropped outright, since the
+    // pre-DXS-09 serializer never inspected `pic:blipFill`'s children at
+    // all.
+    const document = parseBody(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:inline>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:docPr id="1" name="Picture 1"/>
+              <a:graphic>
+                <a:graphicData>
+                  <pic:pic>
+                    <pic:blipFill>
+                      <a:blip r:embed="rIdImage5"/>
+                      <a:srcRect/>
+                    </pic:blipFill>
+                  </pic:pic>
+                </a:graphicData>
+              </a:graphic>
+            </wp:inline>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+    const drawing = run.children[0]
+
+    expect(drawing.kind).toBe('drawing')
+    if (drawing.kind === 'drawing') {
+      expect(drawing.crop).toEqual({})
+    }
+  })
+
+  it('does not model a bare a:xfrm with no rot/flip attributes (DXS-09)', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:r>
+          <w:drawing>
+            <wp:inline>
+              <wp:extent cx="914400" cy="457200"/>
+              <wp:docPr id="1" name="Picture 1"/>
+              <a:graphic>
+                <a:graphicData>
+                  <pic:pic>
+                    <pic:blipFill>
+                      <a:blip r:embed="rIdImage4"/>
+                    </pic:blipFill>
+                    <pic:spPr>
+                      <a:xfrm>
+                        <a:off x="0" y="0"/>
+                        <a:ext cx="914400" cy="457200"/>
+                      </a:xfrm>
+                    </pic:spPr>
+                  </pic:pic>
+                </a:graphicData>
+              </a:graphic>
+            </wp:inline>
+          </w:drawing>
+        </w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    const run = expectRun(paragraph.children[0])
+    const drawing = run.children[0]
+
+    expect(drawing.kind).toBe('drawing')
+    if (drawing.kind === 'drawing') {
+      expect(drawing.transform).toBeUndefined()
+    }
   })
 
   it('preserves a non-picture graphicFrame (chart/SmartArt) as an unknown node instead of a lossy Drawing (P1.7 / DXS-04)', () => {

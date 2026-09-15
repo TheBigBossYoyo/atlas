@@ -7,13 +7,15 @@ import type {
 } from '../model/document';
 import type { Page, PageTableRef, PageTableRowRef } from '../layout/pageTypes';
 import type { LineBox } from '../layout/types';
+import { computePageFloats } from '../layout/floats';
 import type { Relationship } from '../parser/relationships';
 import type { Theme } from '../parser/theme';
 import { resolveStretchableSpaceIndices } from '../layout/breakLines';
 import { MARKER_RUN_INDEX } from '../layout/listMarkers';
 
 import { borderToCss, revisionStyleToCss, type RevisionRenderKind, runStyleToCss } from './style';
-import { InlineDrawing } from './InlineDrawing';
+import { AnchoredDrawing } from './AnchoredDrawing';
+import { DrawingAnchorMarker, InlineDrawing } from './InlineDrawing';
 import './__styles__/page-view.css';
 
 export type PageViewProps = {
@@ -258,6 +260,14 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
     [document, resolvedRelationships],
   );
   const bookmarkNamesByParagraph = useMemo(() => collectBookmarkNamesByParagraph(document), [document]);
+  // D4/DXL-03: computed fresh per page from the already-laid-out `page`
+  // (see `floats.ts`'s doc comment for why this doesn't need to touch
+  // paginate.ts/breakLines.ts). Mirrors the existing per-page memoization
+  // pattern above (`runMetaByParagraph`/`bookmarkNamesByParagraph`), which
+  // also walks the whole document once per page render.
+  const pageFloats = useMemo(() => computePageFloats(page, document), [page, document]);
+  const behindDocFloats = useMemo(() => pageFloats.filter((f) => f.behindDoc), [pageFloats]);
+  const frontFloats = useMemo(() => pageFloats.filter((f) => !f.behindDoc), [pageFloats]);
 
   const outerStyle = useMemo(() => ({
     width: `${page.sizePt.width * scale}px`,
@@ -358,6 +368,20 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
         ))}
         {line.items.map((item, idx) => {
           if (item.kind === 'drawing') {
+            if (item.drawing.layout === 'anchor') {
+              // D4/DXL-03: the picture itself is painted separately as a
+              // page-level float (see `renderFloats` below) — this item
+              // only keeps the anchor's one-character offset addressable
+              // for the editor.
+              return (
+                <DrawingAnchorMarker
+                  key={`drawing-${item.runIndex}-${item.charStart}`}
+                  runIndex={item.runIndex}
+                  charStart={item.charStart}
+                  charEnd={item.charEnd}
+                />
+              );
+            }
             const revisionKind = runMetas?.[item.runIndex]?.revision?.kind ?? item.runProps._revision;
             return (
               <InlineDrawing
@@ -471,6 +495,13 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
           </div>
         )}
 
+        {/* Floating drawings behind the text (D4/DXL-03: wp:anchor's
+            behindDoc="1") — placed before the columns in DOM order so
+            static/auto-z-index text paints over them. */}
+        {behindDocFloats.map((pageFloat, floatIdx) => (
+          <AnchoredDrawing key={`float-behind-${pageFloat.blockIndex}-${floatIdx}`} pageFloat={pageFloat} />
+        ))}
+
         {/* Columns */}
         {page.columns.map((col, colIdx) => (
           <div
@@ -504,6 +535,13 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
             renderPageTable(tableRef, `table-${colIdx}-${tableIdx}`, renderLine),
           ),
         )}
+
+        {/* Floating drawings in front of the text (the common case:
+            wp:anchor's default behindDoc="0") — placed after the columns
+            and tables so they paint on top. */}
+        {frontFloats.map((pageFloat, floatIdx) => (
+          <AnchoredDrawing key={`float-front-${pageFloat.blockIndex}-${floatIdx}`} pageFloat={pageFloat} />
+        ))}
 
         {/* Footer */}
         {page.footerLines.length > 0 && (

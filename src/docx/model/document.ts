@@ -120,16 +120,128 @@ export interface DrawingExtent {
 }
 
 /**
- * Marks where one of Atlas's own modeled `wp:anchor` children (extent/docPr/
- * graphic) sits among the raw, unmodeled ones captured in `Drawing.anchorChildren`,
- * so the serializer can rebuild each slot from current model state instead of
- * replaying stale captured XML, while still emitting position/wrap children
- * (`wp:simplePos`, `wp:positionH`/`wp:positionV`, the wrap choice,
- * `wp:effectExtent`, `wp:cNvGraphicFramePr`) verbatim in their original spot.
+ * `wp:effectExtent`'s l/t/r/b (EMU) — extra bleed around the drawing's
+ * `extent` box reserved for effects (shadow, glow, rotation overshoot) that
+ * extend past the nominal picture rectangle. Valid on both `wp:inline` and
+ * `wp:anchor` (D4/DXP-09).
+ */
+export interface DrawingEffectExtent {
+  readonly l: number
+  readonly t: number
+  readonly r: number
+  readonly b: number
+}
+
+/**
+ * `wp:positionH`'s relativeFrom values (ST_RelFromH). `column`/`character`
+ * only make sense for positionH — see `DrawingRelativeFromV` for positionV's
+ * distinct set.
+ */
+export type DrawingRelativeFromH =
+  | 'page'
+  | 'margin'
+  | 'column'
+  | 'character'
+  | 'leftMargin'
+  | 'rightMargin'
+  | 'insideMargin'
+  | 'outsideMargin'
+
+/** `wp:positionV`'s relativeFrom values (ST_RelFromV). */
+export type DrawingRelativeFromV =
+  | 'page'
+  | 'margin'
+  | 'paragraph'
+  | 'line'
+  | 'topMargin'
+  | 'bottomMargin'
+  | 'insideMargin'
+  | 'outsideMargin'
+
+export type DrawingHorizontalAlign = 'left' | 'center' | 'right' | 'inside' | 'outside'
+export type DrawingVerticalAlign = 'top' | 'center' | 'bottom' | 'inside' | 'outside'
+
+/**
+ * `wp:positionH`, fully parsed (DXP-09/DXL-03) rather than captured as raw
+ * XML: either `align` (`wp:align`) or `offsetEmu` (`wp:posOffset`) is present,
+ * matching the mutually-exclusive `EG_WrapPositionType` choice in the OOXML
+ * schema — never both, and a schema-valid document always has one.
+ */
+export interface DrawingPositionH {
+  readonly relativeFrom: DrawingRelativeFromH
+  readonly align?: DrawingHorizontalAlign
+  readonly offsetEmu?: number
+}
+
+/** `wp:positionV`, the vertical counterpart of `DrawingPositionH`. */
+export interface DrawingPositionV {
+  readonly relativeFrom: DrawingRelativeFromV
+  readonly align?: DrawingVerticalAlign
+  readonly offsetEmu?: number
+}
+
+export type DrawingWrapMode = 'none' | 'square' | 'tight' | 'through' | 'topAndBottom'
+
+/** `wrapText` attribute shared by `wp:wrapSquare`/`wrapTight`/`wrapThrough`. */
+export type DrawingWrapSide = 'bothSides' | 'left' | 'right' | 'largest'
+
+/**
+ * The anchor's wrap choice (`wp:wrapNone`/`wp:wrapSquare`/`wp:wrapTight`/
+ * `wp:wrapThrough`/`wp:wrapTopAndBottom`), parsed into one shape regardless
+ * of which element was present. `distT/B/L/R` (EMU) are that element's own
+ * distance-from-text attributes (absent on `wrapNone`/`wrapThrough`, which
+ * don't carry them).
+ */
+export interface DrawingWrap {
+  readonly mode: DrawingWrapMode
+  readonly side?: DrawingWrapSide
+  readonly distTEmu?: number
+  readonly distBEmu?: number
+  readonly distLEmu?: number
+  readonly distREmu?: number
+}
+
+/**
+ * `a:srcRect`'s crop rectangle (DXS-09): each edge is in thousandths of a
+ * percent of the source image's full width/height (0-100000 for a normal
+ * crop; the OOXML spec also allows negative values to pad rather than crop).
+ * A field's absence means that edge's attribute was absent in the source
+ * (defaults to 0 uncropped per spec) — preserved distinctly from `0` so a
+ * save doesn't add attributes the source never had.
+ */
+export interface DrawingCrop {
+  readonly l?: number
+  readonly t?: number
+  readonly r?: number
+  readonly b?: number
+}
+
+/**
+ * The picture's own rotation/flip (DXS-09), from `pic:spPr/a:xfrm`'s `rot`
+ * (60,000ths of a degree, clockwise) and `flipH`/`flipV` attributes. Only
+ * populated when at least one of the three is present in the source — an
+ * `a:xfrm` present solely for its (unmodeled) `a:off`/`a:ext` children is
+ * treated the same as no `a:xfrm` at all, since Atlas derives position from
+ * `wp:positionH`/`V` and size from `wp:extent` instead.
+ */
+export interface DrawingTransform {
+  readonly rotation?: number
+  readonly flipH?: boolean
+  readonly flipV?: boolean
+}
+
+/**
+ * Marks where one of Atlas's own modeled `wp:anchor` children sits among the
+ * raw, unmodeled ones captured in `Drawing.anchorChildren`, so the serializer
+ * can rebuild each slot from current model state instead of replaying stale
+ * captured XML. `positionH`/`positionV`/`wrap`/`effectExtent` (DXP-09) join
+ * the original `extent`/`docPr`/`graphic` slots; anything else Atlas doesn't
+ * model — `wp:simplePos`, `wp:cNvGraphicFramePr` — is still replayed
+ * verbatim as an `UnknownNode` in `anchorChildren`.
  */
 export interface DrawingAnchorSlot {
   readonly kind: 'anchor-slot'
-  readonly slot: 'extent' | 'docPr' | 'graphic'
+  readonly slot: 'extent' | 'effectExtent' | 'positionH' | 'positionV' | 'wrap' | 'docPr' | 'graphic'
 }
 
 export type DrawingAnchorChild = DrawingAnchorSlot | UnknownNode
@@ -142,6 +254,23 @@ export interface Drawing {
   readonly description?: string
   readonly name?: string
   readonly extent?: DrawingExtent
+  /** Valid for both `inline` and `anchor` (ST schema allows it on either). */
+  readonly effectExtent?: DrawingEffectExtent
+  /** `a:srcRect` crop, from the picture subtree — valid regardless of `layout` (DXS-09). */
+  readonly crop?: DrawingCrop
+  /** `a:xfrm` rotation/flip, from the picture subtree — valid regardless of `layout` (DXS-09). */
+  readonly transform?: DrawingTransform
+  /**
+   * The following fields are populated for `layout: 'anchor'` only (parsed
+   * straight off `wp:anchor`'s own attributes/children rather than captured
+   * via `anchorChildren`, so layout/wrap logic can read them directly
+   * without walking the raw child list — DXP-09/DXL-03).
+   */
+  readonly behindDoc?: boolean
+  readonly allowOverlap?: boolean
+  readonly positionH?: DrawingPositionH
+  readonly positionV?: DrawingPositionV
+  readonly wrap?: DrawingWrap
   /**
    * For `layout: 'anchor'` drawings only: the exact original child order of
    * `wp:anchor`, required so a save emits the schema-required position/wrap

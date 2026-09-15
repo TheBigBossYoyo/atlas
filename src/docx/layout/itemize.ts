@@ -70,13 +70,25 @@ export async function itemizeRuns(
       }
 
       if (child.kind === 'drawing') {
-        // Anchored drawings are painted at their anchor point for now; true
-        // floating placement (positionH/V, wrap modes) is not modelled yet.
+        // D4/DXL-03: an anchored (floating) drawing is positioned and
+        // rendered independently by `floats.ts`/`AnchoredDrawing` at the
+        // page level, driven by its `wp:positionH`/`V`/wrap metadata — not
+        // by where this item falls in the text flow. Giving it zero
+        // width/height here means it contributes no flow width
+        // (`breakLines.ts`'s greedy line-fill just adds 0) and no line-
+        // height inflation (`applyDrawingClearance` takes the max over
+        // `item.height`, so 0 never wins), matching Word's behavior where a
+        // floating picture doesn't reserve any space in the paragraph that
+        // anchors it. The item itself is kept (not dropped) purely so the
+        // anchor still occupies its one character offset for the editor's
+        // position model (`charStart`/`charEnd`), matching every other
+        // drawing kind.
+        const isAnchored = child.layout === 'anchor'
         items.push({
           kind: 'drawing',
           drawing: child,
-          width: resolveDrawingSize(child.extent?.cx),
-          height: resolveDrawingSize(child.extent?.cy),
+          width: isAnchored ? 0 : resolveDrawingSize(child.extent?.cx),
+          height: isAnchored ? 0 : resolveDrawingSize(child.extent?.cy),
           runIndex,
           charStart: childOffset,
           charEnd: childOffset + 1,
