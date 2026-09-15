@@ -95,7 +95,10 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
  */
 function forbidNonSvgStyle(node: Node, data: { tagName: string }): void {
   if (data.tagName !== 'style') return;
-  if (node.namespaceURI === SVG_NS) return;
+  // `data.tagName === 'style'` guarantees `node` is an `Element` here, but
+  // DOMPurify's hook signature types it as the broader `Node` (which has no
+  // `namespaceURI` of its own — that's an `Element`-only property).
+  if ((node as Element).namespaceURI === SVG_NS) return;
   node.parentNode?.removeChild(node);
 }
 

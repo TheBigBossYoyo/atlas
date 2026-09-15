@@ -470,14 +470,15 @@ describe('exportMarkdownPdf', () => {
 
   it('embeds the real KaTeX and highlight.js CSS (review fix) so math/code aren\'t left unstyled — a detached print document never gets main.tsx\'s globally-loaded katex.min.css or the standalone HTML export\'s CDN-linked highlight.js theme', async () => {
     mountTarget('markdown-content');
+    const printToPdfMock = vi.fn().mockResolvedValue({ ok: true, bytes: new Uint8Array([1]) });
     window.electronAPI = {
-      printToPdf: vi.fn().mockResolvedValue({ ok: true, bytes: new Uint8Array([1]) }),
+      printToPdf: printToPdfMock,
       saveBinaryFile: vi.fn().mockResolvedValue({ saved: true }),
     } as unknown as typeof window.electronAPI;
 
     await exportMarkdownPdf('markdown-content', 'report.md', 'light');
 
-    const html = (window.electronAPI.printToPdf as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+    const html = printToPdfMock.mock.calls[0]![0] as string;
     // KaTeX's own @font-face family name — proof the real katex.min.css (not
     // just buildMarkdownExportCss's structural/theme CSS) is embedded.
     expect(html).toContain('KaTeX_Main');
