@@ -19,7 +19,7 @@
  * string (`#DIV/0!`, `#VALUE!`) — that IS a value a real spreadsheet would
  * show, unlike a fallback.
  */
-import { columnLettersToIndex, type CellCoord } from './cellRef'
+import { parseCellRef, type CellCoord } from './cellRef'
 
 export type CellLookup = (row: number, col: number) => string
 
@@ -267,10 +267,14 @@ class FormulaParser {
   }
 }
 
+// Delegates to `cellRef.ts`'s own `parseCellRef` (single source of truth for
+// A1-style parsing, also used — and tested — independently of the formula
+// evaluator) rather than re-implementing the same `$?letters$?digits` regex
+// here a second time.
 function parseRefToken(refText: string): CellCoord {
-  const match = /^\$?([A-Za-z]+)\$?(\d+)$/.exec(refText)
-  if (!match) throw new FormulaSyntaxError(`Malformed reference: ${refText}`)
-  return { row: Number.parseInt(match[2], 10) - 1, col: columnLettersToIndex(match[1]) }
+  const coord = parseCellRef(refText)
+  if (!coord) throw new FormulaSyntaxError(`Malformed reference: ${refText}`)
+  return coord
 }
 
 const FUNCTIONS = new Set(['SUM', 'AVERAGE', 'MIN', 'MAX', 'COUNT', 'COUNTA'])
