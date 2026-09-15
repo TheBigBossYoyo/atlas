@@ -8,16 +8,21 @@ import {
   type RefObject,
 } from 'react'
 import { List, type RowComponentProps } from 'react-window'
-import { Maximize2, Minimize2, RotateCcw, StickyNote, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { Maximize2, Minimize2, MonitorPlay, RotateCcw, StickyNote, X, ZoomIn, ZoomOut } from 'lucide-react'
 
 import '../__styles__/viewer-slides.css'
+import { PresenterView } from './PresenterView'
 import { SlideCanvas } from './SlideCanvas'
 import type { SlideData } from './SlideDeck.types'
+import { SlideEditCanvas } from './SlideEditCanvas'
+import { SlideEditToolbar, type SlideDeckEditor } from './SlideEditToolbar'
 
 type SlideDeckProps = {
   readonly slides: ReadonlyArray<SlideData>
   readonly activeIndex: number
   readonly onSelect: (i: number) => void
+  /** USR-16 — makes the deck editable (PPTX); omitted for read-only decks. */
+  readonly editor?: SlideDeckEditor
 }
 
 type ViewportSize = { readonly width: number; readonly height: number }
@@ -127,15 +132,27 @@ function useFullscreen(containerRef: RefObject<HTMLDivElement | null>) {
   return { isFullscreen, toggle }
 }
 
-function SlideDeckBase({ slides, activeIndex, onSelect }: SlideDeckProps) {
+function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mainRef = useRef<HTMLDivElement | null>(null)
   const viewportSize = useViewportSize(mainRef)
   const [zoom, setZoom] = useState(1)
   const [notesOpen, setNotesOpen] = useState(false)
+  const [presenterOpen, setPresenterOpen] = useState(false)
+  const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null)
+  const [editingShapeId, setEditingShapeId] = useState<string | null>(null)
+  const exitPresenter = useCallback(() => setPresenterOpen(false), [])
   const { isFullscreen, toggle: toggleFullscreen } = useFullscreen(containerRef)
 
   const activeSlide = useMemo(() => slides[activeIndex] ?? null, [activeIndex, slides])
+
+  // Selection belongs to one slide: clear it when another slide becomes active.
+  const [selectionSlideId, setSelectionSlideId] = useState(activeSlide?.id)
+  if (selectionSlideId !== activeSlide?.id) {
+    setSelectionSlideId(activeSlide?.id)
+    setSelectedShapeId(null)
+    setEditingShapeId(null)
+  }
 
   const fitScale = useMemo(() => {
     if (!activeSlide) {
@@ -211,8 +228,19 @@ function SlideDeckBase({ slides, activeIndex, onSelect }: SlideDeckProps) {
                 <RotateCcw size={16} />
               </button>
             </div>
+            {editor && activeSlide && (
+              <SlideEditToolbar
+                editor={editor}
+                slideIndex={activeIndex}
+                slideCount={slides.length}
+                onTextBoxInserted={(sourceId) => {
+                  const shape = activeSlide.shapes.find((candidate) => candidate.sourceId === sourceId)
+                  setSelectedShapeId(shape?.id ?? null)
+                }}
+              />
+            )}
             <div className="slide-deck__toolbar-group">
-              {activeSlide?.notes && (
+              {(activeSlide?.notes || (editor && editor.canEditNotes)) && (
                 <button
                   type="button"
                   className="slide-deck__toolbar-button"
@@ -228,14 +256,37 @@ function SlideDeckBase({ slides, activeIndex, onSelect }: SlideDeckProps) {
               <button type="button" className="slide-deck__toolbar-button" title="Present (fullscreen)" onClick={toggleFullscreen}>
                 <Maximize2 size={16} />
               </button>
+              <button
+                type="button"
+                className="slide-deck__toolbar-button"
+                title="Presenter view"
+                aria-label="Presenter view"
+                onClick={() => setPresenterOpen(true)}
+              >
+                <MonitorPlay size={16} />
+              </button>
             </div>
           </div>
         )}
 
         <div ref={mainRef} className="slide-deck__main">
-          {activeSlide
-            ? <SlideCanvas slide={activeSlide} scale={mainScale} interactive />
-            : <div className="slide-deck__empty">No slides available.</div>}
+          {activeSlide && editor && !isFullscreen ? (
+            <SlideEditCanvas
+              slide={activeSlide}
+              scale={mainScale}
+              selectedShapeId={selectedShapeId}
+              editingShapeId={editingShapeId}
+              onSelectShape={setSelectedShapeId}
+              onEditShape={setEditingShapeId}
+              onCommitBox={editor.onShapeBox}
+              onCommitText={editor.onShapeText}
+              onDeleteShape={editor.onDeleteShape}
+            />
+          ) : activeSlide ? (
+            <SlideCanvas slide={activeSlide} scale={mainScale} interactive />
+          ) : (
+            <div className="slide-deck__empty">No slides available.</div>
+          )}
 
           {isFullscreen && (
             <button
@@ -249,7 +300,9 @@ function SlideDeckBase({ slides, activeIndex, onSelect }: SlideDeckProps) {
           )}
         </div>
 
-        {notesOpen && activeSlide?.notes && (
+        {editor?.saveError && <div className="slide-deck__save-error" role="alert">{editor.saveError}</div>}
+
+        {notesOpen && activeSlide && (activeSlide.notes || editor) && (
           <div className="slide-deck__notes">
             <div className="slide-deck__notes-header">
               <span>Speaker notes</span>
@@ -264,10 +317,28 @@ function SlideDeckBase({ slides, activeIndex, onSelect }: SlideDeckProps) {
                 <X size={14} />
               </button>
             </div>
-            <div className="slide-deck__notes-body">{activeSlide.notes}</div>
+            {editor ? (
+              <textarea
+                key={activeSlide.id}
+                className="slide-deck__notes-editor"
+                aria-label="Speaker notes"
+                defaultValue={activeSlide.notes ?? ''}
+                disabled={!editor.canEditNotes}
+                placeholder="Click to add notes"
+                onBlur={(event) => {
+                  if (event.currentTarget.value !== (activeSlide.notes ?? '')) editor.onNotesChange(event.currentTarget.value)
+                }}
+              />
+            ) : (
+              <div className="slide-deck__notes-body">{activeSlide.notes}</div>
+            )}
           </div>
         )}
       </div>
+
+      {presenterOpen && (
+        <PresenterView slides={slides} activeIndex={activeIndex} onSelect={onSelect} onExit={exitPresenter} />
+      )}
     </div>
   )
 }

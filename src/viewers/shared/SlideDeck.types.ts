@@ -74,6 +74,10 @@ export type SlideTransform = {
 type SlideShapeBase = {
   readonly id: string
   readonly transform: SlideTransform
+  /** USR-16 — the shape's `p:cNvPr@id` in its slide part, used to address it for editing (PPTX only). */
+  readonly sourceId?: string
+  /** USR-16 — a top-level (not grouped) shape whose box can be moved/resized in place. */
+  readonly movable?: boolean
 }
 
 export type SlideTextBox = SlideShapeBase & {
@@ -89,6 +93,8 @@ export type SlideTextBox = SlideShapeBase & {
   readonly placeholderType?: string
   /** USR-15 — `a:bodyPr` text layout, resolved through the layout/master placeholder chain. */
   readonly body?: SlideTextBody
+  /** USR-16 — prompt shown only while editing, for an empty title/body placeholder (e.g. "Click to add title"). */
+  readonly placeholderPrompt?: string
 }
 
 export type SlideTextAnchor = 'top' | 'middle' | 'bottom'
@@ -137,6 +143,8 @@ export type SlideShape = SlideTextBox | SlideShapeOnly | SlideImage | SlideTable
 export type SlideData = {
   readonly id: string
   readonly index: number
+  /** USR-16 — the slide's part path in the package (e.g. `ppt/slides/slide3.xml`), PPTX only. */
+  readonly partPath?: string
   /** Extracted from a title placeholder; falls back to "Slide N" in the UI. */
   readonly title?: string
   readonly hidden?: boolean

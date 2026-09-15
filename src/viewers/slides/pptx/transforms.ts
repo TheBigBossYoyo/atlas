@@ -128,6 +128,8 @@ export type PositionedShape = {
    * stacking only when nothing is inherited" acceptance criterion.
    */
   readonly transform: SlideTransform | null
+  /** USR-16 — nested in a `p:grpSp` (its box is in the group's child space, so it is not moved directly). */
+  readonly inGroup: boolean
 }
 
 /**
@@ -161,13 +163,13 @@ export function traverseShapeTree(
           // space to fall back into (invalid OOXML in practice) — skip it. A
           // top-level shape still gets a place in the deck via generic stacking.
           if (!parent) {
-            results.push({ element: child, transform: null })
+            results.push({ element: child, transform: null, inGroup: false })
           }
           continue
         }
 
         const absolute = parent ? composeWithParent(parent.transform, parent.group, own) : own
-        results.push({ element: child, transform: absolute })
+        results.push({ element: child, transform: absolute, inGroup: parent !== null })
       }
     } catch {
       // One malformed shape's transform must not drop every sibling.

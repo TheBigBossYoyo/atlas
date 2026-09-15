@@ -4,8 +4,8 @@
  * model — the whole point of Wave 3-S's format-agnostic `SlideShape[]`.
  */
 
-import { memo, useEffect, useState, type CSSProperties } from 'react'
-import type { SlideData, SlideImage, SlideShape } from './SlideDeck.types'
+import { memo, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import type { SlideData, SlideImage, SlideShape, SlideTransform } from './SlideDeck.types'
 import { SlideTableGrid, TextParagraphs } from './SlideShapeContent'
 import { fillToCss, geometryToCss, textBodyToCss, transformToCss } from './slideStyleHelpers'
 import { getDownscaledImage } from './downscaleImage'
@@ -122,10 +122,12 @@ function ShapeRenderer({
   shape,
   interactive,
   scale,
+  showPlaceholderPrompt,
 }: {
   readonly shape: SlideShape
   readonly interactive: boolean
   readonly scale: number
+  readonly showPlaceholderPrompt: boolean
 }) {
   const style = boxStyle(shape)
   const pointerEvents: CSSProperties['pointerEvents'] = interactive ? 'auto' : 'none'
@@ -146,7 +148,9 @@ function ShapeRenderer({
             pointerEvents,
           }}
         >
-          <TextParagraphs paragraphs={shape.paragraphs} fontScale={shape.fontScale} />
+          {shape.text === '' && shape.placeholderPrompt
+            ? showPlaceholderPrompt && <div className="slide-shape__prompt">{shape.placeholderPrompt}</div>
+            : <TextParagraphs paragraphs={shape.paragraphs} fontScale={shape.fontScale} />}
         </div>
       )
     }
@@ -210,9 +214,25 @@ type SlideCanvasProps = {
   readonly slide: SlideData
   readonly scale: number
   readonly interactive: boolean
+  /** USR-16 editing: a shape drawn by an overlay editor instead (its text is being edited). */
+  readonly hiddenShapeId?: string
+  /** USR-16 editing: live box of a shape being dragged or resized. */
+  readonly transformOverride?: { readonly shapeId: string; readonly transform: SlideTransform }
+  /** USR-16 editing: show "Click to add title" prompts in empty placeholders. */
+  readonly showPlaceholderPrompts?: boolean
+  /** Overlays positioned in slide coordinates (selection, handles, text editor). */
+  readonly children?: ReactNode
 }
 
-function SlideCanvasBase({ slide, scale, interactive }: SlideCanvasProps) {
+function SlideCanvasBase({
+  slide,
+  scale,
+  interactive,
+  hiddenShapeId,
+  transformOverride,
+  showPlaceholderPrompts = false,
+  children,
+}: SlideCanvasProps) {
   const frameStyle: CSSProperties = {
     width: slide.width * scale,
     height: slide.height * scale,
@@ -230,9 +250,18 @@ function SlideCanvasBase({ slide, scale, interactive }: SlideCanvasProps) {
       <div className="slide-deck__slide" style={slideStyle}>
         {slide.error
           ? <div className="slide-deck__slide-error">{slide.error}</div>
-          : slide.shapes.map(shape => (
-              <ShapeRenderer key={shape.id} shape={shape} interactive={interactive} scale={scale} />
-            ))}
+          : slide.shapes.map(shape =>
+              shape.id === hiddenShapeId ? null : (
+                <ShapeRenderer
+                  key={shape.id}
+                  shape={shape.id === transformOverride?.shapeId ? { ...shape, transform: transformOverride.transform } : shape}
+                  interactive={interactive}
+                  scale={scale}
+                  showPlaceholderPrompt={showPlaceholderPrompts}
+                />
+              ),
+            )}
+        {children}
       </div>
     </div>
   )

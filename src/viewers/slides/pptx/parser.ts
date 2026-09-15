@@ -29,9 +29,9 @@ import { traverseShapeTree } from './transforms'
 const DEFAULT_SLIDE_WIDTH = 1280
 const DEFAULT_SLIDE_HEIGHT = 720
 
-type SlideSize = { readonly width: number; readonly height: number }
+export type SlideSize = { readonly width: number; readonly height: number }
 
-async function resolveSlidePaths(
+export async function resolveSlidePaths(
   zip: ZipArchive,
   signal: CancelSignal,
 ): Promise<{ readonly slidePaths: ReadonlyArray<string>; readonly size: SlideSize }> {
@@ -121,7 +121,7 @@ async function buildSlideShapes(
   const shapes: SlideShape[] = []
   let genericStackIndex = 0
 
-  for (const { element, transform: resolvedTransform } of positioned) {
+  for (const { element, transform: resolvedTransform, inGroup } of positioned) {
     if (signal.cancelled) {
       break
     }
@@ -139,21 +139,24 @@ async function buildSlideShapes(
       genericStackIndex += 1
     }
 
+    // USR-16 — address for editing: the shape's own cNvPr id; only top-level shapes move directly.
+    const source = { sourceId: getFirstByLocalName(element, 'cNvPr')?.getAttribute('id') ?? undefined, movable: !inGroup }
+
     try {
       if (element.localName === 'sp' || element.localName === 'cxnSp') {
         const shape = buildShapeElement(element, id, transform, chain, consumedTextNodes)
         if (shape) {
-          shapes.push(shape)
+          shapes.push({ ...shape, ...source })
         }
       } else if (element.localName === 'pic') {
         const image = await buildImageShape(zip, element, id, transform, relationships, signal)
         if (image) {
-          shapes.push(image)
+          shapes.push({ ...image, ...source })
         }
       } else if (element.localName === 'graphicFrame') {
         const graphicShape = buildGraphicFrameShape(element, id, transform, chain, consumedTextNodes)
         if (graphicShape) {
-          shapes.push(graphicShape)
+          shapes.push({ ...graphicShape, ...source })
         }
       }
     } catch {
@@ -165,7 +168,8 @@ async function buildSlideShapes(
   return [...shapes, ...buildStrayTextShapes(slideDocument, slidePath, size, consumedTextNodes)]
 }
 
-async function parseOneSlide(
+/** Parses one slide part (USR-16 re-parses only the slides an edit touched). */
+export async function parseOneSlide(
   zip: ZipArchive,
   slidePath: string,
   index: number,
@@ -186,6 +190,7 @@ async function parseOneSlide(
     return {
       id: `slide-${index + 1}`,
       index,
+      partPath: slidePath,
       title: extractSlideTitle(slideDocument),
       hidden: isSlideHidden(slideDocument),
       notes,
@@ -199,6 +204,7 @@ async function parseOneSlide(
     return {
       id: `slide-${index + 1}`,
       index,
+      partPath: slidePath,
       width: size.width,
       height: size.height,
       shapes: [],

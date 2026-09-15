@@ -2,19 +2,21 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { ViewerProps } from '../formats/types'
 import { SlideDeck } from './shared/SlideDeck'
-import type { SlideData } from './shared/SlideDeck.types'
+import type { SlideDeckEditor } from './shared/SlideEditToolbar'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
 import { useSlideKeyboardNav } from './slides/shared/useSlideKeyboardNav'
-import type { CancelSignal, ZipArchive } from './slides/shared/xmlUtils'
-import { parsePptxSlides } from './slides/pptx/parser'
+import { usePptxEditor } from './slides/pptx/editing/usePptxEditor'
+
+/** USR-16 — share of the slide a new text box takes, centered. */
+const NEW_TEXT_BOX_WIDTH = 0.5
+const NEW_TEXT_BOX_HEIGHT_PX = 60
 
 function PptxViewerBase({ file }: ViewerProps) {
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
-  const [slides, setSlides] = useState<ReadonlyArray<SlideData>>([])
   const [activeIndex, setActiveIndex] = useState(0)
-  const [error, setError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
+  const editor = usePptxEditor(file.kind === 'binary' ? file.content : null, file.path)
+  const { slides } = editor
 
   const handleSelectSlide = useCallback((index: number) => {
     setActiveIndex(currentIndex => (currentIndex === index ? currentIndex : index))
@@ -49,71 +51,69 @@ function PptxViewerBase({ file }: ViewerProps) {
     setStats({ kind: 'slides', slide: activeIndex + 1, slideCount: visibleSlides.length })
   }, [activeIndex, setStats, visibleSlides.length])
 
-  useEffect(() => {
-    if (visibleSlides.length === 0) {
-      return
-    }
-
-    setActiveIndex(currentIndex => Math.min(currentIndex, visibleSlides.length - 1))
-  }, [visibleSlides.length])
+  if (visibleSlides.length > 0 && activeIndex > visibleSlides.length - 1) {
+    setActiveIndex(visibleSlides.length - 1)
+  }
 
   // S15 — PageUp/PageDown plus Arrow/Space (next/previous) and Home/End (first/last).
   useSlideKeyboardNav(visibleSlides.length, setActiveIndex)
 
-  useEffect(() => {
-    setNavItems([])
-    setStats(null)
-    setSlides([])
-    setActiveIndex(0)
-    setError(null)
+  const active = visibleSlides[activeIndex]
+  // Edits address slides by their position in the whole deck (hidden slides included).
+  const deckIndex = active?.index ?? 0
+  const visiblePositionOf = useCallback(
+    (index: number) => Math.max(0, editor.slides.filter((slide, i) => i <= index && !slide.hidden).length - 1),
+    [editor.slides],
+  )
 
-    if (file.kind !== 'binary') {
-      setIsLoading(false)
-      return
+  const deckEditor = useMemo<SlideDeckEditor | undefined>(() => {
+    if (!active) return undefined
+    return {
+      canUndo: editor.canUndo,
+      canRedo: editor.canRedo,
+      onUndo: editor.undo,
+      onRedo: editor.redo,
+      onAddSlide: () => {
+        void editor.addSlide(deckIndex).then(index => setActiveIndex(visiblePositionOf(index)))
+      },
+      onDuplicateSlide: () => {
+        void editor.duplicateSlide(deckIndex).then(() => setActiveIndex(current => current + 1))
+      },
+      onDeleteSlide: () => {
+        void editor.deleteSlide(deckIndex)
+      },
+      onMoveSlide: (delta) => {
+        const target = visibleSlides[activeIndex + delta]
+        if (!target) return
+        void editor.moveSlide(deckIndex, target.index).then(() => setActiveIndex(current => current + delta))
+      },
+      onInsertTextBox: () =>
+        editor.insertTextBox(deckIndex, {
+          x: (active.width * (1 - NEW_TEXT_BOX_WIDTH)) / 2,
+          y: (active.height - NEW_TEXT_BOX_HEIGHT_PX) / 2,
+          w: active.width * NEW_TEXT_BOX_WIDTH,
+          h: NEW_TEXT_BOX_HEIGHT_PX,
+        }),
+      onSave: () => {
+        void editor.save()
+      },
+      onSaveAs: () => {
+        void editor.saveAs()
+      },
+      canEditNotes: editor.canEditNotes(deckIndex),
+      onNotesChange: (text) => {
+        void editor.setNotes(deckIndex, text)
+      },
+      onShapeText: (sourceId, text) => {
+        void editor.setShapeText(deckIndex, sourceId, text)
+      },
+      onShapeBox: (sourceId, box) => editor.setShapeBox(deckIndex, sourceId, box),
+      onDeleteShape: (sourceId) => {
+        void editor.deleteShape(deckIndex, sourceId)
+      },
+      saveError: editor.saveError,
     }
-
-    const signal: CancelSignal = { cancelled: false }
-
-    setIsLoading(true)
-
-    void (async () => {
-      try {
-        const { default: JSZip } = await import('jszip')
-
-        if (signal.cancelled) {
-          return
-        }
-
-        const zip = await JSZip.loadAsync(file.content)
-
-        if (signal.cancelled) {
-          return
-        }
-
-        const nextSlides = await parsePptxSlides(zip as ZipArchive, signal)
-
-        if (signal.cancelled) {
-          return
-        }
-
-        setSlides(nextSlides)
-        setActiveIndex(0)
-        setError(nextSlides.length > 0 ? null : 'No slides found in PPTX.')
-        setIsLoading(false)
-      } catch (err: unknown) {
-        if (signal.cancelled) {
-          return
-        }
-
-        setError(err instanceof Error ? err.message : String(err))
-        setIsLoading(false)
-      }
-    })()
-
-    return () => {
-      signal.cancelled = true
-    }
-  }, [file, setNavItems, setStats])
+  }, [active, activeIndex, deckIndex, editor, visiblePositionOf, visibleSlides])
 
   if (file.kind !== 'binary') {
     return (
@@ -123,25 +123,21 @@ function PptxViewerBase({ file }: ViewerProps) {
     )
   }
 
-  if (error !== null) {
+  if (editor.status === 'error') {
     return (
       <div className="pptx-viewer pptx-viewer--error">
-        Failed to render PPTX: {error}
+        Failed to render PPTX: {editor.error}
       </div>
     )
   }
 
-  if (isLoading) {
+  if (editor.status === 'loading') {
     return <div className="pptx-viewer">Loading PPTX slides…</div>
   }
 
   return (
     <div className="pptx-viewer" style={{ width: '100%', height: '100%' }}>
-      <SlideDeck
-        slides={visibleSlides}
-        activeIndex={activeIndex}
-        onSelect={handleSelectSlide}
-      />
+      <SlideDeck slides={visibleSlides} activeIndex={activeIndex} onSelect={handleSelectSlide} editor={deckEditor} />
     </div>
   )
 }

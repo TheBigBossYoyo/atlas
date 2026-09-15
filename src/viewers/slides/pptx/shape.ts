@@ -13,6 +13,15 @@ const DEFAULT_INSET_Y_PX = 4.8
 
 const ANCHORS: Readonly<Record<string, SlideTextAnchor>> = { t: 'top', ctr: 'middle', b: 'bottom' }
 
+/** USR-16 — empty text placeholders stay on the slide (editable), showing PowerPoint's prompt only while editing. */
+const PLACEHOLDER_PROMPTS: Readonly<Record<string, string>> = {
+  title: 'Click to add title',
+  ctrTitle: 'Click to add title',
+  subTitle: 'Click to add subtitle',
+  body: 'Click to add text',
+  obj: 'Click to add text',
+}
+
 /**
  * USR-15 — resolves text-box layout from `a:bodyPr` elements ordered slide ->
  * layout -> master: the first element that sets an attribute wins. Titles
@@ -61,7 +70,9 @@ export function buildShapeElement(
   const ref = shape.localName === 'sp' ? getPlaceholderRef(shape) : null
   const { paragraphs, text, fontScale } = parseTextBody(shape, ref, chain)
 
-  if (text.length > 0) {
+  const placeholderPrompt = text.length === 0 && ref ? PLACEHOLDER_PROMPTS[ref.type ?? 'body'] : undefined
+
+  if (text.length > 0 || placeholderPrompt !== undefined) {
     const bodyPr = getFirstByLocalName(getFirstByLocalName(shape, 'txBody') ?? shape, 'bodyPr')
     const inheritedBodyPrs = ref
       ? [findMatchingPlaceholder(chain.layoutDocument, ref), findMatchingPlaceholder(chain.masterDocument, ref)].map(
@@ -80,6 +91,7 @@ export function buildShapeElement(
       fontScale: fontScale ?? resolveNormAutofitScale(bodyPr),
       placeholderType: ref?.type ?? undefined,
       body: resolveTextBody([bodyPr, ...inheritedBodyPrs], ref?.type ?? null),
+      ...(placeholderPrompt !== undefined ? { placeholderPrompt } : {}),
     }
   }
 
