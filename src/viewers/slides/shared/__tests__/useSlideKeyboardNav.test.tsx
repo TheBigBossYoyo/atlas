@@ -17,7 +17,7 @@ function renderNav(slideCount: number, setActiveIndex: (updater: (i: number) => 
   )
 }
 
-function pressKey(key: string, target: EventTarget = window): void {
+function pressKey(key: string, target: Document | Element | Window = window): void {
   fireEvent.keyDown(target, { key })
 }
 

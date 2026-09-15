@@ -215,23 +215,15 @@ function PdfViewerBase({ file }: ViewerProps) {
 
   // ---- Find (PDF-06/P6) --------------------------------------------------
 
+  // Ctrl+F itself is registered by usePdfFind through the shell's
+  // centralized shortcut dispatcher (wave-3 shell-polish follow-up) rather
+  // than this component's own raw keydown handler below — see that hook's
+  // own comment.
   const find = usePdfFind(pdfDoc, pageCount, scrollToPage)
   const activeMatch = find.matches[find.currentMatchIndex]
   const activeMatchLocalIndex = activeMatch
     ? localMatchIndexOnPage(find.matches, find.currentMatchIndex)
     : -1
-
-  // find.isOpen/open/close are read via a ref inside the keydown handler
-  // further below instead of that effect's dependency array — `find`
-  // (usePdfFind's return value) is a fresh object every render, and
-  // depending on it directly would tear down/rebuild the window listener on
-  // every render.
-  const findIsOpenRef = useRef(find.isOpen)
-  useEffect(() => {
-    findIsOpenRef.current = find.isOpen
-  }, [find.isOpen])
-  const findOpen = find.open
-  const findClose = find.close
 
   // ---- Container size (P2: drives fit-width/fit-page re-fit on resize) --
 
@@ -364,10 +356,6 @@ function PdfViewerBase({ file }: ViewerProps) {
         } else if (e.key === '0') {
           e.preventDefault()
           setZoomMode(DEFAULT_ZOOM)
-        } else if (e.key.toLowerCase() === 'f') {
-          e.preventDefault()
-          if (findIsOpenRef.current) findClose()
-          else findOpen()
         } else if (e.key.toLowerCase() === 'p') {
           e.preventDefault()
           void handlePrint()
@@ -396,7 +384,7 @@ function PdfViewerBase({ file }: ViewerProps) {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [handleNextPage, handlePrevPage, scrollToPage, handleZoomIn, handleZoomOut, handlePrint, findOpen, findClose])
+  }, [handleNextPage, handlePrevPage, scrollToPage, handleZoomIn, handleZoomOut, handlePrint])
 
   // Click outside to close the zoom menu.
   useEffect(() => {
