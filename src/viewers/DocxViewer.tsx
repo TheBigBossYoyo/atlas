@@ -9,6 +9,7 @@ import {
   type FormEvent,
   type ClipboardEvent as ReactClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react'
 
 import { Printer, Save, X } from 'lucide-react'
@@ -61,6 +62,7 @@ import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from 
 import { comparePositions } from '../docx/editor/Selection'
 import { domPointToPosition, positionToDomRange } from '../docx/editor/Cursor'
 import { Toolbar } from '../docx/editor/toolbar/Toolbar'
+import { TableEditMenuItems } from '../docx/editor/toolbar/TableEditMenuItems'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
 import './__styles__/viewer-docx.css'
 import { useRegisterViewerSave, useSetNavItems, useSetViewerDirty, useSetViewerStats } from './shared/useViewerContext'
@@ -524,6 +526,11 @@ function DocxEditor({
   const fontResolver = useMemo(() => createFontResolver(), [])
   const [documentModel, setDocumentModel] = useState(bundle.document)
   const [range, setRange] = useState<Range | null>(null)
+  // DXE-14 — right-click table-editing context menu; `null` when closed.
+  // Screen coordinates only (not which table/cell), since by the time a
+  // menu item fires, `range` (synced onto the click below) is already the
+  // source of truth `handleToolbarCommand`/`toolbarToCommand` resolve against.
+  const [tableContextMenuAt, setTableContextMenuAt] = useState<{ x: number; y: number } | null>(null)
   const [pages, setPages] = useState<ReadonlyArray<Page> | null>(null)
   const [paginationProgress, setPaginationProgress] = useState<PaginationProgress | null>(null)
   const [paginationError, setPaginationError] = useState<string | null>(null)
@@ -679,6 +686,37 @@ function DocxEditor({
     const nextRange = getSelectionFromDom(root)
     setRange(current => (rangeEquals(current, nextRange) ? current : nextRange))
   }, [])
+
+  /**
+   * DXE-14 — right-click inside a table cell opens Atlas's own table-editing
+   * menu instead of the native context menu; right-clicking anywhere else
+   * leaves the native menu alone (this viewer doesn't yet have a general
+   * replacement for it — cut/copy/paste, spell-check suggestions, etc.).
+   * Reads the DOM selection directly (`getSelectionFromDom`) rather than the
+   * `range` state, which a right-click's `mousedown` has already moved in
+   * the real DOM by the time this fires but this component's `onMouseUp`
+   * sync hasn't caught up with yet — see the `onContextMenu`/`onMouseUp`
+   * ordering note on the surface element below.
+   */
+  const handleTableContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      const root = editorRootRef.current
+      if (root === null) {
+        return
+      }
+
+      const domRange = getSelectionFromDom(root)
+      const enclosing = domRange === null ? null : findEnclosingTable(documentModel, domRange.focus.paragraphPath)
+      if (enclosing === null) {
+        return
+      }
+
+      event.preventDefault()
+      setRange(domRange)
+      setTableContextMenuAt({ x: event.clientX, y: event.clientY })
+    },
+    [documentModel],
+  )
 
   const mediaResolver = useArchiveMediaResolver(bundle.rawArchive, bundle.relationships)
 
@@ -1543,6 +1581,7 @@ function DocxEditor({
           onCompositionUpdate={handleCompositionUpdate}
           onCompositionEnd={handleCompositionEnd}
           onPaste={handlePaste}
+          onContextMenu={handleTableContextMenu}
         >
           {pages !== null ? (
             <MediaContext.Provider value={mediaResolver}>
@@ -1592,6 +1631,32 @@ function DocxEditor({
             </div>
           )}
         </div>
+        {tableContextMenuAt !== null ? (
+          <>
+            {/* DXE-14 — a full-viewport transparent layer that closes the menu on
+                any outside click/right-click, mirroring Toolbar.tsx's popovers
+                (whose own useClickOutside hook isn't exported/reusable here). */}
+            <div
+              className="docx-viewer__context-menu-overlay"
+              onClick={() => setTableContextMenuAt(null)}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                setTableContextMenuAt(null)
+              }}
+            />
+            <div
+              className="docx-toolbar__popover docx-viewer__context-menu"
+              style={{ position: 'fixed', top: tableContextMenuAt.y, left: tableContextMenuAt.x }}
+              role="menu"
+              aria-label="Table editing"
+            >
+              <TableEditMenuItems
+                onCommand={handleToolbarCommand}
+                onAfterCommand={() => setTableContextMenuAt(null)}
+              />
+            </div>
+          </>
+        ) : null}
         {commentsPaneOpen || documentModel.comments.size > 0 ? (
           <CommentsPane
             document={commentsDocument}

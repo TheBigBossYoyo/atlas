@@ -142,6 +142,87 @@ function createBundle() {
   }
 }
 
+/** DXE-14 — a document whose only top-level block is a 1x1 table, so a
+ * selection at paragraph path `[0, 0, 0, 0, 0]` (section, table block, row,
+ * cell, paragraph) sits inside its one cell. */
+function createTableBundle() {
+  return {
+    document: {
+      kind: 'document' as const,
+      sections: [
+        {
+          kind: 'section' as const,
+          props: {},
+          blocks: [
+            {
+              kind: 'table' as const,
+              rows: [
+                {
+                  kind: 'table-row' as const,
+                  cells: [
+                    {
+                      kind: 'table-cell' as const,
+                      blocks: [
+                        {
+                          kind: 'paragraph' as const,
+                          props: {},
+                          children: [
+                            {
+                              kind: 'run' as const,
+                              props: {},
+                              children: [{ kind: 'text' as const, value: 'Cell text' }],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      styles: new Map(),
+      numbering: new Map(),
+      headers: new Map(),
+      footers: new Map(),
+      comments: new Map(),
+      footnotes: new Map(),
+      endnotes: new Map(),
+    },
+    rawArchive: new Map(),
+  }
+}
+
+/**
+ * DXE-14 — the mocked `PageStack` above always renders one fixed line
+ * regardless of document content, so a real "cursor inside a table cell"
+ * selection is built directly against the DOM instead: append a line with
+ * the deep paragraph path a table cell would have, then point the browser's
+ * real Selection at its run span — exactly what `getSelectionFromDom`
+ * (`DocxViewer.tsx`) reads.
+ */
+function placeSelectionInsideSurfaceTableCell(): void {
+  const surface = document.querySelector('.docx-viewer__surface') as HTMLElement
+  const line = document.createElement('div')
+  line.className = 'docx-page__line'
+  line.setAttribute('data-paragraph-path', '0,0,0,0,0')
+  const span = document.createElement('span')
+  span.setAttribute('data-run-index', '0')
+  span.textContent = 'Cell text'
+  line.appendChild(span)
+  surface.appendChild(line)
+
+  const textNode = span.firstChild as Text
+  const domRange = document.createRange()
+  domRange.setStart(textNode, 0)
+  domRange.setEnd(textNode, 0)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(domRange)
+}
+
 describe('DocxViewer editor', () => {
   beforeEach(() => {
     loadDocxMock.mockResolvedValue(createBundle())
@@ -977,4 +1058,85 @@ describe('DocxViewer editor', () => {
       expect(ctrlBOnButton.defaultPrevented).toBe(true)
     },
   )
+
+  // ---------------------------------------------------------------------------
+  // DXE-14 — right-click table-editing context menu
+  // ---------------------------------------------------------------------------
+
+  it('right-clicking inside a table cell opens the table menu, and picking an entry applies its command', async () => {
+    loadDocxMock.mockResolvedValue(createTableBundle())
+    window.getSelection()?.removeAllRanges()
+
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <ViewerDirtyProbe />
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+
+    placeSelectionInsideSurfaceTableCell()
+    const surface = document.querySelector('.docx-viewer__surface') as HTMLElement
+    const contextMenuEvent = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 40,
+      clientY: 60,
+    })
+    fireEvent(surface, contextMenuEvent)
+    expect(contextMenuEvent.defaultPrevented).toBe(true)
+
+    expect(await screen.findByRole('menu', { name: 'Table editing' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Delete Table'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+    expect(screen.queryByRole('menu', { name: 'Table editing' })).not.toBeInTheDocument()
+  })
+
+  it('right-clicking outside a table leaves the native context menu alone', async () => {
+    window.getSelection()?.removeAllRanges()
+
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    const surface = document.querySelector('.docx-viewer__surface') as HTMLElement
+    const contextMenuEvent = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 10,
+      clientY: 10,
+    })
+    fireEvent(surface, contextMenuEvent)
+
+    expect(contextMenuEvent.defaultPrevented).toBe(false)
+    expect(screen.queryByRole('menu', { name: 'Table editing' })).not.toBeInTheDocument()
+  })
 })

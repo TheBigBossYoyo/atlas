@@ -250,3 +250,19 @@
   background: var(--accent, #4a90e2);
   transition: width 120ms linear;
 }
+
+/* DXE-14 — right-click table-editing context menu (DocxViewer.tsx's
+   handleTableContextMenu). The overlay sits just under the menu so any
+   click/right-click outside it closes the menu without needing a
+   document-level listener. */
+.docx-viewer__context-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: transparent;
+}
+
+.docx-viewer__context-menu {
+  z-index: 1001;
+  margin: 0;
+}
