@@ -1,20 +1,30 @@
-import { renderHook } from '@testing-library/react'
+import { fireEvent, render } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
+import { ShortcutManagerProvider } from '../../../../hooks/ShortcutManagerProvider'
 import { useSlideKeyboardNav } from '../useSlideKeyboardNav'
 
+function Probe({ slideCount, setActiveIndex }: { slideCount: number; setActiveIndex: (updater: (i: number) => number) => void }) {
+  useSlideKeyboardNav(slideCount, setActiveIndex)
+  return null
+}
+
+function renderNav(slideCount: number, setActiveIndex: (updater: (i: number) => number) => void) {
+  return render(
+    <ShortcutManagerProvider>
+      <Probe slideCount={slideCount} setActiveIndex={setActiveIndex} />
+    </ShortcutManagerProvider>,
+  )
+}
+
 function pressKey(key: string, target: EventTarget = window): void {
-  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
-  Object.defineProperty(event, 'target', { value: target })
-  window.dispatchEvent(event)
+  fireEvent.keyDown(target, { key })
 }
 
 describe('useSlideKeyboardNav', () => {
   it('S15 — ArrowRight/ArrowDown/Space advance to the next slide, clamped at the last', () => {
     const setActiveIndex = vi.fn()
-    renderHook(() => {
-      useSlideKeyboardNav(3, setActiveIndex)
-    })
+    renderNav(3, setActiveIndex)
 
     for (const key of ['ArrowRight', 'ArrowDown', ' ']) {
       setActiveIndex.mockClear()
@@ -27,9 +37,7 @@ describe('useSlideKeyboardNav', () => {
 
   it('S15 — ArrowLeft/ArrowUp/PageUp go to the previous slide, clamped at zero', () => {
     const setActiveIndex = vi.fn()
-    renderHook(() => {
-      useSlideKeyboardNav(3, setActiveIndex)
-    })
+    renderNav(3, setActiveIndex)
 
     for (const key of ['ArrowLeft', 'ArrowUp', 'PageUp']) {
       setActiveIndex.mockClear()
@@ -41,9 +49,7 @@ describe('useSlideKeyboardNav', () => {
 
   it('S15 — Home/End jump to the first/last slide', () => {
     const setActiveIndex = vi.fn()
-    renderHook(() => {
-      useSlideKeyboardNav(5, setActiveIndex)
-    })
+    renderNav(5, setActiveIndex)
 
     pressKey('Home')
     expect(setActiveIndex.mock.calls[0][0](3)).toBe(0)
@@ -57,9 +63,7 @@ describe('useSlideKeyboardNav', () => {
     const input = document.createElement('input')
     document.body.appendChild(input)
     const setActiveIndex = vi.fn()
-    renderHook(() => {
-      useSlideKeyboardNav(3, setActiveIndex)
-    })
+    renderNav(3, setActiveIndex)
 
     pressKey('ArrowRight', input)
 
@@ -69,12 +73,38 @@ describe('useSlideKeyboardNav', () => {
 
   it('does nothing when there are no slides', () => {
     const setActiveIndex = vi.fn()
-    renderHook(() => {
-      useSlideKeyboardNav(0, setActiveIndex)
-    })
+    renderNav(0, setActiveIndex)
 
     pressKey('ArrowRight')
 
     expect(setActiveIndex).not.toHaveBeenCalled()
+  })
+
+  it('lets Space activate a focused thumbnail-rail button instead of advancing the slide (shell-polish fix)', () => {
+    const button = document.createElement('button')
+    document.body.appendChild(button)
+    const onClick = vi.fn()
+    button.addEventListener('click', onClick)
+    const setActiveIndex = vi.fn()
+    renderNav(3, setActiveIndex)
+
+    pressKey(' ', button)
+
+    // The hook must not claim the event (and must not preventDefault it) —
+    // it neither advances the slide nor blocks the button's own handling.
+    expect(setActiveIndex).not.toHaveBeenCalled()
+    document.body.removeChild(button)
+  })
+
+  it('still advances the slide on Space when focus is not on a button', () => {
+    const div = document.createElement('div')
+    document.body.appendChild(div)
+    const setActiveIndex = vi.fn()
+    renderNav(3, setActiveIndex)
+
+    pressKey(' ', div)
+
+    expect(setActiveIndex).toHaveBeenCalledTimes(1)
+    document.body.removeChild(div)
   })
 })

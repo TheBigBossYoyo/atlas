@@ -120,6 +120,38 @@ describe('useTheme — live system theme changes (SHELL-25)', () => {
     expect(second.result.current.theme).toBe('dark');
   });
 
+  it('migration: a pre-existing stored theme with no explicit flag is treated as explicit, so an OS toggle does not override it', () => {
+    // Simulates an install from before the explicit-choice flag existed:
+    // `atlas-theme` is already on disk (from ordinary persistence, not
+    // necessarily a deliberate ThemeMenu pick) but `atlas-theme-explicit`
+    // has never been written.
+    localStorage.setItem('atlas-theme', 'nord');
+    const mql = installMatchMediaMock(false);
+
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.theme).toBe('nord');
+
+    act(() => {
+      mql.setSystemDark(true);
+    });
+
+    expect(result.current.theme).toBe('nord');
+    expect(localStorage.getItem('atlas-theme-explicit')).toBe('1');
+  });
+
+  it('a brand-new install (no stored theme at all) still follows the OS live, unaffected by the migration', () => {
+    const mql = installMatchMediaMock(false);
+    const { result } = renderHook(() => useTheme());
+
+    expect(result.current.theme).toBe('light');
+
+    act(() => {
+      mql.setSystemDark(true);
+    });
+
+    expect(result.current.theme).toBe('dark');
+  });
+
   it('cleans up its matchMedia listener on unmount', () => {
     const mql = installMatchMediaMock(false);
     const { unmount } = renderHook(() => useTheme());

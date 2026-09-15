@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { THEMES, type Theme } from '../types';
 
+const THEME_KEY = 'atlas-theme';
 const EXPLICIT_KEY = 'atlas-theme-explicit';
 
 function isTheme(value: string | null): value is Theme {
@@ -12,14 +13,33 @@ function systemTheme(): Theme {
 }
 
 function getInitialTheme(): Theme {
-  const stored = localStorage.getItem('atlas-theme');
+  const stored = localStorage.getItem(THEME_KEY);
   if (isTheme(stored)) return stored;
   return systemTheme();
 }
 
+/**
+ * Migration (wave 3 shell-polish follow-up to SHELL-25): an install that
+ * already had a persisted theme before `EXPLICIT_KEY` existed must keep
+ * behaving the way it always did — sticky across launches, never silently
+ * re-derived from a live OS change — even though a stored value alone can no
+ * longer tell us whether it came from a deliberate ThemeMenu/Ctrl+T pick or
+ * just the very first cold-start OS read. Without this, every upgraded
+ * install would start unexpectedly retheming itself on the next OS light/
+ * dark toggle, which is a bigger surprise than the smaller risk of also
+ * grandfathering a same-version install that never touched the theme picker
+ * before its first relaunch. A brand-new install (no stored theme at all
+ * yet) is unaffected and still follows the OS live until the user actually
+ * picks one.
+ */
 function hasExplicitChoice(): boolean {
   try {
-    return localStorage.getItem(EXPLICIT_KEY) === '1';
+    if (localStorage.getItem(EXPLICIT_KEY) === '1') return true;
+    if (localStorage.getItem(THEME_KEY) !== null) {
+      localStorage.setItem(EXPLICIT_KEY, '1');
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -34,7 +54,7 @@ export function useTheme() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('atlas-theme', theme);
+    localStorage.setItem(THEME_KEY, theme);
     window.electronAPI?.setTheme?.(theme as never);
   }, [theme]);
 
