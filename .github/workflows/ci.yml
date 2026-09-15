@@ -54,6 +54,15 @@ jobs:
       - name: Build
         run: npx vite build
 
+      # P4.3/RUN-15/QA-17 — the bundle-regression gate is wired as the
+      # `postbuild` npm script (package.json), which only fires for `npm run
+      # build`; this job calls `vite build` directly (so unit tests/lint/
+      # type-check run before a possibly-failing build, each with its own
+      # clear step name) and would otherwise never invoke it at all — an
+      # explicit step is required for the gate to actually gate anything here.
+      - name: Check bundle size
+        run: node scripts/check-bundle.mjs
+
   # P4.9/P4.3 — real Electron end-to-end smoke coverage, gated to pushes on
   # main (not every PR/branch push) since it needs a full Electron binary
   # download plus a genuine app launch and is meaningfully slower than the
@@ -66,8 +75,15 @@ jobs:
     runs-on: windows-latest
     env:
       # Override the workflow-level skip: this job needs the real Electron
-      # binary to launch the app under Playwright.
-      ELECTRON_SKIP_BINARY_DOWNLOAD: 0
+      # binary to launch the app under Playwright. `electron`'s own
+      # postinstall (node_modules/electron/install.js) only checks
+      # `if (process.env.ELECTRON_SKIP_BINARY_DOWNLOAD)` — a bare truthiness
+      # test, not `=== '1'` — so setting this to the *string* "0" is still
+      # truthy in Node and would silently keep skipping the download,
+      # leaving no real Electron binary for Playwright to launch and this
+      # entire job permanently red. An empty string is the only value that's
+      # actually falsy here.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: ''
     steps:
       - name: Checkout
         uses: actions/checkout@v7
