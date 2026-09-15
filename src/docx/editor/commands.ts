@@ -133,7 +133,7 @@ export function applyCommand(
     case 'insert-inline':
       return applyInsertInline(doc, cmd)
     case 'composite':
-      return applyComposite(doc, cmd)
+      return applyComposite(doc, cmd, trackChanges)
     case 'replace-blocks':
       return applyReplaceBlocks(doc, cmd)
     case 'insert-list':
@@ -175,16 +175,27 @@ export function applyCommand(
 // Composite / structural primitives (D13, D12 cross-paragraph support)
 // ---------------------------------------------------------------------------
 
+/**
+ * DXE-11 — `trackChanges`, when given, is forwarded to every sub-command
+ * exactly as `applyCommand` would for a lone command: an `insert-text`/
+ * `delete-range` inside a batch (e.g. `handleRichPaste`'s pasted-text
+ * commands, or Replace All's find-and-replace pairs) is recorded as
+ * `w:ins`/`w:del` the same as typed text, while a sub-command kind that
+ * doesn't accept tracking (`insert-table`, `apply-run-format`, ...) just
+ * ignores the extra argument as it always has — see those functions' own
+ * signatures for which kinds actually consult it.
+ */
 function applyComposite(
   doc: Document,
   cmd: Extract<Command, { kind: 'composite' }>,
+  trackChanges?: TrackChangesContext,
 ): { document: Document; inverse: Command; range?: Range } {
   let workingDocument = doc
   const inverses: Command[] = []
   let lastRange: Range | undefined
 
   for (const sub of cmd.commands) {
-    const result = applyCommand(workingDocument, sub)
+    const result = applyCommand(workingDocument, sub, trackChanges)
     workingDocument = result.document
     inverses.push(result.inverse)
     if (result.range !== undefined) {

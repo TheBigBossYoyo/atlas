@@ -310,6 +310,49 @@ describe('DXE-11 — same-author tracking is scoped to a single trackChanges cal
   })
 })
 
+describe('DXE-11 — a composite command forwards trackChanges to every sub-command', () => {
+  // Regression: `applyEditorCommands`/`handleRichPaste` in DocxViewer.tsx
+  // wrap paste (and Replace All) in a single `composite` command so the
+  // whole batch undoes in one step. `applyComposite` used to call
+  // `applyCommand` on each sub-command with no `trackChanges` argument at
+  // all, so pasting while Track Changes was on silently inserted plain,
+  // untracked text — defeating the point of turning it on for exactly the
+  // edit a reviewer most needs visibility into.
+  it('records every insert-text in a paste-shaped composite as its own w:ins', () => {
+    const original = createDocument([createParagraph(['Hello'])])
+
+    const result = applyCommand(
+      original,
+      {
+        kind: 'composite',
+        commands: [
+          { kind: 'insert-paragraph-break', at: position([0], 0, 5) },
+          { kind: 'insert-text', at: position([1], 0, 0), text: 'World' },
+        ],
+      },
+      TRACK,
+    )
+
+    const secondParagraphChildren = paragraphChildren(result.document, [1])
+    expect(secondParagraphChildren).toHaveLength(1)
+    expect(secondParagraphChildren[0]).toMatchObject({ kind: 'ins-revision', author: 'Atlas' })
+    expect(revisionText(secondParagraphChildren[0])).toBe('World')
+  })
+
+  it('leaves a composite untracked when no trackChanges context is given, matching a single command', () => {
+    const original = createDocument([createParagraph([''])])
+
+    const result = applyCommand(original, {
+      kind: 'composite',
+      commands: [{ kind: 'insert-text', at: position([0], 0, 0), text: 'World' }],
+    })
+
+    const children = paragraphChildren(result.document, [0])
+    expect(children).toHaveLength(1)
+    expect(children[0].kind).toBe('run')
+  })
+})
+
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 /** `applyCommand`'s general return type can't express that `insert-text`

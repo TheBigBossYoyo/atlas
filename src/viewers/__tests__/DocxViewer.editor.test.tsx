@@ -65,6 +65,33 @@ function hasPageBreak(document: DocxDocument): boolean {
   )
 }
 
+/** Every top-level `ins-revision` paragraph child's own flattened run text —
+ * used to confirm a paste landed as a tracked insertion rather than plain
+ * text (regression coverage for DXE-11 + DXE-19 composing correctly). */
+function insRevisionTexts(document: DocxDocument): ReadonlyArray<string> {
+  const texts: string[] = []
+  for (const section of document.sections) {
+    for (const block of section.blocks) {
+      if (block.kind !== 'paragraph') continue
+      for (const child of block.children as ReadonlyArray<{
+        kind: string
+        children?: ReadonlyArray<{ kind: string; children?: ReadonlyArray<{ kind: string; value?: string }> }>
+      }>) {
+        if (child.kind !== 'ins-revision') continue
+        for (const run of child.children ?? []) {
+          if (run.kind !== 'run') continue
+          for (const grandchild of run.children ?? []) {
+            if (grandchild.kind === 'text' && typeof grandchild.value === 'string') {
+              texts.push(grandchild.value)
+            }
+          }
+        }
+      }
+    }
+  }
+  return texts
+}
+
 /** Types into Find, then Replace, and clicks "Replace" — a real edit via the
  * real (unmocked) find/replace/command pipeline, without needing a genuine
  * DOM selection (the mocked PageStack doesn't render real paragraph text). */
@@ -1230,5 +1257,86 @@ describe('DocxViewer editor', () => {
 
     const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
     expect(collectText(savedDocument)).toBe('Howdy plain paste')
+  })
+
+  // ---------------------------------------------------------------------------
+  // Regression — DXE-11 (track changes) + DXE-19 (paste) composing correctly.
+  // `applyEditorCommands`/`handleRichPaste` used to apply their command batch
+  // with no `trackChanges` argument at all, so pasting while Track Changes
+  // was on silently produced a plain, untracked edit instead of a `w:ins` —
+  // exactly the edit a reviewer relying on Track Changes most needs to see.
+  // ---------------------------------------------------------------------------
+
+  it('records a plain-text paste as a tracked insertion when Track Changes is on', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Review' }))
+    fireEvent.click(screen.getByLabelText('Toggle track changes'))
+
+    replaceFirstMatch('Hello DOCX', 'Howdy ')
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (format: string) => (format === 'text/plain' ? 'plain paste' : ''),
+      },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(insRevisionTexts(savedDocument)).toContain('plain paste')
+  })
+
+  it('records rich HTML paste as a tracked insertion when Track Changes is on', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+        <ViewerDirtyProbe />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Review' }))
+    fireEvent.click(screen.getByLabelText('Toggle track changes'))
+
+    replaceFirstMatch('Hello', 'Howdy')
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.paste(editor, {
+      clipboardData: {
+        getData: (format: string) => (format === 'text/html' ? '<p>Pasted text</p>' : ''),
+      },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
+    expect(insRevisionTexts(savedDocument)).toContain('Pasted text')
   })
 })

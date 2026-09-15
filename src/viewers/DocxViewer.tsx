@@ -671,14 +671,14 @@ function DocxEditor({
   // batch pushes exactly one inverse, so Ctrl+Z undoes the whole batch in one
   // step.
   const applyEditorCommands = useCallback(
-    (commands: ReadonlyArray<Command>, nextRange: Range | null): boolean => {
+    (commands: ReadonlyArray<Command>, nextRange: Range | null, trackChanges?: TrackChangesContext): boolean => {
       if (commands.length === 0) {
         return false
       }
 
       try {
         const batch: Command = commands.length === 1 ? commands[0] : { kind: 'composite', commands }
-        const result = applyCommand(documentModel, batch)
+        const result = applyCommand(documentModel, batch, trackChanges)
         historyRef.current.push(result.inverse)
         // Prefer the caller's own cursor computation (e.g. buildPasteCommands'
         // finalCursor) over the composite's own `range` (the LAST
@@ -848,6 +848,14 @@ function DocxEditor({
   // own async picker/decode work), so a paste started just before another
   // edit lands could in principle race it — acceptable for a user-initiated,
   // effectively-instantaneous paste.
+  //
+  // DXE-11 — `getTrackChanges()` is passed the same way Input.ts's keyboard
+  // handlers pass it, so pasted text lands as `w:ins` (not a silent,
+  // untracked insertion) whenever Track Changes is on; `applyComposite`
+  // forwards it to each streamed `insert-text` sub-command exactly as a
+  // single one would get it. Sub-commands that don't consult `trackChanges`
+  // (`insert-table`, `apply-run-format`, `insert-hyperlink`) are unaffected —
+  // see `applyComposite`'s own doc comment.
   const handleRichPaste = useCallback(
     (blocks: ReadonlyArray<PasteBlock>, focus: Position, selection: Range | null) => {
       void (async () => {
@@ -865,7 +873,7 @@ function DocxEditor({
 
           const batch: Command =
             result.commands.length === 1 ? result.commands[0] : { kind: 'composite', commands: result.commands }
-          const applied = applyCommand(documentModel, batch)
+          const applied = applyCommand(documentModel, batch, getTrackChanges())
           historyRef.current.push(applied.inverse)
           const finalRange: Range = { anchor: result.finalCursor, focus: result.finalCursor }
           if (result.bundlePatch !== null) {
@@ -877,7 +885,7 @@ function DocxEditor({
         }
       })()
     },
-    [bundle, commitState, documentModel, onBundleChange],
+    [bundle, commitState, documentModel, getTrackChanges, onBundleChange],
   )
 
   const handlePaste = useCallback(
@@ -915,9 +923,12 @@ function DocxEditor({
 
       const { commands, finalCursor } = buildPasteCommands(paragraphs, focus, range)
       const finalRange: Range = { anchor: finalCursor, focus: finalCursor }
-      applyEditorCommands(commands, finalRange)
+      // DXE-11 — plain-text/plain-paragraph paste (no parseable HTML, or
+      // `DOMParser` unavailable) is still an insertion; track it the same
+      // way the rich-paste path above does.
+      applyEditorCommands(commands, finalRange, getTrackChanges())
     },
-    [applyEditorCommands, handleRichPaste, range],
+    [applyEditorCommands, getTrackChanges, handleRichPaste, range],
   )
 
   const handleBeforeInputEvent = useCallback(
