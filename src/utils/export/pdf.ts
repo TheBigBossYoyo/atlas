@@ -45,6 +45,26 @@ import pageViewCss from '../../docx/render/__styles__/page-view.css?raw';
 import viewerRtfCss from '../../viewers/__styles__/viewer-rtf.css?raw';
 import viewerOdtCss from '../../viewers/__styles__/viewer-odt.css?raw';
 
+// Markdown-review fix — `buildMarkdownExportCss()` only carries structural
+// typography + theme colors; it was never meant to cover KaTeX math or
+// rehype-highlight's `.hljs-*` code coloring (those are the LIVE app's own
+// globally-loaded `katex/dist/katex.min.css` — see `main.tsx` — and
+// `markdownHtml.ts`'s CDN-linked `highlight.js` theme, neither of which
+// travels with a detached, serialized DOM string). Without these, a math- or
+// code-heavy document exported to PDF renders with unstyled/garbled math and
+// plain black code text — a real regression from the pre-X1 html2canvas-pro
+// path, which screenshotted the already-CSS-styled live DOM. Harvested the
+// same way `viewerDocxCss`/etc. are above so this can never silently drift
+// from the real KaTeX/highlight.js versions this app actually bundles.
+// Known limitation: KaTeX's own `@font-face` rules point at relative
+// `fonts/*.woff2` paths that don't resolve from the print window's temp-file
+// location, so math falls back to a substitute font — layout/spacing is
+// still correct (that's what most of this CSS governs), only the exact
+// glyph shapes differ; embedding the actual font files as `data:` URIs would
+// fix this fully but is a larger follow-up, not done here.
+import katexCss from 'katex/dist/katex.min.css?raw';
+import hljsCss from 'highlight.js/styles/github.min.css?raw';
+
 export const PDF_MIME = 'application/pdf';
 export const PDF_FILTERS: readonly SaveFilter[] = [{ name: 'PDF Document', extensions: ['pdf'] }];
 
@@ -56,8 +76,11 @@ const PX_PER_INCH = 96;
 
 /**
  * Renders the live `#markdown-content` DOM to a vector PDF using the same
- * theme CSS `exportHtml` embeds in the standalone `.html` export, so the two
- * exports look identical. Replaces the pre-X1 `html2canvas-pro` raster path.
+ * theme CSS `exportHtml` embeds in the standalone `.html` export, plus the
+ * real KaTeX/highlight.js CSS (see the import comment above) so math and
+ * code blocks aren't left unstyled the way a plain CSS-less `<style>` from
+ * `buildMarkdownExportCss()` alone would leave them. Replaces the pre-X1
+ * `html2canvas-pro` raster path.
  */
 export async function exportMarkdownPdf(elementId: string, fileName: string, theme: string): Promise<void> {
   try {
@@ -66,7 +89,7 @@ export async function exportMarkdownPdf(elementId: string, fileName: string, the
       throw new Error(`element #${elementId} not found`);
     }
 
-    const css = `${buildMarkdownExportCss()}\n${MARKDOWN_PRINT_PAGE_CSS}`;
+    const css = `${buildMarkdownExportCss()}\n${katexCss}\n${hljsCss}\n${MARKDOWN_PRINT_PAGE_CSS}`;
     const bodyHtml = `<div data-theme="${theme.replace(/"/g, '')}">${target.outerHTML}</div>`;
     await renderHtmlToPdfFile(bodyHtml, css, fileName, fileName);
   } catch (err) {

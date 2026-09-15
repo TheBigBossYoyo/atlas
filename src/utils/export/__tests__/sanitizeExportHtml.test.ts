@@ -41,6 +41,24 @@ describe('sanitizeExportHtml', () => {
     expect(out).not.toContain('<base');
   });
 
+  it('preserves a <style> nested inside an <svg> (Mermaid\'s own theme CSS) while still stripping a sibling top-level <style>', () => {
+    // Mermaid's render() unconditionally inserts a real <style> element as
+    // the first child of its output <svg> carrying every fill/stroke/color
+    // rule for the diagram — a blanket `FORBID_TAGS: ['style']` (the
+    // original X5 behavior) strips that from every exported Mermaid diagram,
+    // leaving it completely uncolored. Only the SVG-nested one should
+    // survive; a plain top-level <style> (e.g. attacker-supplied raw HTML in
+    // markdown, sitting next to it) must still be removed.
+    const out = sanitizeExportHtml(
+      '<div id="markdown-content">' +
+        '<style>body{display:none}</style>' +
+        '<div class="mermaid"><svg><style>.node rect{fill:blue}</style><rect></rect></svg></div>' +
+        '</div>',
+    );
+    expect(out).toContain('<svg><style>.node rect{fill:blue}</style>');
+    expect(out.replace('<svg><style>.node rect{fill:blue}</style>', '')).not.toContain('<style');
+  });
+
   it('preserves benign HTML content and structure (raw-html.md fixture-shaped content)', () => {
     const out = sanitizeExportHtml('<div class="callout"><strong>Note:</strong> hi</div>');
     expect(out).toContain('class="callout"');
