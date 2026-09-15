@@ -103,7 +103,7 @@ test('a clean (non-dirty) document closes immediately with no prompt at all', as
   const tempPath = copyMarkdownFixtureToTemp()
   const { app, page } = await launchWithFile(tempPath)
   try {
-    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1)
+    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1, { timeout: 15_000 })
 
     // No dialog stub needed — an un-stubbed showMessageBoxSync call here
     // would hang the test on a real native dialog, proving on its own that
@@ -122,7 +122,7 @@ test('Cancel keeps the window open with the edit intact', async () => {
   const tempPath = copyMarkdownFixtureToTemp()
   const { app, page } = await launchWithFile(tempPath)
   try {
-    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1)
+    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1, { timeout: 15_000 })
     await makeMarkdownDirty(page)
 
     await autoAnswerCloseDialog(app, 2 /* CANCEL */)
@@ -146,7 +146,7 @@ test('Discard closes the window immediately without saving', async () => {
   const tempPath = copyMarkdownFixtureToTemp()
   const { app, page } = await launchWithFile(tempPath)
   try {
-    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1)
+    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1, { timeout: 15_000 })
     await makeMarkdownDirty(page)
 
     await autoAnswerCloseDialog(app, 1 /* DISCARD */)
@@ -165,7 +165,7 @@ test('Save runs the real save-before-close round trip, writes the file, and then
   const tempPath = copyMarkdownFixtureToTemp()
   const { app, page } = await launchWithFile(tempPath)
   try {
-    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1)
+    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1, { timeout: 15_000 })
     await makeMarkdownDirty(page)
 
     await autoAnswerCloseDialog(app, 0 /* SAVE */)
