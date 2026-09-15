@@ -790,6 +790,39 @@ describe('paginate — headers/footers/vAlign (D11 milestone 1, D24/DXL-17)', ()
     expect(lineText(withSetting[1]?.headerLines[0])).toBe('Even')
   })
 
+  it('lays out the same reused header id separately per section content width (e.g. a landscape section sharing a portrait header)', async () => {
+    // Regression test: `buildDefaultHeaderFooterLines` used to build each
+    // header/footer id's content ONCE, measured against only the first
+    // section's width, and reuse that same wrapping on every later section
+    // that referenced the same id — even one with a materially different
+    // content width (the common real-world case: a landscape section
+    // inserted mid-document that keeps the same running header). The same
+    // header text must now wrap differently on a much narrower section.
+    const headerText = 'aaaaa bbbbb ccccc'
+    const document = createDocument(
+      [
+        createSection([createParagraph(1)], {
+          headerReferences: [{ id: 'h1', type: 'default' }],
+          pageWidthPt: 400,
+        }),
+        createSection([createParagraph(1)], {
+          headerReferences: [{ id: 'h1', type: 'default' }],
+          pageWidthPt: 40,
+          type: 'nextPage',
+        }),
+      ],
+      undefined,
+      undefined,
+      { headers: new Map([['h1', { kind: 'header', id: 'h1', blocks: [createTextParagraph(headerText)] }]]) },
+    )
+
+    const pages = await paginate({ document, fontResolver: createFontResolver() })
+
+    expect(pages).toHaveLength(2)
+    expect(pages[0]?.headerLines.length).toBe(1)
+    expect(pages[1]?.headerLines.length).toBeGreaterThan(1)
+  })
+
   it('centers page content vertically when the section is vAlign=center', async () => {
     const pages = await paginate({
       document: createDocument([

@@ -399,42 +399,67 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
  * D11 milestone 1 — builds header/footer content directly from
  * `document.headers`/`document.footers` (paragraphs only; a table inside a
  * header/footer is not laid out here, an accepted scope limit), itemized/
- * broken the same way body paragraphs are. Every section shares the same
- * full-page-width measurement (headers/footers don't participate in
- * multi-column layout), computed per distinct header/footer id actually
- * referenced by some section so a document with many unused parts (common
- * after several rounds of Word editing) doesn't pay to lay out all of them.
+ * broken the same way body paragraphs are.
+ *
+ * Built per distinct (header/footer id, section content width) pair rather
+ * than per id alone: the common case is every section sharing the same
+ * width, so the SAME header/footer id is normally laid out exactly once,
+ * but a document mixing portrait and landscape sections (or otherwise
+ * varying margins) that reuses the same header/footer id across both would
+ * otherwise have that id's content measured/wrapped against only the
+ * FIRST section's width and then rendered — visibly mis-wrapped — on
+ * every other section using a different width. Only ids actually
+ * referenced by some section are built at all, so a document with many
+ * unused parts (common after several rounds of Word editing) doesn't pay
+ * to lay out all of them.
  */
 async function buildDefaultHeaderFooterLines(
   input: PaginatorInput,
 ): Promise<ReadonlyMap<string, ReadonlyArray<LineBox>>> {
-  const referencedIds = new Set<string>()
+  const referencedIdsByWidth = new Map<number, Set<string>>()
   for (const section of input.document.sections) {
-    for (const reference of section.props.headerReference ?? EMPTY_HEADER_REFERENCES) {
-      referencedIds.add(reference.id)
+    const references = [
+      ...(section.props.headerReference ?? EMPTY_HEADER_REFERENCES),
+      ...(section.props.footerReference ?? EMPTY_FOOTER_REFERENCES),
+    ]
+    if (references.length === 0) {
+      continue
     }
-    for (const reference of section.props.footerReference ?? EMPTY_FOOTER_REFERENCES) {
-      referencedIds.add(reference.id)
+
+    const contentWidthPt = resolveFullContentWidthPt(resolveSectionLayout(section))
+    const ids = referencedIdsByWidth.get(contentWidthPt) ?? new Set<string>()
+    for (const reference of references) {
+      ids.add(reference.id)
     }
+    referencedIdsByWidth.set(contentWidthPt, ids)
   }
 
-  if (referencedIds.size === 0) {
+  if (referencedIdsByWidth.size === 0) {
     return EMPTY_FOOTNOTE_CONTENT
   }
 
   const styleCache = createStyleResolutionCache()
-  const contentWidthPt = resolveFullContentWidthPt(resolveSectionLayout(input.document.sections[0]))
   const result = new Map<string, ReadonlyArray<LineBox>>()
 
-  for (const id of referencedIds) {
-    const part = input.document.headers.get(id) ?? input.document.footers.get(id)
-    if (part === undefined) {
-      continue
+  for (const [contentWidthPt, ids] of referencedIdsByWidth) {
+    for (const id of ids) {
+      const part = input.document.headers.get(id) ?? input.document.footers.get(id)
+      if (part === undefined) {
+        continue
+      }
+      result.set(
+        headerFooterContentKey(id, contentWidthPt),
+        await buildBlockGroupLines(input, part.blocks, contentWidthPt, styleCache),
+      )
     }
-    result.set(id, await buildBlockGroupLines(input, part.blocks, contentWidthPt, styleCache))
   }
 
   return result
+}
+
+/** Composite key for `buildDefaultHeaderFooterLines`'s per-width cache — see its doc comment. */
+function headerFooterContentKey(id: string, contentWidthPt: number): string {
+  return `${id}::${contentWidthPt}`
 }
 
 function mergeHeaderFooterLines(
@@ -2264,6 +2289,7 @@ function createActivePage(
   evenAndOddHeaders: boolean,
   footnoteContentById: ReadonlyMap<string, ReadonlyArray<LineBox>>,
 ): ActivePage {
+  const contentWidthPt = resolveFullContentWidthPt(sectionLayout)
   const headerLines = resolveHeaderFooterLines(
     sectionLayout.headerReferences,
     sectionLayout.titlePage,
@@ -2271,6 +2297,7 @@ function createActivePage(
     physicalPageNumber,
     headerFooterLines,
     evenAndOddHeaders,
+    contentWidthPt,
   )
   const footerLines = resolveHeaderFooterLines(
     sectionLayout.footerReferences,
@@ -2279,6 +2306,7 @@ function createActivePage(
     physicalPageNumber,
     headerFooterLines,
     evenAndOddHeaders,
+    contentWidthPt,
   )
   const headerReservedPt = sumLineHeights(headerLines)
   const footerReservedPt = sumLineHeights(footerLines)
@@ -2415,6 +2443,7 @@ function resolveHeaderFooterLines(
   physicalPageNumber: number,
   headerFooterLines: ReadonlyMap<string, ReadonlyArray<LineBox>>,
   evenAndOddHeaders: boolean,
+  contentWidthPt: number,
 ): ReadonlyArray<LineBox> {
   if (references.length === 0) {
     return EMPTY_LINES
@@ -2433,7 +2462,19 @@ function resolveHeaderFooterLines(
     references.find((reference) => reference.type === 'default') ??
     references[0]
 
-  return preferredReference ? headerFooterLines.get(preferredReference.id) ?? EMPTY_LINES : EMPTY_LINES
+  if (preferredReference === undefined) {
+    return EMPTY_LINES
+  }
+
+  // Prefer the width-specific entry `buildDefaultHeaderFooterLines` builds
+  // (see its doc comment on why the SAME id can have different content per
+  // section width); fall back to a plain-id entry for `PaginatorInput.
+  // headerFooterLines`'s test-seam overrides, which aren't width-aware.
+  return (
+    headerFooterLines.get(headerFooterContentKey(preferredReference.id, contentWidthPt)) ??
+    headerFooterLines.get(preferredReference.id) ??
+    EMPTY_LINES
+  )
 }
 
 function sumLineHeights(lines: ReadonlyArray<LineBox>): number {
