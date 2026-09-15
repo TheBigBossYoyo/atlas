@@ -6,6 +6,22 @@ export type Position = {
   readonly charOffset: number
 }
 
+/**
+ * DXE-11 — passed alongside a forward `insert-text`/`delete-range` command
+ * (never alongside History's own undo/redo replay — see `commands.ts`'s
+ * `applyInsertText`/`applyDeleteSpan` doc comments for why an *untracked*
+ * replay of the stored inverse is exactly what makes undo/redo of a tracked
+ * edit come out coherent for free) to record the edit as `w:ins`/`w:del`
+ * instead of mutating the run directly, when the document's Track Changes
+ * setting is on.
+ */
+export type TrackChangesContext = {
+  readonly enabled: boolean
+  readonly author: string
+  /** ISO 8601 timestamp, e.g. `new Date().toISOString()`. */
+  readonly date: string
+}
+
 export type Range = {
   readonly anchor: Position
   readonly focus: Position

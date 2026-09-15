@@ -53,6 +53,7 @@ import {
   type FindOptions,
   type ImageMimeType,
   type Range,
+  type TrackChangesContext,
 } from '../docx/editor'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
 import { comparePositions } from '../docx/editor/Selection'
@@ -508,6 +509,21 @@ function DocxEditor({
   // `saveDocx` persists it via `writeSettingsXml` instead of losing it to
   // the passthrough copy of the original part.
   const [trackChangesEnabled, setTrackChangesEnabled] = useState(bundle.settings?.trackChanges ?? false)
+  // DXE-11 — the context threaded into Input.ts so a genuine typed
+  // insertion/deletion (never History's own undo/redo replay — see
+  // `InputContext`'s own doc comment) is recorded as `w:ins`/`w:del`.
+  // `author` is a static "Atlas" rather than the OS user's real name: Word
+  // itself falls back to a generic label when it can't resolve one, and
+  // wiring a real OS-username IPC channel would mean adding one in
+  // electron/main.cjs + preload.cjs, both outside this task's editor-only
+  // ownership boundary (see the wave plan) and shared with other in-flight
+  // branches. Recomputed fresh on every keystroke (not memoized) so `date`
+  // is always "now," matching what Word itself stamps per edit.
+  const getTrackChanges = useCallback((): TrackChangesContext | undefined => {
+    return trackChangesEnabled
+      ? { enabled: true, author: 'Atlas', date: new Date().toISOString() }
+      : undefined
+  }, [trackChangesEnabled])
   const [spellCheckEnabled, setSpellCheckEnabled] = useState(true)
   const composition = useComposition()
   const spellCheck = useSpellCheck()
@@ -788,6 +804,7 @@ function DocxEditor({
           document: documentModel,
           range,
           history: historyRef.current,
+          trackChanges: getTrackChanges(),
         }),
       )
 
@@ -798,7 +815,7 @@ function DocxEditor({
         composition.markApplied(nativeEvent.data)
       }
     },
-    [applyResult, composition, documentModel, range],
+    [applyResult, composition, documentModel, getTrackChanges, range],
   )
 
   // Wave F.4 — refs for handlers defined later in this component, so the
@@ -892,6 +909,7 @@ function DocxEditor({
           document: documentModel,
           range,
           history: historyRef.current,
+          trackChanges: getTrackChanges(),
         }),
       )
 
@@ -908,7 +926,7 @@ function DocxEditor({
         event.preventDefault()
       }
     },
-    [applyResult, documentModel, range],
+    [applyResult, documentModel, getTrackChanges, range],
   )
 
   const handleCompositionStart = useCallback((event: FormEvent<HTMLDivElement>) => {
@@ -931,10 +949,11 @@ function DocxEditor({
           document: documentModel,
           range,
           history: historyRef.current,
+          trackChanges: getTrackChanges(),
         }),
       )
     },
-    [applyResult, composition.handlers, documentModel, range],
+    [applyResult, composition.handlers, documentModel, getTrackChanges, range],
   )
 
   const handleFind = useCallback((query: string, options: FindOptions) => {

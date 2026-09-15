@@ -1,5 +1,5 @@
 import type { Document, Paragraph, Run, RunProps, Underline } from '../model'
-import type { Command, Position, Range } from './commandTypes'
+import type { Command, Position, Range, TrackChangesContext } from './commandTypes'
 import { applyCommand, findParagraph, getFlatTextRuns } from './commands'
 import type { History } from './History'
 
@@ -9,6 +9,18 @@ export interface InputContext {
   readonly document: Document
   readonly range: Range | null
   readonly history: History
+  /**
+   * DXE-11 — when present and `enabled`, every insertion/deletion this module
+   * applies directly (typing, Backspace/Delete, word-delete) is recorded as
+   * `w:ins`/`w:del` instead of mutating the run in place. Deliberately never
+   * forwarded to `history.undo`/`redo` (those replay a *stored inverse*
+   * command, which must apply exactly as originally computed — see
+   * `commands.ts`'s `applyInsertText`/`applyDeleteSpan` doc comments for why
+   * that's what makes undo/redo of a tracked edit come out coherent) nor to
+   * `applyFormatToggle` (formatting changes are not yet recorded as
+   * `w:rPrChange` — a documented limitation, not an oversight).
+   */
+  readonly trackChanges?: TrackChangesContext
 }
 
 export interface InputResult {
@@ -406,7 +418,7 @@ export function handleBeforeInput(
   event: InputEvent,
   ctx: InputContext,
 ): InputResult | null {
-  const { document, range, history } = ctx
+  const { document, range, history, trackChanges } = ctx
   if (range === null) return null
 
   const focusPos = range.focus
@@ -424,20 +436,26 @@ export function handleBeforeInput(
         if (!samePos(range.anchor, range.focus)) {
           const { start } = normaliseRange(range)
           const deleteCmd: Command = { kind: 'delete-range', range }
-          const deleteResult = applyCommand(workingDoc, deleteCmd)
+          const deleteResult = applyCommand(workingDoc, deleteCmd, trackChanges)
           workingDoc = deleteResult.document
           history.push(deleteResult.inverse)
           insertAt = start
         }
 
         const cmd: Command = { kind: 'insert-text', at: insertAt, text }
-        const result = applyCommand(workingDoc, cmd)
+        const result = applyCommand(workingDoc, cmd, trackChanges)
         const coalesced = history.coalesceWithLast(cmd, result.inverse)
         if (!coalesced) history.push(result.inverse)
 
-        const newOffset = insertAt.charOffset + text.length
-        const newPos = makePos(insertAt.paragraphPath, insertAt.runIndex, newOffset)
-        return { document: result.document, range: { anchor: newPos, focus: newPos } }
+        // DXE-11 — `applyInsertText` always returns its own precisely
+        // computed post-insertion caret position (needed now that a tracked
+        // insertion can shift which run/offset the caret lands in — see its
+        // own doc comment); `applyCommand`'s general signature just can't
+        // express that as non-optional across every command kind, so fall
+        // back to the simple same-run computation only in the type-level
+        // case this can't actually happen for `insert-text`.
+        const fallbackPos = makePos(insertAt.paragraphPath, insertAt.runIndex, insertAt.charOffset + text.length)
+        return { document: result.document, range: result.range ?? { anchor: fallbackPos, focus: fallbackPos } }
       }
 
       case 'insertParagraph': {
@@ -454,7 +472,7 @@ export function handleBeforeInput(
         if (!samePos(range.anchor, range.focus)) {
           const { start } = normaliseRange(range)
           const cmd: Command = { kind: 'delete-range', range }
-          const result = applyCommand(document, cmd)
+          const result = applyCommand(document, cmd, trackChanges)
           history.push(result.inverse)
           return { document: result.document, range: { anchor: start, focus: start } }
         }
@@ -462,7 +480,7 @@ export function handleBeforeInput(
         if (samePos(before, focusPos)) return null
         const deleteRange: Range = { anchor: before, focus: focusPos }
         const cmd: Command = { kind: 'delete-range', range: deleteRange }
-        const result = applyCommand(document, cmd)
+        const result = applyCommand(document, cmd, trackChanges)
         history.push(result.inverse)
         return { document: result.document, range: { anchor: before, focus: before } }
       }
@@ -471,7 +489,7 @@ export function handleBeforeInput(
         if (!samePos(range.anchor, range.focus)) {
           const { start } = normaliseRange(range)
           const cmd: Command = { kind: 'delete-range', range }
-          const result = applyCommand(document, cmd)
+          const result = applyCommand(document, cmd, trackChanges)
           history.push(result.inverse)
           return { document: result.document, range: { anchor: start, focus: start } }
         }
@@ -479,7 +497,7 @@ export function handleBeforeInput(
         if (samePos(after, focusPos)) return null
         const deleteRange: Range = { anchor: focusPos, focus: after }
         const cmd: Command = { kind: 'delete-range', range: deleteRange }
-        const result = applyCommand(document, cmd)
+        const result = applyCommand(document, cmd, trackChanges)
         history.push(result.inverse)
         return { document: result.document, range: { anchor: focusPos, focus: focusPos } }
       }
@@ -489,7 +507,7 @@ export function handleBeforeInput(
         if (!wordBefore) return null
         const deleteRange: Range = { anchor: wordBefore, focus: focusPos }
         const cmd: Command = { kind: 'delete-range', range: deleteRange }
-        const result = applyCommand(document, cmd)
+        const result = applyCommand(document, cmd, trackChanges)
         history.push(result.inverse)
         return { document: result.document, range: { anchor: wordBefore, focus: wordBefore } }
       }
@@ -499,7 +517,7 @@ export function handleBeforeInput(
         if (!wordAfter) return null
         const deleteRange: Range = { anchor: focusPos, focus: wordAfter }
         const cmd: Command = { kind: 'delete-range', range: deleteRange }
-        const result = applyCommand(document, cmd)
+        const result = applyCommand(document, cmd, trackChanges)
         history.push(result.inverse)
         return { document: result.document, range: { anchor: focusPos, focus: focusPos } }
       }

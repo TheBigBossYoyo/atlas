@@ -1,8 +1,10 @@
 import type {
   Block,
+  DelRevision,
   Document,
   Hyperlink,
   Indent,
+  InsRevision,
   ParaProps,
   Paragraph,
   ParagraphChild,
@@ -23,6 +25,7 @@ import type {
   DeleteRangeCommand,
   Position,
   Range,
+  TrackChangesContext,
 } from './commandTypes'
 
 type ResolvedParagraphPath = {
@@ -39,9 +42,35 @@ type ResolvedParagraphPath = {
  * `Hyperlink` wrapper (verbatim, minus any interior non-run children) when
  * writing the paragraph back out.
  */
-type RunOwner = { readonly kind: 'direct' } | { readonly kind: 'hyperlink'; readonly wrapper: Hyperlink }
+/**
+ * DXE-11 — a run's owner additionally tracks whether it lives inside an
+ * existing `w:ins`/`w:del` (parsed from the source document, or created by a
+ * previous tracked edit in this session). Flattening through these two kinds
+ * the same way hyperlinks already flatten (rather than rejecting the whole
+ * paragraph — `getEditableRuns`'s previous behavior for any unrecognized
+ * child kind) fixes a real editing gap: a paragraph containing so much as one
+ * existing tracked change used to be entirely uneditable, silently, since
+ * `requireEditableRuns` threw and every caller's `event.preventDefault()`
+ * safety net (D12) made that indistinguishable from "nothing happened."
+ */
+type RunOwner =
+  | { readonly kind: 'direct' }
+  | { readonly kind: 'hyperlink'; readonly wrapper: Hyperlink }
+  | { readonly kind: 'ins-revision'; readonly wrapper: InsRevision }
+  | { readonly kind: 'del-revision'; readonly wrapper: DelRevision }
 
 const DIRECT_OWNER: RunOwner = Object.freeze({ kind: 'direct' })
+
+/**
+ * A freshly minted `InsRevision`/`DelRevision` wrapper only ever needs its
+ * `children` field as a placeholder — `buildParagraphChildren`'s owner
+ * grouping (the same mechanism that already reconstructs a `Hyperlink`
+ * wrapper from its own template) immediately replaces it with the real
+ * grouped runs. Typed the same way the parser's `freezeRevisionChildren`
+ * already has to (`ReadonlyArray<ParagraphChild> & ReadonlyArray<Run>`, see
+ * the model's own `InsRevision`/`DelRevision` field types).
+ */
+const EMPTY_REVISION_CHILDREN = Object.freeze([]) as ReadonlyArray<ParagraphChild> & ReadonlyArray<Run>
 
 type RunEntry = {
   readonly run: Run
@@ -75,6 +104,7 @@ type RevisionTarget = {
 export function applyCommand(
   doc: Document,
   cmd: Command,
+  trackChanges?: TrackChangesContext,
 ): {
   document: Document
   inverse: Command
@@ -82,9 +112,9 @@ export function applyCommand(
 } {
   switch (cmd.kind) {
     case 'insert-text':
-      return applyInsertText(doc, cmd)
+      return applyInsertText(doc, cmd, trackChanges)
     case 'delete-range':
-      return applyDeleteRange(doc, cmd)
+      return applyDeleteRange(doc, cmd, trackChanges)
     case 'insert-paragraph-break':
       return applyInsertParagraphBreak(doc, cmd)
     case 'apply-run-format':
@@ -753,9 +783,112 @@ export function replaceParagraph(
 // Text editing (D12 — cross-paragraph, cross-run, hyperlink-aware)
 // ---------------------------------------------------------------------------
 
+/**
+ * DXE-11 — decides which owner a freshly-typed run should get. Untracked
+ * (`trackChanges` absent/disabled), this always returns `currentOwner`
+ * unchanged — exactly the pre-DXE-11 behavior of extending whatever run/
+ * hyperlink/owner already sits at the insertion point. Tracked, it also
+ * extends when `currentOwner` is already a pending insertion by the *same*
+ * author ("typing inside your own pending insertion extends it," rather than
+ * nesting a new `w:ins` inside the last one on every keystroke); otherwise it
+ * mints a fresh `w:ins` wrapper, so newly-typed text next to plain content,
+ * next to someone else's tracked insertion, or next to an already-tracked
+ * deletion, always gets its own new revision.
+ */
+function resolveInsertOwner(
+  doc: Document,
+  trackChanges: TrackChangesContext | undefined,
+  currentOwner: RunOwner,
+): RunOwner {
+  if (trackChanges === undefined || !trackChanges.enabled) {
+    return currentOwner
+  }
+
+  if (currentOwner.kind === 'ins-revision' && currentOwner.wrapper.author === trackChanges.author) {
+    return currentOwner
+  }
+
+  return {
+    kind: 'ins-revision',
+    wrapper: createInsRevisionWrapper(doc, trackChanges),
+  }
+}
+
+function createInsRevisionWrapper(doc: Document, trackChanges: TrackChangesContext): InsRevision {
+  return Object.freeze({
+    kind: 'ins-revision',
+    id: nextRevisionId(doc),
+    author: trackChanges.author,
+    date: trackChanges.date,
+    children: EMPTY_REVISION_CHILDREN,
+  })
+}
+
+function createDelRevisionWrapper(doc: Document, trackChanges: TrackChangesContext): DelRevision {
+  return Object.freeze({
+    kind: 'del-revision',
+    id: nextRevisionId(doc),
+    author: trackChanges.author,
+    date: trackChanges.date,
+    children: EMPTY_REVISION_CHILDREN,
+  })
+}
+
+/**
+ * Every `w:id` already used by an `ins-revision`/`del-revision` anywhere in
+ * the document (including inside table cells — mirroring
+ * `findRevisionTargetInBlocks`'s own recursion depth), so a freshly minted
+ * revision's id can never collide with one carried over from the source
+ * file. `w:id` only needs to be unique, not contiguous, so returning
+ * `max + 1` (starting at `1` for a document with none yet) is enough.
+ */
+function nextRevisionId(doc: Document): string {
+  let max = 0
+  for (const section of doc.sections) {
+    max = Math.max(max, maxRevisionIdInBlocks(section.blocks))
+  }
+  return String(max + 1)
+}
+
+function maxRevisionIdInBlocks(blocks: ReadonlyArray<Block>): number {
+  let max = 0
+  for (const block of blocks) {
+    if (block.kind === 'paragraph') {
+      for (const child of block.children) {
+        if (child.kind === 'ins-revision' || child.kind === 'del-revision') {
+          const parsed = Number.parseInt(child.id, 10)
+          if (Number.isFinite(parsed)) {
+            max = Math.max(max, parsed)
+          }
+        }
+      }
+      continue
+    }
+
+    if (block.kind !== 'table') {
+      continue
+    }
+
+    for (const row of block.rows) {
+      if (row.kind !== 'table-row') {
+        continue
+      }
+
+      for (const cell of row.cells) {
+        if (cell.kind === 'table-cell') {
+          max = Math.max(max, maxRevisionIdInBlocks(cell.blocks))
+        }
+      }
+    }
+  }
+
+  return max
+}
+
 function applyInsertText(
   doc: Document,
   cmd: Extract<Command, { kind: 'insert-text' }>,
+  trackChanges?: TrackChangesContext,
 ): {
   document: Document
   inverse: Command
@@ -778,8 +911,9 @@ function applyInsertText(
       throw new Error('InsertText position is outside the paragraph')
     }
 
+    const owner = resolveInsertOwner(doc, trackChanges, DIRECT_OWNER)
     const insertedRun = createRunWithText(undefined, cmd.text)
-    const nextParagraph = cloneParagraph(paragraph, [insertedRun])
+    const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren([{ run: insertedRun, owner }]))
     const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
     const start = createPosition(cmd.at.paragraphPath, 0, 0)
     const end = createPosition(cmd.at.paragraphPath, 0, cmd.text.length)
@@ -796,18 +930,29 @@ function applyInsertText(
 
   // DXE-18/D18 — `resolveInsertTarget`'s own end-of-paragraph branch resolves
   // "insert at the very end" to `{runIndex: lastIndex, charOffset: 0}` when
-  // the last entry is an atomic one (image/break/tab, zero-length "text") —
-  // exactly what happens when a user keeps typing right after inserting an
-  // image at the end of a paragraph. Splicing a new sibling text run in
-  // after it (rather than calling createRunLike on it, which would silently
-  // replace its non-text child with a plain text node — see
-  // toRunEntryOrNull) keeps the image and places the typed text right after
-  // it, matching what the user was actually doing.
-  if (isAtomicRun(current.run)) {
+  // the last entry is an atomic image/break/tab run (exactly what happens
+  // when a user keeps typing right after inserting an image at the end of a
+  // paragraph), or (DXE-11) an already-tracked-deletion entry, which is
+  // presented with zero width the same way for the same reason (see
+  // `getEditableRuns`'s `del-revision` case) even though its *real* run text
+  // is non-empty. Splicing a new sibling text run in after it (rather than
+  // calling createRunLike on it, which would silently replace its non-text
+  // child with a plain text node — see toRunEntryOrNull — or, for a
+  // del-revision entry, silently overwrite the deleted text with whatever
+  // was just typed) keeps it intact and places the typed text right after
+  // it, matching what the user was actually doing. Deliberately checked as
+  // two explicit shape tests rather than `current.text.length === 0`: an
+  // ordinary, genuinely-empty text run (e.g. an emptied-out paragraph — see
+  // `applyDeleteSpan`'s own empty-paragraph fallback) also reports a
+  // zero-length `.text` but is not a boundary — it must still take the
+  // normal splice path below so typing into it replaces its content in
+  // place instead of leaving a stray empty run behind.
+  if (isAtomicRun(current.run) || current.owner.kind === 'del-revision') {
+    const owner = resolveInsertOwner(doc, trackChanges, current.owner)
     const insertedRun = createRunWithText(undefined, cmd.text)
     const nextEntries: RunEntry[] = [
       ...editableRuns.slice(0, target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
-      { run: insertedRun, owner: current.owner },
+      { run: insertedRun, owner },
       ...editableRuns.slice(target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
     ]
 
@@ -823,21 +968,63 @@ function applyInsertText(
     }
   }
 
-  const nextText =
-    current.text.slice(0, target.charOffset) +
-    cmd.text +
-    current.text.slice(target.charOffset)
+  const owner = resolveInsertOwner(doc, trackChanges, current.owner)
 
-  const nextEntries = editableRuns.map((entry, index): RunEntry =>
-    index === target.runIndex
-      ? { run: createRunLike(entry.run, nextText, entry.run.props), owner: entry.owner }
-      : { run: entry.run, owner: entry.owner },
-  )
+  if (sameOwner(owner, current.owner)) {
+    // Untracked, or typing inside your own pending insertion (DXE-11): a
+    // simple in-place text splice, exactly the pre-DXE-11 behavior — no new
+    // wrapper, no run split.
+    const nextText =
+      current.text.slice(0, target.charOffset) +
+      cmd.text +
+      current.text.slice(target.charOffset)
+
+    const nextEntries = editableRuns.map((entry, index): RunEntry =>
+      index === target.runIndex
+        ? { run: createRunLike(entry.run, nextText, entry.run.props), owner: entry.owner }
+        : { run: entry.run, owner: entry.owner },
+    )
+
+    const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
+    const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
+    const start = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset)
+    const end = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset + cmd.text.length)
+
+    return {
+      document: nextDocument,
+      inverse: createDeleteRangeCommand(start, end),
+      range: { anchor: end, focus: end },
+    }
+  }
+
+  // DXE-11 — Track Changes is on and the caret sits inside a run that isn't
+  // already a pending insertion of ours: split that run at the caret (both
+  // halves keep its original owner untouched — plain text stays plain,
+  // someone else's tracked insertion stays theirs) and splice the freshly
+  // typed text in between as its own new `w:ins`-owned run, inheriting the
+  // split run's formatting the same way the untracked splice above always
+  // has.
+  const leftText = current.text.slice(0, target.charOffset)
+  const rightText = current.text.slice(target.charOffset)
+  const insertedRun = createRunWithText(current.run.props, cmd.text)
+  const insertedIndex = target.runIndex + (leftText.length > 0 ? 1 : 0)
+
+  const nextEntries: RunEntry[] = [
+    ...editableRuns.slice(0, target.runIndex).map((entry) => ({ run: entry.run, owner: entry.owner })),
+    ...(leftText.length > 0
+      ? [{ run: createRunLike(current.run, leftText, current.run.props), owner: current.owner }]
+      : []),
+    { run: insertedRun, owner },
+    ...(rightText.length > 0
+      ? [{ run: createRunLike(current.run, rightText, current.run.props), owner: current.owner }]
+      : []),
+    ...editableRuns.slice(target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
+  ]
 
   const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
   const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
-  const start = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset)
-  const end = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset + cmd.text.length)
+  const start = createPosition(cmd.at.paragraphPath, insertedIndex, 0)
+  const end = createPosition(cmd.at.paragraphPath, insertedIndex, cmd.text.length)
 
   return {
     document: nextDocument,
@@ -849,6 +1036,7 @@ function applyInsertText(
 function applyDeleteRange(
   doc: Document,
   cmd: DeleteRangeCommand,
+  trackChanges?: TrackChangesContext,
 ): {
   document: Document
   inverse: Command
@@ -863,7 +1051,7 @@ function applyDeleteRange(
     }
   }
 
-  return applyDeleteSpan(doc, range)
+  return applyDeleteSpan(doc, range, trackChanges)
 }
 
 /**
@@ -874,10 +1062,21 @@ function applyDeleteRange(
  * paragraph before `range.anchor`, keep the content of the last affected
  * paragraph after `range.focus`, merge those two halves into one paragraph,
  * and splice it in place of every paragraph the range touched.
+ *
+ * DXE-11 — when Track Changes is on *and* the whole range sits inside one
+ * paragraph, the deleted content is kept and wrapped in a fresh `w:del`
+ * (`buildTrackedDeleteParagraph`) instead of being dropped. A range spanning
+ * several paragraphs still deletes untracked even with Track Changes on: a
+ * merge across paragraph boundaries would need to record a deleted
+ * *paragraph mark* (`w:pPr/w:rPr/w:del`) to be reversible, which this editor's
+ * model doesn't represent yet — a documented scope cut rather than an
+ * oversight, left for a follow-up once cross-paragraph tracked deletion is
+ * needed.
  */
 function applyDeleteSpan(
   doc: Document,
   range: Range,
+  trackChanges?: TrackChangesContext,
 ): {
   document: Document
   inverse: Command
@@ -934,22 +1133,10 @@ function applyDeleteSpan(
   const firstParagraph = paragraphs[0]
   const lastParagraph = paragraphs[paragraphs.length - 1]
 
-  const firstRuns = requireEditableRuns(firstParagraph)
-  const lastRuns = requireEditableRuns(lastParagraph)
-
-  const beforeEntries = splitEntriesAtPosition(firstRuns, range.anchor).beforeEntries
-  const afterEntries = splitEntriesAtPosition(lastRuns, range.focus).afterEntries
-
-  const mergedEntries = mergeAdjacentEntries([...beforeEntries, ...afterEntries])
-  // Deleting every run's text still leaves the paragraph holding one
-  // (now-empty) run rather than none, matching the representation the rest of
-  // the pipeline (e.g. InsertText's own empty-paragraph branch) already
-  // treats as "an empty paragraph" the model was loaded/created with.
-  const mergedChildren =
-    mergedEntries.length > 0
-      ? buildParagraphChildren(mergedEntries)
-      : freezeArray<ParagraphChild>([createRunWithText(firstRuns[0]?.run.props, '')])
-  const mergedParagraph = cloneParagraph(firstParagraph, mergedChildren)
+  const mergedParagraph =
+    trackChanges?.enabled === true && paragraphs.length === 1
+      ? buildTrackedDeleteParagraph(doc, firstParagraph, range, trackChanges)
+      : buildPlainDeleteParagraph(firstParagraph, lastParagraph, range)
 
   const nextSiblingBlocks = freezeArray([
     ...siblingBlocks.slice(0, startIndex),
@@ -972,6 +1159,75 @@ function applyDeleteSpan(
     },
     range: { anchor: collapsedAt, focus: collapsedAt },
   }
+}
+
+function buildPlainDeleteParagraph(
+  firstParagraph: Paragraph,
+  lastParagraph: Paragraph,
+  range: Range,
+): Paragraph {
+  const firstRuns = requireEditableRuns(firstParagraph)
+  const lastRuns = requireEditableRuns(lastParagraph)
+
+  const beforeEntries = splitEntriesAtPosition(firstRuns, range.anchor).beforeEntries
+  const afterEntries = splitEntriesAtPosition(lastRuns, range.focus).afterEntries
+
+  const mergedEntries = mergeAdjacentEntries([...beforeEntries, ...afterEntries])
+  // Deleting every run's text still leaves the paragraph holding one
+  // (now-empty) run rather than none, matching the representation the rest of
+  // the pipeline (e.g. InsertText's own empty-paragraph branch) already
+  // treats as "an empty paragraph" the model was loaded/created with.
+  const mergedChildren =
+    mergedEntries.length > 0
+      ? buildParagraphChildren(mergedEntries)
+      : freezeArray<ParagraphChild>([createRunWithText(firstRuns[0]?.run.props, '')])
+  return cloneParagraph(firstParagraph, mergedChildren)
+}
+
+/**
+ * DXE-11 — Track Changes is on and the whole selection sits inside one
+ * paragraph: keep the selected text instead of dropping it, marking it
+ * `w:del` so Reject can restore it later. The one exception is a slice
+ * that's already part of a *pending insertion by this same author*: text
+ * that was never actually committed is removed outright, shrinking (or
+ * fully removing) that `w:ins` — the deletion counterpart of "typing inside
+ * your own pending insertion extends it" — rather than nesting a `w:del`
+ * inside a `w:ins` that reflects nothing Word itself does for your own
+ * still-open edit. Every other slice (plain text, someone else's tracked
+ * insertion, or a hyperlink's runs — whose wrapper is intentionally dropped
+ * here, a documented limitation: DXE-11 doesn't extend the del-revision
+ * model to carry a nested hyperlink target) is re-owned under one freshly
+ * minted `DelRevision` shared across the whole deleted span, so a selection
+ * touching several such slices still comes out as a single `<w:del>` rather
+ * than one per slice.
+ */
+function buildTrackedDeleteParagraph(
+  doc: Document,
+  paragraph: Paragraph,
+  range: Range,
+  trackChanges: TrackChangesContext,
+): Paragraph {
+  const editableRuns = requireEditableRuns(paragraph)
+  const offsets = getRangeOffsets(paragraph, range)
+  const { before, within, after } = sliceEntriesByOffsets(editableRuns, offsets)
+
+  const survivors = within.filter(
+    (entry) => !(entry.owner.kind === 'ins-revision' && entry.owner.wrapper.author === trackChanges.author),
+  )
+
+  if (survivors.length === 0) {
+    const mergedEntries = mergeAdjacentEntries([...before, ...after])
+    const mergedChildren =
+      mergedEntries.length > 0
+        ? buildParagraphChildren(mergedEntries)
+        : freezeArray<ParagraphChild>([createRunWithText(editableRuns[0]?.run.props, '')])
+    return cloneParagraph(paragraph, mergedChildren)
+  }
+
+  const delOwner: RunOwner = { kind: 'del-revision', wrapper: createDelRevisionWrapper(doc, trackChanges) }
+  const deletedEntries: RunEntry[] = survivors.map((entry) => ({ run: entry.run, owner: delOwner }))
+  const mergedEntries = mergeAdjacentEntries([...before, ...deletedEntries, ...after])
+  return cloneParagraph(paragraph, buildParagraphChildren(mergedEntries))
 }
 
 function applyInsertParagraphBreak(
@@ -1543,6 +1799,46 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> | nul
       continue
     }
 
+    if (child.kind === 'ins-revision') {
+      const owner: RunOwner = { kind: 'ins-revision', wrapper: child }
+      for (const grandchild of child.children) {
+        if (grandchild.kind !== 'run') {
+          return null
+        }
+
+        const entry = toRunEntryOrNull(grandchild, owner)
+        if (entry === null) {
+          return null
+        }
+
+        editableRuns.push(entry)
+      }
+      continue
+    }
+
+    if (child.kind === 'del-revision') {
+      // DXE-11 — an already-tracked deletion's text is presented with zero
+      // width, exactly like an atomic image/tab/break run (see
+      // `toRunEntryOrNull`): the surrounding paragraph stays fully editable,
+      // but the struck-through text itself is never a target a caret
+      // position can land inside or a delete/insert range can split — it
+      // reads as a single boundary you type/delete around, matching how a
+      // reviewer reads (not edits) already-rejected-pending content. Each
+      // grandchild run must still be text-only (checked via `getRunText`, not
+      // just assumed) so a deleted drawing/tab/break — a shape this editor
+      // doesn't specifically model as "deleted" — still conservatively
+      // rejects the whole paragraph rather than silently mishandling it.
+      const owner: RunOwner = { kind: 'del-revision', wrapper: child }
+      for (const grandchild of child.children) {
+        if (grandchild.kind !== 'run' || getRunText(grandchild) === null) {
+          return null
+        }
+
+        editableRuns.push({ run: grandchild, owner, text: '' })
+      }
+      continue
+    }
+
     return null
   }
 
@@ -1642,7 +1938,15 @@ function sameOwner(a: RunOwner, b: RunOwner): boolean {
     return true
   }
 
-  return a.kind === 'hyperlink' && b.kind === 'hyperlink' && a.wrapper === b.wrapper
+  if (a.kind === 'hyperlink' && b.kind === 'hyperlink') {
+    return a.wrapper === b.wrapper
+  }
+
+  if (a.kind === 'ins-revision' && b.kind === 'ins-revision') {
+    return a.wrapper === b.wrapper
+  }
+
+  return a.kind === 'del-revision' && b.kind === 'del-revision' && a.wrapper === b.wrapper
 }
 
 /**
