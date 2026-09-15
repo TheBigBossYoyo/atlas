@@ -75,6 +75,24 @@ describe('exportDocxPdf', () => {
     expect(html).toContain('content-visibility: visible !important');
   });
 
+  it('zeroes the page-stack\'s on-screen padding/gap and forces an explicit page-break-after every page but the last (regression: left in place, that padding/gap compounds page over page and a 2-page document printed as 3+ pages)', async () => {
+    const { printToPdfMock } = mockElectron();
+    mountViewerContent(
+      '<div class="docx-page-stack">' +
+        '<div class="docx-page" style="width: 816px; height: 1056px;">Page 1</div>' +
+        '<div class="docx-page" style="width: 816px; height: 1056px;">Page 2</div>' +
+        '</div>',
+    );
+
+    await exportDocxPdf('viewer-content', 'doc.docx');
+
+    const html = printToPdfMock.mock.calls[0]![0] as string;
+    expect(html).toMatch(/\.docx-page-stack\s*\{[^}]*padding:\s*0\s*!important/);
+    expect(html).toMatch(/\.docx-page-stack\s*\{[^}]*gap:\s*0\s*!important/);
+    expect(html).toMatch(/\.docx-page\s*\{[^}]*page-break-after:\s*always/);
+    expect(html).toMatch(/\.docx-page:last-child\s*\{[^}]*page-break-after:\s*auto/);
+  });
+
   it('rejects with a friendly error when the document has not finished loading', async () => {
     mockElectron();
     mountViewerContent('<div class="docx-viewer__loading">Loading…</div>');

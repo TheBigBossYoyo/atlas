@@ -138,17 +138,46 @@ function buildDocxPageCss(pageEls: readonly HTMLElement[]): string {
 
 /**
  * Print-only overrides layered on top of the harvested `viewer-docx.css`/
- * `page-view.css`. `content-visibility: auto` (a perf optimization for the
- * on-screen scroll view — see `page-view.css`) is forced back to `visible`
- * here as a defense-in-depth guarantee: the whole point of X1 is that export
- * must never depend on what happens to be laid out, and this removes any
- * doubt about how a given Chromium version treats `content-visibility` under
- * `printToPDF` rather than trusting it to already do the right thing.
+ * `page-view.css`.
+ *
+ * - `content-visibility: auto` (a perf optimization for the on-screen scroll
+ *   view — see `page-view.css`) is forced back to `visible` here as a
+ *   defense-in-depth guarantee: the whole point of X1 is that export must
+ *   never depend on what happens to be laid out, and this removes any doubt
+ *   about how a given Chromium version treats `content-visibility` under
+ *   `printToPDF` rather than trusting it to already do the right thing.
+ * - `.docx-page-stack`'s on-screen `padding`/`gap`/`flex` (chrome for the
+ *   scrollable "sheets of paper on a desk" view — see `page-view.css`) is
+ *   zeroed and switched to `display: block` for print. Left in place, that
+ *   padding/gap accumulates extra height ABOVE and BETWEEN each already
+ *   exactly-one-physical-page-tall `.docx-page` box; Chromium's print
+ *   pagination flows the whole document by physical page height, so that
+ *   extra height pushes each page's own trailing content onto the NEXT
+ *   printed page — compounding page over page until a 2-page document
+ *   prints as 3+ pages (the concrete regression this fixes). An explicit
+ *   `page-break-after` on each `.docx-page` (mirroring `slidesPdf.ts`'s
+ *   `.export-slide`) makes the one-page-per-`.docx-page` pagination
+ *   independent of exact height-matching entirely, rather than relying on
+ *   it as the pre-fix code implicitly did.
  */
 const DOCX_PRINT_OVERRIDES = `
+.docx-page-stack {
+  display: block !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  background: none !important;
+}
 .docx-page {
   content-visibility: visible !important;
   contain: none !important;
+  margin: 0 !important;
+  box-shadow: none !important;
+  page-break-after: always;
+  break-after: page;
+}
+.docx-page:last-child {
+  page-break-after: auto;
+  break-after: auto;
 }
 `;
 
