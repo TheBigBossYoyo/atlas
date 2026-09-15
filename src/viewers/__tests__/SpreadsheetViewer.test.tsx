@@ -49,7 +49,20 @@ function gridRows(props: CapturedProps): string[][] {
     }
     out.push(row)
   }
-  return out
+  return trimBlankMargin(out)
+}
+
+/** Drops the blank rows/columns the viewer draws past the data (USR-17's Excel-like margin). */
+function trimBlankMargin(grid: string[][]): string[][] {
+  let rowCount = grid.length
+  while (rowCount > 0 && grid[rowCount - 1].every((cell) => cell === '')) rowCount--
+  const rows = grid.slice(0, rowCount)
+  const colCount = rows.reduce((max, row) => {
+    let last = row.length
+    while (last > 0 && row[last - 1] === '') last--
+    return Math.max(max, last)
+  }, 0)
+  return rows.map((row) => row.slice(0, colCount))
 }
 
 function buildWorkbookFile(build: (wb: XLSX.WorkBook) => void): LoadedFile {

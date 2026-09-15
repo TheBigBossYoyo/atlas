@@ -272,6 +272,15 @@ body {
   min-height: auto;
 }
 
+/* USR-17 — glide-data-grid mounts every cell editor into `#portal`
+   (index.html); without it no spreadsheet/CSV cell could ever be edited. */
+#portal {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 9999;
+}
+
 button {
   cursor: pointer;
   border: none;

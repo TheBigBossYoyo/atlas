@@ -33,6 +33,13 @@
 import { evaluateFormula } from './spreadsheetFormula'
 import type { CellLookup } from './spreadsheetFormula'
 import type { FrozenPanes, MergeRange, ParsedSheet } from '../shared/spreadsheetGrid'
+import {
+  tablesAfterColumnDelete,
+  tablesAfterColumnInsert,
+  tablesAfterRowDelete,
+  tablesAfterRowInsert,
+  type SheetTable,
+} from './spreadsheetTables'
 
 export type EditableSheet = {
   readonly name: string
@@ -44,6 +51,8 @@ export type EditableSheet = {
   readonly colWidthsPx: ReadonlyArray<number | undefined>
   readonly rowHeightsPx: ReadonlyArray<number | undefined>
   readonly freeze?: FrozenPanes
+  /** Excel tables (USR-17), kept in step with row/column inserts and deletes. */
+  readonly tables?: ReadonlyArray<SheetTable>
 }
 
 export type SpreadsheetDocument = {
@@ -84,6 +93,7 @@ export function createDocument(parsedSheets: ReadonlyArray<ParsedSheet>): Spread
         colWidthsPx: sheet.grid.colWidthsPx,
         rowHeightsPx: sheet.grid.rowHeightsPx,
         ...(sheet.freeze ? { freeze: sheet.freeze } : {}),
+        ...(sheet.tables ? { tables: sheet.tables } : {}),
       }),
     ),
   }
@@ -105,6 +115,15 @@ export function createDocumentFromRows(rows: ReadonlyArray<ReadonlyArray<string>
       },
     ],
   }
+}
+
+/** Spread into an updated sheet: its tables after a row/column insert or delete, or nothing when it has none. */
+function shiftedTables(
+  sheet: EditableSheet,
+  shift: (tables: ReadonlyArray<SheetTable>, at: number) => ReadonlyArray<SheetTable>,
+  atIndex: number,
+): { readonly tables?: ReadonlyArray<SheetTable> } {
+  return sheet.tables ? { tables: shift(sheet.tables, atIndex) } : {}
 }
 
 function replaceSheet(doc: SpreadsheetDocument, sheetIndex: number, sheet: EditableSheet): SpreadsheetDocument {
@@ -236,7 +255,8 @@ export function insertRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
     return m
   })
 
-  return replaceSheet(doc, sheetIndex, recalculateSheet({ ...sheet, rows, formulas, rowHeightsPx, merges }))
+  const tables = shiftedTables(sheet, tablesAfterRowInsert, atIndex)
+  return replaceSheet(doc, sheetIndex, recalculateSheet({ ...sheet, rows, formulas, rowHeightsPx, merges, ...tables }))
 }
 
 /** Deletes the row at `atIndex`. A no-op if it would leave the sheet with zero rows. */
@@ -265,7 +285,8 @@ export function deleteRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
       c1: m.c1,
     }))
 
-  return replaceSheet(doc, sheetIndex, recalculateSheet({ ...sheet, rows, formulas, rowHeightsPx, merges }))
+  const tables = shiftedTables(sheet, tablesAfterRowDelete, atIndex)
+  return replaceSheet(doc, sheetIndex, recalculateSheet({ ...sheet, rows, formulas, rowHeightsPx, merges, ...tables }))
 }
 
 /** Inserts one empty column at `atIndex` (0-based; may equal `colCount` to append at the end). */
@@ -297,7 +318,15 @@ export function insertColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
   return replaceSheet(
     doc,
     sheetIndex,
-    recalculateSheet({ ...sheet, rows, formulas, colWidthsPx, colCount: sheet.colCount + 1, merges }),
+    recalculateSheet({
+      ...sheet,
+      rows,
+      formulas,
+      colWidthsPx,
+      colCount: sheet.colCount + 1,
+      merges,
+      ...shiftedTables(sheet, tablesAfterColumnInsert, atIndex),
+    }),
   )
 }
 
@@ -325,7 +354,15 @@ export function deleteColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
   return replaceSheet(
     doc,
     sheetIndex,
-    recalculateSheet({ ...sheet, rows, formulas, colWidthsPx, colCount: sheet.colCount - 1, merges }),
+    recalculateSheet({
+      ...sheet,
+      rows,
+      formulas,
+      colWidthsPx,
+      colCount: sheet.colCount - 1,
+      merges,
+      ...shiftedTables(sheet, tablesAfterColumnDelete, atIndex),
+    }),
   )
 }
 

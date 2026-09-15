@@ -49,6 +49,7 @@ import * as XLSX from 'xlsx'
 import Papa from 'papaparse'
 
 import type { EditableSheet, SpreadsheetDocument } from './spreadsheetDocument'
+import { graftTables, tableHeaderNames } from './spreadsheetTables'
 
 /** Extension -> SheetJS write `bookType`. `.xltx`/`.xltm` (templates) have no distinct write format in this build, so they're written as plain `.xlsx`/`.xlsm` bytes — the OOXML content is otherwise identical. */
 const EXTENSION_TO_BOOK_TYPE: Readonly<Record<string, XLSX.BookType>> = {
@@ -95,6 +96,14 @@ function buildWorksheet(sheet: EditableSheet): XLSX.WorkSheet {
     }
   }
 
+  // USR-17: an Excel table's header cells must be text equal to its column names.
+  for (const table of sheet.tables ?? []) {
+    if (!table.headerRow) continue
+    tableHeaderNames(table, sheet.rows).forEach((name, i) => {
+      ws[XLSX.utils.encode_cell({ r: table.r0, c: table.c0 + i })] = { t: 's', v: name }
+    })
+  }
+
   ws['!ref'] = XLSX.utils.encode_range({
     s: { r: 0, c: 0 },
     e: { r: Math.max(rowCount - 1, 0), c: Math.max(colCount - 1, 0) },
@@ -136,6 +145,18 @@ export function writeWorkbookBytes(doc: SpreadsheetDocument, bookType: XLSX.Book
   const wb = buildWorkbook(doc)
   const buffer = XLSX.write(wb, { type: 'array', bookType }) as ArrayBuffer
   return new Uint8Array(buffer)
+}
+
+/** Book types whose package is OOXML, where Excel tables can be grafted back in (see `spreadsheetTables.ts`). */
+const OOXML_BOOK_TYPES: ReadonlySet<XLSX.BookType> = new Set<XLSX.BookType>(['xlsx', 'xlsm'])
+
+/** `writeWorkbookBytes` plus the sheets' Excel tables for OOXML targets (USR-17); other formats have no table concept. */
+export async function writeWorkbookBytesWithTables(
+  doc: SpreadsheetDocument,
+  bookType: XLSX.BookType,
+): Promise<Uint8Array> {
+  const bytes = writeWorkbookBytes(doc, bookType)
+  return OOXML_BOOK_TYPES.has(bookType) ? graftTables(bytes, doc.sheets) : bytes
 }
 
 /**

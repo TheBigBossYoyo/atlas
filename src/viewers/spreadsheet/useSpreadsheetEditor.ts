@@ -35,7 +35,7 @@ import {
   setCellValue as setCellValueOp,
   type SpreadsheetDocument,
 } from './spreadsheetDocument'
-import { documentToDelimitedText, writeWorkbookBytes } from './spreadsheetWrite'
+import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
 import { useUndoableState } from './useUndoableState'
 import { useRegisterViewerSave, useSetViewerDirty } from '../shared/useViewerContext'
 import { useViewerShortcuts } from '../../hooks/useShortcutManager'
@@ -72,7 +72,7 @@ async function writeToDisk(
   const filters = [{ name: target.filterName, extensions: [target.extension] }]
 
   if (target.kind === 'workbook') {
-    const bytes = writeWorkbookBytes(doc, target.bookType)
+    const bytes = await writeWorkbookBytesWithTables(doc, target.bookType)
     const result = await window.electronAPI?.saveBinaryFile?.({
       content: bytes,
       suggestedName,

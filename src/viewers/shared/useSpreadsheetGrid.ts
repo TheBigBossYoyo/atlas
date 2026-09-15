@@ -73,6 +73,8 @@ export type UseSpreadsheetGridOptions = {
    * exists to fix.
    */
   readonly formulas?: ReadonlyArray<ReadonlyArray<string | undefined>>
+  /** Grid-space cells drawn as a header (bold on the header background) — Excel table header rows (USR-17). */
+  readonly isHeaderCell?: (row: number, col: number) => boolean
 }
 
 export type UseSpreadsheetGridResult = {
@@ -119,6 +121,7 @@ export function useSpreadsheetGrid({
   resetKey,
   onCellEdited: onCellEditedOption,
   formulas,
+  isHeaderCell,
 }: UseSpreadsheetGridOptions): UseSpreadsheetGridResult {
   const theme = useGridTheme()
   const [hoveredRow, setHoveredRow] = useState<number | undefined>()
@@ -147,6 +150,7 @@ export function useSpreadsheetGrid({
       const isHovered = row === hoveredRow
       let bgCell = isOdd ? theme.bgRowOdd : theme.bgCell
       if (isHovered) bgCell = theme.bgRowHover
+      const isHeader = isHeaderCell?.(row, col) ?? false
 
       return {
         kind: 'text' as const,
@@ -156,10 +160,12 @@ export function useSpreadsheetGrid({
         // the caller actually wired up `onCellEdited` below — otherwise the
         // grid stays honestly read-only exactly as before.
         allowOverlay: onCellEditedOption !== undefined,
-        themeOverride: { bgCell },
+        themeOverride: isHeader
+          ? { bgCell: theme.bgHeader, baseFontStyle: `600 ${theme.baseFontStyle}` }
+          : { bgCell },
       } as GridCell
     },
-    [rows, formulas, theme, hoveredRow, onCellEditedOption],
+    [rows, formulas, theme, hoveredRow, onCellEditedOption, isHeaderCell],
   )
 
   const onCellEdited = useMemo(() => {

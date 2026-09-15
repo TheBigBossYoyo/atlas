@@ -16,8 +16,9 @@
  * Chromium exposes `DOMParser` on the Worker global scope, so this works
  * unmodified here.
  */
-import { attachFrozenPanes, parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
+import { attachFrozenPanes, attachTables, parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
 import { readFrozenPanes } from '../spreadsheet/spreadsheetPanes'
+import { readSheetTables } from '../spreadsheet/spreadsheetTables'
 
 export type SpreadsheetWorkerRequest = {
   readonly buffer: ArrayBuffer
@@ -30,8 +31,14 @@ export type SpreadsheetWorkerResponse =
 self.onmessage = async (event: MessageEvent<SpreadsheetWorkerRequest>) => {
   try {
     const sheets = parseWorkbookBuffer(event.data.buffer)
-    const paneMap = await readFrozenPanes(event.data.buffer)
-    const response: SpreadsheetWorkerResponse = { ok: true, sheets: attachFrozenPanes(sheets, paneMap) }
+    const [paneMap, tableMap] = await Promise.all([
+      readFrozenPanes(event.data.buffer),
+      readSheetTables(event.data.buffer),
+    ])
+    const response: SpreadsheetWorkerResponse = {
+      ok: true,
+      sheets: attachTables(attachFrozenPanes(sheets, paneMap), tableMap),
+    }
     self.postMessage(response)
   } catch (err) {
     const response: SpreadsheetWorkerResponse = {

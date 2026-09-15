@@ -6,6 +6,7 @@ import type { ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats, useRegisterViewerFind } from './shared/useViewerContext'
 import { useSpreadsheetGrid } from './shared/useSpreadsheetGrid'
 import { useGridFind } from './shared/useGridFind'
+import { commitGridEdit, useGridBlankMargin } from './shared/useGridBlankMargin'
 import { parseCsv } from './shared/csvParse'
 import { ViewerLoading } from '../components/ViewerLoading'
 import { SearchOverlay } from '../components/SearchOverlay'
@@ -15,11 +16,10 @@ import { SpreadsheetEditToolbar } from './spreadsheet/SpreadsheetEditToolbar'
 import type { SpreadsheetDocument } from './spreadsheet/spreadsheetDocument'
 import './__styles__/viewer-spreadsheet.css'
 
-// Lazy load DataEditor and its CSS
+// Lazy load the grid (shared/SpreadsheetDataEditor pulls in glide-data-grid and its CSS)
 const LazyDataEditor = lazy(async () => {
-  const mod = await import('@glideapps/glide-data-grid')
-  await import('@glideapps/glide-data-grid/dist/index.css')
-  return { default: mod.DataEditor }
+  const mod = await import('./shared/SpreadsheetDataEditor')
+  return { default: mod.SpreadsheetDataEditor }
 })
 
 type CsvData = {
@@ -149,18 +149,25 @@ function CsvViewerBase({ file }: ViewerProps) {
     }
   }, [setStats, sheet, filteredRows.length])
 
+  // Blank rows/columns past the data so empty cells can be typed into (USR-17).
+  const { gridRowCount, gridColCount, sheetRowForGridRow } = useGridBlankMargin({
+    bodyRowIndices: filteredRowIndices,
+    colCount: sheet?.colCount ?? 0,
+    isFiltering: deferredSearch !== '',
+  })
+
   const handleCellEdited = useCallback(
     (row: number, col: number, rawText: string) => {
-      const sheetRow = filteredRowIndices[row]
-      if (sheetRow === undefined) return
-      editor.setCellValue(0, sheetRow, col, rawText)
+      const sheetRow = sheetRowForGridRow(row)
+      if (!sheet || sheetRow === undefined) return
+      commitGridEdit(editor, 0, sheet, sheetRow, col, rawText)
     },
-    [editor, filteredRowIndices],
+    [editor, sheet, sheetRowForGridRow],
   )
 
   const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited } = useSpreadsheetGrid({
     rows: filteredRows,
-    colCount: sheet?.colCount ?? 0,
+    colCount: gridColCount,
     onCellEdited: handleCellEdited,
     formulas: filteredFormulas,
   })
@@ -174,14 +181,14 @@ function CsvViewerBase({ file }: ViewerProps) {
   const selection = useMemo(() => {
     const cell = gridFind.gridSelection?.current?.cell
     if (!cell) return null
-    const sheetRow = filteredRowIndices[cell[1]]
+    const sheetRow = sheetRowForGridRow(cell[1])
     return sheetRow === undefined ? null : { row: sheetRow, col: cell[0] }
-  }, [gridFind.gridSelection, filteredRowIndices])
+  }, [gridFind.gridSelection, sheetRowForGridRow])
 
   const handleGridPaste = useCallback(
     (target: Item, values: readonly (readonly string[])[]): boolean => {
       const [col, row] = target
-      const sheetRow = filteredRowIndices[row]
+      const sheetRow = sheetRowForGridRow(row)
       if (sheetRow === undefined) return false
       // See SpreadsheetViewer's identical note: anchors correctly under an
       // active search filter, but a multi-row paste still targets contiguous
@@ -189,7 +196,7 @@ function CsvViewerBase({ file }: ViewerProps) {
       editor.pasteRange(0, sheetRow, col, values.map((r) => [...r]))
       return false
     },
-    [editor, filteredRowIndices],
+    [editor, sheetRowForGridRow],
   )
 
   const saveFormats = useMemo(() => CSV_SAVE_FORMATS.map((f) => ({ id: f.id, label: f.label })), [])
@@ -246,10 +253,10 @@ function CsvViewerBase({ file }: ViewerProps) {
       />
       {editor.saveError && <div className="csv-viewer__error">{editor.saveError}</div>}
       <div className="csv-viewer__grid">
-        {filteredRows.length === 0 ? (
+        {!sheet ? null : search && filteredRows.length === 0 ? (
           <div className="csv-viewer__empty">
             <FileSpreadsheet size={48} />
-            <p>{search ? 'No rows match your search.' : 'This file is empty.'}</p>
+            <p>No rows match your search.</p>
           </div>
         ) : (
           <Suspense fallback={null}>
@@ -257,7 +264,7 @@ function CsvViewerBase({ file }: ViewerProps) {
               getCellContent={getCellContent}
               getCellsForSelection={true}
               columns={columns}
-              rows={filteredRows.length}
+              rows={gridRowCount}
               theme={theme}
               width="100%"
               height="100%"

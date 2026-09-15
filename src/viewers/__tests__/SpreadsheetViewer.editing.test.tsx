@@ -7,6 +7,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import JSZip from 'jszip'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as XLSX from 'xlsx'
 import { CompactSelection, type EditableGridCell, type GridSelection, type Item } from '@glideapps/glide-data-grid'
@@ -17,7 +18,12 @@ import { ViewerProvider } from '../shared/ViewerContext'
 import { SpreadsheetViewer } from '../SpreadsheetViewer'
 import { OdsViewer } from '../OdsViewer'
 
-type CapturedCell = { readonly data: string; readonly displayData: string }
+type CapturedCell = {
+  readonly data: string
+  readonly displayData: string
+  readonly allowOverlay?: boolean
+  readonly themeOverride?: { readonly baseFontStyle?: string }
+}
 type CapturedProps = {
   readonly getCellContent: (loc: readonly [number, number]) => CapturedCell
   readonly columns: ReadonlyArray<{ readonly title: string }>
@@ -56,7 +62,20 @@ function gridRows(props: CapturedProps): string[][] {
     }
     out.push(row)
   }
-  return out
+  return trimBlankMargin(out)
+}
+
+/** Drops the blank rows/columns the viewer draws past the data (USR-17's Excel-like margin). */
+function trimBlankMargin(grid: string[][]): string[][] {
+  let rowCount = grid.length
+  while (rowCount > 0 && grid[rowCount - 1].every((cell) => cell === '')) rowCount--
+  const rows = grid.slice(0, rowCount)
+  const colCount = rows.reduce((max, row) => {
+    let last = row.length
+    while (last > 0 && row[last - 1] === '') last--
+    return Math.max(max, last)
+  }, 0)
+  return rows.map((row) => row.slice(0, colCount))
 }
 
 function editCell(col: number, row: number, text: string): void {
@@ -123,6 +142,62 @@ describe('SpreadsheetViewer — cell editing', () => {
     act(() => editCell(0, 1, 'Bob'))
 
     await waitFor(() => expect(gridRows(lastDataEditorProps!)[1][0]).toBe('Bob'))
+  })
+
+  it('draws blank rows/columns past the data and typing into one grows the sheet (USR-17)', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Name', 'Score'], ['Alice', 10]]), 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+    expect(lastDataEditorProps!.rows).toBeGreaterThanOrEqual(100)
+    expect(lastDataEditorProps!.columns.length).toBeGreaterThanOrEqual(26)
+    expect(lastDataEditorProps!.getCellContent([4, 5]).allowOverlay).toBe(true)
+
+    act(() => editCell(3, 4, 'far'))
+
+    await waitFor(() =>
+      expect(gridRows(lastDataEditorProps!)).toEqual([
+        ['Name', 'Score', '', ''],
+        ['Alice', '10', '', ''],
+        ['', '', '', ''],
+        ['', '', '', ''],
+        ['', '', '', 'far'],
+      ]),
+    )
+    expect(screen.getByText('5 rows × 4 columns')).toBeInTheDocument()
+  })
+
+  it('draws an Excel table header row as a header (USR-17)', async () => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Name', 'Qty'], ['Apple', 3]]), 'Data')
+    const zip = await JSZip.loadAsync(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer)
+    zip.file(
+      'xl/tables/table1.xml',
+      '<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="T" displayName="T" ref="A1:B2"><tableColumns count="2"><tableColumn id="1" name="Name"/><tableColumn id="2" name="Qty"/></tableColumns></table>',
+    )
+    zip.file(
+      'xl/worksheets/_rels/sheet1.xml.rels',
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>',
+    )
+    const file: LoadedFile = {
+      kind: 'binary',
+      content: await zip.generateAsync({ type: 'arraybuffer' }),
+      path: '/tmp/table.xlsx',
+      format: 'xlsx',
+    }
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps!.getCellContent([0, 0]).themeOverride?.baseFontStyle).toMatch(/^600/))
+    expect(lastDataEditorProps!.getCellContent([0, 1]).themeOverride?.baseFontStyle).toBeUndefined()
+    expect(lastDataEditorProps!.getCellContent([2, 0]).themeOverride?.baseFontStyle).toBeUndefined()
   })
 
   it('a formula edit shows its computed value', async () => {
@@ -536,8 +611,7 @@ describe('SpreadsheetViewer — search filter + editing (row-index mapping)', ()
     act(() => editCell(0, 0, 'Edited'))
 
     fireEvent.change(screen.getByPlaceholderText('Search rows...'), { target: { value: '' } })
-    await waitFor(() => expect(lastDataEditorProps!.rows).toBe(3))
-    expect(gridRows(lastDataEditorProps!)).toEqual([['a'], ['b'], ['Edited']])
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)).toEqual([['a'], ['b'], ['Edited']]))
   })
 
   it('inserts a row above the correct underlying sheet row via the toolbar when filtered', async () => {
@@ -628,7 +702,6 @@ describe('SpreadsheetViewer — frozen rows (T4/DAT-10 remainder)', () => {
 
     await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
     // 3 total rows minus 1 frozen row = 2 in the scrollable body.
-    expect(lastDataEditorProps!.rows).toBe(2)
     expect(gridRows(lastDataEditorProps!)).toEqual([['Row1'], ['Row2']])
     // The frozen header row itself renders in the separate strip, not lost.
     expect(screen.getByDisplayValue('Header')).toBeInTheDocument()

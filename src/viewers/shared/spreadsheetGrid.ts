@@ -40,6 +40,7 @@
  */
 import * as XLSX from 'xlsx'
 import { formatCellText } from './xlsxCellFormat'
+import type { SheetTable } from '../spreadsheet/spreadsheetTables'
 
 export type MergeRange = {
   readonly r0: number
@@ -84,6 +85,19 @@ export type ParsedSheet = {
    * back explicitly rather than treating `undefined` as `{cols:0,rows:0}`.
    */
   readonly freeze?: FrozenPanes
+  /** Excel tables on this sheet (USR-17, OOXML only — see `spreadsheet/spreadsheetTables.ts`). */
+  readonly tables?: ReadonlyArray<SheetTable>
+}
+
+/** Merges a sheet-name-keyed table map (from `readSheetTables`) onto already-parsed sheets. Pure/sync. */
+export function attachTables(
+  sheets: ReadonlyArray<ParsedSheet>,
+  tableMap: Readonly<Record<string, ReadonlyArray<SheetTable>>>,
+): ParsedSheet[] {
+  return sheets.map((sheet) => {
+    const tables = tableMap[sheet.name]
+    return tables && tables.length > 0 ? { ...sheet, tables } : sheet
+  })
 }
 
 /** Merges a sheet-name-keyed frozen-pane map (from `readFrozenPanes`) onto already-parsed sheets. Pure/sync. */

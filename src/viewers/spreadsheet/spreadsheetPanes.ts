@@ -63,9 +63,10 @@ function resolveRelTarget(target: string): string {
   return `xl/${target}`
 }
 
-type SheetPart = { readonly name: string; readonly path: string }
+export type SheetPart = { readonly name: string; readonly path: string }
 
-function readSheetParts(workbookXml: string, relsXml: string | null): SheetPart[] {
+/** Sheet name -> worksheet part path, in workbook order (also used by `spreadsheetTables.ts`). */
+export function readSheetParts(workbookXml: string, relsXml: string | null): SheetPart[] {
   const parser = new DOMParser()
   const workbookDoc = parser.parseFromString(workbookXml, 'application/xml')
   if (workbookDoc.getElementsByTagName('parsererror').length > 0) return []

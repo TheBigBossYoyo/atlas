@@ -7,6 +7,7 @@ import { useSetNavItems, useSetViewerStats, useRegisterViewerFind } from './shar
 import { useSpreadsheetWorkbook } from './shared/useSpreadsheetWorkbook'
 import { useSpreadsheetGrid } from './shared/useSpreadsheetGrid'
 import { useGridFind } from './shared/useGridFind'
+import { commitGridEdit, useGridBlankMargin } from './shared/useGridBlankMargin'
 import { ViewerLoading } from '../components/ViewerLoading'
 import { SearchOverlay } from '../components/SearchOverlay'
 import { createDocument } from './spreadsheet/spreadsheetDocument'
@@ -14,13 +15,13 @@ import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from './spreadsheet/
 import { bookTypeForExtension } from './spreadsheet/spreadsheetWrite'
 import { SpreadsheetEditToolbar } from './spreadsheet/SpreadsheetEditToolbar'
 import { FrozenRowsStrip } from './spreadsheet/FrozenRowsStrip'
+import { isTableHeaderCell } from './spreadsheet/spreadsheetTables'
 import './__styles__/viewer-spreadsheet.css'
 
-// Lazy load DataEditor and its CSS
+// Lazy load the grid (shared/SpreadsheetDataEditor pulls in glide-data-grid and its CSS)
 const LazyDataEditor = lazy(async () => {
-  const mod = await import('@glideapps/glide-data-grid')
-  await import('@glideapps/glide-data-grid/dist/index.css')
-  return { default: mod.DataEditor }
+  const mod = await import('./shared/SpreadsheetDataEditor')
+  return { default: mod.SpreadsheetDataEditor }
 })
 
 /** Fixed so FrozenRowsStrip's spacer can line up exactly with the grid's own row-number column (T4/DAT-10 remainder). */
@@ -214,23 +215,40 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     }
   }, [setStats, activeSheet, filteredRows.length])
 
+  const isFiltering = deferredSearch !== ''
+  // Blank rows/columns past the data (USR-17); rows past the data map one-to-one after it.
+  const { gridRowCount, gridColCount, sheetRowForGridRow } = useGridBlankMargin({
+    bodyRowIndices,
+    colCount: activeSheet?.colCount ?? 0,
+    isFiltering,
+    rowOffset: frozenRowCount,
+  })
+
   const handleCellEdited = useCallback(
     (row: number, col: number, rawText: string) => {
-      if (activeSheetIndex < 0) return
-      const sheetRow = bodyRowIndices[row]
-      if (sheetRow === undefined) return
-      editor.setCellValue(activeSheetIndex, sheetRow, col, rawText)
+      const sheetRow = sheetRowForGridRow(row)
+      if (activeSheetIndex < 0 || !activeSheet || sheetRow === undefined) return
+      commitGridEdit(editor, activeSheetIndex, activeSheet, sheetRow, col, rawText)
     },
-    [editor, activeSheetIndex, bodyRowIndices],
+    [editor, activeSheetIndex, activeSheet, sheetRowForGridRow],
+  )
+
+  const isHeaderCell = useCallback(
+    (row: number, col: number): boolean => {
+      const sheetRow = sheetRowForGridRow(row)
+      return sheetRow !== undefined && isTableHeaderCell(activeSheet?.tables, sheetRow, col)
+    },
+    [sheetRowForGridRow, activeSheet],
   )
 
   const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited } = useSpreadsheetGrid({
     rows: bodyRows,
-    colCount: activeSheet?.colCount ?? 0,
+    colCount: gridColCount,
     colWidthsPx: activeSheet?.colWidthsPx,
     resetKey: activeSheetName ?? undefined,
     onCellEdited: handleCellEdited,
     formulas: bodyFormulas,
+    isHeaderCell: activeSheet?.tables?.length ? isHeaderCell : undefined,
   })
 
   const gridFind = useGridFind(bodyRows)
@@ -248,15 +266,15 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   const selection = useMemo(() => {
     const cell = gridFind.gridSelection?.current?.cell
     if (!cell) return null
-    const sheetRow = bodyRowIndices[cell[1]]
+    const sheetRow = sheetRowForGridRow(cell[1])
     return sheetRow === undefined ? null : { row: sheetRow, col: cell[0] }
-  }, [gridFind.gridSelection, bodyRowIndices])
+  }, [gridFind.gridSelection, sheetRowForGridRow])
 
   const handleGridPaste = useCallback(
     (target: Item, values: readonly (readonly string[])[]): boolean => {
       if (activeSheetIndex < 0) return false
       const [col, row] = target
-      const sheetRow = bodyRowIndices[row]
+      const sheetRow = sheetRowForGridRow(row)
       if (sheetRow === undefined) return false
       // Anchors the paste at the correct sheet row even under an active
       // search filter (see `bodyRowIndices`). A multi-row paste while
@@ -272,7 +290,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
       )
       return false // handled manually (can grow the sheet) — see DataEditor's onPaste docs.
     },
-    [editor, activeSheetIndex, bodyRowIndices],
+    [editor, activeSheetIndex, sheetRowForGridRow],
   )
 
   const handleVisibleRegionChanged = useCallback((_range: Rectangle, tx: number) => {
@@ -407,7 +425,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         />
       )}
       <div className="spreadsheet-viewer__grid">
-        {filteredRows.length === 0 ? (
+        {isFiltering && filteredRows.length === 0 ? (
           <div className="spreadsheet-viewer__empty">
             <FileSpreadsheet size={48} />
             <p>{search ? 'No rows match your search.' : 'This sheet is empty.'}</p>
@@ -419,7 +437,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
                 getCellContent={getCellContent}
                 getCellsForSelection={true}
                 columns={columns}
-                rows={bodyRows.length}
+                rows={gridRowCount}
                 theme={theme}
                 width="100%"
                 height="100%"
