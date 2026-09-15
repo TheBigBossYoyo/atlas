@@ -89,10 +89,6 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
       await stubSaveDialog(electronApp, outPath)
       const page = await electronApp.firstWindow()
       await waitForViewer(page, 'docx')
-      // eslint-disable-next-line no-console
-      console.log('DEBUG docx-page count:', await page.locator('.docx-page').count())
-      // eslint-disable-next-line no-console
-      console.log('DEBUG docx-page texts:', JSON.stringify(await page.locator('.docx-page').allTextContents()))
       await exportToPdf(page)
       await waitForFile(outPath)
 

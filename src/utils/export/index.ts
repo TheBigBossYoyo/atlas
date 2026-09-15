@@ -12,7 +12,9 @@ export { sanitizeFileName, saveTextOutput, saveBinaryOutput } from './download';
 export type { SaveFilter } from './download';
 
 // X1 — real per-format PDF export (replaces the html2canvas-pro screenshot
-// exporter; see pdf.ts's own header for the full rationale per format).
+// exporter; see pdf.ts's own header for the full rationale per format, and
+// for why html2canvas-pro itself is still a dependency — docxMedia.ts's
+// unrelated DOCX math/Mermaid rasterization still needs it).
 export {
   exportMarkdownPdf,
   exportDocxPdf,

@@ -4,10 +4,19 @@
  * Every exporter here builds a self-contained, sanitized HTML document and
  * hands it to `printHtmlToPdf` (Electron's `webContents.printToPDF`, via the
  * `export:printToPdf` IPC) instead of rasterizing the on-screen viewport with
- * `html2canvas-pro` (the pre-X1 behavior — see git history / P4.4 for its
- * removal). This produces a real vector PDF with selectable text, and — the
- * actual point of X1 — captures the document's FULL content instead of
- * whatever happened to be scrolled into view.
+ * `html2canvas-pro` (the pre-X1 behavior — see git history). This produces a
+ * real vector PDF with selectable text, and — the actual point of X1 —
+ * captures the document's FULL content instead of whatever happened to be
+ * scrolled into view.
+ *
+ * P4.4 note: `html2canvas-pro` itself is NOT removed as a dependency even
+ * though this file no longer uses it for PDF export. `docxMedia.ts` (X2, DOCX
+ * export's math/Mermaid rasterization — Word has no live LaTeX/diagram
+ * renderer, so a picture of the already-rendered output is the only way to
+ * embed one) still genuinely needs it. The plan's original P4.4 wording
+ * assumed X1 shipping would make the package fully dead; that assumption
+ * doesn't hold once `docxMedia.ts`'s independent, ongoing use is accounted
+ * for — see notesForMerger.
  *
  * - `exportMarkdownPdf` replaces the old generic `exportPdf('markdown-content', ...)`
  *   with a printToPDF-based render of the same live `#markdown-content` DOM
