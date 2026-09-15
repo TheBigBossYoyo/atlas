@@ -12,6 +12,7 @@ import {
 
 import { toHighlightColor } from './colorMapping'
 import { findEnclosingTable, findParagraph } from './commands'
+import type { EnclosingTable } from './commands'
 import type { Command, Range } from './commandTypes'
 import { pickListNumId } from './insertList'
 import { normalizeRange } from './Selection'
@@ -122,6 +123,37 @@ function findRevisionAtSelection(
 }
 
 /**
+ * DXE-14 fix — `EnclosingTable.cellIndex` is the clicked cell's position in
+ * `row.cells` (array index), but `insert-table-column`/`delete-table-column`
+ * (see `commands.ts`'s `insertColumnIntoRow`/`deleteColumnFromRow` doc
+ * comments) both address a column by *grid* index instead — the two only
+ * coincide when every cell before it in the row has `gridSpan` 1. Once an
+ * earlier cell has been merged wider, the array index undercounts the grid
+ * index, so resolving straight from `cellIndex` silently picks the wrong
+ * column (widening/narrowing the merged cell instead of the clicked one).
+ * Summing every earlier cell's span translates array index to grid index;
+ * the clicked cell's own span is also returned so "insert to its right" can
+ * land just past *all* of the columns it covers, not just its first one.
+ */
+function cellGridColumnRange(enclosing: EnclosingTable): { readonly start: number; readonly span: number } {
+  const row = enclosing.table.rows[enclosing.rowIndex]
+  if (row === undefined || row.kind !== 'table-row') {
+    return { start: enclosing.cellIndex, span: 1 }
+  }
+
+  let start = 0
+  for (let i = 0; i < enclosing.cellIndex; i += 1) {
+    const cell = row.cells[i]
+    start += cell !== undefined && cell.kind === 'table-cell' ? cell.props?.gridSpan ?? 1 : 1
+  }
+
+  const current = row.cells[enclosing.cellIndex]
+  const span = current !== undefined && current.kind === 'table-cell' ? current.props?.gridSpan ?? 1 : 1
+
+  return { start, span }
+}
+
+/**
  * DXE-14 — resolves a table-editing toolbar/context-menu command against the
  * cell the cursor is currently in. There's no rectangular multi-cell mouse
  * selection yet (documented remaining scope for DXE-14), so "merge" acts on
@@ -165,14 +197,20 @@ function resolveTableCommand(
       return { kind: 'insert-table-row', tablePath, at: rowIndex }
     case 'insert-table-row-below':
       return { kind: 'insert-table-row', tablePath, at: rowIndex + 1 }
-    case 'insert-table-column-left':
-      return { kind: 'insert-table-column', tablePath, at: cellIndex }
-    case 'insert-table-column-right':
-      return { kind: 'insert-table-column', tablePath, at: cellIndex + 1 }
+    case 'insert-table-column-left': {
+      const { start } = cellGridColumnRange(enclosing)
+      return { kind: 'insert-table-column', tablePath, at: start }
+    }
+    case 'insert-table-column-right': {
+      const { start, span } = cellGridColumnRange(enclosing)
+      return { kind: 'insert-table-column', tablePath, at: start + span }
+    }
     case 'delete-table-row':
       return { kind: 'delete-table-row', tablePath, rowIndex }
-    case 'delete-table-column':
-      return { kind: 'delete-table-column', tablePath, columnIndex: cellIndex }
+    case 'delete-table-column': {
+      const { start } = cellGridColumnRange(enclosing)
+      return { kind: 'delete-table-column', tablePath, columnIndex: start }
+    }
     case 'delete-table':
       return { kind: 'delete-table', tablePath }
     case 'merge-table-cell-right':

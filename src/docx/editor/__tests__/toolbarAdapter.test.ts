@@ -165,6 +165,77 @@ describe('toolbarToCommand — DXE-14 table structural editing', () => {
     })
   })
 
+  // ---------------------------------------------------------------------------
+  // Regression — `EnclosingTable.cellIndex` is an array index into
+  // `row.cells`, which stops matching the table's *grid* column index (what
+  // insert/delete-column actually address) as soon as an earlier cell in the
+  // row has been merged wider. Resolving straight from `cellIndex` used to
+  // pick the wrong column once that happened.
+  // ---------------------------------------------------------------------------
+
+  /** A single row spanning 3 grid columns but only 2 cells — `AB` (gridSpan
+   * 2, as `merge-table-cells` would produce) followed by plain cell `C`, so
+   * `C`'s array index (1) diverges from its grid column (2). */
+  function createMergedTableDocument(): Document {
+    const emptyCellBlocks = Object.freeze([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([]) }) as Paragraph,
+    ])
+    const table: Table = Object.freeze({
+      kind: 'table',
+      tblGrid: Object.freeze([twip(1440), twip(1440), twip(1440)]),
+      rows: Object.freeze([
+        Object.freeze({
+          kind: 'table-row',
+          cells: Object.freeze([
+            Object.freeze({ kind: 'table-cell', props: { gridSpan: 2 }, blocks: emptyCellBlocks }),
+            Object.freeze({ kind: 'table-cell', blocks: emptyCellBlocks }),
+          ]),
+        } satisfies TableRow),
+      ]),
+    }) as Table
+
+    const section = Object.freeze({ kind: 'section', props: {}, blocks: Object.freeze([table]) }) satisfies Section
+
+    return Object.freeze({
+      kind: 'document',
+      sections: Object.freeze([section]),
+      styles: new Map<string, Style>(),
+      numbering: new Map<string, NumberingDef>(),
+      comments: new Map<string, Comment>(),
+      footnotes: new Map<string, Footnote>(),
+      endnotes: new Map<string, Endnote>(),
+      headers: new Map<string, Header>(),
+      footers: new Map<string, Footer>(),
+    }) satisfies Document
+  }
+
+  it('resolves insert-table-column-left/right against the grid column, not the cell array index, once an earlier cell is merged', () => {
+    // Row: [AB (gridSpan 2), C] — three grid columns, two cells. The cursor
+    // sits in C, whose array index is 1 but whose grid column is 2.
+    const document = createMergedTableDocument()
+
+    expect(toolbarToCommand({ kind: 'insert-table-column-left' }, cellPos(0, 1), document)).toEqual({
+      kind: 'insert-table-column',
+      tablePath: [0, 0],
+      at: 2,
+    })
+    expect(toolbarToCommand({ kind: 'insert-table-column-right' }, cellPos(0, 1), document)).toEqual({
+      kind: 'insert-table-column',
+      tablePath: [0, 0],
+      at: 3,
+    })
+  })
+
+  it('resolves delete-table-column against the grid column, not the cell array index, once an earlier cell is merged', () => {
+    const document = createMergedTableDocument()
+
+    expect(toolbarToCommand({ kind: 'delete-table-column' }, cellPos(0, 1), document)).toEqual({
+      kind: 'delete-table-column',
+      tablePath: [0, 0],
+      columnIndex: 2,
+    })
+  })
+
   it('resolves delete-table-row/column against the cursor\'s cell', () => {
     const document = createTableDocument(2, 2)
 
