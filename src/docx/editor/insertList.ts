@@ -66,6 +66,36 @@ export function pickListNumId(numbering: ReadonlyMap<string, NumberingDef>, kind
   return maxNumId + 1
 }
 
+export interface ListNumberingEntry {
+  readonly abstractNum: AbstractNum
+  readonly numInstance: NumInstance
+  readonly numberingDef: NumberingDef
+}
+
+/**
+ * Builds the abstractNum/num/NumberingDef triple for a fresh single-level
+ * (level 0 only) bullet or decimal-numbered list definition under `numId`.
+ * Pure and side-effect-free so both `ensureListNumbering` (below, for the
+ * toolbar's bundle-level list toggle) and DXE-19 rich paste's own
+ * `pasteRich.ts` (which mints these against a locally-tracked numbering map
+ * rather than a whole `DocxBundle`, potentially several in one paste) can
+ * share the exact same definition shape.
+ */
+export function createListNumberingEntry(numId: number, kind: ListKind): ListNumberingEntry {
+  const numIdStr = String(numId)
+  const abstractNumId = `atlas-list-${numIdStr}`
+  const level: LvlDef =
+    kind === 'number'
+      ? { level: 0, format: 'decimal', text: { value: '%1.', placeholders: [1] }, suffix: 'tab' }
+      : { level: 0, format: 'bullet', text: { value: '•', placeholders: [] }, suffix: 'tab' }
+
+  return {
+    abstractNum: { abstractNumId, levels: new Map([[0, level]]) },
+    numInstance: { numId: numIdStr, abstractNumId },
+    numberingDef: { numId: numIdStr, abstractNumId, levels: new Map([[0, level]]) },
+  }
+}
+
 /**
  * Ensures `bundle.numberingPart` and `bundle.document.numbering` both have an
  * entry for `numId`. If the source document already defines this numId
@@ -80,22 +110,14 @@ export function ensureListNumbering(bundle: DocxBundle, numId: number, kind: Lis
     return bundle
   }
 
-  const abstractNumId = `atlas-list-${numIdStr}`
-  const level: LvlDef =
-    kind === 'number'
-      ? { level: 0, format: 'decimal', text: { value: '%1.', placeholders: [1] }, suffix: 'tab' }
-      : { level: 0, format: 'bullet', text: { value: '•', placeholders: [] }, suffix: 'tab' }
-
-  const abstractNum: AbstractNum = { abstractNumId, levels: new Map([[0, level]]) }
-  const numInstance: NumInstance = { numId: numIdStr, abstractNumId }
+  const { abstractNum, numInstance, numberingDef } = createListNumberingEntry(numId, kind)
 
   const previousPart = bundle.numberingPart ?? { abstractNums: new Map(), nums: new Map() }
   const nextNumberingPart: NumberingPart = {
-    abstractNums: new Map(previousPart.abstractNums).set(abstractNumId, abstractNum),
-    nums: new Map(previousPart.nums).set(numIdStr, numInstance),
+    abstractNums: new Map(previousPart.abstractNums).set(abstractNum.abstractNumId, abstractNum),
+    nums: new Map(previousPart.nums).set(numInstance.numId, numInstance),
   }
 
-  const numberingDef: NumberingDef = { numId: numIdStr, abstractNumId, levels: new Map([[0, level]]) }
   const nextDocumentNumbering = new Map(bundle.document.numbering).set(numIdStr, numberingDef)
 
   return {
