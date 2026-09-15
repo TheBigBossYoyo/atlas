@@ -16,6 +16,15 @@ describe('buildPrintDocument', () => {
     expect(html).toContain('<style>body{color:red}</style>');
     expect(html).toContain('<body><p>hi</p></body>');
   });
+
+  it('does not grant img-src/font-src a file: scheme (review fix — nothing this codebase produces references file:, and DOMPurify already strips it from content, so allowing it here would only ever help a sanitizer-bypass load an arbitrary local file)', () => {
+    const html = buildPrintDocument({ title: 't', css: '', bodyHtml: '' });
+    const cspMatch = /content="([^"]*)"/.exec(html);
+    const csp = cspMatch?.[1] ?? '';
+    expect(csp).toMatch(/img-src[^;]*\bdata:/);
+    expect(csp).toMatch(/font-src[^;]*\bdata:/);
+    expect(csp).not.toContain('file:');
+  });
 });
 
 describe('renderHtmlToPdfFile', () => {

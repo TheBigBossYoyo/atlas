@@ -8,9 +8,14 @@
  * (`electron/lib/csp.cjs`): this document never needs to run script (the
  * hidden print window also has `javascript: false` — see
  * `electron/lib/printToPdf.cjs` — so this is defense in depth, not the only
- * guard) or fetch anything remote. `data:`/`file:` stay allowed for
- * `img-src`/`font-src` because DOCX/slide exports embed images and Atlas's
- * own bundled substitute fonts as `data:` URIs.
+ * guard) or fetch anything remote. `data:` stays allowed for `img-src`/
+ * `font-src` because DOCX/slide exports embed images and Atlas's own
+ * bundled substitute fonts as `data:` URIs — nothing this codebase produces
+ * ever references a `file:` URI (found during wave3/export review: the
+ * original policy allowed it too, which would have let a sanitizer bypass
+ * load an arbitrary local file into the hidden print window; DOMPurify
+ * already strips `file:` `src`/`href` values by default, so this is
+ * defense-in-depth tightening, not a fix for a reachable bug).
  */
 import { sanitizeExportHtml } from './sanitizeExportHtml';
 import { printHtmlToPdf } from './printToPdf';
@@ -26,8 +31,7 @@ export function escapeHtml(str: string): string {
     .replace(/'/g, '&#39;');
 }
 
-const EXPORT_CSP =
-  "default-src 'none'; img-src data: file:; font-src data: file:; style-src 'unsafe-inline';";
+const EXPORT_CSP = "default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline';";
 
 export interface PrintDocumentOptions {
   /** Used for the document `<title>` only — never rendered as page content. */
