@@ -392,15 +392,32 @@ export function computePageFloats(page: Page, document: Document): ReadonlyArray
       widthPt: anchorLine.column.widthPt,
       heightPt: Math.max(0, page.sizePt.height - page.marginsPt.top - page.marginsPt.bottom),
     }
-    // `PageLineRef.topPt` is relative to the content area (below the
-    // header); `PageView.tsx` renders it inside a column `<div>` already
-    // offset by `marginsPt.top`, so the true page-absolute top is their
-    // sum. `leftPt` is already page-absolute (PageView subtracts
-    // `column.leftPt` back out only to make it column-relative for
-    // rendering inside that div) — see paginate.ts's `placeLine`.
+    // Both `PageLineRef.leftPt` AND `.topPt` are already page-absolute —
+    // `placeLine` (paginate.ts) sets `topPt: currentPage.contentTopPt +
+    // column.usedHeightPt + ...` where `contentTopPt` itself starts at
+    // `marginsPt.top` (+ any reserved header height), exactly mirroring how
+    // `leftPt: column.leftPt + leftOffsetPt` already bakes in the page's
+    // left margin via `column.leftPt`. Do NOT add `page.marginsPt.top`
+    // again here (an earlier version of this function did — verified wrong
+    // against real `paginate()` output; see "places a float using the real
+    // paginate() line geometry" below, which exercises this against actual
+    // pagination rather than a hand-built `Page` so a regression here would
+    // fail a test instead of only showing up on screen).
+    //
+    // This fix has a PageView.tsx counterpart: `.docx-page__column` renders
+    // at `top: marginsPt.top`, and (before this change) the line inside it
+    // was positioned at `top: lineRef.topPt` — i.e. the line's already
+    // page-absolute `topPt` was applied a *second* time relative to a
+    // container that already sits at `marginsPt.top`, double-counting the
+    // top margin for ordinary text (the horizontal axis had no such bug:
+    // `lineRef.leftPt - col.leftPt` already made it column-relative).
+    // Fixed alongside this by rendering `lineRef.topPt - page.marginsPt.top`
+    // instead. The two had to move together — this `paragraphRect` and that
+    // render call are the only two places that treat `PageLineRef.topPt` as
+    // "already page-absolute" vs. "needs the margin added/subtracted".
     const paragraphRect: FloatRectPt = {
       leftPt: anchorLine.lineRef.leftPt,
-      topPt: page.marginsPt.top + anchorLine.lineRef.topPt,
+      topPt: anchorLine.lineRef.topPt,
       widthPt: anchorLine.lineRef.line.width,
       heightPt: anchorLine.lineRef.line.lineHeight,
     }

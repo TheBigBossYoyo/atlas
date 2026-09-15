@@ -9,6 +9,7 @@ import {
   type FloatRectPt,
   type PageFloat,
 } from '../floats'
+import { paginate } from '../paginate'
 import type { Page } from '../pageTypes'
 import type { LineBox } from '../types'
 
@@ -327,8 +328,14 @@ describe('computePageFloats', () => {
           widthPt: 456,
           leftPt: 72,
           tables: [],
+          // `topPt: 72` (not 0) matches what `paginate()` actually produces
+          // for a page's first line: `PageLineRef.topPt` is page-absolute,
+          // already including `marginsPt.top` (see the dedicated
+          // "matches real paginate() output" test below) — a fixture with
+          // `topPt: 0` here would silently hide a regression that
+          // re-introduces double-counting the top margin.
           lines: [
-            { paragraphPath: [0], lineIndex: 0, line: makeLineBox(200, 14), topPt: 0, leftPt: 72 },
+            { paragraphPath: [0], lineIndex: 0, line: makeLineBox(200, 14), topPt: 72, leftPt: 72 },
           ],
         },
       ],
@@ -341,7 +348,8 @@ describe('computePageFloats', () => {
     // positionH relativeFrom=margin, offset 10pt -> marginRect.leftPt (72) + 10
     expect(floats[0].rect.leftPt).toBe(82)
     // positionV relativeFrom=paragraph, offset 5pt -> paragraph top
-    // (marginsPt.top (72) + lineRef.topPt (0)) + 5
+    // (lineRef.topPt (72), already page-absolute — no marginsPt.top added
+    // again) + 5
     expect(floats[0].rect.topPt).toBe(77)
     expect(floats[0].rect.widthPt).toBe(40)
     expect(floats[0].rect.heightPt).toBe(30)
@@ -398,5 +406,77 @@ describe('computePageFloats', () => {
     const floats = computePageFloats(page, document)
     expect(floats[0].rect.widthPt).toBe(96)
     expect(floats[0].rect.heightPt).toBe(96)
+  })
+
+  // Regression test for a real double-top-margin bug this task found:
+  // `PageLineRef.topPt` (from real `paginate()`, not a hand-built `Page`) is
+  // page-absolute already, and an earlier version of `computePageFloats`
+  // added `page.marginsPt.top` to it a second time — placing every
+  // `relativeFrom: 'paragraph'|'line'` float `marginsPt.top` too far down.
+  // Exercising this against actual pagination output (rather than a
+  // fixture that could encode the same wrong assumption the buggy code
+  // did) is the only way this class of bug gets caught by a test at all.
+  it('places a float using the real paginate() line geometry, honoring a nonzero top margin', async () => {
+    const drawing: Drawing = {
+      kind: 'drawing',
+      layout: 'anchor',
+      relationshipId: 'rId9',
+      extent: { cx: emu(40), cy: emu(30) },
+      positionH: { relativeFrom: 'column', offsetEmu: 0 },
+      positionV: { relativeFrom: 'paragraph', offsetEmu: 0 },
+    }
+    const paragraph: Paragraph = {
+      kind: 'paragraph',
+      props: {},
+      children: [{ kind: 'run', props: {}, children: [drawing] }],
+    }
+    const section: Section = {
+      kind: 'section',
+      props: {
+        pgSz: { w: twip(12000), h: twip(16000) },
+        pgMar: {
+          top: twip(1440), // 72pt
+          right: twip(1440),
+          bottom: twip(1440),
+          left: twip(1440),
+          header: twip(720),
+          footer: twip(720),
+          gutter: twip(0),
+        },
+      },
+      blocks: [paragraph],
+    }
+    const document: Document = {
+      kind: 'document',
+      sections: [section],
+      styles: new Map(),
+      numbering: new Map(),
+      headers: new Map(),
+      footers: new Map(),
+      comments: new Map(),
+      footnotes: new Map(),
+      endnotes: new Map(),
+    }
+    const fontResolver = async () => ({
+      unitsPerEm: 1000,
+      ascender: 800,
+      descender: -200,
+      lineGap: 0,
+      xHeight: 500,
+      capHeight: 700,
+      advanceWidth: () => 500,
+      hasGlyph: () => true,
+    })
+
+    const pages = await paginate({ document, fontResolver })
+    const floats = computePageFloats(pages[0], document)
+
+    // The float's offset is 0 relative to its anchor paragraph's own first
+    // line — it must land at exactly that line's rendered top (72pt, the
+    // page's top margin, since this is the first line on the page), not
+    // 144pt (72 counted twice).
+    const firstLineTopPt = pages[0].columns[0].lines[0].topPt
+    expect(firstLineTopPt).toBe(72)
+    expect(floats[0].rect.topPt).toBe(firstLineTopPt)
   })
 })

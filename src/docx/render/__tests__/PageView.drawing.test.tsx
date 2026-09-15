@@ -252,4 +252,65 @@ describe('PageView drawings', () => {
     expect(line.style.boxSizing).toBe('border-box');
     expect(parseFloat(line.style.lineHeight)).toBeCloseTo(lineHeight - clearance, 5);
   });
+
+  it('does not double-count the top margin when positioning a line inside its column (regression)', async () => {
+    // `.docx-page__column` renders at `top: marginsPt.top`; a line's own
+    // `top` inside it must be column-relative, not `PageLineRef.topPt`
+    // as-is (which is already page-absolute) — otherwise every line on
+    // every page renders `marginsPt.top` further down than it should.
+    // Found while adding `floats.ts` (D4/DXL-03), which renders page-
+    // absolute floats directly under the page layer and so exposed the
+    // inconsistency between the horizontal (`leftPt - col.leftPt`,
+    // correctly column-relative) and vertical axes.
+    const topMarginPt = 72;
+    const section: Section = {
+      kind: 'section',
+      props: {
+        pgSz: { w: twip(600 * 20), h: twip(800 * 20) },
+        pgMar: {
+          top: twip(topMarginPt * 20),
+          right: twip(0),
+          bottom: twip(0),
+          left: twip(0),
+          header: twip(0),
+          footer: twip(0),
+          gutter: twip(0),
+        },
+        cols: { num: 1, space: twip(0), col: [] },
+      },
+      blocks: [
+        {
+          kind: 'paragraph',
+          props: {},
+          children: [{ kind: 'run', props: {}, children: [{ kind: 'text', value: 'hi' }] }],
+        },
+      ],
+    };
+    const doc: Document = {
+      kind: 'document',
+      sections: [section],
+      styles: new Map(),
+      numbering: new Map(),
+      headers: new Map(),
+      footers: new Map(),
+      comments: new Map(),
+      footnotes: new Map(),
+      endnotes: new Map(),
+    } as Document;
+    const pages = await paginate({ document: doc, fontResolver: mockFontResolver });
+
+    const { container } = render(
+      <MediaContext.Provider value={resolverFor({})}>
+        <PageView page={pages[0]} zoom={1} document={doc} />
+      </MediaContext.Provider>,
+    );
+
+    const column = container.querySelector('.docx-page__column') as HTMLElement;
+    const line = container.querySelector('.docx-page__line') as HTMLElement;
+
+    expect(column.style.top).toBe(`${topMarginPt}px`);
+    // The first line sits at the column's own top edge (0), not at
+    // `topMarginPt` again.
+    expect(line.style.top).toBe('0px');
+  });
 });

@@ -517,7 +517,18 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
             {col.lines.map((lineRef, lineIdx) =>
               renderLine(
                 lineRef.line,
-                lineRef.topPt,
+                // `lineRef.topPt` is page-absolute (paginate.ts's `placeLine`
+                // starts it at `marginsPt.top` + any reserved header height),
+                // and this column `<div>` is itself already positioned at
+                // `top: marginsPt.top` above — so, exactly like `leftPt -
+                // col.leftPt` on the next line, this needs to become
+                // column-relative or the top margin gets applied twice and
+                // every line renders `marginsPt.top` further down than it
+                // should (D4/DXL-03 found this while adding floats.ts, which
+                // renders page-absolute floats directly under the page layer
+                // with no such wrapper — see floats.ts's `paragraphRect`
+                // comment for the coupled reasoning).
+                lineRef.topPt - page.marginsPt.top,
                 lineRef.leftPt - col.leftPt,
                 `line-${colIdx}-${lineIdx}`,
                 lineRef.paragraphPath,
