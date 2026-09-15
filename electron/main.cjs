@@ -12,6 +12,7 @@ const { logToFile } = require('./lib/crashLog.cjs');
 const { FileTooLargeError, assertFileSizeAllowed } = require('./lib/fileSizeGuard.cjs');
 const { EXTENSIONS: MANIFEST_EXTENSIONS } = require('./lib/extensionManifest.generated.cjs');
 const { CLOSE_PROMPT_BUTTONS, decideOnClose, decideAfterPromptChoice } = require('./lib/closeGuard.cjs');
+const { resolveIsDev } = require('./lib/devDetect.cjs');
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -52,25 +53,21 @@ let currentOverlayColors = OVERLAY_COLORS.light;
 
 // ---- Dev/prod detection (RUN-12) ---- //
 //
-// `app.isPackaged` alone used to decide this, but it only reflects whether
-// Electron was launched from an asar/packaged app — it's still `false` for
-// `npm run electron:preview` (`npm run build && electron .`), which runs the
-// unpackaged CLI against a freshly-built `dist/`. That made "preview" load
-// `http://localhost:5173` instead, silently falling back to a dev server
-// that isn't even guaranteed to be running. Key it instead on whether a
-// production build actually exists on disk, with an explicit env override
-// for the rare case a caller wants to force one mode or the other (e.g. a
-// packaged debug build that should still point at a local dev server, or
-// vice versa).
+// Decision logic lives in `./lib/devDetect.cjs` (unit-tested there — see
+// `src/__tests__/electron-lib/devDetect.test.ts` — the same split-out-for-
+// testability pattern as closeGuard/csp/pathAllowlist, since Electron's own
+// modules can't be constructed outside a running app). That file's header
+// also documents a known nuance: this checks the filesystem, not how the
+// process was launched, so a stale `dist/` from an earlier build can make a
+// plain local `electron .` (including `npx playwright test`, whose specs
+// launch Electron directly) resolve to prod against that stale build unless
+// `ATLAS_DEV=1` overrides it.
 const DIST_INDEX_PATH = path.join(app.getAppPath(), 'dist', 'index.html');
 
-function resolveIsDev() {
-  if (process.env.ATLAS_DEV === '1') return true;
-  if (process.env.ATLAS_DEV === '0') return false;
-  return !fs.existsSync(DIST_INDEX_PATH);
-}
-
-const isDev = resolveIsDev();
+const isDev = resolveIsDev({
+  atlasDevEnv: process.env.ATLAS_DEV,
+  distIndexExists: () => fs.existsSync(DIST_INDEX_PATH),
+});
 
 // ---- Path allowlist (P1.2 / ELEC-02, ELEC-03, ELEC-25) ---- //
 //

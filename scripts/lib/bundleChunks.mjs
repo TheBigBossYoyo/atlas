@@ -17,6 +17,21 @@ import path from 'node:path'
  * `rtf.js-9fQzR2Lm.js` both become `rtf.js.js` — so the baseline can compare
  * "the rtf.js vendor chunk" release over release instead of a filename that
  * would never match twice.
+ *
+ * Known nuance: only the trailing hash is stripped. Some anonymous
+ * Rollup-auto-named shared chunks (e.g. `chunk-XXDRQBXY-<hash>.js`, and
+ * several of mermaid's per-diagram-type sub-chunks) already carry a
+ * hash-like segment in the name Rollup itself assigned *before* Vite's own
+ * trailing content hash — that inner segment is left as part of the
+ * "stable" name. It stays byte-identical across rebuilds that don't touch
+ * that chunk's own module graph (verified empirically: two consecutive
+ * `vite build` runs with no source changes produce identical filenames for
+ * these), so this does not cause spurious diffs in the common case. It can
+ * still change if an unrelated change elsewhere shifts what Rollup groups
+ * into that particular anonymous chunk — in that rarer case this one chunk
+ * reports as a (new)+(removed) pair instead of a real delta, but the
+ * aggregate total-size check below still catches a meaningful regression
+ * regardless.
  */
 const HASH_SUFFIX = /-[A-Za-z0-9_-]{8}(\.(?:js|css))$/
 

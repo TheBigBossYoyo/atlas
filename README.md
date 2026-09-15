@@ -2,7 +2,7 @@
 
 A universal document viewer & editor for Windows, built on Electron + React.
 Opens Word, Excel, PowerPoint, PDF, OpenDocument, plain text/code, RTF, and
-Markdown — 13 binary formats plus Markdown, all through one app.
+Markdown — 12 binary formats plus Markdown, all through one app.
 
 ---
 

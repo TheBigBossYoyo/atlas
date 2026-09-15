@@ -153,6 +153,22 @@ Export targets and fidelity vary by format — see the README's Export table
 for the current, per-format matrix (kept as the single source of truth
 there so this document doesn't drift out of sync with it).
 
+## Dev tooling: dev/prod detection depends on `dist/` existing
+
+`electron/main.cjs` decides dev vs. prod (RUN-12, `electron/lib/devDetect.cjs`)
+by checking whether `dist/index.html` exists on disk, not by how the process
+was launched. This fixed the real bug it targets (`npm run electron:preview`
+silently falling back to a dev server instead of previewing the production
+build), but it means a `dist/` left over from an earlier `npm run build` or
+`npm run electron:build` makes every subsequent plain `electron .` — including
+a local `npx playwright test` run, since `tests/e2e/*.spec.ts` launch
+Electron directly with no explicit mode — resolve to prod against that
+possibly-stale build instead of the live dev server, with no warning that
+this happened. Set `ATLAS_DEV=1` explicitly when you want the dev server
+regardless of what's on disk (or delete `dist/` first). CI's `e2e-windows`
+job never hits this, since it always runs a fresh `npx vite build`
+immediately before the e2e step.
+
 ## Build & performance: the `rtf.js` bundle size
 
 `rtf.js` is, by a wide margin, the single largest chunk in Atlas's
