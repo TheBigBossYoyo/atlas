@@ -29,6 +29,7 @@ import {
   Superscript
 } from 'lucide-react';
 import type { ToolbarCommand, ToolbarState } from './toolbarTypes';
+import { FontPicker } from './FontPicker';
 import { TableEditMenuItems } from './TableEditMenuItems';
 import { TablePropertiesDialog } from './TablePropertiesDialog';
 import './__styles__/toolbar.css';
@@ -67,6 +68,10 @@ interface ToolbarProps {
   onTabChange?: (tab: 'home' | 'insert' | 'layout' | 'review') => void;
   availableStyles?: ReadonlyArray<{ id: string; name: string }>;
   availableFonts?: ReadonlyArray<string>;
+  /** Fonts the open document already uses — listed first in the font picker. */
+  documentFonts?: ReadonlyArray<string>;
+  /** USR-12 — document-level actions (save, print, zoom…) shown compactly at the right of the tab row. */
+  trailing?: React.ReactNode;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -74,7 +79,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onCommand,
   activeTab: controlledTab,
   onTabChange,
-  availableFonts = DEFAULT_FONTS
+  availableFonts = DEFAULT_FONTS,
+  documentFonts = [],
+  trailing,
 }) => {
   const [internalTab, setInternalTab] = useState<'home' | 'insert' | 'layout' | 'review'>('home');
   const currentTab = controlledTab !== undefined ? controlledTab : internalTab;
@@ -95,6 +102,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
   return (
     <div className="docx-toolbar" role="toolbar" aria-label="Document formatting toolbar" aria-orientation="horizontal">
+      <div className="docx-toolbar__header">
       <div className="docx-toolbar__tabs" role="tablist" aria-label="Toolbar tabs">
         {(['home', 'insert', 'layout', 'review'] as const).map(tab => (
           <button
@@ -111,6 +119,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </button>
         ))}
       </div>
+      {trailing !== undefined && <div className="docx-toolbar__trailing">{trailing}</div>}
+      </div>
       <div
         className="docx-toolbar__panel"
         role="tabpanel"
@@ -122,6 +132,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             state={state}
             activeFormats={activeFormats}
             availableFonts={availableFonts}
+            documentFonts={documentFonts}
             onCommand={handleCommand}
           />
         )}
@@ -146,9 +157,10 @@ interface TabProps {
   state?: ToolbarState;
   activeFormats?: ReadonlySet<string>;
   availableFonts?: ReadonlyArray<string>;
+  documentFonts?: ReadonlyArray<string>;
 }
 
-const HomeTab: React.FC<TabProps> = ({ onCommand, state, activeFormats, availableFonts }) => {
+const HomeTab: React.FC<TabProps> = ({ onCommand, state, activeFormats, availableFonts, documentFonts }) => {
   return (
     <>
       <div className="docx-toolbar__group">
@@ -157,23 +169,20 @@ const HomeTab: React.FC<TabProps> = ({ onCommand, state, activeFormats, availabl
       </div>
       <div className="docx-toolbar__group-divider" />
       <div className="docx-toolbar__group">
-        <select
-          className="docx-toolbar__font-select"
-          aria-label="Font"
-          value={state?.fontFamily || ''}
-          onChange={(e) => onCommand({ kind: 'set-font-family', family: e.target.value })}
-        >
-          <option value="" disabled>Font</option>
-          {availableFonts?.map(f => <option key={f} value={f}>{f}</option>)}
-        </select>
+        <FontPicker
+          value={state?.fontFamily ?? null}
+          fonts={availableFonts ?? DEFAULT_FONTS}
+          documentFonts={documentFonts}
+          onSelect={(family) => onCommand({ kind: 'set-font-family', family })}
+        />
         <select
           className="docx-toolbar__size-select"
           aria-label="Font size"
-          value={state?.fontSizePt || ''}
+          value={state?.fontSizePt ?? ''}
           onChange={(e) => onCommand({ kind: 'set-font-size', sizePt: Number(e.target.value) })}
         >
           <option value="" disabled>Size</option>
-          {FONT_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+          {(state?.fontSizePt != null && !FONT_SIZES.includes(state.fontSizePt) ? [...FONT_SIZES, state.fontSizePt].sort((a, b) => a - b) : FONT_SIZES).map(s => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
       <div className="docx-toolbar__group-divider" />

@@ -87,6 +87,10 @@ interface ElectronAPI {
   image?: {
     pick: () => Promise<ImagePickResult>;
   };
+  /** USR-11 — installed font family names (empty outside Windows). */
+  fonts?: {
+    list: () => Promise<string[]>;
+  };
   spellcheck: {
     onContextMenu: (
       callback: (payload: SpellCheckContextMenuPayload) => void,

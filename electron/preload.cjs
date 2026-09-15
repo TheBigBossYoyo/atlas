@@ -47,6 +47,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   image: {
     pick: () => ipcRenderer.invoke('image:pick'),
   },
+  // USR-11 — installed font families for the DOCX font picker.
+  fonts: {
+    list: () => ipcRenderer.invoke('fonts:list'),
+  },
   spellcheck: {
     onContextMenu: (callback) => {
       const handler = (_e, payload) => callback(payload);

@@ -94,16 +94,26 @@ describe('Toolbar', () => {
     expect(italicButton.className).not.toContain('docx-toolbar__button--active');
   });
 
-  it('emits set-font-family when select changes', () => {
+  it('emits set-font-family when a font is typed and confirmed in the font picker (USR-11)', () => {
     const onCommand = vi.fn();
     const { getByDisplayValue } = render(
       <Toolbar state={{ ...defaultState, fontFamily: 'Arial' }} onCommand={onCommand} />
     );
-    
-    const select = getByDisplayValue('Arial');
-    fireEvent.change(select, { target: { value: 'Verdana' } });
-    
+
+    const combobox = getByDisplayValue('Arial');
+    fireEvent.focus(combobox);
+    fireEvent.change(combobox, { target: { value: 'Verdana' } });
+    fireEvent.keyDown(combobox, { key: 'Enter' });
+
     expect(onCommand).toHaveBeenCalledWith({ kind: 'set-font-family', family: 'Verdana' });
+  });
+
+  it('shows the document font even when it is not in the font list (USR-10)', () => {
+    const { getByDisplayValue } = render(
+      <Toolbar state={{ ...defaultState, fontFamily: 'Garamond Premier Pro' }} onCommand={vi.fn()} availableFonts={['Arial']} />
+    );
+
+    expect(getByDisplayValue('Garamond Premier Pro')).toBeInTheDocument();
   });
 
   it('emits set-font-size when select changes', () => {

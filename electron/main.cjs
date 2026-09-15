@@ -5,6 +5,7 @@ const fs = require('fs');
 
 const { createPathAllowlist } = require('./lib/pathAllowlist.cjs');
 const { createRecentFilesStore } = require('./lib/recentFilesStore.cjs');
+const { listSystemFontFamilies } = require('./lib/systemFonts.cjs');
 const { atomicWriteFile, FileLockedError, classifyWriteError } = require('./lib/atomicWrite.cjs');
 const { printHtmlToPdfBuffer, PrintToPdfError } = require('./lib/printToPdf.cjs');
 const { decodeTextBuffer } = require('./lib/textDecoding.cjs');
@@ -909,6 +910,11 @@ ipcMain.handle('spellcheck:set-languages', (_event, languages) => {
 // (fileSizeGuard's 200 MiB default) rather than letting someone insert a
 // multi-hundred-megabyte "image" and hang the renderer.
 const IMAGE_PICK_MAX_BYTES = 25 * 1024 * 1024; // 25 MiB
+
+ipcMain.handle('fonts:list', async (event) => {
+  if (!isFromMainFrame(event)) return [];
+  return listSystemFontFamilies();
+});
 
 ipcMain.handle('image:pick', async (event) => {
   if (!isFromMainFrame(event)) return { cancelled: true };

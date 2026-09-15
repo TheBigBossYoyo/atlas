@@ -12,7 +12,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 
-import { Printer, Save, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { ListTree, Printer, RefreshCw, Save, SaveAll, X, ZoomIn, ZoomOut } from 'lucide-react'
 
 import type { NavItem, ViewerProps } from '../formats/types'
 import { loadDocx, saveDocx, type DocxBundle } from '../docx'
@@ -21,6 +21,7 @@ import type { Page, PaginationProgress } from '../docx/layout'
 import type { FontResolver } from '../docx/layout/types'
 import {
   buildMetrics,
+  collectReferencedFontFamilies,
   FONT_FAMILIES,
   loadEmbeddedFonts,
   loadFontMetrics,
@@ -123,6 +124,14 @@ function clampZoom(zoom: number): number {
 /** D12/DXE-03 — keys whose native contentEditable behavior always mutates
  * content; see handleKeyDownEvent's preventDefault-safety comment. */
 const MUTATING_KEYS: ReadonlySet<string> = new Set(['Backspace', 'Delete', 'Enter', 'Tab'])
+
+/** USR-11 — always offered in the font picker, even before (or without)
+ * system font enumeration. */
+const COMMON_OFFICE_FONTS: ReadonlyArray<string> = [
+  'Aptos', 'Arial', 'Calibri', 'Cambria', 'Candara', 'Century Gothic', 'Comic Sans MS', 'Consolas', 'Constantia',
+  'Corbel', 'Courier New', 'Franklin Gothic Medium', 'Garamond', 'Georgia', 'Impact', 'Lucida Console',
+  'Palatino Linotype', 'Segoe UI', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana',
+]
 
 /** USR-07/USR-09 — navigation keys the model does not handle yet (vertical
  * movement needs layout), so the browser moves the caret and the DOM
@@ -844,6 +853,31 @@ function DocxEditor({
       .filter(style => style.type === 'paragraph')
       .map(style => ({ id: style.id, name: style.name ?? style.id }))
   }, [documentModel.styles])
+
+  // USR-11 — fonts the document uses first, then every installed system font
+  // (via the main process), the bundled metric-compatible substitutes and
+  // common Office fonts.
+  const documentFonts = useMemo(() => collectReferencedFontFamilies(documentModel), [documentModel])
+  const [systemFonts, setSystemFonts] = useState<ReadonlyArray<string>>([])
+  useEffect(() => {
+    let cancelled = false
+    const listFonts = window.electronAPI?.fonts?.list
+    if (listFonts === undefined) {
+      return undefined
+    }
+    listFonts()
+      .then((families) => {
+        if (!cancelled) setSystemFonts(families)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const availableFonts = useMemo(() => {
+    const merged = new Set<string>([...COMMON_OFFICE_FONTS, ...FONT_FAMILIES.map((family) => family.wordName), ...systemFonts])
+    return Array.from(merged).sort((a, b) => a.localeCompare(b))
+  }, [systemFonts])
 
   // DXE-25 — save-failure feedback used to be cleared by commitState, which
   // runs on every single edit, so the banner vanished the instant the user
@@ -2093,75 +2127,59 @@ function DocxEditor({
   return (
     <div className="docx-viewer__editor-shell">
       <div className="docx-viewer__topbar">
-        <Toolbar state={toolbarState} onCommand={handleToolbarCommand} availableStyles={availableStyles} />
-        <button className="docx-viewer__save-button" type="button" onClick={() => void handleSave()}>
-          <Save size={16} aria-hidden="true" />
-          <span>Save</span>
-        </button>
-        <button
-          className="docx-viewer__save-as-button"
-          type="button"
-          onClick={() => void handleSaveAs()}
-          aria-label="Save As"
-        >
-          <span>Save As…</span>
-        </button>
-        <button
-          className="docx-viewer__print-button"
-          type="button"
-          onClick={handlePrint}
-          aria-label="Print document"
-        >
-          <Printer size={16} aria-hidden="true" />
-          <span>Print</span>
-        </button>
-        <button
-          className="docx-viewer__update-fields-button"
-          type="button"
-          onClick={handleUpdateFields}
-          aria-label="Update fields"
-          title="Recalculate DATE/TIME/AUTHOR/TITLE/REF/PAGEREF/SEQ/PAGE/NUMPAGES fields to their current values"
-        >
-          <span>Update Fields</span>
-        </button>
-        <button
-          className="docx-viewer__update-toc-button"
-          type="button"
-          onClick={handleUpdateTableOfContents}
-          aria-label="Update table of contents"
-          title="Regenerate the table of contents from the document's current headings"
-        >
-          <span>Update TOC</span>
-        </button>
-        <div className="docx-viewer__zoom-controls" role="group" aria-label="Zoom">
-          <button
-            className="docx-viewer__zoom-button"
-            type="button"
-            onClick={handleZoomOut}
-            disabled={zoom <= MIN_ZOOM}
-            aria-label="Zoom out"
-          >
-            <ZoomOut size={16} aria-hidden="true" />
-          </button>
-          <button
-            className="docx-viewer__zoom-level"
-            type="button"
-            onClick={handleZoomReset}
-            aria-label="Reset zoom to 100%"
-            title="Reset zoom"
-          >
-            {Math.round(zoom * 100)}%
-          </button>
-          <button
-            className="docx-viewer__zoom-button"
-            type="button"
-            onClick={handleZoomIn}
-            disabled={zoom >= MAX_ZOOM}
-            aria-label="Zoom in"
-          >
-            <ZoomIn size={16} aria-hidden="true" />
-          </button>
-        </div>
+        <Toolbar
+          state={toolbarState}
+          onCommand={handleToolbarCommand}
+          availableStyles={availableStyles}
+          availableFonts={availableFonts}
+          documentFonts={documentFonts}
+          trailing={
+            <>
+              <span className="docx-toolbar__page-count docx-viewer__meta">Pages: {pageCount}</span>
+              <span className="docx-toolbar__action-divider" aria-hidden="true" />
+              <div className="docx-viewer__zoom-controls" role="group" aria-label="Zoom">
+                <button className="docx-toolbar__action" type="button" onClick={handleZoomOut} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" title="Zoom out">
+                  <ZoomOut aria-hidden="true" />
+                </button>
+                <button className="docx-toolbar__action docx-toolbar__zoom-level" type="button" onClick={handleZoomReset} aria-label="Reset zoom to 100%" title="Reset zoom">
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button className="docx-toolbar__action" type="button" onClick={handleZoomIn} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" title="Zoom in">
+                  <ZoomIn aria-hidden="true" />
+                </button>
+              </div>
+              <span className="docx-toolbar__action-divider" aria-hidden="true" />
+              <button
+                className="docx-toolbar__action"
+                type="button"
+                onClick={handleUpdateFields}
+                aria-label="Update fields"
+                title="Update fields — recalculate DATE/TIME/AUTHOR/TITLE/REF/PAGEREF/SEQ/PAGE/NUMPAGES"
+              >
+                <RefreshCw aria-hidden="true" />
+              </button>
+              <button
+                className="docx-toolbar__action"
+                type="button"
+                onClick={handleUpdateTableOfContents}
+                aria-label="Update table of contents"
+                title="Update table of contents"
+              >
+                <ListTree aria-hidden="true" />
+              </button>
+              <button className="docx-toolbar__action" type="button" onClick={handlePrint} aria-label="Print document" title="Print (Ctrl+P)">
+                <Printer aria-hidden="true" />
+              </button>
+              <button className="docx-toolbar__action" type="button" onClick={() => void handleSaveAs()} aria-label="Save As" title="Save as…">
+                <SaveAll aria-hidden="true" />
+              </button>
+              <button className="docx-toolbar__action docx-toolbar__action--primary" type="button" onClick={() => void handleSave()} aria-label="Save" title="Save (Ctrl+S)">
+                <Save aria-hidden="true" />
+                <span>Save</span>
+              </button>
+            </>
+          }
+        />
       </div>
       <FindReplace
         open={findOpen}
@@ -2174,7 +2192,6 @@ function DocxEditor({
         matchCount={matches.length}
         currentMatchIndex={currentMatchIndex}
       />
-      <div className="docx-viewer__meta">Pages: {pageCount}</div>
       <div className="docx-viewer__workspace">
         <div
           ref={editorRootRef}

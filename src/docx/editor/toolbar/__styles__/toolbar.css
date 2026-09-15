@@ -11,17 +11,37 @@
   display: flex;
   flex-direction: column;
   background-color: var(--toolbar-bg);
-  border-bottom: 1px solid var(--toolbar-border);
+  border: 1px solid var(--toolbar-border);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   color: var(--toolbar-text);
   font-family: system-ui, -apple-system, sans-serif;
   user-select: none;
+  min-width: 0;
+}
+
+/* USR-12 — one header row: tabs on the left, document actions on the right. */
+.docx-toolbar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--toolbar-border);
+  padding: 0 6px 0 8px;
+  min-height: 34px;
 }
 
 .docx-toolbar__tabs {
   display: flex;
   flex-direction: row;
-  border-bottom: 1px solid var(--toolbar-border);
-  padding: 0 8px;
+  align-self: stretch;
+}
+
+.docx-toolbar__trailing {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .docx-toolbar__tab {
@@ -45,13 +65,16 @@
   border-bottom-color: var(--toolbar-accent);
 }
 
+/* USR-12 — wraps instead of scrolling horizontally: `overflow-x: auto`
+   clipped every popover (colors, table grid, fonts) and added a scrollbar. */
 .docx-toolbar__panel {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 4px 8px;
-  height: 36px;
-  overflow-x: auto;
+  row-gap: 4px;
+  padding: 5px 8px;
+  min-height: 40px;
 }
 
 .docx-toolbar__group {
@@ -211,11 +234,130 @@
 }
 
 .docx-toolbar__font-select {
-  width: 120px;
+  width: 168px;
 }
 
 .docx-toolbar__size-select {
-  width: 50px;
+  width: 60px;
+}
+
+/* USR-10/USR-11 — searchable font combobox. */
+.docx-font-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.docx-font-picker__input {
+  height: 28px;
+  border: 1px solid var(--toolbar-border);
+  background: var(--toolbar-bg);
+  cursor: text;
+  font-size: 13px;
+  padding: 0 8px;
+}
+
+.docx-font-picker__input:focus {
+  outline: 2px solid var(--toolbar-accent);
+  outline-offset: -1px;
+}
+
+.docx-font-picker__list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 200;
+  width: 260px;
+  max-height: 340px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--toolbar-bg);
+  border: 1px solid var(--toolbar-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.docx-font-picker__option {
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  color: var(--toolbar-text);
+}
+
+.docx-font-picker__option--active {
+  background: var(--toolbar-hover-bg);
+}
+
+.docx-font-picker__option--group-start {
+  margin-top: 4px;
+  border-top: 1px solid var(--toolbar-border);
+  padding-top: 8px;
+}
+
+/* USR-12 — compact document actions in the toolbar header. */
+.docx-toolbar__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--toolbar-text);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.docx-toolbar__action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.docx-toolbar__action:hover:not(:disabled) {
+  background: var(--toolbar-hover-bg);
+  border-color: var(--toolbar-border);
+}
+
+.docx-toolbar__action:focus-visible {
+  outline: 2px solid var(--toolbar-accent);
+  outline-offset: 1px;
+}
+
+.docx-toolbar__action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.docx-toolbar__action--primary {
+  color: var(--toolbar-accent);
+  font-weight: 600;
+}
+
+.docx-toolbar__action-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--toolbar-border);
+}
+
+.docx-toolbar__zoom-level {
+  min-width: 44px;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.docx-toolbar__page-count {
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--toolbar-text-muted);
+  white-space: nowrap;
 }
 
 .docx-toolbar__table-grid {

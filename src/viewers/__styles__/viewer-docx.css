@@ -18,10 +18,16 @@
 }
 
 .docx-viewer__topbar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  min-width: 0;
+}
+
+.docx-viewer__zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .docx-viewer__save-button {
@@ -171,11 +177,7 @@
 .docx-viewer__zoom-controls {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  border: 1px solid var(--border-primary, #d0d7de);
-  background: var(--bg-primary, #fff);
-  border-radius: 8px;
-  padding: 4px;
+  gap: 2px;
 }
 
 .docx-viewer__zoom-button {
