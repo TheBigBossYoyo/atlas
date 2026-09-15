@@ -271,6 +271,42 @@ describe('insertRowAt / deleteRowAt', () => {
     const doc = insertRowAt(withMerge, 0, 0)
     expect(doc.sheets[0].merges).toEqual([{ r0: 2, c0: 0, r1: 2, c1: 1 }])
   })
+
+  it('grows (rather than shifts) a merge range when a row is inserted strictly inside it', () => {
+    const withMerge = createDocument([
+      sheetFixture(
+        [
+          ['a', 'a'],
+          ['a', 'a'],
+          ['b', 'c'],
+        ],
+        {
+          grid: {
+            rows: [
+              ['a', 'a'],
+              ['a', 'a'],
+              ['b', 'c'],
+            ],
+            colCount: 2,
+            merges: [{ r0: 0, c0: 0, r1: 1, c1: 1 }],
+            colWidthsPx: [],
+            rowHeightsPx: [],
+            formulas: [
+              [undefined, undefined],
+              [undefined, undefined],
+              [undefined, undefined],
+            ],
+          },
+        },
+      ),
+    ])
+
+    // Row 1 lands strictly inside the r0:0-r1:1 merge — the merge should
+    // grow to r1:2, not shift down whole (which would incorrectly leave a
+    // gap between the merge and its own top row).
+    const doc = insertRowAt(withMerge, 0, 1)
+    expect(doc.sheets[0].merges).toEqual([{ r0: 0, c0: 0, r1: 2, c1: 1 }])
+  })
 })
 
 describe('insertColumnAt / deleteColumnAt', () => {
@@ -289,6 +325,38 @@ describe('insertColumnAt / deleteColumnAt', () => {
   it('refuses to delete the last remaining column', () => {
     const single = createDocument([sheetFixture([['only']])])
     expect(deleteColumnAt(single, 0, 0)).toBe(single)
+  })
+
+  it('grows (rather than shifts) a merge range when a column is inserted strictly inside it', () => {
+    const withMerge = createDocument([
+      sheetFixture(
+        [
+          ['a', 'a', 'a'],
+          ['b', 'c', 'd'],
+        ],
+        {
+          grid: {
+            rows: [
+              ['a', 'a', 'a'],
+              ['b', 'c', 'd'],
+            ],
+            colCount: 3,
+            merges: [{ r0: 0, c0: 0, r1: 0, c1: 1 }],
+            colWidthsPx: [],
+            rowHeightsPx: [],
+            formulas: [
+              [undefined, undefined, undefined],
+              [undefined, undefined, undefined],
+            ],
+          },
+        },
+      ),
+    ])
+
+    // Column 1 lands strictly inside the c0:0-c1:1 merge — it should grow to
+    // c1:2, not shift right whole.
+    const doc = insertColumnAt(withMerge, 0, 1)
+    expect(doc.sheets[0].merges).toEqual([{ r0: 0, c0: 0, r1: 0, c1: 2 }])
   })
 })
 

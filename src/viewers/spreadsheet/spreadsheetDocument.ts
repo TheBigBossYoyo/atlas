@@ -204,9 +204,15 @@ export function insertRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
   const rowHeightsPx = [...sheet.rowHeightsPx]
   rowHeightsPx.splice(atIndex, 0, undefined)
 
-  const merges = sheet.merges.map((m) =>
-    m.r0 >= atIndex ? { ...m, r0: m.r0 + 1, r1: m.r1 + 1 } : m,
-  )
+  // A merge entirely at/after the insertion point shifts down whole; one
+  // that STRADDLES it (starts before, ends at/after) instead grows by one
+  // row, since the new row lands inside it; one entirely before it is
+  // untouched.
+  const merges = sheet.merges.map((m) => {
+    if (atIndex <= m.r0) return { ...m, r0: m.r0 + 1, r1: m.r1 + 1 }
+    if (atIndex <= m.r1) return { ...m, r1: m.r1 + 1 }
+    return m
+  })
 
   return replaceSheet(doc, sheetIndex, recalculateSheet({ ...sheet, rows, formulas, rowHeightsPx, merges }))
 }
@@ -250,9 +256,13 @@ export function insertColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
   const colWidthsPx = [...sheet.colWidthsPx]
   colWidthsPx.splice(atIndex, 0, undefined)
 
-  const merges = sheet.merges.map((m) =>
-    m.c0 >= atIndex ? { ...m, c0: m.c0 + 1, c1: m.c1 + 1 } : m,
-  )
+  // See `insertRowAt`'s identical comment: a merge straddling the insertion
+  // point grows by one column instead of shifting whole.
+  const merges = sheet.merges.map((m) => {
+    if (atIndex <= m.c0) return { ...m, c0: m.c0 + 1, c1: m.c1 + 1 }
+    if (atIndex <= m.c1) return { ...m, c1: m.c1 + 1 }
+    return m
+  })
 
   return replaceSheet(
     doc,
