@@ -304,6 +304,8 @@ function makePage(overrides: Partial<Page> = {}): Page {
     columns: [],
     headerLines: [],
     footerLines: [],
+    footnoteLines: [],
+    hasFootnoteSeparator: false,
     ...overrides,
   }
 }

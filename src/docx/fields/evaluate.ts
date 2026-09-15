@@ -12,6 +12,7 @@
  * correct, honest fallback per `Field`'s own doc comment.
  */
 import type { Field, FieldType } from '../model'
+import { resolvePageField } from '../layout/pageFields'
 
 import { DEFAULT_DATE_PICTURE, DEFAULT_TIME_PICTURE, formatDatePicture } from './dateFormat'
 import { parseFieldInstruction, type ParsedFieldInstruction } from './instruction'
@@ -40,9 +41,9 @@ export function evaluateFieldText(
     case 'SEQ':
       return evaluateSeqField(instruction, context)
     case 'NUMPAGES':
-      return evaluateNumPagesField(context)
+      return evaluateNumPagesField(field.instruction, context)
     case 'PAGE':
-      return evaluatePageField(paragraphPath, context)
+      return evaluatePageField(field.instruction, paragraphPath, context)
     case 'HYPERLINK':
       // A HYPERLINK field's display text is user-authored (Word never
       // regenerates it from the target URL either) — see
@@ -138,16 +139,40 @@ function evaluateSeqField(
   return String(next)
 }
 
-function evaluateNumPagesField(context: FieldEvaluationContext): string | undefined {
-  return context.pageCount !== undefined ? String(context.pageCount) : undefined
+/**
+ * Delegates the actual numeric formatting to `layout/pageFields.ts`'s
+ * `resolvePageField` (owned by wave3/docx-pagination) rather than
+ * duplicating its `\* ROMAN`/`\* roman`/`\* ALPHABETIC`/`\* alphabetic`
+ * switch handling here — the two branches independently built a PAGE/
+ * NUMPAGES resolver (this evaluator wired to the real Field/context model,
+ * `resolvePageField` a pure instruction-string formatter that was never
+ * wired to a parsed field), and unifying on `resolvePageField` for the
+ * numeric-format piece means this evaluator gets that support for free
+ * instead of leaving it as dead, unreferenced code.
+ */
+function evaluateNumPagesField(rawInstruction: string, context: FieldEvaluationContext): string | undefined {
+  if (context.pageCount === undefined) {
+    return undefined
+  }
+  return (
+    resolvePageField(rawInstruction, { pageNumber: 1, totalPages: context.pageCount }) ??
+    String(context.pageCount)
+  )
 }
 
 function evaluatePageField(
+  rawInstruction: string,
   paragraphPath: ReadonlyArray<number>,
   context: FieldEvaluationContext,
 ): string | undefined {
   const page = context.currentPageOf?.(paragraphPath)
-  return page !== undefined ? String(page) : undefined
+  if (page === undefined) {
+    return undefined
+  }
+  return (
+    resolvePageField(rawInstruction, { pageNumber: page, totalPages: context.pageCount ?? page }) ??
+    String(page)
+  )
 }
 
 /** Structural (not text-value) info extracted from a HYPERLINK field's instruction, for a caller that wants the link target rather than a recalculated display string (see `evaluateFieldText`'s HYPERLINK case). */

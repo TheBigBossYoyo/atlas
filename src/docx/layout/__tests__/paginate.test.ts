@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { FontMetrics } from '../../fonts'
 import type {
   Document,
+  Endnote,
+  Footnote,
   FooterReference,
   HeaderReference,
   NumberingDef,
@@ -17,7 +19,7 @@ import { halfPoint, hexColor, twip } from '../../model'
 
 import { MARKER_RUN_INDEX } from '../listMarkers'
 import { paginate } from '../paginate'
-import type { Page, PageLineRef } from '../pageTypes'
+import type { Page, PageLineRef, PageTableRef } from '../pageTypes'
 import type { FontResolver, LineBox, LineItem } from '../types'
 
 describe('paginate', () => {
@@ -810,6 +812,601 @@ describe('paginate', () => {
   })
 })
 
+describe('paginate — headers/footers/vAlign (D11 milestone 1, D24/DXL-17)', () => {
+  it('builds header/footer content directly from document.headers/document.footers', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([createParagraph(1)], {
+            headerReferences: [{ id: 'h1', type: 'default' }],
+          }),
+        ],
+        undefined,
+        undefined,
+        { headers: new Map([['h1', { kind: 'header', id: 'h1', blocks: [createTextParagraph('Header Text')] }]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages[0]?.headerLines).toHaveLength(1)
+    expect(lineText(pages[0]?.headerLines[0])).toBe('Header Text')
+  })
+
+  it('ignores an even-typed header reference when evenAndOddHeaders is off', async () => {
+    const document = createDocument(
+      [
+        createSection(
+          [createParagraph(1), createParagraph(1, { pageBreakBefore: true })],
+          {
+            headerReferences: [
+              { id: 'default', type: 'default' },
+              { id: 'even', type: 'even' },
+            ],
+          },
+        ),
+      ],
+      undefined,
+      undefined,
+      {
+        headers: new Map([
+          ['default', { kind: 'header', id: 'default', blocks: [createTextParagraph('Default')] }],
+          ['even', { kind: 'header', id: 'even', blocks: [createTextParagraph('Even')] }],
+        ]),
+      },
+    )
+
+    const withoutSetting = await paginate({ document, fontResolver: createFontResolver() })
+    expect(lineText(withoutSetting[1]?.headerLines[0])).toBe('Default')
+
+    const withSetting = await paginate({ document, fontResolver: createFontResolver(), evenAndOddHeaders: true })
+    expect(lineText(withSetting[1]?.headerLines[0])).toBe('Even')
+  })
+
+  it("honors a header/footer paragraph's own alignment (D11 milestone 1) instead of always rendering flush left", async () => {
+    // Regression test: header/footer content used to render every line
+    // flush left (`leftPt`/`leftOffsetPt` hardcoded to 0 at both build and
+    // render time), silently dropping a header/footer paragraph's own
+    // `w:jc` — a common real case (e.g. a simple centered or right-aligned
+    // page-number footer created via Word's own "Insert Page Number" UI).
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([createParagraph(1)], {
+            headerReferences: [{ id: 'h1', type: 'default' }],
+            footerReferences: [{ id: 'f1', type: 'default' }],
+            pageWidthPt: 200,
+          }),
+        ],
+        undefined,
+        undefined,
+        {
+          headers: new Map([['h1', { kind: 'header', id: 'h1', blocks: [createTextParagraph('aaaa', { jc: 'center' })] }]]),
+          footers: new Map([['f1', { kind: 'footer', id: 'f1', blocks: [createTextParagraph('aaaa', { jc: 'end' })] }]]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    const headerLine = pages[0]?.headerLines[0]
+    const footerLine = pages[0]?.footerLines[0]
+    expect(headerLine?.leftOffsetPt).toBeGreaterThan(0)
+    expect(footerLine?.leftOffsetPt).toBeGreaterThan(0)
+    // Right-aligned ("end") content should land further right than
+    // center-aligned content of the same width on the same page width.
+    expect(footerLine?.leftOffsetPt ?? 0).toBeGreaterThan(headerLine?.leftOffsetPt ?? 0)
+  })
+
+  it('lays out the same reused header id separately per section content width (e.g. a landscape section sharing a portrait header)', async () => {
+    // Regression test: `buildDefaultHeaderFooterLines` used to build each
+    // header/footer id's content ONCE, measured against only the first
+    // section's width, and reuse that same wrapping on every later section
+    // that referenced the same id — even one with a materially different
+    // content width (the common real-world case: a landscape section
+    // inserted mid-document that keeps the same running header). The same
+    // header text must now wrap differently on a much narrower section.
+    const headerText = 'aaaaa bbbbb ccccc'
+    const document = createDocument(
+      [
+        createSection([createParagraph(1)], {
+          headerReferences: [{ id: 'h1', type: 'default' }],
+          pageWidthPt: 400,
+        }),
+        createSection([createParagraph(1)], {
+          headerReferences: [{ id: 'h1', type: 'default' }],
+          pageWidthPt: 40,
+          type: 'nextPage',
+        }),
+      ],
+      undefined,
+      undefined,
+      { headers: new Map([['h1', { kind: 'header', id: 'h1', blocks: [createTextParagraph(headerText)] }]]) },
+    )
+
+    const pages = await paginate({ document, fontResolver: createFontResolver() })
+
+    expect(pages).toHaveLength(2)
+    expect(pages[0]?.headerLines.length).toBe(1)
+    expect(pages[1]?.headerLines.length).toBeGreaterThan(1)
+  })
+
+  it('centers page content vertically when the section is vAlign=center', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)], { pageHeightPt: 100, vAlign: 'center' }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    // One 20pt line on a 100pt-tall page: 80pt slack, centered = 40pt offset.
+    expect(firstLineRef(pages)?.topPt).toBe(40)
+  })
+
+  it('pushes page content to the bottom when the section is vAlign=bottom', async () => {
+    const pages = await paginate({
+      document: createDocument([
+        createSection([createParagraph(1)], { pageHeightPt: 100, vAlign: 'bottom' }),
+      ]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(firstLineRef(pages)?.topPt).toBe(80)
+  })
+
+  it('does not offset a page vAlign=top (or the default) content', async () => {
+    const pages = await paginate({
+      document: createDocument([createSection([createParagraph(1)], { pageHeightPt: 100 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(firstLineRef(pages)?.topPt).toBe(0)
+  })
+})
+
+describe('paginate — footnotes (D11 milestones 2-3, 5)', () => {
+  it('renders a footnote reference as a numbered, superscripted marker', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([createFootnoteRefParagraph('See note', 'fn1')])],
+        undefined,
+        undefined,
+        { footnotes: new Map([['fn1', createFootnote('fn1', 'Footnote body text')]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    const marker = findNoteRefItem(pages)
+    expect(marker?.text).toBe('1')
+    expect(marker?.runProps.vertAlign).toBe('superscript')
+    expect(marker?.noteRef).toEqual({ kind: 'footnote', id: 'fn1' })
+  })
+
+  it('reserves bottom-of-page space and renders the footnote body with a separator', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([createFootnoteRefParagraph('See note', 'fn1')], { pageHeightPt: 200 })],
+        undefined,
+        undefined,
+        { footnotes: new Map([['fn1', createFootnote('fn1', 'Footnote body text')]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages[0]?.hasFootnoteSeparator).toBe(true)
+    expect(footnoteAreaText(pages, 0)).toContain('Footnote')
+    // The footnote's own marker (mark + tab) precedes its body text.
+    expect(findFootnoteAreaLines(pages, 0)[0]?.line.items[0]).toMatchObject({ text: '1' })
+  })
+
+  it('numbers two footnotes continuously in document order (default restart)', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([
+            createFootnoteRefParagraph('First', 'fn1'),
+            createFootnoteRefParagraph('Second', 'fn2'),
+          ], { pageHeightPt: 200 }),
+        ],
+        undefined,
+        undefined,
+        {
+          footnotes: new Map([
+            ['fn1', createFootnote('fn1', 'One')],
+            ['fn2', createFootnote('fn2', 'Two')],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    const marks = pages[0]?.footnoteLines
+      .filter((line) => line.line.items[0]?.kind === 'word')
+      .map((line) => (line.line.items[0] as Extract<LineItem, { kind: 'word' }>).text)
+    expect(marks).toEqual(['1', '2'])
+  })
+
+  it('resets footnote numbering at the start of each section (eachSect restart)', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([createFootnoteRefParagraph('First', 'fn1')], { pageHeightPt: 200 }),
+          createSection([createFootnoteRefParagraph('Second', 'fn2')], { pageHeightPt: 200, type: 'nextPage' }),
+        ],
+        undefined,
+        undefined,
+        {
+          footnotes: new Map([
+            ['fn1', createFootnote('fn1', 'One')],
+            ['fn2', createFootnote('fn2', 'Two')],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+      footnoteNumbering: { restart: 'eachSect' },
+    })
+
+    expect((findFootnoteAreaLines(pages, 0)[0]?.line.items[0] as Extract<LineItem, { kind: 'word' }>)?.text).toBe('1')
+    expect((findFootnoteAreaLines(pages, 1)[0]?.line.items[0] as Extract<LineItem, { kind: 'word' }>)?.text).toBe('1')
+  })
+
+  it('restarts footnote numbering on every page (eachPage restart)', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection(
+            [
+              createFootnoteRefParagraph('First', 'fn1'),
+              createParagraph(1, { pageBreakBefore: true }),
+              createFootnoteRefParagraph('Second', 'fn2'),
+            ],
+            { pageHeightPt: 200 },
+          ),
+        ],
+        undefined,
+        undefined,
+        {
+          footnotes: new Map([
+            ['fn1', createFootnote('fn1', 'One')],
+            ['fn2', createFootnote('fn2', 'Two')],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+      footnoteNumbering: { restart: 'eachPage' },
+    })
+
+    expect(pages).toHaveLength(2)
+    expect((findFootnoteAreaLines(pages, 0)[0]?.line.items[0] as Extract<LineItem, { kind: 'word' }>)?.text).toBe('1')
+    expect((findFootnoteAreaLines(pages, 1)[0]?.line.items[0] as Extract<LineItem, { kind: 'word' }>)?.text).toBe('1')
+    // The body markers were relabeled to match, not left at their
+    // continuous placeholder values.
+    const bodyMarks = pages.map((page) => findNoteRefItem([page])?.text)
+    expect(bodyMarks).toEqual(['1', '1'])
+  })
+
+  it('does not overflow a line past the footnote area it is about to reserve on this same page', async () => {
+    // A single 6-line paragraph (20pt/line, exact spacing): lines 0-1 plain,
+    // line 2 carries the footnote reference, lines 3-5 plain. A 100pt page
+    // fits exactly 5 lines of body content with no footnote reservation —
+    // the bug this regresses: a stale fit-check that doesn't yet know line 2
+    // is about to reserve a 34pt footnote area (14pt separator + one 20pt
+    // line of body text) would report 5 lines as fitting and then actually
+    // place all 5, running lines 3-4 straight through the footnote area
+    // instead of correctly stopping after line 2.
+    const paragraph: Paragraph = {
+      kind: 'paragraph',
+      props: {},
+      children: [
+        {
+          kind: 'run',
+          children: [
+            { kind: 'break' },
+            { kind: 'break' },
+            { kind: 'footnote-reference', id: 'fn1' },
+            { kind: 'break' },
+            { kind: 'break' },
+            { kind: 'break' },
+          ],
+        },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([paragraph], { pageHeightPt: 100 })],
+        undefined,
+        undefined,
+        { footnotes: new Map([['fn1', createFootnote('fn1', 'X')]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    expect(paragraphLineCounts(pages, 0)).toEqual([3, 3])
+    expect(pages[0]?.hasFootnoteSeparator).toBe(true)
+  })
+
+  it("applies a footnote paragraph's own left indent instead of always rendering flush left", async () => {
+    // Regression test: footnote body content used to render every line
+    // flush left (`PageFootnoteLineRef.leftPt` hardcoded to 0), silently
+    // dropping the footnote paragraph's own indent — including the hanging
+    // indent that, in many real "Footnote Text" styles, aligns a wrapped
+    // continuation line under the marker's own text rather than under the
+    // marker itself.
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([createFootnoteRefParagraph('See note', 'fn1')], { pageHeightPt: 200 })],
+        undefined,
+        undefined,
+        {
+          footnotes: new Map([
+            [
+              'fn1',
+              {
+                kind: 'footnote',
+                id: 'fn1',
+                blocks: [createTextParagraph('Indented footnote body', { ind: { left: twip(200) } })],
+              },
+            ],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(findFootnoteAreaLines(pages, 0)[0]?.leftPt).toBeGreaterThan(0)
+  })
+})
+
+describe('paginate — table row splitting across page breaks (D24b/DXL-15)', () => {
+  it("splits a row's content across page breaks when it doesn't fit even on an empty page", async () => {
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        {
+          kind: 'table-row',
+          cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(20)] }],
+        },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages.length).toBeGreaterThan(1)
+
+    const allTableRefs = allPageTableRefs(pages)
+    expect(allTableRefs.length).toBeGreaterThan(1)
+
+    // No content lost or duplicated across the split.
+    const totalContentLines = allTableRefs.reduce(
+      (total, tableRef) =>
+        total + tableRef.rows.reduce((sum, rowRef) => sum + rowRef.row.cells[0].contentLines.length, 0),
+      0,
+    )
+    expect(totalContentLines).toBe(20)
+
+    expect(allTableRefs[0]?.isContinuation).toBe(false)
+    expect(allTableRefs.slice(1).every((tableRef) => tableRef.isContinuation)).toBe(true)
+  })
+
+  it('does not split a row explicitly marked cantSplit — keeps the old clip-on-empty-page behavior', async () => {
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        {
+          kind: 'table-row',
+          props: { cantSplit: true },
+          cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(20)] }],
+        },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(1)
+    const tableRef = allPageTableRefs(pages)[0]
+    expect(tableRef?.rows[0]?.row.cells[0].contentLines).toHaveLength(20)
+  })
+
+  it('splits a moderately tall row that overflows the space LEFT on a page, not just one too tall for an empty page', async () => {
+    // Regression test: the original implementation only ever attempted a
+    // split when a row didn't fit even on a completely empty page. A row
+    // that merely overflows the space remaining after earlier content
+    // (but would fit fine on its own fresh page) was instead moved whole
+    // to the next page, leaving the first page's remaining space
+    // (~2 lines' worth here) unused — not what Word itself does. Row 1
+    // (3 lines) uses most of a 50pt page, leaving room for only ~2 more
+    // lines; row 2 (also 3 lines) must therefore split across the
+    // boundary rather than move over entirely.
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        { kind: 'table-row', cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(3)] }] },
+        { kind: 'table-row', cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(3)] }] },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages.length).toBeGreaterThan(1)
+
+    const allTableRefs = allPageTableRefs(pages)
+    const totalContentLines = allTableRefs.reduce(
+      (total, tableRef) =>
+        total + tableRef.rows.reduce((sum, rowRef) => sum + rowRef.row.cells[0].contentLines.length, 0),
+      0,
+    )
+    // No content lost or duplicated across the split.
+    expect(totalContentLines).toBe(6)
+
+    // Row 2 actually split (rather than moving whole to page 2): the
+    // first page's table ref carries MORE than just row 1's 3 lines.
+    const firstPageRowLineCounts = allTableRefs[0]?.rows.map((rowRef) => rowRef.row.cells[0].contentLines.length)
+    expect(firstPageRowLineCounts?.reduce((sum, count) => sum + count, 0)).toBeGreaterThan(3)
+  })
+
+  it('moves a row whole to the next page when there is no usable room left to split into (not a bogus empty split)', async () => {
+    // Row 1 (4 lines = 44pt) leaves only 6pt on a 50pt page — less than
+    // one more line (11pt) — so row 2 can't be split even partially; it
+    // must move whole to page 2 rather than leaving a content-less first
+    // fragment behind.
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        { kind: 'table-row', cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(4)] }] },
+        { kind: 'table-row', cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(2)] }] },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages).toHaveLength(2)
+    const allTableRefs = allPageTableRefs(pages)
+    expect(allTableRefs[0]?.rows.map((rowRef) => rowRef.row.cells[0].contentLines.length)).toEqual([4])
+    // Row 2 landed on page 2 whole (its full 2 lines, not a shorter
+    // fragment) — `isContinuation` is still true here because it's simply
+    // not the table's first row (see `buildPageTableRefFromSlice`), not
+    // because a split happened.
+    expect(allTableRefs[1]?.rows.map((rowRef) => rowRef.row.cells[0].contentLines.length)).toEqual([2])
+    expect(allTableRefs[1]?.isContinuation).toBe(true)
+  })
+
+  it('never splits a repeated header row, but still splits and repeats it above a later giant body row', async () => {
+    const table: Table = {
+      kind: 'table',
+      rows: [
+        {
+          kind: 'table-row',
+          props: { tblHeader: true },
+          cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(1)] }],
+        },
+        {
+          kind: 'table-row',
+          cells: [{ kind: 'table-cell', blocks: [createTallCellParagraph(20)] }],
+        },
+      ],
+    }
+
+    const pages = await paginate({
+      document: createDocument([createSection([table], { pageHeightPt: 50 })]),
+      fontResolver: createFontResolver(),
+    })
+
+    expect(pages.length).toBeGreaterThan(1)
+    const allTableRefs = allPageTableRefs(pages)
+    for (const tableRef of allTableRefs.slice(1)) {
+      expect(tableRef.rows.some((rowRef) => rowRef.isRepeatedHeader)).toBe(true)
+    }
+  })
+})
+
+function allPageTableRefs(pages: ReadonlyArray<Page>): ReadonlyArray<PageTableRef> {
+  return pages.flatMap((page) => page.columns.flatMap((column) => column.tables))
+}
+
+function createTallCellParagraph(lineCount: number): Paragraph {
+  return {
+    kind: 'paragraph',
+    props: {},
+    children:
+      lineCount > 1
+        ? [{ kind: 'run', children: Array.from({ length: lineCount - 1 }, () => ({ kind: 'break' as const })) }]
+        : [],
+  }
+}
+
+describe('paginate — endnotes (D11 milestone 4)', () => {
+  it('renders endnote content once at the end of the document, not per page', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [createSection([createEndnoteRefParagraph('See end', 'en1')])],
+        undefined,
+        undefined,
+        { endnotes: new Map([['en1', createEndnote('en1', 'Endnote body text')]]) },
+      ),
+      fontResolver: createFontResolver(),
+    })
+
+    const marker = findNoteRefItem(pages)
+    expect(marker?.text).toBe('1')
+    expect(marker?.noteRef).toEqual({ kind: 'endnote', id: 'en1' })
+
+    // Endnote content flows as ordinary placed lines (not a footnoteLines
+    // area) at the end of the document.
+    const allWords = pages
+      .flatMap((page) => page.columns.flatMap((column) => column.lines))
+      .flatMap((lineRef) => lineRef.line.items)
+      .filter((item): item is Extract<LineItem, { kind: 'word' }> => item.kind === 'word')
+      .map((item) => item.text)
+      .join(' ')
+    expect(allWords).toContain('Endnote')
+    expect(allWords).toContain('body')
+  })
+
+  it('resets endnote numbering at the start of each section (eachSect restart)', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([createEndnoteRefParagraph('First', 'en1')], { pageHeightPt: 200 }),
+          createSection([createEndnoteRefParagraph('Second', 'en2')], { pageHeightPt: 200, type: 'nextPage' }),
+        ],
+        undefined,
+        undefined,
+        {
+          endnotes: new Map([
+            ['en1', createEndnote('en1', 'One')],
+            ['en2', createEndnote('en2', 'Two')],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+      endnoteNumbering: { restart: 'eachSect' },
+    })
+
+    // Endnotes flow through the ordinary body pipeline (unlike footnotes),
+    // so `column.lines` holds BOTH each paragraph's own inline reference
+    // mark and the endnote listing's leading marker at the end of the
+    // document. Filter to just the listing markers (tagged with the
+    // synthetic `MARKER_RUN_INDEX`, exactly like a list marker or a
+    // footnote's own leading mark — see `buildNoteMarkerLeadingItems`) so
+    // this only asserts on the endnote listing's own displayed numbers.
+    const markerTexts = pages
+      .flatMap((page) => page.columns.flatMap((column) => column.lines))
+      .flatMap((lineRef) => lineRef.line.items)
+      .filter(
+        (item): item is Extract<LineItem, { kind: 'word' }> =>
+          item.kind === 'word' && item.runIndex === MARKER_RUN_INDEX && item.noteRef?.kind === 'endnote',
+      )
+      .map((item) => item.text)
+
+    // Both listing entries show mark "1": each is the first (and only)
+    // endnote reference in its own section, and 'eachSect' resets the
+    // counter at every section boundary — without the fix this reads
+    // ["1", "2"] (continuous numbering) instead.
+    expect(markerTexts).toEqual(['1', '1'])
+  })
+})
+
+function lineText(line: LineBox | undefined): string {
+  if (line === undefined) {
+    return ''
+  }
+  return line.items
+    .map((item) => (item.kind === 'word' || item.kind === 'glyph-cluster' ? item.text : item.kind === 'space' ? ' ' : ''))
+    .join('')
+}
+
 function createFontResolver(): FontResolver {
   const metrics: FontMetrics = {
     unitsPerEm: 1000,
@@ -857,6 +1454,12 @@ function createDocument(
   sections: ReadonlyArray<Section>,
   styles: ReadonlyMap<string, Style> = new Map(),
   numbering: ReadonlyMap<string, NumberingDef> = new Map(),
+  notes: {
+    footnotes?: ReadonlyMap<string, Footnote>
+    endnotes?: ReadonlyMap<string, Endnote>
+    headers?: Document['headers']
+    footers?: Document['footers']
+  } = {},
 ): Document {
   return {
     kind: 'document',
@@ -872,11 +1475,86 @@ function createDocument(
       },
     },
     comments: new Map(),
-    footnotes: new Map(),
-    endnotes: new Map(),
-    headers: new Map(),
-    footers: new Map(),
+    footnotes: notes.footnotes ?? new Map(),
+    endnotes: notes.endnotes ?? new Map(),
+    headers: notes.headers ?? new Map(),
+    footers: notes.footers ?? new Map(),
   }
+}
+
+function createFootnote(id: string, text: string): Footnote {
+  return { kind: 'footnote', id, blocks: [createTextParagraph(text)] }
+}
+
+function createEndnote(id: string, text: string): Endnote {
+  return { kind: 'endnote', id, blocks: [createTextParagraph(text)] }
+}
+
+function createFootnoteRefParagraph(text: string, footnoteId: string): Paragraph {
+  return {
+    kind: 'paragraph',
+    props: {},
+    children: [
+      {
+        kind: 'run',
+        children: [
+          { kind: 'text', value: text },
+          { kind: 'footnote-reference', id: footnoteId },
+        ],
+      },
+    ],
+  }
+}
+
+function createEndnoteRefParagraph(text: string, endnoteId: string): Paragraph {
+  return {
+    kind: 'paragraph',
+    props: {},
+    children: [
+      {
+        kind: 'run',
+        children: [
+          { kind: 'text', value: text },
+          { kind: 'endnote-reference', id: endnoteId },
+        ],
+      },
+    ],
+  }
+}
+
+function findFootnoteAreaLines(pages: ReadonlyArray<Page>, pageIndex: number): Page['footnoteLines'] {
+  return pages[pageIndex]?.footnoteLines ?? []
+}
+
+function footnoteAreaText(pages: ReadonlyArray<Page>, pageIndex: number): string {
+  return findFootnoteAreaLines(pages, pageIndex)
+    .flatMap((footnoteLine) =>
+      footnoteLine.line.items
+        .filter((item): item is Extract<LineItem, { kind: 'word' | 'glyph-cluster' }> =>
+          item.kind === 'word' || item.kind === 'glyph-cluster',
+        )
+        .map((item) => item.text),
+    )
+    .join('')
+}
+
+function findNoteRefItem(
+  pages: ReadonlyArray<Page>,
+): Extract<LineItem, { kind: 'word' }> | undefined {
+  for (const page of pages) {
+    for (const column of page.columns) {
+      for (const lineRef of column.lines) {
+        const item = lineRef.line.items.find(
+          (candidate): candidate is Extract<LineItem, { kind: 'word' }> =>
+            candidate.kind === 'word' && candidate.noteRef !== undefined,
+        )
+        if (item !== undefined) {
+          return item
+        }
+      }
+    }
+  }
+  return undefined
 }
 
 function createSection(
@@ -896,6 +1574,7 @@ function createSection(
     type?: SectionProps['type']
     headerReferences?: ReadonlyArray<HeaderReference>
     footerReferences?: ReadonlyArray<FooterReference>
+    vAlign?: SectionProps['vAlign']
   } = {},
 ): Section {
   return {
@@ -922,6 +1601,7 @@ function createSection(
       type: options.type,
       headerReference: options.headerReferences,
       footerReference: options.footerReferences,
+      vAlign: options.vAlign,
     },
     blocks,
   }

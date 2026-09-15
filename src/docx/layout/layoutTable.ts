@@ -394,6 +394,7 @@ async function layoutRow(
       heightPt,
     })),
     isHeader,
+    cantSplit: row.props?.cantSplit === true,
   }
 }
 

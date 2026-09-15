@@ -1,4 +1,5 @@
 import type { Document, Table } from '../model'
+import type { NotePr } from '../parser/settings'
 import type { Theme } from '../parser/theme'
 
 import type { LaidOutTable } from './tableTypes'
@@ -23,6 +24,26 @@ export type Page = {
   columns: ReadonlyArray<ColumnBox>
   headerLines: ReadonlyArray<LineBox>
   footerLines: ReadonlyArray<LineBox>
+  /**
+   * D11 milestone 3 (DXL-09) — this page's bottom-of-page footnote area,
+   * flattened across every footnote referenced on the page (in
+   * first-reference order), each already positioned relative to the
+   * area's own top via `topPt`. Empty when the page references no
+   * footnotes — `PageView` renders nothing and reserves no space in that
+   * case (mirrors `headerLines`/`footerLines`'s empty-array convention).
+   */
+  footnoteLines: ReadonlyArray<PageFootnoteLineRef>
+  /** Whether to draw the short horizontal separator above the footnote area — true whenever `footnoteLines` is non-empty. */
+  hasFootnoteSeparator: boolean
+}
+
+/** One line of one footnote's body text, positioned within the page's footnote area (see `Page.footnoteLines`). */
+export type PageFootnoteLineRef = {
+  noteId: string
+  line: LineBox
+  /** Top offset in points from the footnote area's own top edge (NOT the page). */
+  topPt: number
+  leftPt: number
 }
 
 export type ColumnBox = {
@@ -113,9 +134,28 @@ export class PaginationCancelledError extends Error {
 export type PaginatorInput = {
   document: Document
   fontResolver: FontResolver
+  /**
+   * Overrides (or, for an id this document doesn't otherwise define,
+   * supplements) the header/footer content `paginate` itself builds from
+   * `document.headers`/`document.footers` (D11 milestone 1) — mainly a
+   * test seam at this point; production callers can omit it entirely.
+   */
   headerFooterLines?: Map<string, ReadonlyArray<LineBox>>
   tableLayout?: TableLayoutFn
   theme?: Theme
+  /**
+   * `word/settings.xml`'s `w:evenAndOddHeaders` (D11 milestone 1/DXL-09):
+   * when false/absent (the common case), an `even`-typed header/footer
+   * reference is never selected even if the document happens to define
+   * one — every page uses the `default` reference regardless of parity,
+   * matching Word's own behavior for a document that never turned this
+   * setting on.
+   */
+  evenAndOddHeaders?: boolean
+  /** `word/settings.xml`'s `w:footnotePr` (D11 milestone 5) — default footnote numbering format/restart/start. */
+  footnoteNumbering?: NotePr
+  /** `word/settings.xml`'s `w:endnotePr` (D11 milestone 5) — default endnote numbering format/restart/start. */
+  endnoteNumbering?: NotePr
   /**
    * Called after each block (paragraph or table) is itemized + measured.
    * Lets the UI render a progress indicator during long pagination on

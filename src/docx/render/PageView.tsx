@@ -46,6 +46,29 @@ type RunMeta = {
 // CSS px is 96dpi, pt is 72dpi. So 1pt = 1.333px.
 const PT_TO_PX = 4 / 3;
 
+/**
+ * Renders a tab's leader (D24/DXL-16) as a bottom border spanning its
+ * measured width, rather than repeating literal `.`/`-`/`_` glyphs — this
+ * viewer doesn't know the leader glyph's per-character advance width at
+ * render time (only `breakLines.ts`'s layout-time font metrics do), so a
+ * border reliably fills the exact tab width instead of over/under-shooting
+ * with a whole number of repeated characters. `text-bottom` vertical
+ * alignment on the tab span (see the caller) keeps the rule close to the
+ * text baseline rather than the bottom of the (taller) line box.
+ */
+function tabLeaderToCss(leader: 'none' | 'dot' | 'hyphen' | 'underscore'): React.CSSProperties {
+  if (leader === 'dot') {
+    return { borderBottom: '1px dotted currentColor' };
+  }
+  if (leader === 'hyphen') {
+    return { borderBottom: '1px dashed currentColor' };
+  }
+  if (leader === 'underscore') {
+    return { borderBottom: '1px solid currentColor' };
+  }
+  return {};
+}
+
 const EMPTY_STRETCH_INDICES: ReadonlySet<number> = new Set();
 const EMPTY_RELATIONSHIPS: ReadonlyArray<Relationship> = [];
 const EMPTY_BOOKMARK_NAMES: ReadonlyArray<string> = [];
@@ -462,7 +485,17 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
             return wrapHyperlink(spaceSpan, item.runIndex, idx);
           }
           if (item.kind === 'tab') {
-            return <span key={idx} style={{ display: 'inline-block', width: `${item.width}px` }} />;
+            return (
+              <span
+                key={idx}
+                style={{
+                  display: 'inline-block',
+                  width: `${item.width}px`,
+                  verticalAlign: 'text-bottom',
+                  ...tabLeaderToCss(item.leader),
+                }}
+              />
+            );
           }
           if (item.kind === 'hyphen-opportunity') {
             return null;
@@ -490,7 +523,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
           >
             {page.headerLines.map((line, idx) => {
               const top = page.headerLines.slice(0, idx).reduce((sum, l) => sum + l.lineHeight, 0);
-              return renderLine(line, top, 0, `header-${idx}`);
+              return renderLine(line, top, line.leftOffsetPt ?? 0, `header-${idx}`);
             })}
           </div>
         )}
@@ -554,6 +587,36 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
           <AnchoredDrawing key={`float-front-${pageFloat.blockIndex}-${floatIdx}`} pageFloat={pageFloat} />
         ))}
 
+        {/* Footnote area (D11 milestone 3/DXL-09) — sits just above the
+            footer, sized to exactly the space `paginate.ts`'s
+            `reserveFootnotesForLine` reserved for it (the last line's
+            `topPt + lineHeight`, which already includes the leading
+            separator gap — see `buildPageFootnoteLines`'s doc comment). */}
+        {page.hasFootnoteSeparator && page.footnoteLines.length > 0 && (() => {
+          const lastFootnoteLine = page.footnoteLines[page.footnoteLines.length - 1];
+          const footnoteAreaHeight = lastFootnoteLine.topPt + lastFootnoteLine.line.lineHeight;
+          return (
+            <div
+              className="docx-page__footnotes"
+              style={{
+                position: 'absolute',
+                top: `${page.sizePt.height - page.marginsPt.bottom - footnoteAreaHeight}px`,
+                left: `${page.marginsPt.left}px`,
+                width: `${page.sizePt.width - page.marginsPt.left - page.marginsPt.right}px`,
+                height: `${footnoteAreaHeight}px`,
+              }}
+            >
+              <div
+                className="docx-page__footnote-separator"
+                style={{ position: 'absolute', top: 0, left: 0, width: '144px', borderTop: '1px solid currentColor' }}
+              />
+              {page.footnoteLines.map((footnoteLine, idx) =>
+                renderLine(footnoteLine.line, footnoteLine.topPt, footnoteLine.leftPt, `footnote-${idx}`),
+              )}
+            </div>
+          );
+        })()}
+
         {/* Footer */}
         {page.footerLines.length > 0 && (
           <div
@@ -567,7 +630,7 @@ export const PageView: React.FC<PageViewProps> = ({ page, zoom, document, theme,
           >
             {page.footerLines.map((line, idx) => {
               const top = page.footerLines.slice(0, idx).reduce((sum, l) => sum + l.lineHeight, 0);
-              return renderLine(line, top, 0, `footer-${idx}`);
+              return renderLine(line, top, line.leftOffsetPt ?? 0, `footer-${idx}`);
             })}
           </div>
         )}

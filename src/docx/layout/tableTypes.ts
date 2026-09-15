@@ -25,6 +25,14 @@ export type LaidOutRow = {
   heightPt: number
   cells: ReadonlyArray<LaidOutCell>
   isHeader: boolean
+  /**
+   * `w:trPr/w:cantSplit` (D24b/DXL-15) — when true, `paginate.ts` never
+   * splits this row's content across a page break, matching Word's own
+   * behavior for a row explicitly marked "keep on one page"; every other
+   * row is eligible for `paginate.ts`'s `splitTableRowForPage` when it
+   * doesn't fit as a whole.
+   */
+  cantSplit: boolean
 }
 
 export type LaidOutCell = {

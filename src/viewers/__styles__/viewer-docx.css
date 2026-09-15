@@ -167,6 +167,56 @@
   font-size: 13px;
 }
 
+/* D24/DXL-19 — zoom controls */
+.docx-viewer__zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  background: var(--bg-primary, #fff);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.docx-viewer__zoom-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text-primary, #1f2328);
+  border-radius: 6px;
+  padding: 6px;
+  cursor: pointer;
+}
+
+.docx-viewer__zoom-button:hover:not(:disabled) {
+  background: var(--bg-secondary, #f6f8fa);
+}
+
+.docx-viewer__zoom-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.docx-viewer__zoom-level {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  border: none;
+  background: none;
+  color: var(--text-primary, #1f2328);
+  font-size: 12px;
+  border-radius: 6px;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+
+.docx-viewer__zoom-level:hover {
+  background: var(--bg-secondary, #f6f8fa);
+}
+
 /* ------------------------------------------------------------------ */
 /* Wave F.1 — Print preview / native print                             */
 /* ------------------------------------------------------------------ */
@@ -181,6 +231,7 @@
   .docx-viewer__update-fields-button,
   .docx-viewer__update-toc-button,
   .docx-viewer__field-status,
+  .docx-viewer__zoom-controls,
   .comments-pane,
   .docx-find-replace,
   .spellcheck-menu {

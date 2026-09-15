@@ -82,6 +82,7 @@ describe('itemizeRuns', () => {
         width: 0,
         runIndex: 0,
         charOffset: 0,
+        leader: 'none',
       },
     ])
   })
@@ -113,7 +114,7 @@ describe('itemizeRuns', () => {
     ])
   })
 
-  it('emits soft hyphen opportunities between word fragments', async () => {
+  it('emits soft hyphen opportunities between word fragments (D24/DXL-18 — the full extent of hyphenation support)', async () => {
     const items = await itemizeRuns([wrapTextRun('co\u00adoperate')], fontResolver)
 
     expect(items).toHaveLength(3)
@@ -214,6 +215,46 @@ describe('itemizeRuns', () => {
       { kind: 'drawing', charStart: 2, charEnd: 3 },
       { kind: 'word', text: 'cd', charStart: 3, charEnd: 5 },
     ])
+  })
+
+  it('renders a footnote reference as its resolved, superscripted mark (D11/DXL-09)', async () => {
+    const items = await itemizeRuns(
+      [wrapRun([{ kind: 'footnote-reference', id: 'fn-1' }])],
+      fontResolver,
+      undefined,
+      { footnote: new Map([['fn-1', '1']]), endnote: new Map() },
+    )
+
+    expect(items).toMatchObject([
+      {
+        kind: 'word',
+        text: '1',
+        runProps: { vertAlign: 'superscript' },
+        noteRef: { kind: 'footnote', id: 'fn-1' },
+      },
+    ])
+  })
+
+  it('renders an endnote reference as its resolved mark', async () => {
+    const items = await itemizeRuns(
+      [wrapRun([{ kind: 'endnote-reference', id: 'en-3' }])],
+      fontResolver,
+      undefined,
+      { footnote: new Map(), endnote: new Map([['en-3', 'iii']]) },
+    )
+
+    expect(items).toMatchObject([
+      { kind: 'word', text: 'iii', noteRef: { kind: 'endnote', id: 'en-3' } },
+    ])
+  })
+
+  it('renders an empty mark for a note reference with no resolved number', async () => {
+    const items = await itemizeRuns(
+      [wrapRun([{ kind: 'footnote-reference', id: 'unknown' }])],
+      fontResolver,
+    )
+
+    expect(items).toMatchObject([{ kind: 'word', text: '', noteRef: { id: 'unknown' } }])
   })
 })
 

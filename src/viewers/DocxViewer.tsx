@@ -11,7 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 
-import { Printer, Save, X } from 'lucide-react'
+import { Printer, Save, X, ZoomIn, ZoomOut } from 'lucide-react'
 
 import type { NavItem, ViewerProps } from '../formats/types'
 import { loadDocx, saveDocx, type DocxBundle } from '../docx'
@@ -94,6 +94,14 @@ const DEFAULT_FIND_OPTIONS: FindOptions = {
 }
 
 const DOCX_SAVE_FILTERS = [{ name: 'Word Documents', extensions: ['docx'] }]
+// D24/DXL-19
+const MIN_ZOOM = 0.25
+const MAX_ZOOM = 3
+const ZOOM_STEP = 0.1
+
+function clampZoom(zoom: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
+}
 
 /** D12/DXE-03 — keys whose native contentEditable behavior always mutates
  * content; see handleKeyDownEvent's preventDefault-safety comment. */
@@ -672,6 +680,10 @@ function DocxEditor({
   // `saveDocx` persists it via `writeSettingsXml` instead of losing it to
   // the passthrough copy of the original part.
   const [trackChangesEnabled, setTrackChangesEnabled] = useState(bundle.settings?.trackChanges ?? false)
+  // D24/DXL-19 — PageView already fully supports a CSS-transform zoom (its
+  // `zoom` prop); this was simply never wired to anything, hardcoded to 1
+  // below. Percent steps match the common Word/most-viewers convention.
+  const [zoom, setZoom] = useState(1)
   const [spellCheckEnabled, setSpellCheckEnabled] = useState(true)
   const composition = useComposition()
   const spellCheck = useSpellCheck()
@@ -1592,6 +1604,17 @@ function DocxEditor({
     setFieldUpdateMessage('Table of contents updated.')
   }, [documentModel, pages])
 
+  // D24/DXL-19
+  const handleZoomIn = useCallback(() => {
+    setZoom((current) => clampZoom(current + ZOOM_STEP))
+  }, [])
+  const handleZoomOut = useCallback(() => {
+    setZoom((current) => clampZoom(current - ZOOM_STEP))
+  }, [])
+  const handleZoomReset = useCallback(() => {
+    setZoom(1)
+  }, [])
+
   useEffect(() => {
     handleToolbarCommandRef.current = handleToolbarCommand
   }, [handleToolbarCommand])
@@ -1644,6 +1667,16 @@ function DocxEditor({
           document: documentModel,
           fontResolver,
           theme: bundle.theme,
+          // D11 milestone 1/5 — these were parsed from word/settings.xml
+          // (see docx/parser/settings.ts) but never threaded through to the
+          // paginator in production; only paginate.test.ts's direct calls
+          // exercised them. Without this, a real document that turns on
+          // w:evenAndOddHeaders, or sets a non-default footnote/endnote
+          // numbering restart/format, silently fell back to "off"/
+          // "continuous" in the actual app.
+          evenAndOddHeaders: bundle.settings?.evenAndOddHeaders,
+          footnoteNumbering: bundle.settings?.footnotePr,
+          endnoteNumbering: bundle.settings?.endnotePr,
           onProgress: progress => {
             if (!cancelled) {
               setPaginationProgress(progress)
@@ -1672,7 +1705,7 @@ function DocxEditor({
     return () => {
       cancelled = true
     }
-  }, [documentModel, fontResolver, bundle.theme])
+  }, [documentModel, fontResolver, bundle.theme, bundle.settings])
 
   useLayoutEffect(() => {
     const root = editorRootRef.current
@@ -1729,6 +1762,35 @@ function DocxEditor({
         >
           <span>Update TOC</span>
         </button>
+        <div className="docx-viewer__zoom-controls" role="group" aria-label="Zoom">
+          <button
+            className="docx-viewer__zoom-button"
+            type="button"
+            onClick={handleZoomOut}
+            disabled={zoom <= MIN_ZOOM}
+            aria-label="Zoom out"
+          >
+            <ZoomOut size={16} aria-hidden="true" />
+          </button>
+          <button
+            className="docx-viewer__zoom-level"
+            type="button"
+            onClick={handleZoomReset}
+            aria-label="Reset zoom to 100%"
+            title="Reset zoom"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            className="docx-viewer__zoom-button"
+            type="button"
+            onClick={handleZoomIn}
+            disabled={zoom >= MAX_ZOOM}
+            aria-label="Zoom in"
+          >
+            <ZoomIn size={16} aria-hidden="true" />
+          </button>
+        </div>
       </div>
       <FindReplace
         open={findOpen}
@@ -1766,7 +1828,7 @@ function DocxEditor({
             <MediaContext.Provider value={mediaResolver}>
               <PageStack
                 pages={pages}
-                zoom={1}
+                zoom={zoom}
                 document={documentModel}
                 theme={bundle.theme}
                 relationships={bundle.relationships}
