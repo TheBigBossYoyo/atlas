@@ -313,3 +313,75 @@ One commit per task ID. Conventional Commits. After each Wave Gate, run `skill(n
 - Phase 5: PDF editing
 - Phase 6: ODT/ODS/ODP editing
 - Phase 7: Real-time collaboration (CRDT)
+
+---
+
+# Phase 2 — Actual State (retroactive addendum, added 2026-09-15, Task P4.9/QA-19)
+
+QA-19 found this plan's locked library stack and in-scope bullets never
+reconciled against what `src/docx/` actually implements — most notably, the
+spellchecker was silently swapped to a completely different approach with
+no record of the change. This section checks the plan's own "IN SCOPE" list
+(near the top of this file) and "Success Criteria" (above) against `main`
+as of commit `03b2e2a`, read directly from `src/docx/`.
+
+## Locked library stack — what actually shipped
+
+| Planned | Shipped | Note |
+|---|---|---|
+| `jszip` | ✅ as planned | |
+| `fast-xml-parser` | ✅ as planned | |
+| `nspell` + `dictionary-en`/`dictionary-fr` (bundled Hunspell) | ❌ **not used** | Spell check instead goes through Electron/Chromium's own **native spellchecker** — `src/docx/editor/useSpellCheck.ts` calls `window.electronAPI.spellcheck` (`electron/preload.cjs` → `session.setSpellCheckerLanguages`/`addWordToSpellCheckerDictionary`, native Chromium APIs). `nspell` and the dictionary packages are not a dependency anywhere in `package.json`. **Why this is a reasonable substitution, not a regression**: it needed zero bundled dictionary data, works for every language Chromium's spellchecker supports (not just the two originally locked), and reuses infrastructure Electron already provides rather than shipping a second spellchecking engine. **Real trade-off**: available languages are whatever the OS/Chromium ships, not a guaranteed en+fr pair — Success Criterion 5 ("spell check working in en + fr") is met only if the runtime environment has those languages available, not guaranteed by Atlas itself the way a bundled dictionary would be. |
+| No `docx`, no `docx-preview`, no `mammoth` | ✅ as planned | `src/docx/` is a fully hand-written parser/model/layout/render/editor/serializer pipeline (see `docs/ARCHITECTURE.md` Section 5). The `docx` npm package remains a dependency, but only for the unrelated markdown→DOCX export path — never imported anywhere under `src/docx/`. |
+
+## In-scope bullets — checked off against `src/docx/`
+
+- ✅ Document model, run/paragraph formatting, styles + inheritance chain,
+  lists, images, page setup structure, Find & Replace (`FindReplace.tsx`) —
+  present.
+- ✅ Comments: insert/reply/resolve/delete UI exists (`CommentsPane.tsx`,
+  `commentMutations.ts`, `comments.ts`) with `commentsExtended` resolved-
+  state round-tripping.
+- ✅ Track Changes: insertion/deletion runs, accept/reject (single + all), a
+  `trackChanges` on/off setting.
+- ✅ Undo/Redo: command-pattern history.
+- ⚠️ **Tables: insert-whole-table only.** Row/column insert-delete and
+  cell merge/split — explicitly listed in this plan's Success Criterion 3
+  — are **not implemented**; `src/docx/editor/commands.ts` throws
+  `"DeleteRange across ... table ... is not yet implemented"` for the
+  cross-cell case. This is the same gap tracked as **DEFER-1** in the
+  Phase 3 improvement plan, not something Phase 2 silently dropped without
+  a record — but Phase 2's own Success Criterion 3 did originally commit to
+  it, so recording the gap here too.
+- ❌ **Headers/footers: render-only, no edit UI.** The layout engine
+  positions headers/footers per-section (including first-page-different,
+  odd/even) and comments/track-changes work inside body text, but there is
+  no editor surface for *authoring* header/footer content — Success
+  Criterion 3's "insert/edit headers + footers" is unmet for the "edit"
+  half.
+- ❌ **Page setup: render-only, no edit UI.** Paper size/orientation/
+  margins/columns/section-break *type* are all parsed and laid out
+  correctly, but there is no UI to *change* them from within Atlas.
+- ⚠️ **Paste from Word/web**: plain-formatting paste works; the planned
+  "HTML→DOCX-AST converter that preserves common formatting" does not yet
+  reconstruct pasted tables/images/hyperlink structure (tracked as part of
+  **DEFER-1** in the Phase 3 plan).
+- Equations/SmartArt/charts/macros/mail-merge/collaboration/DRM/legacy
+  forms/ink/3D — all shipped exactly as scoped ("out of scope for Phase 2 /
+  placeholder-only"), no drift to record.
+
+## Success Criteria — actual state
+
+Criteria 1 (installer), 6 (Find & Replace), 7 (undo/redo), 9 (lint/tsc/
+test/build green) are met on `main` today. Criterion 3 (edit operations) is
+met except for table row/column/merge-split and header/footer/page-setup
+editing (see above). Criterion 5 (spell check en+fr) depends on the runtime
+spellchecker's installed languages rather than a bundled guarantee (see
+substitution note above). Criteria 2, 4, 8, 10 (corpus-scale fidelity
+validation, Word-compatibility rate, print-preview page-count accuracy,
+bundle-size regression) were not re-measured for this addendum — they need
+a real 50-document corpus and a Word installation to check against, neither
+of which this pass had available; the closest existing automated proxy is
+the round-trip corpus suite (`P0.5`, `src/docx/__tests__/roundtrip.corpus.test.ts`),
+which is green on `main` but covers a much smaller, synthetic fixture set
+than the originally-envisioned 50-document real-world corpus.

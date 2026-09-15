@@ -9,8 +9,10 @@ permissions:
 
 env:
   # Electron's postinstall normally downloads a matching Electron binary for
-  # the target platform; CI only needs the package installed to type-check,
-  # lint, test, and build the renderer bundle, so skip that download.
+  # the target platform; the `build` job only needs the package installed to
+  # type-check, lint, test, and build the renderer bundle, so skip that
+  # download there. The `e2e-windows` job below overrides this back off
+  # (it needs a real Electron binary to actually launch the app).
   ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
 jobs:
@@ -18,10 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # Single source of truth for the pinned Node version — kept in
           # .nvmrc alongside package.json's "engines" field so CI can't drift
@@ -38,12 +40,79 @@ jobs:
       - name: Type-check
         run: npx tsc -b
 
-      - name: Unit tests
-        run: npx vitest run
+      - name: Unit tests + coverage
+        run: npm run coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
       - name: Build
         run: npx vite build
 
-# NOTE: Electron end-to-end (Playwright) tests are not run in CI yet — they
-# need a display server / xvfb on ubuntu-latest and are tracked as a
-# follow-up rather than part of this minimal pipeline.
+      # P4.3/RUN-15/QA-17 — the bundle-regression gate is wired as the
+      # `postbuild` npm script (package.json), which only fires for `npm run
+      # build`; this job calls `vite build` directly (so unit tests/lint/
+      # type-check run before a possibly-failing build, each with its own
+      # clear step name) and would otherwise never invoke it at all — an
+      # explicit step is required for the gate to actually gate anything here.
+      - name: Check bundle size
+        run: node scripts/check-bundle.mjs
+
+  # P4.9/P4.3 — real Electron end-to-end smoke coverage, gated to pushes on
+  # main (not every PR/branch push) since it needs a full Electron binary
+  # download plus a genuine app launch and is meaningfully slower than the
+  # ubuntu unit-test job above. GitHub-hosted windows-latest runners provide
+  # a real interactive desktop session for the runner service, so — unlike
+  # ubuntu-latest — no Xvfb/virtual-display setup is needed for Electron's
+  # BrowserWindow to actually open.
+  e2e-windows:
+    needs: build
+    # A job-level `if` replaces the implicit `success()` gate a `needs`
+    # dependency would otherwise add, so `success()` must be spelled out
+    # here explicitly — otherwise this job would still run (and burn a full
+    # Electron download + build + e2e pass on windows-latest) even when the
+    # `build` job above it failed.
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    env:
+      # Override the workflow-level skip: this job needs the real Electron
+      # binary to launch the app under Playwright. `electron`'s own
+      # postinstall (node_modules/electron/install.js) only checks
+      # `if (process.env.ELECTRON_SKIP_BINARY_DOWNLOAD)` — a bare truthiness
+      # test, not `=== '1'` — so setting this to the *string* "0" is still
+      # truthy in Node and would silently keep skipping the download,
+      # leaving no real Electron binary for Playwright to launch and this
+      # entire job permanently red. An empty string is the only value that's
+      # actually falsy here.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Cache Electron binary
+        uses: actions/cache@v6
+        with:
+          path: ~\AppData\Local\electron\Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npx vite build
+
+      - name: Electron e2e (Playwright)
+        run: npx playwright test

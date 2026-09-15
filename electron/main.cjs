@@ -14,6 +14,7 @@ const { FileTooLargeError, assertFileSizeAllowed } = require('./lib/fileSizeGuar
 const { EXTENSIONS: MANIFEST_EXTENSIONS } = require('./lib/extensionManifest.generated.cjs');
 const { CLOSE_PROMPT_BUTTONS, decideOnClose, decideAfterPromptChoice } = require('./lib/closeGuard.cjs');
 const { clampBoundsToDisplays, loadWindowState, saveWindowState } = require('./lib/windowState.cjs');
+const { resolveIsDev } = require('./lib/devDetect.cjs');
 
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
@@ -52,7 +53,23 @@ const OVERLAY_COLORS = {
 /** @type {{ color: string; symbolColor: string }} */
 let currentOverlayColors = OVERLAY_COLORS.light;
 
-const isDev = !app.isPackaged;
+// ---- Dev/prod detection (RUN-12) ---- //
+//
+// Decision logic lives in `./lib/devDetect.cjs` (unit-tested there — see
+// `src/__tests__/electron-lib/devDetect.test.ts` — the same split-out-for-
+// testability pattern as closeGuard/csp/pathAllowlist, since Electron's own
+// modules can't be constructed outside a running app). That file's header
+// also documents a known nuance: this checks the filesystem, not how the
+// process was launched, so a stale `dist/` from an earlier build can make a
+// plain local `electron .` (including `npx playwright test`, whose specs
+// launch Electron directly) resolve to prod against that stale build unless
+// `ATLAS_DEV=1` overrides it.
+const DIST_INDEX_PATH = path.join(app.getAppPath(), 'dist', 'index.html');
+
+const isDev = resolveIsDev({
+  atlasDevEnv: process.env.ATLAS_DEV,
+  distIndexExists: () => fs.existsSync(DIST_INDEX_PATH),
+});
 
 // ---- Path allowlist (P1.2 / ELEC-02, ELEC-03, ELEC-25) ---- //
 //
@@ -596,8 +613,7 @@ function createWindow() {
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
   } else {
-    const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
-    mainWindow.loadFile(indexPath);
+    mainWindow.loadFile(DIST_INDEX_PATH);
   }
 
   // Fallback: show window after 5s even if ready-to-show never fires (e.g. loadFile failure)

@@ -898,4 +898,77 @@ Applied after the critic/revision pass, from a last read-through of the full doc
 
 ---
 
+## 13. Execution Status (as of 2026-09-15, wave3/docs-quality)
+
+Per Task P4.9/QA-18's fix — this section is a dated snapshot of what has
+actually *merged to `main`*, cross-checked against `git log` and the code
+itself, not a restatement of any task's own "Acceptance" prose. Update it at
+each future phase gate; treat any status below as stale the moment `main`
+moves without a corresponding edit here.
+
+**Legend**: **DONE** — merged to `main`, spot-verified against code.
+**PARTIAL** — some real sub-scope merged, rest open. **IN PROGRESS** — real
+commits exist on an unmerged `wave3/*` branch, not yet on `main`. **PENDING**
+— not started (no commits anywhere) or only interrupted `wip:` commits.
+
+### Phase 0 (Foundation) — DONE
+All of P0.1–P0.6 merged via wave1: `wave1/ci-lint` (CI + lint), `wave1/
+markdown-characterization` (P0.4), `wave1/docx-corpus` (P0.5), `wave1/
+docx-comments` (P0.6).
+
+### Phase 1 (Shell hardening) — DONE
+All of P1.1–P1.16 merged via wave1's `electron-hardening`, `shell-session`,
+`docx-save-integrity`, `deps-security`, and `viewer-quickfixes` merges.
+Spot-verified: IPC path allowlist, CSP, `sandbox: true`, atomic writes with
+lock detection, the `ViewerContext` dirty/save contract, crash logging
+(`electron/lib/crashLog.cjs`) all present and wired in `main.cjs`.
+
+### Phase 2 (DOCX v1 editing) — DONE, with documented deviations
+Shipped via wave1/wave2's DOCX-focused merges. See
+`atlas-phase2-docx.md`'s "Actual State" addendum (added this wave, QA-19)
+for the full reconciliation — headline deviation: spell check uses
+Electron/Chromium's native spellchecker, not the originally-locked
+`nspell` + bundled Hunspell dictionaries.
+
+### Phase 3 — Waves 1 & 2 — DONE; Wave 3-D remainder and X-tasks — PARTIAL
+- **DONE** (wave2 merges, 8 parallel worktrees on 2026-09-14): DOCX model/
+  layout/editor fidelity (D1–D10, D12–D22, D26, D28, D30), PDF viewer
+  (P1–P12/PDF-01..19), slides (S1–S22/SLD-02..24), spreadsheet/CSV/code/RTF/
+  ODT (T1–T5, T7–T9, T11), format detection/routing (P2.2, P2.11, P2.14,
+  T6), export/UX (X2, X5, X3 non-DOCX a11y, UX-19/20/21), shell (P2.1, P2.5,
+  P2.6, P2.8, X4, SHELL-25, P2.13).
+- **IN PROGRESS** (unmerged `wave3/*` branches, real commits, not on
+  `main`): table row-splitting/footnote-endnote layout/header-footer
+  vAlign/hyphenation/zoom (`wave3/docx-pagination`); embedded-font
+  de-obfuscation (DEFER-4) and field/TOC regeneration (DEFER-5) on
+  `wave3/docx-fields-fonts`; real spreadsheet cell editing + write-back
+  (`wave3/sheets` — a genuine scope expansion past the original plan's
+  DAT-06 stopgap, consistent with the owner's later "everything is in
+  scope" decision).
+- **PENDING** (branch exists, zero commits at time of writing):
+  `wave3/docx-drawings`, `wave3/docx-editing`, `wave3/export`,
+  `wave3/shell-polish` (only interrupted `wip:` commits).
+
+### Phase 4 — mixed; see per-task below
+| Task | Status | Note |
+|---|---|---|
+| P4.1 (strict-mode ratchet) | **PENDING** | `tsconfig.app.json` has no `strict`/`strictNullChecks` flag of any kind and no `STRICT_MODE_TODO.md` exists on disk — not started. |
+| P4.2 (coverage thresholds) | **DONE** (this wave) | v8 provider, `reportOnFailure`, `npm run coverage`, measured-floor thresholds in `vitest.config.ts`. |
+| P4.3 (bundle gate + rtf.js) | **DONE** (this wave) | Per-chunk `postbuild` gate wired with a fresh baseline; `rtf.js` investigated and, per its documented findings (`docs/KNOWN_LIMITATIONS.md`), kept rather than replaced. |
+| P4.4 (dependency hygiene) | **PARTIAL** | `wave1/deps-security` covered part of this; the `html2canvas-pro` removal sub-item still explicitly depends on the export rework (`wave3/export`, no commits yet). |
+| P4.5 (Electron major upgrade epic) | **PENDING** | No epic issue exists in the GitHub repo (`gh issue list` returns none) — not started. |
+| P4.6 (E2E expansion) | **PARTIAL** | `tests/e2e/smoke.spec.ts` covers open + console-error assertions for all 13 formats; `tests/e2e/perf.spec.ts` covers the 200ms task-perf budget. The open→edit→save→reopen, export-verification, and full-keyboard-shortcut scenario specs described in P4.6's approach are not present yet. |
+| P4.7 (viewer coverage sweep) | **PARTIAL** | Per this wave's `npm run coverage` measurement: several PDF sub-components remain low (`PdfToolbar.tsx` ~29%, `PdfThumbnailRail.tsx` ~4%, `PdfWordDialog.tsx` ~41%); most other viewers are well-covered (DOCX/RTF/ODT/OD{S,P}/Pptx/spreadsheet all 66–95%+ statement coverage). |
+| P4.8 (shared mocks) | **DONE** (this wave) | `createMockElectronAPI()` added; 2 representative call sites migrated by design (not all — see the task's own "a few representative tests" scope); `useRecentFiles.test.ts` added. |
+| P4.9 (process hygiene) | **DONE** (this wave) | This section, `atlas-phase1.md`/`atlas-phase2-docx.md` addenda, README, `CHANGELOG.md`, `docs/ARCHITECTURE.md`, `docs/KNOWN_LIMITATIONS.md`, RUN-12 fix. |
+| P4.10 (I/O perf hygiene) | **DONE** | `fileSizeGuard.cjs` (ELEC-08/LOAD-14), prefetched-buffer reuse on dialog opens (LOAD-13, see `useFileHandler.test.ts`), bounded head/tail ZIP-marker scan (LOAD-15, `formats/detect.ts`) all confirmed present. `lazy()` wrapper caching per format (LOAD-21) not confirmed either way — low priority per the task's own "only if it proves worth optimizing" framing. |
+| P4.11 (tech-debt sweep) | **PARTIAL** | Confirmed fixed: `saveBinaryFile` typed on `ElectronAPI` (ELEC-16); no flat/namespaced spellcheck IPC duplication, already collapsed to the nested `spellcheck.*` shape (ELEC-17); `onFileOpenedPath` uses `removeListener`, not `removeAllListeners` (ELEC-18); a live `matchMedia` theme-change listener exists in `useTheme.ts` (SHELL-25, landed early via `wave2/shell`). Confirmed still open: the dead `ENABLE_VIEWER_ROUTER` flag (`App.tsx:43`, SHELL-21/22) and the `as never` cast in `useTheme.ts:38` (SHELL-23/UX-23). Remaining items (ELEC-20/21/22/23, UX-19/20/21 CSS cleanup, `prefers-reduced-motion`) not individually re-verified this pass. |
+| P4.12 (toolchain pinning) | **DONE** | `.nvmrc` (`24.14.0`) and `package.json`'s `engines.node` both present and CI (`.nvmrc`-keyed `setup-node`) already depends on it. |
+
+### Phase 5 (Release) — PENDING
+Not started; correctly gated on every prior phase's exit criteria per the
+plan's own Gate P5.
+
+---
+
 *End of plan. See the companion document `atlas-phase3-findings-register.md` for the complete per-finding detail (locations, evidence, verification status) behind every task above.*
