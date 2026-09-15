@@ -16,9 +16,55 @@
 
 import type { DocxBundle } from '../index'
 import type { AbstractNum, NumberingPart, NumInstance } from '../parser/numbering'
-import type { LvlDef, NumberingDef } from '../model'
+import type { Document, LvlDef, NumberingDef } from '../model'
 
 export type ListKind = 'bullet' | 'number'
+
+const LIST_FORMAT_BY_KIND: Readonly<Record<ListKind, string>> = {
+  bullet: 'bullet',
+  number: 'decimal',
+}
+
+/**
+ * DXE-06/D18 — picks the `numId` to use for a bullet/numbered list toggle
+ * (the toolbar's, or DXE-19 rich paste's own list support). A real Word
+ * document almost always already defines numId "1" (frequently "2" as well)
+ * for its own lists — hardcoding those values here would mean toggling
+ * "Bulleted List" on such a document silently reuses whatever list style the
+ * document already assigned to numId 1 (rarely an actual bullet format) via
+ * `ensureListNumbering`'s "reuse if already defined" rule, instead of
+ * creating Atlas's own bullet definition.
+ *
+ * Reuses an Atlas-created list definition of the matching kind if one
+ * already exists in this document (identified by the `atlas-list-` prefix
+ * `ensureListNumbering` gives its own `abstractNumId`s, plus a matching
+ * level-0 format) so repeated toggles/pastes of the same kind keep
+ * converging on one shared definition; otherwise allocates one past every
+ * numId already in use, which can never collide with the source document's
+ * own numbering or with a different-kind list Atlas already created in this
+ * session.
+ */
+export function pickListNumId(document: Document, kind: ListKind): number {
+  const wantedFormat = LIST_FORMAT_BY_KIND[kind]
+  let maxNumId = 0
+
+  for (const [numIdStr, def] of document.numbering) {
+    const parsed = Number.parseInt(numIdStr, 10)
+    if (Number.isFinite(parsed) && parsed > maxNumId) {
+      maxNumId = parsed
+    }
+
+    if (
+      Number.isFinite(parsed) &&
+      def.abstractNumId?.startsWith('atlas-list-') === true &&
+      def.levels.get(0)?.format === wantedFormat
+    ) {
+      return parsed
+    }
+  }
+
+  return maxNumId + 1
+}
 
 /**
  * Ensures `bundle.numberingPart` and `bundle.document.numbering` both have an
