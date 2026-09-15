@@ -21,7 +21,7 @@ function renderStats(stats: ViewerStats, formatter: Intl.NumberFormat): string {
     case 'text':
       return `${formatter.format(stats.lines)} lines · ${formatter.format(stats.chars)} chars`;
     case 'document':
-      return `${formatter.format(stats.words)} words · ${formatter.format(stats.pages)} pages`;
+      return `${formatter.format(stats.words)} ${stats.words === 1 ? 'word' : 'words'} · ${formatter.format(stats.pages)} ${stats.pages === 1 ? 'page' : 'pages'}`;
   }
 
   const exhaustiveCheck: never = stats;

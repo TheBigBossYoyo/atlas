@@ -10,16 +10,25 @@ import {
   type TableProps,
 } from '../model'
 
-import { toHighlightColor } from './colorMapping'
+import { toNearestHighlightColor } from './colorMapping'
 import { findEnclosingTable, findParagraph } from './commands'
 import type { EnclosingTable } from './commands'
 import type { Command, Range } from './commandTypes'
+import { buildFormatPatch, isFormatActive, type FormatKey } from './Input'
 import { pickListNumId } from './insertList'
 import { normalizeRange } from './Selection'
 import type { ToolbarCommand } from './toolbar/toolbarTypes'
 
 function getSelectionRange(selection: Range | null): Range | null {
   return selection
+}
+
+function buildToggleCommand(key: FormatKey, range: Range | null, document: Document): Command | null {
+  if (range === null) {
+    return null
+  }
+
+  return { kind: 'apply-run-format', range, format: buildFormatPatch(key, !isFormatActive(range, document, key)) }
 }
 
 function getPrimaryParagraphPath(selection: Range | null): ReadonlyArray<number> | null {
@@ -62,18 +71,42 @@ function getParagraphPaths(
   }
 
   const normalized = normalizeRange(selection)
+  const startPath = normalized.start.paragraphPath
+  // USR-04 — a selection that ends at the very start of the next paragraph
+  // (what a triple-click or a Shift+Down selection produces) does not select
+  // any of that paragraph's content, so paragraph-level commands (alignment,
+  // spacing, lists) must not touch it.
+  const endsAtNextParagraphStart =
+    !pathsEqual(startPath, normalized.end.paragraphPath) &&
+    normalized.end.runIndex === 0 &&
+    normalized.end.charOffset === 0
   const allPaths = collectTopLevelParagraphPaths(document)
-  const startIndex = allPaths.findIndex((path) => pathsEqual(path, normalized.start.paragraphPath))
-  const endIndex = allPaths.findIndex((path) => pathsEqual(path, normalized.end.paragraphPath))
+  const startIndex = allPaths.findIndex((path) => pathsEqual(path, canonicalParagraphPath(startPath, document)))
+  const rawEndIndex = allPaths.findIndex((path) =>
+    pathsEqual(path, canonicalParagraphPath(normalized.end.paragraphPath, document)),
+  )
 
-  if (startIndex === -1 || endIndex === -1) {
-    return pathsEqual(normalized.start.paragraphPath, normalized.end.paragraphPath)
-      ? [normalized.start.paragraphPath]
-      : [normalized.start.paragraphPath, normalized.end.paragraphPath]
+  if (startIndex === -1 || rawEndIndex === -1) {
+    if (endsAtNextParagraphStart || pathsEqual(startPath, normalized.end.paragraphPath)) {
+      return [startPath]
+    }
+    return [startPath, normalized.end.paragraphPath]
   }
 
+  const endIndex = endsAtNextParagraphStart && rawEndIndex > startIndex ? rawEndIndex - 1 : rawEndIndex
   const [lo, hi] = startIndex <= endIndex ? [startIndex, endIndex] : [endIndex, startIndex]
   return allPaths.slice(lo, hi + 1)
+}
+
+/**
+ * The editor addresses a top-level paragraph either as `[blockIndex]` (first
+ * section, what the rendered DOM's `data-paragraph-path` carries) or as
+ * `[sectionIndex, blockIndex]`. `commands.ts`'s resolver accepts both; this
+ * normalizes to the two-segment form `collectTopLevelParagraphPaths` produces
+ * so the range enumeration above can find both endpoints.
+ */
+function canonicalParagraphPath(path: ReadonlyArray<number>, document: Document): ReadonlyArray<number> {
+  return path.length === 1 && document.sections.length > 0 ? [0, path[0]] : path
 }
 
 function toAlignment(align: 'left' | 'center' | 'right' | 'justify'): JustifyContent {
@@ -276,20 +309,15 @@ export function toolbarToCommand(
         },
       }
     }
-    case 'toggle-bold': {
-      const range = getSelectionRange(selection)
-      return range === null ? null : { kind: 'apply-run-format', range, format: { bold: true } }
-    }
-    case 'toggle-italic': {
-      const range = getSelectionRange(selection)
-      return range === null ? null : { kind: 'apply-run-format', range, format: { italic: true } }
-    }
-    case 'toggle-underline': {
-      const range = getSelectionRange(selection)
-      return range === null
-        ? null
-        : { kind: 'apply-run-format', range, format: { underline: { style: 'single' } } }
-    }
+    // USR-03 — toolbar toggles used to always SET the format (bold: true,
+    // underline: single), so clicking Underline on underlined text could
+    // never remove it. They now share the keyboard shortcuts' toggle logic.
+    case 'toggle-bold':
+      return buildToggleCommand('bold', getSelectionRange(selection), document)
+    case 'toggle-italic':
+      return buildToggleCommand('italic', getSelectionRange(selection), document)
+    case 'toggle-underline':
+      return buildToggleCommand('underline', getSelectionRange(selection), document)
     case 'toggle-strike': {
       const range = getSelectionRange(selection)
       return range === null ? null : { kind: 'apply-run-format', range, format: { strike: true } }
@@ -314,7 +342,7 @@ export function toolbarToCommand(
     }
     case 'set-highlight-color': {
       const range = getSelectionRange(selection)
-      const highlight = toHighlightColor(toolbarCmd.colorHex)
+      const highlight = toNearestHighlightColor(toolbarCmd.colorHex)
 
       return range === null || highlight === null
         ? null

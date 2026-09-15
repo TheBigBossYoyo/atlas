@@ -67,6 +67,57 @@ export function toHighlightColor(colorHex: string): HighlightColor | null {
   }
 }
 
+const HIGHLIGHT_RGB: ReadonlyArray<readonly [HighlightColor, number, number, number]> = [
+  ['black', 0, 0, 0],
+  ['blue', 0, 0, 255],
+  ['cyan', 0, 255, 255],
+  ['darkBlue', 0, 0, 139],
+  ['darkCyan', 0, 139, 139],
+  ['darkGray', 169, 169, 169],
+  ['darkGreen', 0, 100, 0],
+  ['darkMagenta', 139, 0, 139],
+  ['darkRed', 139, 0, 0],
+  ['darkYellow', 184, 134, 11],
+  ['green', 0, 255, 0],
+  ['lightGray', 211, 211, 211],
+  ['magenta', 255, 0, 255],
+  ['red', 255, 0, 0],
+  ['white', 255, 255, 255],
+  ['yellow', 255, 255, 0],
+]
+
+/**
+ * USR-08 — the toolbar's highlight picker offers the same free-form swatches
+ * as the font-color picker, so most swatches are not one of `w:highlight`'s
+ * 16 values. Returning `null` for them made the highlight button silently do
+ * nothing; map any valid hex color to the closest highlight value instead.
+ */
+export function toNearestHighlightColor(colorHex: string): HighlightColor | null {
+  const exact = toHighlightColor(colorHex)
+  if (exact !== null) {
+    return exact
+  }
+
+  const hex = parseCssColor(colorHex)
+  if (hex === null) {
+    return null
+  }
+
+  const r = Number.parseInt(hex.slice(1, 3), 16)
+  const g = Number.parseInt(hex.slice(3, 5), 16)
+  const b = Number.parseInt(hex.slice(5, 7), 16)
+  let best: HighlightColor = 'yellow'
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const [name, hr, hg, hb] of HIGHLIGHT_RGB) {
+    const distance = (r - hr) ** 2 + (g - hg) ** 2 + (b - hb) ** 2
+    if (distance < bestDistance) {
+      best = name
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
 function componentToHex(value: number): string {
   return Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, '0')
 }

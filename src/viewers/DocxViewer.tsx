@@ -83,7 +83,13 @@ import {
 } from '../docx/editor'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
 import { comparePositions } from '../docx/editor/Selection'
-import { domPointToPosition, positionToDomRange } from '../docx/editor/Cursor'
+import {
+  domPointToPosition,
+  paragraphRangeFromClientPoint,
+  positionFromClientPoint,
+  positionToDomRange,
+  wordRangeFromClientPoint,
+} from '../docx/editor/Cursor'
 import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import { TableEditMenuItems } from '../docx/editor/toolbar/TableEditMenuItems'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
@@ -117,6 +123,11 @@ function clampZoom(zoom: number): number {
 /** D12/DXE-03 — keys whose native contentEditable behavior always mutates
  * content; see handleKeyDownEvent's preventDefault-safety comment. */
 const MUTATING_KEYS: ReadonlySet<string> = new Set(['Backspace', 'Delete', 'Enter', 'Tab'])
+
+/** USR-07/USR-09 — navigation keys the model does not handle yet (vertical
+ * movement needs layout), so the browser moves the caret and the DOM
+ * selection is read back on keyup. Every other key keeps the model range. */
+const NATIVE_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
 
 const DEFAULT_FONT_METRICS: FontMetrics = Object.freeze({
   unitsPerEm: 1000,
@@ -604,6 +615,42 @@ function getSelectionFromDom(root: HTMLElement): Range | null {
   return anchor && focus ? { anchor, focus } : null
 }
 
+const SELECTION_HIGHLIGHT_NAME = 'docx-selection'
+
+type HighlightRegistry = { set: (name: string, highlight: unknown) => void; delete: (name: string) => void }
+type HighlightConstructor = new (...ranges: globalThis.Range[]) => unknown
+
+/**
+ * USR-06 — paints a model range without touching the DOM selection (and so
+ * without stealing focus), using the CSS Custom Highlight API. `null` clears
+ * it. A no-op where the API is unavailable (e.g. jsdom).
+ */
+function paintSelectionHighlight(root: HTMLElement | null, range: Range | null): void {
+  const registry = (globalThis.CSS as unknown as { highlights?: HighlightRegistry } | undefined)?.highlights
+  const HighlightCtor = (globalThis as unknown as { Highlight?: HighlightConstructor }).Highlight
+  if (registry === undefined || HighlightCtor === undefined) {
+    return
+  }
+  if (root === null || range === null) {
+    registry.delete(SELECTION_HIGHLIGHT_NAME)
+    return
+  }
+  const anchor = positionToDomRange(range.anchor, root)
+  const focus = positionToDomRange(range.focus, root)
+  if (anchor === null || focus === null) {
+    registry.delete(SELECTION_HIGHLIGHT_NAME)
+    return
+  }
+  const domRange = root.ownerDocument.createRange()
+  domRange.setStart(anchor.node, anchor.offset)
+  domRange.setEnd(focus.node, focus.offset)
+  if (domRange.collapsed) {
+    domRange.setStart(focus.node, focus.offset)
+    domRange.setEnd(anchor.node, anchor.offset)
+  }
+  registry.set(SELECTION_HIGHLIGHT_NAME, new HighlightCtor(domRange))
+}
+
 function syncSelectionToDom(root: HTMLElement, range: Range | null): void {
   if (range === null) {
     return
@@ -677,13 +724,25 @@ function DocxEditor({
   file,
   containerRef,
   onBundleChange,
+  onPageCountChange,
 }: {
   bundle: DocxBundle
   file: Extract<ViewerProps['file'], { kind: 'binary' }>
   containerRef: React.RefObject<HTMLDivElement | null>
   onBundleChange: (next: DocxBundle) => void
+  onPageCountChange?: (pageCount: number) => void
 }) {
   const editorRootRef = useRef<HTMLDivElement | null>(null)
+  // USR-05 — pointer selection is driven from the model (see
+  // handleSurfaceMouseDown): the anchor of an in-progress drag selection.
+  const dragAnchorRef = useRef<Range['anchor'] | null>(null)
+  // USR-06 — set by Find next/prev so the post-render selection sync scrolls
+  // the match into view.
+  const revealSelectionRef = useRef(false)
+  // USR-07/USR-09 — whether the last keydown was handled by the model; only
+  // natively-handled navigation keys re-read the DOM selection on keyup, so a
+  // model selection (Ctrl+A, formatting) is never overwritten by a stale DOM.
+  const nativeNavigationKeyRef = useRef(false)
   const historyRef = useRef(new History())
   // DEFER-4 / DXP-13 — this document's own embedded fonts (already
   // de-obfuscated), keyed off the raw archive so switching to a different
@@ -878,6 +937,84 @@ function DocxEditor({
 
     const nextRange = getSelectionFromDom(root)
     setRange(current => (rangeEquals(current, nextRange) ? current : nextRange))
+  }, [])
+
+  /**
+   * USR-04/USR-05 — pointer selection computed from the model layout instead
+   * of the browser's caret placement, which is unreliable on this
+   * absolutely-positioned page layout (a click beside a line used to jump to
+   * another paragraph; a double-click selected one character; a triple-click
+   * spilled into the next paragraph). Single click places the caret (Shift
+   * extends), double-click selects the word, triple-click the paragraph, and
+   * dragging extends from the mousedown anchor.
+   */
+  const handleSurfaceMouseDown = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      const root = editorRootRef.current
+      if (event.button !== 0 || root === null) {
+        return
+      }
+      const target = event.target as HTMLElement
+      if (target.closest('button, input, select, textarea, [role="separator"], [data-resize-handle], .docx-table-resize-handle') !== null) {
+        return
+      }
+
+      event.preventDefault()
+      root.focus({ preventScroll: true })
+
+      if (event.detail >= 3) {
+        const paragraph = paragraphRangeFromClientPoint(event.clientX, event.clientY, root)
+        dragAnchorRef.current = null
+        if (paragraph !== null) {
+          setRange(paragraph)
+        }
+        return
+      }
+
+      if (event.detail === 2) {
+        const word = wordRangeFromClientPoint(event.clientX, event.clientY, root)
+        dragAnchorRef.current = null
+        if (word !== null) {
+          setRange(word)
+        }
+        return
+      }
+
+      const position = positionFromClientPoint(event.clientX, event.clientY, root)
+      if (position === null) {
+        return
+      }
+      const anchor = event.shiftKey && range !== null ? range.anchor : position
+      dragAnchorRef.current = anchor
+      setRange({ anchor, focus: position })
+    },
+    [range],
+  )
+
+  useEffect(() => {
+    const handleMove = (event: MouseEvent): void => {
+      const root = editorRootRef.current
+      const anchor = dragAnchorRef.current
+      if (root === null || anchor === null || (event.buttons & 1) === 0) {
+        return
+      }
+      const focus = positionFromClientPoint(event.clientX, event.clientY, root)
+      if (focus !== null) {
+        setRange((current) => {
+          const next = { anchor, focus }
+          return rangeEquals(current, next) ? current : next
+        })
+      }
+    }
+    const handleUp = (): void => {
+      dragAnchorRef.current = null
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
   }, [])
 
   /**
@@ -1108,9 +1245,16 @@ function DocxEditor({
     [applyEditorCommands, getTrackChanges, handleRichPaste, range],
   )
 
+  // USR-01 — this handler must receive the NATIVE `beforeinput` InputEvent.
+  // React's synthetic `onBeforeInput` is a polyfill built on the legacy
+  // `textInput`/`keypress` events in Chromium/Electron: its nativeEvent has
+  // no `inputType`, so handleBeforeInput matched no case and returned null
+  // while preventDefault() still blocked the browser's own insertion — every
+  // keystroke was silently dropped. It is attached with addEventListener in
+  // the effect right below the surface ref instead of via the React prop.
   const handleBeforeInputEvent = useCallback(
-    (event: FormEvent<HTMLDivElement>) => {
-      const nativeEvent = event.nativeEvent as InputEvent
+    (event: InputEvent) => {
+      const nativeEvent = event
 
       // D12/DXE-03 — this contentEditable's DOM is entirely React-rendered
       // from `documentModel`, so a native mutation must never be allowed to
@@ -1145,6 +1289,24 @@ function DocxEditor({
     [applyResult, composition, documentModel, getTrackChanges, range],
   )
 
+  const beforeInputHandlerRef = useRef(handleBeforeInputEvent)
+  useEffect(() => {
+    beforeInputHandlerRef.current = handleBeforeInputEvent
+  }, [handleBeforeInputEvent])
+
+  useEffect(() => {
+    const surface = editorRootRef.current
+    if (surface === null) {
+      return undefined
+    }
+
+    const listener = (event: Event): void => {
+      beforeInputHandlerRef.current(event as InputEvent)
+    }
+    surface.addEventListener('beforeinput', listener)
+    return () => surface.removeEventListener('beforeinput', listener)
+  }, [])
+
   // Wave F.4 — refs for handlers defined later in this component, so the
   // keyboard-shortcut callback below can reference them without TDZ errors.
   const handlePrintRef = useRef<() => void>(() => {})
@@ -1156,6 +1318,7 @@ function DocxEditor({
       const ctrl = event.ctrlKey || event.metaKey
       const shift = event.shiftKey
       const lowerKey = event.key.toLowerCase()
+      nativeNavigationKeyRef.current = NATIVE_NAVIGATION_KEYS.has(event.key)
 
       // Wave F.4 — MS Word keyboard parity.  Intercept the parity-only
       // shortcuts here BEFORE falling through to the editor's handleKeyDown
@@ -1293,6 +1456,7 @@ function DocxEditor({
 
     const nextMatch = findNext(documentModel, query, options, null)
     if (nextMatch !== null) {
+      revealSelectionRef.current = true
       setRange(nextMatch.range)
     }
   }, [documentModel])
@@ -1304,6 +1468,7 @@ function DocxEditor({
 
     const nextMatch = findNext(documentModel, findQuery, findOptions, range?.focus ?? null)
     if (nextMatch !== null) {
+      revealSelectionRef.current = true
       setRange(nextMatch.range)
     }
   }, [documentModel, findOptions, findQuery, range])
@@ -1315,6 +1480,7 @@ function DocxEditor({
 
     const prevMatch = findPrev(documentModel, findQuery, findOptions, range?.anchor ?? null)
     if (prevMatch !== null) {
+      revealSelectionRef.current = true
       setRange(prevMatch.range)
     }
   }, [documentModel, findOptions, findQuery, range])
@@ -1881,10 +2047,43 @@ function DocxEditor({
 
   useLayoutEffect(() => {
     const root = editorRootRef.current
-    if (root !== null) {
+    if (root === null) {
+      return
+    }
+
+    // USR-06 — placing the DOM selection inside a contentEditable moves
+    // keyboard focus into it in Chromium, which stole focus from the Find
+    // box after the first match (Enter then edited the document). While a
+    // form field outside the editor has focus, paint the model selection with
+    // the CSS Custom Highlight API instead of moving the DOM selection.
+    const activeElement = root.ownerDocument.activeElement
+    const fieldHasFocus =
+      activeElement !== null &&
+      !root.contains(activeElement) &&
+      activeElement.matches('input, textarea, select, [contenteditable="true"]')
+    if (fieldHasFocus) {
+      paintSelectionHighlight(root, range)
+    } else {
+      paintSelectionHighlight(root, null)
       syncSelectionToDom(root, range)
     }
+
+    if (revealSelectionRef.current && range !== null) {
+      revealSelectionRef.current = false
+      const point = positionToDomRange(range.focus, root)
+      const node = point?.node ?? null
+      const element = node === null ? null : node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
+      if (element !== null && typeof element.scrollIntoView === 'function') {
+        element.scrollIntoView({ block: 'center', inline: 'nearest' })
+      }
+    }
   }, [pages, range])
+
+  useEffect(() => () => paintSelectionHighlight(null, null), [])
+
+  useEffect(() => {
+    onPageCountChange?.(pages?.length ?? 1)
+  }, [onPageCountChange, pages])
 
   const pageCount = useMemo(
     () => pages?.length ?? (documentModel.sections.length || 1),
@@ -1986,11 +2185,18 @@ function DocxEditor({
           contentEditable
           suppressContentEditableWarning
           spellCheck={spellCheckEnabled}
-          onBeforeInput={handleBeforeInputEvent}
           onKeyDown={handleKeyDownEvent}
-          onMouseUp={() => syncRangeFromDom()}
-          onKeyUp={() => syncRangeFromDom()}
-          onFocus={() => syncRangeFromDom()}
+          onMouseDown={handleSurfaceMouseDown}
+          onKeyUp={() => {
+            if (nativeNavigationKeyRef.current) {
+              syncRangeFromDom()
+            }
+          }}
+          onFocus={() => {
+            if (range === null) {
+              syncRangeFromDom()
+            }
+          }}
           onCompositionStart={handleCompositionStart}
           onCompositionUpdate={handleCompositionUpdate}
           onCompositionEnd={handleCompositionEnd}
@@ -2127,6 +2333,9 @@ function DocxEditor({
 function DocxViewerBase({ file }: ViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [bundle, setBundle] = useState<DocxBundle | null>(null)
+  // USR-13 — the status bar used the section count as the page count; the
+  // editor reports the real paginated page count instead.
+  const [layoutPageCount, setLayoutPageCount] = useState<number | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
@@ -2206,9 +2415,9 @@ function DocxViewerBase({ file }: ViewerProps) {
     setStats({
       kind: 'document',
       words: metrics.words,
-      pages: documentModel.sections.length || 1,
+      pages: layoutPageCount ?? (documentModel.sections.length || 1),
     })
-  }, [documentModel, metrics, setStats])
+  }, [documentModel, layoutPageCount, metrics, setStats])
 
   if (file.kind === 'text') {
     return <div className="docx-viewer docx-viewer--error">Unexpected text file routed to DocxViewer.</div>
@@ -2223,7 +2432,7 @@ function DocxViewerBase({ file }: ViewerProps) {
 
   return (
     <div ref={containerRef} className="docx-viewer">
-      {bundle !== null ? <DocxEditor bundle={bundle} file={file} containerRef={containerRef} onBundleChange={setBundle} /> : null}
+      {bundle !== null ? <DocxEditor bundle={bundle} file={file} containerRef={containerRef} onBundleChange={setBundle} onPageCountChange={setLayoutPageCount} /> : null}
     </div>
   )
 }

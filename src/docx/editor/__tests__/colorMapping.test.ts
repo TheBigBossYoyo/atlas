@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseCssColor, toHighlightColor } from '../colorMapping'
+import { parseCssColor, toHighlightColor, toNearestHighlightColor } from '../colorMapping'
+
+describe('toNearestHighlightColor (USR-08)', () => {
+  it('keeps exact highlight swatches', () => {
+    expect(toNearestHighlightColor('#FFFF00')).toBe('yellow')
+  })
+
+  it('maps arbitrary picker colors to the closest highlight instead of null', () => {
+    expect(toNearestHighlightColor('#123456')).toBe('darkBlue')
+    expect(toNearestHighlightColor('#fbbc04')).toBe('yellow')
+    expect(toNearestHighlightColor('#b0800f')).toBe('darkYellow')
+    expect(toNearestHighlightColor('not-a-color')).toBeNull()
+  })
+})
 
 describe('toHighlightColor', () => {
   it('maps a known swatch hex to its highlight name', () => {

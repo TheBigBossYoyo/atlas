@@ -602,9 +602,17 @@ export const PageView: React.FC<PageViewProps> = ({
             const width = stretchableIndices.has(idx)
               ? item.width + line.justificationStretch
               : item.width;
+            // USR-05 — spaces carry the same run/char addressing as words so
+            // a selection or caret that starts/ends on a space maps back to a
+            // model position (unaddressed spaces made such selections resolve
+            // to null, silently dropping formatting commands).
             const spaceSpan = (
               <span
                 key={idx}
+                className="docx-space"
+                data-run-index={item.runIndex}
+                data-char-start={item.charOffset}
+                data-char-end={item.charOffset + 1}
                 style={{ display: 'inline-block', width: `${width}px`, whiteSpace: 'pre' }}
               >
                 {' '}
@@ -616,6 +624,10 @@ export const PageView: React.FC<PageViewProps> = ({
             return (
               <span
                 key={idx}
+                className="docx-tab"
+                data-run-index={item.runIndex}
+                data-char-start={item.charOffset}
+                data-char-end={item.charOffset + 1}
                 style={{
                   display: 'inline-block',
                   width: `${item.width}px`,

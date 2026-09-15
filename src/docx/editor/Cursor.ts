@@ -362,7 +362,27 @@ export function domPointToPosition(
   return null
 }
 
+/**
+ * USR-06 — model positions address a first-section paragraph either as
+ * `[blockIndex]` (what the rendered DOM carries) or as `[0, blockIndex]`
+ * (what Find, the toolbar and several commands produce). Try the position as
+ * given, then without the leading section 0, so both forms map to the DOM.
+ */
 export function positionToDomRange(
+  position: Position,
+  root: HTMLElement,
+): Readonly<{
+  node: Node
+  offset: number
+}> | null {
+  const direct = positionToDomRangeForPath(position, root)
+  if (direct !== null || position.paragraphPath.length < 2 || position.paragraphPath[0] !== 0) {
+    return direct
+  }
+  return positionToDomRangeForPath({ ...position, paragraphPath: position.paragraphPath.slice(1) }, root)
+}
+
+function positionToDomRangeForPath(
   position: Position,
   root: HTMLElement,
 ): Readonly<{
@@ -375,7 +395,13 @@ export function positionToDomRange(
   }))
 
   if (fragments.length === 0) {
-    return null
+    // An empty paragraph renders a line with no run spans: anchor the DOM
+    // point on the line element itself so caret/selection sync still works.
+    const emptyLine = findLineElements(root).find((line) => {
+      const linePath = parseParagraphPath(line.dataset.paragraphPath)
+      return linePath !== null && paragraphPathsEqual(linePath, position.paragraphPath)
+    })
+    return emptyLine === undefined ? null : { node: emptyLine, offset: 0 }
   }
 
   const explicitFragments = fragments.filter((fragment) => fragment.metrics.start !== null)
@@ -409,6 +435,155 @@ export function positionToDomRange(
 
   const lastFragment = fragments[fragments.length - 1]
   return resolveDomPointWithin(lastFragment.element, lastFragment.metrics.length)
+}
+
+// ─── Pointer hit-testing (USR-04 / USR-05) ────────────────────────────────────
+
+export type PointerRange = Readonly<{ anchor: Position; focus: Position }>
+
+type LineHit = Readonly<{
+  line: HTMLElement
+  paragraphPath: ReadonlyArray<number>
+  spans: ReadonlyArray<HTMLElement>
+}>
+
+function findLineElements(root: ParentNode): ReadonlyArray<HTMLElement> {
+  return Array.from(root.querySelectorAll<HTMLElement>('.docx-page__line[data-paragraph-path]'))
+}
+
+function spanPosition(span: HTMLElement, paragraphPath: ReadonlyArray<number>, atEnd: boolean): Position | null {
+  const runIndex = parseInteger(span.dataset.runIndex)
+  const metrics = getCharMetrics(span)
+  if (runIndex === null || metrics.start === null) {
+    return null
+  }
+  return { paragraphPath, runIndex, charOffset: atEnd ? metrics.start + metrics.length : metrics.start }
+}
+
+/**
+ * The rendered line closest to a client point: the line whose vertical band
+ * contains `y` (nearest horizontally when several do, e.g. multi-column
+ * pages), otherwise the line with the smallest vertical distance.
+ */
+function hitLine(x: number, y: number, root: HTMLElement): LineHit | null {
+  let best: { line: HTMLElement; score: number } | null = null
+  for (const line of findLineElements(root)) {
+    const rect = line.getBoundingClientRect()
+    if (rect.height === 0 && rect.width === 0) {
+      continue
+    }
+    const dy = y < rect.top ? rect.top - y : y > rect.bottom ? y - rect.bottom : 0
+    const dx = x < rect.left ? rect.left - x : x > rect.right ? x - rect.right : 0
+    const score = dy * 1000 + dx
+    if (best === null || score < best.score) {
+      best = { line, score }
+    }
+  }
+  if (best === null) {
+    return null
+  }
+  const paragraphPath = parseParagraphPath(best.line.dataset.paragraphPath)
+  if (paragraphPath === null) {
+    return null
+  }
+  const spans = Array.from(best.line.querySelectorAll<HTMLElement>('[data-run-index][data-char-start]'))
+  return { line: best.line, paragraphPath, spans }
+}
+
+function offsetWithinSpan(span: HTMLElement, x: number): number {
+  const metrics = getCharMetrics(span)
+  const text = span.firstChild
+  if (text === null || text.nodeType !== Node.TEXT_NODE || metrics.length === 0) {
+    const rect = span.getBoundingClientRect()
+    return x > rect.left + rect.width / 2 ? metrics.length : 0
+  }
+  const ownerDocument = span.ownerDocument
+  const range = ownerDocument.createRange()
+  const length = Math.min(metrics.length, text.textContent?.length ?? 0)
+  for (let index = 0; index < length; index += 1) {
+    range.setStart(text, index)
+    range.setEnd(text, index + 1)
+    const rect = range.getBoundingClientRect()
+    if (x < rect.left + rect.width / 2) {
+      return index
+    }
+  }
+  return length
+}
+
+/**
+ * Model position for a click at client coordinates. Unlike the browser's own
+ * caret placement on this absolutely-positioned layout, a click to the right
+ * of a line lands at the end of THAT line, to the left at its start, and a
+ * click between lines on the nearest line.
+ */
+export function positionFromClientPoint(x: number, y: number, root: HTMLElement): Position | null {
+  const hit = hitLine(x, y, root)
+  if (hit === null) {
+    return null
+  }
+  if (hit.spans.length === 0) {
+    return { paragraphPath: hit.paragraphPath, runIndex: 0, charOffset: 0 }
+  }
+
+  const first = hit.spans[0]
+  const last = hit.spans[hit.spans.length - 1]
+  if (x <= first.getBoundingClientRect().left) {
+    return spanPosition(first, hit.paragraphPath, false)
+  }
+  if (x >= last.getBoundingClientRect().right) {
+    return spanPosition(last, hit.paragraphPath, true)
+  }
+
+  for (const span of hit.spans) {
+    const rect = span.getBoundingClientRect()
+    if (x <= rect.right) {
+      const start = spanPosition(span, hit.paragraphPath, false)
+      if (start === null) {
+        return null
+      }
+      return { ...start, charOffset: start.charOffset + offsetWithinSpan(span, x) }
+    }
+  }
+  return spanPosition(last, hit.paragraphPath, true)
+}
+
+/** The word (or whitespace run) under a client point, for double-click. */
+export function wordRangeFromClientPoint(x: number, y: number, root: HTMLElement): PointerRange | null {
+  const hit = hitLine(x, y, root)
+  if (hit === null || hit.spans.length === 0) {
+    const caret = positionFromClientPoint(x, y, root)
+    return caret === null ? null : { anchor: caret, focus: caret }
+  }
+  const target =
+    hit.spans.find((span) => {
+      const rect = span.getBoundingClientRect()
+      return x >= rect.left && x <= rect.right
+    }) ?? (x < hit.spans[0].getBoundingClientRect().left ? hit.spans[0] : hit.spans[hit.spans.length - 1])
+  const anchor = spanPosition(target, hit.paragraphPath, false)
+  const focus = spanPosition(target, hit.paragraphPath, true)
+  return anchor === null || focus === null ? null : { anchor, focus }
+}
+
+/** The whole paragraph under a client point (all of its lines), for triple-click. */
+export function paragraphRangeFromClientPoint(x: number, y: number, root: HTMLElement): PointerRange | null {
+  const hit = hitLine(x, y, root)
+  if (hit === null) {
+    return null
+  }
+  const spans = findLineElements(root)
+    .filter((line) => {
+      const linePath = parseParagraphPath(line.dataset.paragraphPath)
+      return linePath !== null && paragraphPathsEqual(linePath, hit.paragraphPath)
+    })
+    .flatMap((line) => Array.from(line.querySelectorAll<HTMLElement>('[data-run-index][data-char-start]')))
+  if (spans.length === 0) {
+    const empty = { paragraphPath: hit.paragraphPath, runIndex: 0, charOffset: 0 }
+    return { anchor: empty, focus: empty }
+  }
+  const anchor = spanPosition(spans[0], hit.paragraphPath, false)
+  const focus = spanPosition(spans[spans.length - 1], hit.paragraphPath, true)
+  return anchor === null || focus === null ? null : { anchor, focus }
 }
 
 export function findPositionAtClientPoint(

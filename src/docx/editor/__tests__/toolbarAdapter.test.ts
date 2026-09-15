@@ -483,6 +483,29 @@ describe('toolbarToCommand', () => {
     expect(command).toMatchObject({ kind: 'apply-para-format', paragraphPaths: [[0, 0], [0, 1]] })
   })
 
+  it('USR-04: a selection ending at the start of the next paragraph does not align that paragraph', () => {
+    const document = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('Title')]) }) as Paragraph,
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('Body')]) }) as Paragraph,
+    ])
+    // What a triple-click on the title line used to produce: [1] offset 0.
+    const range: Range = { anchor: pos([0], 0, 0), focus: pos([1], 0, 0) }
+
+    const command = toolbarToCommand({ kind: 'set-alignment', align: 'right' }, range, document)
+
+    expect(command).toMatchObject({ kind: 'apply-para-format', paragraphPaths: [[0, 0]] })
+  })
+
+  it('USR-03: toolbar underline removes underline from already-underlined text', () => {
+    const underlined: Run = Object.freeze({ ...createRun('Hello'), props: Object.freeze({ underline: { style: 'single' } }) }) as Run
+    const document = createDocument([Object.freeze({ kind: 'paragraph', children: Object.freeze([underlined]) }) as Paragraph])
+    const range: Range = { anchor: pos([0, 0], 0, 0), focus: pos([0, 0], 0, 5) }
+
+    const command = toolbarToCommand({ kind: 'toggle-underline' }, range, document)
+
+    expect(command).toEqual({ kind: 'apply-run-format', range, format: { underline: undefined } })
+  })
+
   // ---------------------------------------------------------------------------
   // Regression — a real Word document almost always already defines its own
   // numId "1" (and often "2"). Hardcoding those for the toolbar's list

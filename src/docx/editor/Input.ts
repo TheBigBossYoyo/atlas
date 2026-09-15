@@ -343,7 +343,7 @@ function wordBoundaryAfter(pos: Position, doc: Document): Position | null {
 
 // ─── Format toggle ────────────────────────────────────────────────────────────
 
-type FormatKey = 'bold' | 'italic' | 'underline'
+export type FormatKey = 'bold' | 'italic' | 'underline'
 
 function positionToFlatOffset(runs: ReadonlyArray<EditableRun>, pos: Position): number {
   let offset = 0
@@ -353,7 +353,7 @@ function positionToFlatOffset(runs: ReadonlyArray<EditableRun>, pos: Position): 
   return offset + pos.charOffset
 }
 
-function isFormatActive(range: Range, doc: Document, key: FormatKey): boolean {
+export function isFormatActive(range: Range, doc: Document, key: FormatKey): boolean {
   const para = findParagraph(doc, range.anchor.paragraphPath)
   if (!para) return false
   // only works within a single paragraph (cross-paragraph format is not yet supported)
@@ -383,7 +383,7 @@ function isFormatActive(range: Range, doc: Document, key: FormatKey): boolean {
   return true
 }
 
-function buildFormatPatch(key: FormatKey, turnOn: boolean): Partial<RunProps> {
+export function buildFormatPatch(key: FormatKey, turnOn: boolean): Partial<RunProps> {
   if (key === 'underline') {
     if (turnOn) {
       const u: Underline = { style: 'single' }
@@ -407,7 +407,10 @@ function applyFormatToggle(
   try {
     const result = applyCommand(doc, cmd)
     history.push(result.inverse)
-    return { document: result.document, range }
+    // USR-09 — formatting splits runs, so the pre-command range addresses
+    // stale run indices; keep the command's re-mapped selection instead
+    // (returning the old one collapsed the visible selection).
+    return { document: result.document, range: result.range ?? range }
   } catch {
     return null
   }

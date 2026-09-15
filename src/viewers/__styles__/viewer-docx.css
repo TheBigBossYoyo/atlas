@@ -352,3 +352,9 @@
   z-index: 1001;
   margin: 0;
 }
+
+/* USR-06 - model selection painted while focus is in the Find box (see paintSelectionHighlight). */
+::highlight(docx-selection) {
+  background-color: rgba(59, 130, 246, 0.35);
+}
+
