@@ -1281,6 +1281,49 @@ describe('paginate — endnotes (D11 milestone 4)', () => {
     expect(allWords).toContain('Endnote')
     expect(allWords).toContain('body')
   })
+
+  it('resets endnote numbering at the start of each section (eachSect restart)', async () => {
+    const pages = await paginate({
+      document: createDocument(
+        [
+          createSection([createEndnoteRefParagraph('First', 'en1')], { pageHeightPt: 200 }),
+          createSection([createEndnoteRefParagraph('Second', 'en2')], { pageHeightPt: 200, type: 'nextPage' }),
+        ],
+        undefined,
+        undefined,
+        {
+          endnotes: new Map([
+            ['en1', createEndnote('en1', 'One')],
+            ['en2', createEndnote('en2', 'Two')],
+          ]),
+        },
+      ),
+      fontResolver: createFontResolver(),
+      endnoteNumbering: { restart: 'eachSect' },
+    })
+
+    // Endnotes flow through the ordinary body pipeline (unlike footnotes),
+    // so `column.lines` holds BOTH each paragraph's own inline reference
+    // mark and the endnote listing's leading marker at the end of the
+    // document. Filter to just the listing markers (tagged with the
+    // synthetic `MARKER_RUN_INDEX`, exactly like a list marker or a
+    // footnote's own leading mark — see `buildNoteMarkerLeadingItems`) so
+    // this only asserts on the endnote listing's own displayed numbers.
+    const markerTexts = pages
+      .flatMap((page) => page.columns.flatMap((column) => column.lines))
+      .flatMap((lineRef) => lineRef.line.items)
+      .filter(
+        (item): item is Extract<LineItem, { kind: 'word' }> =>
+          item.kind === 'word' && item.runIndex === MARKER_RUN_INDEX && item.noteRef?.kind === 'endnote',
+      )
+      .map((item) => item.text)
+
+    // Both listing entries show mark "1": each is the first (and only)
+    // endnote reference in its own section, and 'eachSect' resets the
+    // counter at every section boundary — without the fix this reads
+    // ["1", "2"] (continuous numbering) instead.
+    expect(markerTexts).toEqual(['1', '1'])
+  })
 })
 
 function lineText(line: LineBox | undefined): string {

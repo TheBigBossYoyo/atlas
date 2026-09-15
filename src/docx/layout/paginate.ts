@@ -34,6 +34,7 @@ import {
   collectNoteReferences,
   createNoteNumberingState,
   renumberFootnotesEachPage,
+  resetEndnoteCounter,
   resetFootnoteCounter,
   type NoteNumberingState,
 } from './noteNumbering'
@@ -240,6 +241,14 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
   // below rather than replacing this state object.
   const noteState = createNoteNumberingState()
   const footnoteRestart = input.footnoteNumbering?.restart ?? 'continuous'
+  // Endnotes only ever support 'continuous'/'eachSect' in practice (Word's
+  // own "Endnote numbering" option omits "restart each page" entirely,
+  // unlike its footnote counterpart) — and structurally couldn't mean
+  // anything else here regardless: endnotes are placed once, together, at
+  // the very end of the whole document (`placeEndnotes`, after this loop),
+  // never per-page, so there is no "page" for an `eachPage` reset to key
+  // off. An `eachPage` value is therefore treated the same as `continuous`.
+  const endnoteRestart = input.endnoteNumbering?.restart === 'eachSect' ? 'eachSect' : 'continuous'
 
   // Carries across the `for` loop below (rather than being section-local)
   // so a 'continuous'/'nextColumn' section break (D9) can keep flowing
@@ -262,6 +271,10 @@ export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Pag
       // against before the post-layout `applyEachPageFootnoteRestart` pass
       // relabels the displayed text per page.
       resetFootnoteCounter(noteState, input.footnoteNumbering?.start ?? 1)
+    }
+
+    if (endnoteRestart === 'eachSect') {
+      resetEndnoteCounter(noteState, input.endnoteNumbering?.start ?? 1)
     }
 
     const sectionFootnoteIds: string[] = []
