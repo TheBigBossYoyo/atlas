@@ -971,4 +971,16 @@ plan's own Gate P5.
 
 ---
 
+## 14. Owner-Reported DOCX Editor Issues — Wave 4 Top Priority (2026-09-15)
+
+After installing Atlas 3.1.0 (`487d9fc`), the owner tested the DOCX editor on a real document and reported 12 problems; two more are visible in the owner's screenshots. They are recorded as **USR-01…USR-14** in Section 14 of `atlas-phase3-findings-register.md` (symptom, expected behavior, fix direction). **Status: recorded, fix NOT started** — per the owner's instruction, nothing is launched until the owner says go.
+
+**Headline:** the most basic editing flow is broken — **typing does not insert text (USR-01, CRITICAL)**, Ctrl+Y pastes unrelated content (USR-02), underline can't be removed even with undo (USR-03), alignment leaks into the next paragraph (USR-04), caret placement/selection rendering is unreliable (USR-05), Ctrl+F doesn't navigate (USR-06), Ctrl+A and highlight don't work (USR-07, USR-08). These outrank every other wave-4 item.
+
+**Planned task (wave 4, runs first / alone on the DOCX editor):** `docx-editor-ux` — reproduce each USR item with a Playwright scenario against a temp copy of the owner's document (plus corpus fixtures), fix in priority order (USR-01 → USR-08, then USR-09…USR-14), and keep the scenarios as permanent e2e regression tests (typing, selection, Ctrl+A/B/I/U/Y/Z/F, alignment, highlight, underline toggle, find navigation). The toolbar redesign (USR-12) and the system font list (USR-11) are part of the same task. Because this task owns `src/docx/editor/**`, `DocxViewer.tsx` and the DOCX toolbar, the previously planned `docx-hf-editing` (D29) moves after it rather than running in parallel.
+
+**Process lesson:** 2527 unit tests and a green CI did not catch that typing was broken. Every future DOCX-editor change must pass real-editor e2e scenarios before merge; the release checklist (P5.3) gains a manual "open a real DOCX, type, format, save, reopen" step.
+
+---
+
 *End of plan. See the companion document `atlas-phase3-findings-register.md` for the complete per-finding detail (locations, evidence, verification status) behind every task above.*
