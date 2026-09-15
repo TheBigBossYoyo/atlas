@@ -337,11 +337,17 @@ function trimRuns(runs: ReadonlyArray<ParsedRun>): ReadonlyArray<ParsedRun> {
 // Internals — misc
 // ---------------------------------------------------------------------------
 
-function hasAnyFormat(format: Partial<RunProps>): boolean {
+/** Exported for reuse by `pasteRich.ts` (DXE-19) — genuinely generic across
+ * any `Partial<RunProps>`-shaped format, not specific to this module's own
+ * `ParsedRun`. */
+export function hasAnyFormat(format: Partial<RunProps>): boolean {
   return Object.keys(format).length > 0
 }
 
-function positionsEqual(a: Position, b: Position): boolean {
+/** Exported for reuse by `pasteRich.ts` (DXE-19), which needs the same
+ * "is this a real (non-collapsed) selection" check `buildPasteCommands`
+ * already does before deciding whether to prefix a `delete-range`. */
+export function positionsEqual(a: Position, b: Position): boolean {
   if (a.runIndex !== b.runIndex || a.charOffset !== b.charOffset) {
     return false
   }
@@ -356,7 +362,9 @@ function positionsEqual(a: Position, b: Position): boolean {
   return true
 }
 
-function comparePositions(a: Position, b: Position): number {
+/** Exported for reuse by `pasteRich.ts` (DXE-19), which needs to order an
+ * arbitrary anchor/focus pair exactly like `orderedStart` below does. */
+export function comparePositions(a: Position, b: Position): number {
   const len = Math.max(a.paragraphPath.length, b.paragraphPath.length)
   for (let i = 0; i < len; i += 1) {
     const av = a.paragraphPath[i] ?? -1
@@ -371,21 +379,36 @@ function comparePositions(a: Position, b: Position): number {
   return a.charOffset - b.charOffset
 }
 
-function orderedStart(range: Range): Position {
+/** Exported for reuse by `pasteRich.ts` (DXE-19). */
+export function orderedStart(range: Range): Position {
   return comparePositions(range.anchor, range.focus) <= 0 ? range.anchor : range.focus
 }
 
-function startOfNextParagraph(pos: Position): Position {
+/**
+ * The start of the sibling block `delta` positions after `pos`'s own block
+ * (an `insert-paragraph-break` creates exactly 2 siblings — before/after —
+ * so text continuing after one always wants `delta: 1`; `pasteRich.ts`'s
+ * table insertion creates 3 — before/table/after — so content continuing
+ * after a pasted table wants `delta: 2`). Exported alongside
+ * `startOfNextParagraph` (which is just this with `delta: 1`) rather than
+ * only as that thin wrapper, since `pasteRich.ts` is the one caller that
+ * actually needs `delta: 2`.
+ */
+export function advanceSiblingPosition(pos: Position, delta: number): Position {
   const path = [...pos.paragraphPath]
   if (path.length === 0) {
-    return { paragraphPath: Object.freeze([0]), runIndex: 0, charOffset: 0 }
+    return { paragraphPath: Object.freeze([delta]), runIndex: 0, charOffset: 0 }
   }
-  path[path.length - 1] = (path[path.length - 1] ?? 0) + 1
+  path[path.length - 1] = (path[path.length - 1] ?? 0) + delta
   return {
     paragraphPath: Object.freeze(path),
     runIndex: 0,
     charOffset: 0,
   }
+}
+
+function startOfNextParagraph(pos: Position): Position {
+  return advanceSiblingPosition(pos, 1)
 }
 
 function getDomParser(): DOMParser | null {
