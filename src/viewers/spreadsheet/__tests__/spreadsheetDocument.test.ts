@@ -222,6 +222,18 @@ describe('setCellValue', () => {
     setCellValue(original, 0, 0, 0, 'changed')
     expect(original.sheets[0].rows).toEqual(originalRows)
   })
+
+  it('keeps every untouched row\'s exact array reference (perf: no O(rows) copy for one cell)', () => {
+    const original = basicDoc()
+    const doc = setCellValue(original, 0, 1, 0, 'Carol')
+    // Row 1 (the edited one) is a fresh array; rows 0 and 2 must be the
+    // EXACT SAME reference as before — cloning every row of a 100k-row
+    // sheet to change one cell does not scale (see the function's own
+    // header comment).
+    expect(doc.sheets[0].rows[0]).toBe(original.sheets[0].rows[0])
+    expect(doc.sheets[0].rows[2]).toBe(original.sheets[0].rows[2])
+    expect(doc.sheets[0].rows[1]).not.toBe(original.sheets[0].rows[1])
+  })
 })
 
 describe('insertRowAt / deleteRowAt', () => {
@@ -461,6 +473,14 @@ describe('pasteRange', () => {
     const doc = pasteRange(basicDoc(), 0, 1, 1, [['=1+1']])
     expect(doc.sheets[0].formulas[1][1]).toBe('1+1')
     expect(doc.sheets[0].rows[1][1]).toBe('2')
+  })
+
+  it('keeps rows outside the pasted block\'s exact array reference when the paste stays within bounds (perf)', () => {
+    const original = basicDoc()
+    // Pastes into row 1 only; row 0 is untouched and colCount doesn't grow.
+    const doc = pasteRange(original, 0, 1, 0, [['X', 'Y']])
+    expect(doc.sheets[0].rows[0]).toBe(original.sheets[0].rows[0])
+    expect(doc.sheets[0].rows[1]).not.toBe(original.sheets[0].rows[1])
   })
 })
 

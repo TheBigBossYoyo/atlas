@@ -133,7 +133,13 @@ function replaceSheet(doc: SpreadsheetDocument, sheetIndex: number, sheet: Edita
  * formulas at all — so the common "no formulas in this sheet" case must not
  * pay for an O(rows) copy of every row it never needed. `rows` therefore
  * stays `null` (and the original `sheet` is returned unchanged) until a
- * formula cell is actually found; only then is the copy-on-write triggered.
+ * formula cell is actually found; only then is the copy-on-write triggered —
+ * and even then, only the specific ROW a formula cell was found in is ever
+ * cloned (`rowCopied`, below). Every other row keeps its exact original
+ * array reference. This matters because `setCellValue` calls this after
+ * EVERY keystroke-commit: a sheet with even a single formula cell anywhere
+ * would otherwise pay an O(rows × cols) copy on every unrelated edit
+ * elsewhere in a 100k-row sheet, not just the O(rows) the edit itself needs.
  */
 export function recalculateSheet(sheet: EditableSheet): EditableSheet {
   let rows: string[][] | null = null
@@ -141,10 +147,19 @@ export function recalculateSheet(sheet: EditableSheet): EditableSheet {
 
   for (let r = 0; r < sheet.formulas.length; r++) {
     const formulaRow = sheet.formulas[r]
+    let rowCopied = false
     for (let c = 0; c < formulaRow.length; c++) {
       const formula = formulaRow[c]
       if (formula === undefined) continue
-      if (rows === null) rows = sheet.rows.map((row) => [...row])
+      // Outer array only, on first formula cell found anywhere in the sheet
+      // — every row still points at `sheet.rows`' own (readonly-typed, but
+      // never actually written to until `rowCopied` below) array until it's
+      // this row's turn to actually be written to, just below.
+      if (rows === null) rows = sheet.rows.map((row) => row as string[])
+      if (!rowCopied) {
+        rows[r] = [...rows[r]]
+        rowCopied = true
+      }
 
       const result = evaluateFormula(formula, lookup)
       if (result.ok) {
@@ -179,8 +194,15 @@ export function setCellValue(
   }
 
   const isFormula = rawInput.startsWith('=') && rawInput.length > 1
-  const rows = sheet.rows.map((r) => [...r])
-  const formulas = sheet.formulas.map((r) => [...r])
+  // Only the touched row needs a fresh array — every other row keeps its
+  // existing reference (see `recalculateSheet`'s identical note just above:
+  // this is called on every keystroke-commit, so cloning every row of a
+  // 100k-row sheet to change one cell does not scale). The untouched
+  // branch's cast is safe: this function only ever writes into index `row`.
+  const rows: string[][] = sheet.rows.map((r, i) => (i === row ? [...r] : (r as string[])))
+  const formulas: (string | undefined)[][] = sheet.formulas.map((r, i) =>
+    i === row ? [...r] : (r as (string | undefined)[]),
+  )
 
   formulas[row][col] = isFormula ? rawInput.slice(1) : undefined
   // For a formula cell this is immediately overwritten by `recalculateSheet`
@@ -320,19 +342,34 @@ export function pasteRange(
 
   const neededRows = startRow + values.length
   const neededCols = startCol + Math.max(...values.map((r) => r.length), 0)
-
-  const rows = sheet.rows.map((row) => [...row])
-  const formulas = sheet.formulas.map((row) => [...row])
-  while (rows.length < neededRows) {
-    rows.push(emptyRow(Math.max(sheet.colCount, neededCols)))
-    formulas.push(emptyFormulaRow(Math.max(sheet.colCount, neededCols)))
-  }
   const colCount = Math.max(sheet.colCount, neededCols)
-  if (colCount > sheet.colCount) {
-    for (let r = 0; r < rows.length; r++) {
-      while (rows[r].length < colCount) rows[r].push('')
-      while (formulas[r].length < colCount) formulas[r].push(undefined)
-    }
+  // Widening (a paste running past the sheet's right edge) genuinely touches
+  // every existing row's array, since each one needs padding out to the new
+  // width — but the far more common case (pasting within the sheet's
+  // current bounds) doesn't, so only the rows the paste actually WRITES to
+  // get cloned then. Same reasoning as `setCellValue`'s identical comment:
+  // this must not cost an O(rows) clone of a 100k-row sheet to paste one row.
+  const widening = colCount > sheet.colCount
+  const isPastedRow = (i: number): boolean => i >= startRow && i < startRow + values.length
+
+  // The untouched-row casts are safe: the write loop below only ever
+  // indexes into `[startRow, startRow + values.length)`, exactly the rows
+  // this map already clones via `isPastedRow`.
+  const rows: string[][] = sheet.rows.map((row, i) => {
+    if (!widening && !isPastedRow(i)) return row as string[]
+    const next = [...row]
+    while (next.length < colCount) next.push('')
+    return next
+  })
+  const formulas: (string | undefined)[][] = sheet.formulas.map((row, i) => {
+    if (!widening && !isPastedRow(i)) return row as (string | undefined)[]
+    const next = [...row]
+    while (next.length < colCount) next.push(undefined)
+    return next
+  })
+  while (rows.length < neededRows) {
+    rows.push(emptyRow(colCount))
+    formulas.push(emptyFormulaRow(colCount))
   }
 
   for (let r = 0; r < values.length; r++) {
