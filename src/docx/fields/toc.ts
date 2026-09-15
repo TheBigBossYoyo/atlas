@@ -248,6 +248,13 @@ export function updateTableOfContents(
   if (location === undefined) {
     return { document, updated: false }
   }
+  // `w:fldLock` (`Field.locked`): the same "author explicitly froze this
+  // field" reasoning `updateFields.ts` honors for every other field type
+  // applies here too — Word's own "Update Table of Contents" leaves a
+  // locked TOC field's entries untouched rather than regenerating them.
+  if (location.field.locked === true) {
+    return { document, updated: false }
+  }
 
   const options = parseTocOptions(location.field.instruction)
   const entries = collectTocEntries(document, options, pageOf)

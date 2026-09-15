@@ -212,6 +212,25 @@ describe('updateTableOfContents', () => {
     expect(result.document).toBe(document)
   })
 
+  it('returns updated: false and leaves a locked (w:fldLock) TOC field untouched, matching Word\'s own "Update Table of Contents"', () => {
+    const lockedField: Field = { ...makeTocField(), locked: true }
+    const document = makeDocument([
+      {
+        kind: 'section',
+        props: {},
+        blocks: [
+          { kind: 'paragraph', children: [lockedField] },
+          headingParagraph('Introduction', 'Heading1'),
+        ],
+      },
+    ])
+
+    const result = updateTableOfContents(document)
+
+    expect(result.updated).toBe(false)
+    expect(result.document).toBe(document)
+  })
+
   it('replaces the TOC field\'s result with freshly generated entries and clears raw', () => {
     const document = makeDocument([
       {

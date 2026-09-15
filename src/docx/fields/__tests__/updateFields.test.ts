@@ -84,6 +84,16 @@ describe('updateFields', () => {
     ])
   })
 
+  it('leaves a locked (w:fldLock) field completely unchanged, raw included, matching Word\'s own Update Field(s)', () => {
+    const field = makeField({ fieldType: 'AUTHOR', instruction: 'AUTHOR', locked: true })
+    const document = makeDocument([makeSection([makeFieldParagraph(field)])])
+
+    const { document: updated, updatedCount } = updateFields(document, makeContext({ author: 'A. Author' }))
+
+    expect(updatedCount).toBe(0)
+    expect(fieldAt(updated)).toEqual(field)
+  })
+
   it('never touches a TOC field (updateTableOfContents handles those separately)', () => {
     const field = makeField({ fieldType: 'TOC', instruction: 'TOC \\o "1-3"' })
     const document = makeDocument([makeSection([makeFieldParagraph(field)])])

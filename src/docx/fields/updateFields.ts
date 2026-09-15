@@ -201,6 +201,15 @@ function updateField(
   if ((field.fieldType === 'PAGE' || field.fieldType === 'NUMPAGES') && !allowPageFields) {
     return field
   }
+  // `w:fldLock` (`Field.locked`) means the author explicitly froze this
+  // field's cached value (e.g. a signing date that must stop tracking
+  // "today") — real Word's own Update Field(s)/F9 never recalculates a
+  // locked field, so honoring that here isn't optional: silently
+  // overwriting a value the document itself marks as locked would corrupt
+  // exactly the content the lock exists to protect.
+  if (field.locked === true) {
+    return field
+  }
 
   const newText = evaluateFieldText(field, paragraphPath, context)
   if (newText === undefined) {
