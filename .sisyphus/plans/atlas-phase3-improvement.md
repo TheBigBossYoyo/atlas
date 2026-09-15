@@ -979,6 +979,8 @@ After installing Atlas 3.1.0 (`487d9fc`), the owner tested the DOCX editor on a 
 
 **Planned task (wave 4, runs first / alone on the DOCX editor):** `docx-editor-ux` — reproduce each USR item with a Playwright scenario against a temp copy of the owner's document (plus corpus fixtures), fix in priority order (USR-01 → USR-08, then USR-09…USR-14), and keep the scenarios as permanent e2e regression tests (typing, selection, Ctrl+A/B/I/U/Y/Z/F, alignment, highlight, underline toggle, find navigation). The toolbar redesign (USR-12) and the system font list (USR-11) are part of the same task. Because this task owns `src/docx/editor/**`, `DocxViewer.tsx` and the DOCX toolbar, the previously planned `docx-hf-editing` (D29) moves after it rather than running in parallel.
 
+**Other formats (USR-15…USR-19, register §14b):** PowerPoint text is clipped and the slide viewer has no editing or real presentation features (USR-15 HIGH, USR-16 HIGH/XL); **spreadsheet editing does not work at all in 3.1.0 despite shipping in wave 3 (USR-17, CRITICAL)**, including inside Excel tables; code files are a read-only highlighter with no editor features (USR-18 HIGH) and no way to run code (USR-19, security design required). Planned wave-4 tasks: `sheets-editing-fix` (USR-17, runs early — it is a regression of shipped scope), `slides-editor` (USR-15 + USR-16), `code-editor` (USR-18 + USR-19, own npm install for CodeMirror/Monaco).
+
 **Process lesson:** 2527 unit tests and a green CI did not catch that typing was broken. Every future DOCX-editor change must pass real-editor e2e scenarios before merge; the release checklist (P5.3) gains a manual "open a real DOCX, type, format, save, reopen" step.
 
 ---
