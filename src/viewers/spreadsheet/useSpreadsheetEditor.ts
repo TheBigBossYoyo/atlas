@@ -38,6 +38,7 @@ import {
 import { documentToDelimitedText, writeWorkbookBytes } from './spreadsheetWrite'
 import { useUndoableState } from './useUndoableState'
 import { useRegisterViewerSave, useSetViewerDirty } from '../shared/useViewerContext'
+import { useViewerShortcuts } from '../../hooks/useShortcutManager'
 
 export type SpreadsheetSaveTarget =
   | {
@@ -244,6 +245,40 @@ export function useSpreadsheetEditor(
     registerSave(handleSave)
     return () => registerSave(null)
   }, [registerSave, handleSave])
+
+  // Ctrl+Z/Ctrl+Y (and Ctrl+Shift+Z as the common redo alternative) at the
+  // active-viewer shortcut precedence tier (see DocxViewer's identical use
+  // of `useViewerShortcuts` for its own undo/redo) — glide-data-grid's
+  // canvas grid has no native contentEditable undo of its own to fall back
+  // on, so without this, undo/redo only worked by clicking the toolbar
+  // buttons despite being the very first thing a user reaches for. Bails out
+  // for a real `<input>`/`<textarea>` target (the sheet-rename box, the
+  // "Search rows..." field, FrozenRowsStrip's per-cell inputs) so their own
+  // native text-editing undo keeps working instead of being hijacked.
+  useViewerShortcuts(
+    useCallback(
+      (event: KeyboardEvent): boolean => {
+        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+          return false
+        }
+        const ctrl = event.ctrlKey || event.metaKey
+        if (!ctrl) return false
+        const key = event.key.toLowerCase()
+        if (key === 'z' && !event.shiftKey) {
+          event.preventDefault()
+          history.undo()
+          return true
+        }
+        if (key === 'y' || (key === 'z' && event.shiftKey)) {
+          event.preventDefault()
+          history.redo()
+          return true
+        }
+        return false
+      },
+      [history],
+    ),
+  )
 
   return {
     document: history.present,

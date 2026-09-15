@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompactSelection, type EditableGridCell, type GridSelection, type Item } from '@glideapps/glide-data-grid'
 
 import type { LoadedFile } from '../../formats/types'
+import { ShortcutManagerProvider } from '../../hooks/ShortcutManagerProvider'
 import { ViewerProvider } from '../shared/ViewerContext'
 import { CsvViewer } from '../CsvViewer'
 import { TsvViewer } from '../TsvViewer'
@@ -223,5 +224,39 @@ describe('CsvViewer — row insert/delete and undo', () => {
     const undoButton = await screen.findByRole('button', { name: 'Undo' })
     fireEvent.click(undoButton)
     await waitFor(() => expect(gridRows(lastDataEditorProps!)).toEqual([['a'], ['b'], ['c']]))
+  })
+
+  // Regression: the shared `useSpreadsheetEditor` hook's undo/redo was only
+  // reachable via the toolbar buttons, not the standard Ctrl+Z/Ctrl+Y keys —
+  // see the identical test in SpreadsheetViewer.editing.test.tsx, which this
+  // mirrors to confirm the fix (added directly to the shared hook) also
+  // covers CsvViewer.
+  it('Ctrl+Z / Ctrl+Y perform undo/redo, matching the toolbar buttons', async () => {
+    const file: LoadedFile = { kind: 'text', content: 'a\nb\nc\n', path: '/tmp/sample.csv', format: 'csv' }
+    render(
+      <ShortcutManagerProvider>
+        <ViewerProvider filePath={file.path}>
+          <CsvViewer file={file} />
+        </ViewerProvider>
+      </ShortcutManagerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    act(() => editCell(0, 0, 'changed'))
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('changed'))
+
+    const ctrlZ = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true })
+    act(() => {
+      window.dispatchEvent(ctrlZ)
+    })
+    expect(ctrlZ.defaultPrevented).toBe(true)
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('a'))
+
+    const ctrlY = new KeyboardEvent('keydown', { key: 'y', ctrlKey: true, bubbles: true, cancelable: true })
+    act(() => {
+      window.dispatchEvent(ctrlY)
+    })
+    expect(ctrlY.defaultPrevented).toBe(true)
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('changed'))
   })
 })
