@@ -91,7 +91,10 @@ test('DOCX editor: Ctrl+B/Ctrl+E/Ctrl+S do not leak to the shell (sidebar/export
     await expect(page.locator('.docx-find__input[aria-label="Find"]')).toBeVisible({ timeout: 5_000 })
     await expect(page.locator('.search-overlay')).toHaveCount(0)
     await page.keyboard.press('Escape')
-    await expect(page.locator('.docx-find__input[aria-label="Find"]')).toHaveCount(0)
+    // FindReplace stays mounted (its own `open` prop only toggles the
+    // `docx-find--closed` CSS class, matching FindReplace.test.tsx's own
+    // assertions) rather than unmounting — assert hidden, not absent.
+    await expect(page.locator('.docx-find__input[aria-label="Find"]')).not.toBeVisible()
 
     // Ctrl+W (close file) is NOT one of DocxViewer's reserved combos, so it
     // falls through to the shell — but the shell itself skips it while
