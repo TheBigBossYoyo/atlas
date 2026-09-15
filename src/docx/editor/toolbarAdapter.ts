@@ -6,11 +6,11 @@ import {
   type Border,
   type BorderSet,
   type Document,
-  type HighlightColor,
   type JustifyContent,
   type TableProps,
 } from '../model'
 
+import { toHighlightColor } from './colorMapping'
 import { findEnclosingTable, findParagraph } from './commands'
 import type { Command, Range } from './commandTypes'
 import { normalizeRange } from './Selection'
@@ -128,54 +128,6 @@ function toAlignment(align: 'left' | 'center' | 'right' | 'justify'): JustifyCon
       return 'end'
     case 'justify':
       return 'both'
-  }
-}
-
-function toHighlightColor(colorHex: string): HighlightColor | null {
-  switch (colorHex.trim().toLowerCase()) {
-    case '#000000':
-      return 'black'
-    case '#0000ff':
-      return 'blue'
-    case '#00ffff':
-      return 'cyan'
-    case '#00008b':
-      return 'darkBlue'
-    case '#008b8b':
-      return 'darkCyan'
-    case '#a9a9a9':
-    case '#666666':
-      return 'darkGray'
-    case '#006400':
-      return 'darkGreen'
-    case '#8b008b':
-      return 'darkMagenta'
-    case '#8b0000':
-    case '#980000':
-      return 'darkRed'
-    case '#b8860b':
-    case '#ff9900':
-      return 'darkYellow'
-    case '#00ff00':
-      return 'green'
-    case '#d3d3d3':
-    case '#cccccc':
-    case '#d9d9d9':
-    case '#efefef':
-      return 'lightGray'
-    case '#ff00ff':
-      return 'magenta'
-    case 'transparent':
-    case 'none':
-      return 'none'
-    case '#ff0000':
-      return 'red'
-    case '#ffffff':
-      return 'white'
-    case '#ffff00':
-      return 'yellow'
-    default:
-      return null
   }
 }
 
