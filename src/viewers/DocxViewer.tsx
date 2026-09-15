@@ -31,6 +31,7 @@ import {
   type FontVariant,
 } from '../docx/fonts'
 import {
+  collectBookmarkMaps,
   parseCoreProps,
   updateFields,
   updateTableOfContents,
@@ -1533,12 +1534,13 @@ function DocxEditor({
    * PAGE/NUMPAGES; HYPERLINK/TOC/unknown fields are never touched here —
    * see `updateFields`'s doc comment). Author/title come from a light
    * regex read of `docProps/core.xml` (`parseCoreProps`) — Atlas has no
-   * broader docProps model to draw on. Bookmark text/page maps are left
-   * empty for this minimal wiring, so REF/PAGEREF fields specifically are
-   * left unevaluated for now (a known, documented gap — see the branch
-   * report). Applied directly to `documentModel`, bypassing History/undo:
-   * a follow-up could route it through a `replace-blocks`-shaped command
-   * instead, but wiring into the shared editor Command/History system
+   * broader docProps model to draw on. Bookmark text/page maps come from
+   * `collectBookmarkMaps` walking the current `documentModel` (see that
+   * module's doc comment on scope — a bookmark inside a table cell or a
+   * header/footer/footnote/endnote gets its text but no page). Applied
+   * directly to `documentModel`, bypassing History/undo: a follow-up could
+   * route it through a `replace-blocks`-shaped command instead, but wiring
+   * into the shared editor Command/History system
    * (`docx/editor/commandTypes.ts`) is left to wave3/docx-editing's scope.
    */
   const handleUpdateFields = useCallback(() => {
@@ -1546,11 +1548,13 @@ function DocxEditor({
     const coreXml = coreXmlBytes !== undefined ? new TextDecoder().decode(coreXmlBytes) : undefined
     const { author, title } = parseCoreProps(coreXml)
     const pageOfParagraph = pages !== null ? buildPageOfParagraph(pages) : undefined
+    const { bookmarkText, bookmarkPage } = collectBookmarkMaps(documentModel, pageOfParagraph)
 
     const context: FieldEvaluationContext = {
       ...(author !== undefined ? { author } : {}),
       ...(title !== undefined ? { title } : {}),
-      bookmarkText: new Map(),
+      bookmarkText,
+      bookmarkPage,
       ...(pages !== null ? { pageCount: pages.length } : {}),
       ...(pageOfParagraph !== undefined
         ? { currentPageOf: (path: ReadonlyArray<number>) => (path[1] !== undefined ? pageOfParagraph(path[0], path[1]) : undefined) }

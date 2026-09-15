@@ -65,6 +65,47 @@ function authorFieldDocument(): DocxDocument {
   }
 }
 
+function refFieldDocument(): DocxDocument {
+  return {
+    kind: 'document',
+    sections: [
+      {
+        kind: 'section',
+        props: {},
+        blocks: [
+          {
+            kind: 'paragraph',
+            children: [
+              { kind: 'bookmark', id: '1', boundary: 'start', name: '_Ref1' },
+              { kind: 'run', children: [{ kind: 'text', value: 'Section One' }] },
+              { kind: 'bookmark', id: '1', boundary: 'end' },
+            ],
+          },
+          {
+            kind: 'paragraph',
+            children: [
+              {
+                kind: 'field',
+                fieldType: 'REF',
+                instruction: 'REF _Ref1 \\h',
+                result: [{ kind: 'run', children: [{ kind: 'text', value: 'Stale Reference' }] }],
+                raw: '<w:fldSimple w:instr="REF _Ref1 \\h"><w:r><w:t>Stale Reference</w:t></w:r></w:fldSimple>',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    styles: new Map(),
+    numbering: new Map(),
+    headers: new Map(),
+    footers: new Map(),
+    comments: new Map(),
+    footnotes: new Map(),
+    endnotes: new Map(),
+  }
+}
+
 function documentWithNoFields(): DocxDocument {
   return {
     kind: 'document',
@@ -164,6 +205,32 @@ describe('DocxViewer field commands (DEFER-5 / DXS-20)', () => {
     const field = block?.kind === 'paragraph' ? block.children[0] : undefined
     expect(field?.kind === 'field' && field.result).toEqual([
       { kind: 'run', children: [{ kind: 'text', value: 'Real Author' }] },
+    ])
+  })
+
+  it('recalculates a REF field from a bookmark\'s current text, resolved from the live document model', async () => {
+    loadDocxMock.mockResolvedValue({ document: refFieldDocument(), rawArchive: new Map() })
+    renderViewer()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Update fields' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update fields' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Updated 1 field.')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+    const savedBundle = saveDocxMock.mock.calls[0]?.[0]
+    const block = savedBundle?.document.sections[0].blocks[1]
+    const field = block?.kind === 'paragraph' ? block.children[0] : undefined
+    expect(field?.kind === 'field' && field.result).toEqual([
+      { kind: 'run', children: [{ kind: 'text', value: 'Section One' }] },
     ])
   })
 

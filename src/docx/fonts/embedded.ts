@@ -74,7 +74,7 @@ export function loadEmbeddedFonts(
     return []
   }
 
-  const fontTableXml = decodeUtf8(files.get(FONT_TABLE_PART_PATH));
+  const fontTableXml = decodeUtf8(files.get(FONT_TABLE_PART_PATH))
   if (fontTableXml === undefined) {
     return []
   }
