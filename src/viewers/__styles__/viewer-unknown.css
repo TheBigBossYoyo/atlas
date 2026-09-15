@@ -1,18 +1,25 @@
 /* Unknown-format viewer container — mirrors the working .docx-viewer scroll
    pattern (DAT-02 / UX-04): the shared `.content--viewer .preview-panel`
    sets `overflow: hidden`, so the viewer root itself must own scrolling or
-   content past one screen is unreachable. */
+   content past one screen is unreachable.
+   wave-3 shell-polish follow-up: this used to ALSO set padding/align-items/
+   text-align/gap/color that duplicated (and, for padding/gap/color,
+   silently conflicted with) the shared `.viewer-fallback` class it's always
+   combined with in the empty-state view below — which of the two rules won
+   depended on unrelated CSS-chunk load order, so UnknownViewer's empty
+   state could render with different spacing/color than the other
+   `.viewer-fallback` consumers (ViewerLoading, ViewerErrorBoundary) rather
+   than the consistent look UX-17 intended. `.unknown-viewer` now owns only
+   the structural scroll-container shape both of its states actually need;
+   `.viewer-fallback` alone supplies the empty state's padding/gap/color/
+   centering, and `.unknown-viewer--as-text` below supplies what the as-text
+   state needs instead (it never combines with `.viewer-fallback`). */
 .unknown-viewer {
   height: 100%;
   width: 100%;
   overflow: auto;
-  padding: 48px 24px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 8px;
-  color: var(--text-primary);
 }
 
 .unknown-viewer__filename {
@@ -75,7 +82,7 @@
 .unknown-viewer--as-text {
   align-items: stretch;
   text-align: left;
-  padding: 0;
+  color: var(--text-primary);
 }
 
 .unknown-viewer__text-toolbar {
@@ -101,12 +108,27 @@
   word-break: break-all;
 }
 
+.unknown-viewer__text-truncated {
+  margin-left: auto;
+  opacity: 0.65;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* wave-3 shell-polish follow-up — now wraps `VirtualizedPlainText` (a
+   react-window list) instead of a plain `<pre>`, so this is a flex item
+   whose own row list manages its own internal scrolling; `min-height: 0`
+   is required for it to actually shrink to the remaining column height
+   instead of growing to fit all (unrendered) content, per the flexbox
+   automatic-minimum-size rule. */
 .unknown-viewer__text-content {
   flex: 1;
-  margin: 0;
-  padding: 16px;
+  min-height: 0;
   overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--mono-font, monospace);
+}
+
+.unknown-viewer__text-line {
+  padding: 0 16px;
+  font-family: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+  font-size: 0.85rem;
 }

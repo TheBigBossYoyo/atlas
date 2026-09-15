@@ -58,9 +58,36 @@ describe('UnknownViewer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /open as text/i }))
     expect(screen.getByText(text)).toBeInTheDocument()
+    expect(screen.queryByText(/showing the first/i)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /back/i }))
     expect(screen.getByText('README')).toBeInTheDocument()
+  })
+
+  it('caps decoded bytes for an oversized file and shows a truncation notice (wave-3 shell-polish follow-up)', () => {
+    const TEXT_PREVIEW_MAX_BYTES = 5 * 1024 * 1024
+    // One byte over the cap — an "a" repeated, followed by a single
+    // recognizable marker character placed right at the cap boundary so the
+    // test can assert it is NOT present in the decoded preview.
+    const bytes = new Uint8Array(TEXT_PREVIEW_MAX_BYTES + 1).fill(0x61) // 'a'
+    bytes[TEXT_PREVIEW_MAX_BYTES] = 0x5a // 'Z' — one byte past the cap
+
+    render(<UnknownViewer file={makeBinaryFile(Array.from(bytes), 'C:/docs/huge.bin')} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /open as text/i }))
+
+    expect(screen.getByText(/showing the first 5(\.0)? MB only/i)).toBeInTheDocument()
+    // The marker byte just past the cap must never have been decoded.
+    expect(screen.queryByText(/Z/)).not.toBeInTheDocument()
+  })
+
+  it('does not show a truncation notice for a file at or under the cap', () => {
+    const bytes = new Uint8Array(1024).fill(0x61)
+    render(<UnknownViewer file={makeBinaryFile(Array.from(bytes), 'C:/docs/small.bin')} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /open as text/i }))
+
+    expect(screen.queryByText(/showing the first/i)).not.toBeInTheDocument()
   })
 
   it('reveal in folder calls the IPC bridge with the file path', async () => {

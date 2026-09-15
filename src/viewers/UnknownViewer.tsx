@@ -4,11 +4,23 @@ import { FileQuestion, FileWarning, FolderOpen, Type } from 'lucide-react'
 import type { LoadedFile } from '../formats/types'
 import { isLegacyOfficeMagic, guessLegacyOfficeKind, legacyOfficeMessage } from '../formats/legacyOffice'
 import { decodeTextBuffer } from '../utils/textDecoding'
+import { VirtualizedPlainText } from './shared/VirtualizedPlainText'
 import './__styles__/viewer-unknown.css'
 
 type UnknownViewerProps = {
   readonly file: LoadedFile
 }
+
+/**
+ * wave-3 shell-polish follow-up — "Open as text" is a best-effort fallback
+ * for a file Atlas couldn't otherwise identify; it may not be text at all
+ * (a heuristic guess gone wrong) and could be arbitrarily large. Capping how
+ * much of it is ever decoded/rendered bounds both the string-decode cost and
+ * the DOM this view can produce, independent of `VirtualizedPlainText`'s own
+ * row virtualization (which only bounds *mounted* rows, not the decoded
+ * string itself).
+ */
+const TEXT_PREVIEW_MAX_BYTES = 5 * 1024 * 1024 // 5 MiB
 
 function fileNameOf(filePath: string): string {
   return filePath.split(/[\\/]/).pop() ?? filePath
@@ -49,11 +61,14 @@ function UnknownViewerBase({ file }: UnknownViewerProps) {
     return guessLegacyOfficeKind(file.path)
   }, [buffer, file.path])
 
-  const decodedText = useMemo(() => {
+  const isTruncated = Boolean(buffer && buffer.byteLength > TEXT_PREVIEW_MAX_BYTES)
+
+  const decodedLines = useMemo(() => {
     if (!showAsText || !buffer) {
-      return ''
+      return []
     }
-    return decodeTextBuffer(buffer)
+    const preview = buffer.byteLength > TEXT_PREVIEW_MAX_BYTES ? buffer.slice(0, TEXT_PREVIEW_MAX_BYTES) : buffer
+    return decodeTextBuffer(preview).split('\n')
   }, [showAsText, buffer])
 
   const handleRevealInFolder = async () => {
@@ -76,8 +91,17 @@ function UnknownViewerBase({ file }: UnknownViewerProps) {
             Back
           </button>
           <span className="unknown-viewer__text-filename">{fileName}</span>
+          {isTruncated && (
+            <span className="unknown-viewer__text-truncated">
+              Showing the first {formatFileSize(TEXT_PREVIEW_MAX_BYTES)} only
+            </span>
+          )}
         </div>
-        <pre className="unknown-viewer__text-content">{decodedText}</pre>
+        <VirtualizedPlainText
+          lines={decodedLines}
+          className="unknown-viewer__text-content"
+          lineClassName="unknown-viewer__text-line"
+        />
       </div>
     )
   }
