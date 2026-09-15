@@ -43,6 +43,7 @@ import {
   insertHyperlinkIntoBundle,
   insertImageIntoBundle,
   buildPasteCommands,
+  friendlyDocxErrorMessage,
   htmlToParagraphs,
   textToParagraphs,
   toolbarToCommand,
@@ -1271,7 +1272,9 @@ function DocxEditor({
         setLastSavedDocument(documentModel)
         return true
       } catch (error) {
-        setSaveError(error instanceof Error ? error.message : String(error))
+        // RUN-14 — wrap JSZip/fast-xml-parser/DocxSaveError internals in a
+        // friendly, actionable message instead of showing the raw exception.
+        setSaveError(friendlyDocxErrorMessage(error, 'save'))
         return false
       }
     },
@@ -1612,7 +1615,8 @@ function DocxViewerBase({ file }: ViewerProps) {
           setBundle(null)
           setNavItems([])
           setStats(null)
-          setErrorMessage(error instanceof Error ? error.message : String(error))
+          // RUN-14 — see friendlyDocxErrorMessage's own doc comment.
+          setErrorMessage(friendlyDocxErrorMessage(error, 'open'))
         }
       }
     })()
@@ -1667,7 +1671,10 @@ function DocxViewerBase({ file }: ViewerProps) {
   }
 
   if (errorMessage !== null) {
-    return <div className="docx-viewer docx-viewer--error">Failed to render DOCX: {errorMessage}</div>
+    // RUN-14 — errorMessage is already a complete, friendly sentence (see
+    // friendlyDocxErrorMessage), so it's shown as-is rather than appended to
+    // a generic "Failed to render DOCX:" prefix.
+    return <div className="docx-viewer docx-viewer--error">{errorMessage}</div>
   }
 
   return (
