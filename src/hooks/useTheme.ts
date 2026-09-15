@@ -50,7 +50,23 @@ export function useTheme() {
   // Tracks whether the user has ever explicitly picked a theme (ThemeMenu or
   // Ctrl+T) — a ref so the SHELL-25 matchMedia listener below always reads
   // the latest value without needing to re-subscribe every time it changes.
-  const explicitRef = useRef(hasExplicitChoice());
+  //
+  // Lazily initialized (`useRef(undefined)` + a render-time backfill) rather
+  // than `useRef(hasExplicitChoice())`: that argument is a plain expression,
+  // re-evaluated on EVERY render (React only uses its value on the very
+  // first one) — and `hasExplicitChoice()` is side-effecting, persisting
+  // `EXPLICIT_KEY` once it sees a stored theme. The mount effect below
+  // writes `THEME_KEY` right after the first render, so the SECOND render
+  // for any reason at all (an OS-driven theme change included) would call
+  // hasExplicitChoice() again, see the just-written THEME_KEY, and
+  // permanently mark the install "explicit" — breaking live OS-following
+  // for brand-new installs too, not just migrating existing ones. Computing
+  // it once here, only on the render that actually initializes the ref,
+  // keeps the migration's side effect from firing on unrelated re-renders.
+  const explicitRef = useRef<boolean | undefined>(undefined);
+  if (explicitRef.current === undefined) {
+    explicitRef.current = hasExplicitChoice();
+  }
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
