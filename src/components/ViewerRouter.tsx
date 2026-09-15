@@ -16,6 +16,27 @@ export function ViewerRouter({ file }: ViewerRouterProps): React.ReactElement {
   // dynamic import) on every retry instead of replaying the dead promise.
   const [retryCount, setRetryCount] = useState(0)
 
+  // LOAD-21 evaluated (wave-3 shell-polish follow-up), not implemented:
+  // caching this `lazy()` wrapper per `file.format` alone (dropping
+  // `file.path` from the dep array) would NOT actually avoid the
+  // unmount/remount cost on a same-format file switch, because
+  // `ViewerErrorBoundary` below is keyed on `file.path` (LOAD-08/RUN-09) —
+  // a React `key` change on an ancestor already forces a full remount of
+  // everything under it, independent of whether `LazyComponent`'s own
+  // identity also changes. Removing/relaxing that key to fix the remount
+  // would reintroduce LOAD-08/RUN-09's bug (a crash on one file permanently
+  // showing "Viewer crashed" for every later file) unless
+  // `ViewerErrorBoundary` were restructured to clear its own error state
+  // from a lifecycle hook instead of from being unmounted — out of this
+  // file's scope. Separately, at least one viewer (`DocxViewer`) seeds
+  // several of its own `useState` calls (`documentModel`, `savePath`,
+  // `lastSavedDocument`, `commentsPaneOpen`, `trackChangesEnabled`) directly
+  // from `bundle`/`file.path` with no companion effect to resync them on a
+  // later prop change — safe only because it currently always remounts on
+  // file change; kept mounted across a same-format switch, it would keep
+  // rendering/editing the PREVIOUS file's content. Revisit only alongside
+  // that ViewerErrorBoundary rework and a full per-viewer state-rederivation
+  // audit — not a scope this polish wave took on.
   const LazyComponent = useMemo(
     () =>
       lazy(
