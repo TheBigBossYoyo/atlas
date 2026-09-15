@@ -81,6 +81,15 @@ const XLSX_ROWS: ReadonlyArray<RawEntry> = [
   ['xlsb', 'xlsx', 'Excel Binary Spreadsheet', 'Excel Binary Spreadsheet', 'Viewer'],
   ['xltx', 'xlsx', 'Excel Template', 'Excel Template', 'Viewer'],
   ['xltm', 'xlsx', 'Excel Macro-Enabled Template', 'Excel Macro-Enabled Template', 'Viewer'],
+  // Wave 3 — legacy binary BIFF8 workbook. Unlike `.doc`/`.ppt`, SheetJS's
+  // `XLSX.read`/`XLSX.write` genuinely parse and re-serialize this OLE2/CFB
+  // -container format (`bookType: 'xls'`), so it is routed to the same
+  // spreadsheet viewer rather than `legacyOffice.ts`'s honest-unsupported
+  // message, with full in-place Save supported (not Save-As-only) — see
+  // `spreadsheetWrite.ts`. One real, documented limitation: this build's
+  // BIFF8 writer never serializes a cell's formula text, only its cached
+  // value, so a formula saved back to `.xls` round-trips as a plain value.
+  ['xls', 'xlsx', 'Excel 97-2003 Workbook', 'Excel 97-2003 Workbook', 'Viewer'],
 ]
 
 const PPTX_ROWS: ReadonlyArray<RawEntry> = [
@@ -103,6 +112,11 @@ const MISC_DOCUMENT_ROWS: ReadonlyArray<RawEntry> = [
   ['ods', 'ods', 'OpenDocument Spreadsheet', 'OpenDocument Spreadsheet', 'Viewer'],
   ['odp', 'odp', 'OpenDocument Presentation', 'OpenDocument Presentation', 'Viewer'],
   ['rtf', 'rtf', 'Rich Text Document', 'Rich Text Document', 'Viewer'],
+  // Wave 3 — "Flat ODS": a single flat-XML file (no ZIP container) holding
+  // the same OpenDocument spreadsheet schema as `.ods`. SheetJS reads and
+  // writes it directly (`bookType: 'fods'`), so it routes to the same
+  // spreadsheet viewer with full in-place Save supported.
+  ['fods', 'ods', 'Flat OpenDocument Spreadsheet', 'Flat OpenDocument Spreadsheet', 'Viewer'],
 ]
 
 // Source-code extensions -> shiki bundled-language id. `getSingletonHighlighter`

@@ -1,5 +1,6 @@
-import { memo, useEffect, useMemo, useState, lazy, Suspense, useDeferredValue } from 'react'
-import { Table, FileSpreadsheet, Eye, EyeOff } from 'lucide-react'
+import { memo, useCallback, useEffect, useMemo, useState, lazy, Suspense, useDeferredValue } from 'react'
+import { Table, FileSpreadsheet, Eye, EyeOff, Plus, X } from 'lucide-react'
+import type { GridColumn, Item, Rectangle } from '@glideapps/glide-data-grid'
 
 import type { ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats, useRegisterViewerFind } from './shared/useViewerContext'
@@ -8,7 +9,11 @@ import { useSpreadsheetGrid } from './shared/useSpreadsheetGrid'
 import { useGridFind } from './shared/useGridFind'
 import { ViewerLoading } from '../components/ViewerLoading'
 import { SearchOverlay } from '../components/SearchOverlay'
-import type { ParsedSheet } from './shared/spreadsheetGrid'
+import { createDocument } from './spreadsheet/spreadsheetDocument'
+import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from './spreadsheet/useSpreadsheetEditor'
+import { bookTypeForExtension } from './spreadsheet/spreadsheetWrite'
+import { SpreadsheetEditToolbar } from './spreadsheet/SpreadsheetEditToolbar'
+import { FrozenRowsStrip } from './spreadsheet/FrozenRowsStrip'
 import './__styles__/viewer-spreadsheet.css'
 
 // Lazy load DataEditor and its CSS
@@ -17,6 +22,57 @@ const LazyDataEditor = lazy(async () => {
   await import('@glideapps/glide-data-grid/dist/index.css')
   return { default: mod.DataEditor }
 })
+
+/** Fixed so FrozenRowsStrip's spacer can line up exactly with the grid's own row-number column (T4/DAT-10 remainder). */
+const ROW_MARKER_WIDTH_PX = 44
+
+type WorkbookFormatOption = {
+  readonly id: string
+  readonly label: string
+  readonly extension: string
+  readonly filterName: string
+}
+
+/** Save As format choices offered for the xlsx/ods family (the plan's "Save As with format choice"). */
+const WORKBOOK_SAVE_FORMATS: ReadonlyArray<WorkbookFormatOption> = [
+  { id: 'xlsx', label: 'Excel Workbook (.xlsx)', extension: 'xlsx', filterName: 'Excel Workbook' },
+  { id: 'xlsm', label: 'Excel Macro-Enabled Workbook (.xlsm)', extension: 'xlsm', filterName: 'Excel Macro-Enabled Workbook' },
+  { id: 'xlsb', label: 'Excel Binary Workbook (.xlsb)', extension: 'xlsb', filterName: 'Excel Binary Workbook' },
+  { id: 'xls', label: 'Excel 97-2003 Workbook (.xls)', extension: 'xls', filterName: 'Excel 97-2003 Workbook' },
+  { id: 'ods', label: 'OpenDocument Spreadsheet (.ods)', extension: 'ods', filterName: 'OpenDocument Spreadsheet' },
+  { id: 'fods', label: 'Flat OpenDocument Spreadsheet (.fods)', extension: 'fods', filterName: 'Flat OpenDocument Spreadsheet' },
+]
+
+/** `useSpreadsheetGrid`'s own columns always set an explicit `width` (see that hook), but `GridColumn`'s library type also allows a width-less `AutoGridColumn` — narrow defensively rather than asserting. */
+function columnWidthOf(column: GridColumn): number {
+  return 'width' in column && typeof column.width === 'number' ? column.width : 120
+}
+
+function extensionOf(path: string): string {
+  const base = path.replace(/\\/g, '/').split('/').pop() ?? path
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(dot + 1).toLowerCase() : ''
+}
+
+function workbookTargetFor(formatId: string): SpreadsheetSaveTarget {
+  const option = WORKBOOK_SAVE_FORMATS.find((f) => f.id === formatId) ?? WORKBOOK_SAVE_FORMATS[0]
+  return {
+    kind: 'workbook',
+    bookType: bookTypeForExtension(option.extension),
+    extension: option.extension,
+    filterName: option.filterName,
+  }
+}
+
+/**
+ * Legacy/flat formats scoped as "view + save-as-xlsx only" (owner's plan):
+ * SheetJS can technically write `.xls`/`.xlsb`/`.fods` back out (verified
+ * directly against the library — see `spreadsheetWrite.ts`'s header), but
+ * the plan deliberately doesn't offer silently re-encoding the user's
+ * original legacy file in place. Save always defaults to `.xlsx` and never
+ * seeds the original path as an overwrite target for these three.
+ */
+const LEGACY_SAVE_AS_XLSX_ONLY: ReadonlySet<string> = new Set(['xls', 'xlsb', 'fods'])
 
 function SpreadsheetViewerBase({ file }: ViewerProps) {
   const setNavItems = useSetNavItems()
@@ -27,13 +83,33 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   const [showHiddenSheets, setShowHiddenSheets] = useState(false)
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
+  const [renamingSheet, setRenamingSheet] = useState<string | null>(null)
+  const [gridTranslateX, setGridTranslateX] = useState(0)
 
   const buffer = file.kind === 'binary' ? file.content : null
   const workbookState = useSpreadsheetWorkbook(buffer)
-  const sheets: ParsedSheet[] = useMemo(
-    () => (workbookState.status === 'ready' ? workbookState.sheets : []),
+
+  // Built once per successful parse — see useSpreadsheetEditor's own
+  // "hydrate once" guard for why recomputing this on every render (a cheap
+  // per-sheet wrap, not a deep clone — see spreadsheetDocument.ts) is safe.
+  const initialDocument = useMemo(
+    () => (workbookState.status === 'ready' ? createDocument(workbookState.sheets) : null),
     [workbookState],
   )
+
+  const fileExtension = useMemo(() => extensionOf(file.path) || 'xlsx', [file.path])
+  const isLegacySaveAsOnly = LEGACY_SAVE_AS_XLSX_ONLY.has(fileExtension)
+  // Plain Save keeps the file's OWN original extension/format — UNLESS it's
+  // one of the "view + save-as-xlsx only" legacy/flat formats above, which
+  // default to .xlsx instead. Save As always lets the user pick a different
+  // format either way (see the toolbar's format <select>).
+  const defaultSaveTarget = useMemo<SpreadsheetSaveTarget>(
+    () => workbookTargetFor(isLegacySaveAsOnly ? 'xlsx' : fileExtension),
+    [fileExtension, isLegacySaveAsOnly],
+  )
+
+  const editor = useSpreadsheetEditor(initialDocument, file.path, defaultSaveTarget, !isLegacySaveAsOnly)
+  const sheets = editor.document.sheets
 
   const hasHiddenSheets = useMemo(() => sheets.some((s) => s.hidden), [sheets])
   const visibleSheets = useMemo(
@@ -42,11 +118,9 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   )
 
   // Pick an initial/fallback active sheet once the workbook is ready, or
-  // when the current selection is no longer in the visible list (e.g. the
-  // "show hidden sheets" toggle was switched off while a hidden one was
-  // active). A pure derivation of `visibleSheets`/`activeSheetName`, so this
-  // uses the render-time "adjust state" idiom (see ViewerContext.tsx) rather
-  // than an effect.
+  // when the current selection is no longer in the visible list. Pure
+  // derivation of `visibleSheets`/`activeSheetName`, so this uses the
+  // render-time "adjust state" idiom (see ViewerContext.tsx) rather than an effect.
   if (visibleSheets.length > 0 && !visibleSheets.some((s) => s.name === activeSheetName)) {
     setActiveSheetName(visibleSheets[0].name)
   }
@@ -55,13 +129,64 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     () => visibleSheets.find((s) => s.name === activeSheetName) ?? visibleSheets[0],
     [visibleSheets, activeSheetName],
   )
+  const activeSheetIndex = useMemo(
+    () => (activeSheet ? sheets.findIndex((s) => s.name === activeSheet.name) : -1),
+    [sheets, activeSheet],
+  )
 
-  const filteredRows = useMemo(() => {
+  // `filteredRowIndices[i]` is the ACTUAL (unfiltered) sheet row index that
+  // grid-space row `i` corresponds to. When the "Search rows..." filter is
+  // active it drops non-matching rows, so grid row `i` and sheet row `i` are
+  // no longer the same thing — every place below that turns a grid-space row
+  // back into a document edit (cell edit, paste, and the toolbar's
+  // insert/delete row/column, which read `selection.row`) MUST go through
+  // this mapping rather than assuming identity. Getting this wrong doesn't
+  // error — it silently edits a different, arbitrary row than the one the
+  // user is looking at (a confirmed data-corruption bug this fixes: search
+  // for a value, edit what looks like the matching row, and — before this
+  // fix — the edit landed on whatever row shares that same position in the
+  // FILTERED list instead).
+  const filteredRowIndices = useMemo(() => {
     if (!activeSheet) return []
     const q = deferredSearch.toLowerCase()
-    if (!q) return activeSheet.grid.rows
-    return activeSheet.grid.rows.filter((row) => row.some((cell) => cell.toLowerCase().includes(q)))
+    if (!q) return activeSheet.rows.map((_, i) => i)
+    const indices: number[] = []
+    activeSheet.rows.forEach((row, i) => {
+      if (row.some((cell) => cell.toLowerCase().includes(q))) indices.push(i)
+    })
+    return indices
   }, [activeSheet, deferredSearch])
+
+  const filteredRows = useMemo(
+    () => filteredRowIndices.map((i) => activeSheet!.rows[i]),
+    [filteredRowIndices, activeSheet],
+  )
+  // Formulas, mapped through the exact same filter as `filteredRows` (see
+  // `useSpreadsheetGrid`'s own header for why this must reach the grid: a
+  // formula cell's edit overlay needs its literal `=<formula>` text, not the
+  // already-computed value `filteredRows` carries).
+  const filteredFormulas = useMemo(
+    () => filteredRowIndices.map((i) => activeSheet!.formulas[i]),
+    [filteredRowIndices, activeSheet],
+  )
+
+  // Frozen ROWS (T4/DAT-10 remainder — see FrozenRowsStrip's header for why
+  // this isn't a second DataEditor) are rendered as a fixed strip ABOVE the
+  // main scrollable grid, which therefore only ever renders the REMAINING
+  // rows — never both, which would show the frozen row twice. Disabled
+  // while a search filter is active: the filter can drop/reorder rows
+  // entirely, and "the top N rows of a reshuffled result set" is not a
+  // meaningful thing to freeze.
+  const frozenRowCount = !deferredSearch ? (activeSheet?.freeze?.rows ?? 0) : 0
+  const bodyRows = frozenRowCount > 0 ? filteredRows.slice(frozenRowCount) : filteredRows
+  // Sheet-absolute row index for each row of `bodyRows`, by the same
+  // position — see `filteredRowIndices` above. Slicing this array in lockstep
+  // with `bodyRows` (rather than re-deriving it from `frozenRowCount`
+  // elsewhere) keeps the two arrays' indices aligned by construction.
+  const bodyRowIndices = frozenRowCount > 0 ? filteredRowIndices.slice(frozenRowCount) : filteredRowIndices
+  const bodyFormulas = frozenRowCount > 0 ? filteredFormulas.slice(frozenRowCount) : filteredFormulas
+  const frozenRowsData = frozenRowCount > 0 ? activeSheet!.rows.slice(0, frozenRowCount) : []
+  const frozenFormulasData = frozenRowCount > 0 ? activeSheet!.formulas.slice(0, frozenRowCount) : []
 
   const navItems = useMemo(() => {
     return visibleSheets.map((sheet) => ({
@@ -82,25 +207,124 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         kind: 'spreadsheet',
         sheet: activeSheet.name,
         rows: filteredRows.length,
-        cols: activeSheet.grid.colCount,
+        cols: activeSheet.colCount,
       })
     } else {
       setStats(null)
     }
   }, [setStats, activeSheet, filteredRows.length])
 
-  const { columns, getCellContent, onColumnResize, onItemHovered, theme } = useSpreadsheetGrid({
-    rows: filteredRows,
-    colCount: activeSheet?.grid.colCount ?? 0,
-    colWidthsPx: activeSheet?.grid.colWidthsPx,
+  const handleCellEdited = useCallback(
+    (row: number, col: number, rawText: string) => {
+      if (activeSheetIndex < 0) return
+      const sheetRow = bodyRowIndices[row]
+      if (sheetRow === undefined) return
+      editor.setCellValue(activeSheetIndex, sheetRow, col, rawText)
+    },
+    [editor, activeSheetIndex, bodyRowIndices],
+  )
+
+  const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited } = useSpreadsheetGrid({
+    rows: bodyRows,
+    colCount: activeSheet?.colCount ?? 0,
+    colWidthsPx: activeSheet?.colWidthsPx,
     resetKey: activeSheetName ?? undefined,
+    onCellEdited: handleCellEdited,
+    formulas: bodyFormulas,
   })
 
-  const gridFind = useGridFind(filteredRows)
+  const gridFind = useGridFind(bodyRows)
   useEffect(() => {
     registerFind(gridFind.open)
     return () => registerFind(null)
   }, [registerFind, gridFind.open])
+
+  // The currently-selected cell, sheet-absolute (mapped through
+  // `bodyRowIndices`, which already accounts for both frozen rows AND an
+  // active search filter — see that array's own comment) — read straight off
+  // gridFind's own selection state rather than tracking a parallel one, since
+  // it already reflects the live selection regardless of whether Find is open
+  // (see that hook's `onGridSelectionChange`).
+  const selection = useMemo(() => {
+    const cell = gridFind.gridSelection?.current?.cell
+    if (!cell) return null
+    const sheetRow = bodyRowIndices[cell[1]]
+    return sheetRow === undefined ? null : { row: sheetRow, col: cell[0] }
+  }, [gridFind.gridSelection, bodyRowIndices])
+
+  const handleGridPaste = useCallback(
+    (target: Item, values: readonly (readonly string[])[]): boolean => {
+      if (activeSheetIndex < 0) return false
+      const [col, row] = target
+      const sheetRow = bodyRowIndices[row]
+      if (sheetRow === undefined) return false
+      // Anchors the paste at the correct sheet row even under an active
+      // search filter (see `bodyRowIndices`). A multi-row paste while
+      // filtered still writes to CONTIGUOUS rows from that anchor — matching
+      // filtered rows are not, in general, contiguous in the sheet — since
+      // `pasteRange` itself has no notion of a non-contiguous target range;
+      // pasting a single row/cell (by far the common case) is unaffected.
+      editor.pasteRange(
+        activeSheetIndex,
+        sheetRow,
+        col,
+        values.map((r) => [...r]),
+      )
+      return false // handled manually (can grow the sheet) — see DataEditor's onPaste docs.
+    },
+    [editor, activeSheetIndex, bodyRowIndices],
+  )
+
+  const handleVisibleRegionChanged = useCallback((_range: Rectangle, tx: number) => {
+    setGridTranslateX(tx)
+  }, [])
+
+  const handleFrozenRowCommit = useCallback(
+    (row: number, col: number, text: string) => {
+      if (activeSheetIndex < 0) return
+      editor.setCellValue(activeSheetIndex, row, col, text)
+    },
+    [editor, activeSheetIndex],
+  )
+
+  const commitRename = useCallback(
+    (sheetName: string, newName: string) => {
+      const idx = sheets.findIndex((s) => s.name === sheetName)
+      const trimmed = newName.trim()
+      if (idx < 0 || !trimmed || trimmed === sheetName) return
+      // Mirrors `renameSheetOp`'s own duplicate-name guard (spreadsheetDocument.ts)
+      // so this only follows the active-tab pointer when the rename will
+      // actually take effect — see the comment below on why this pointer
+      // must move at all.
+      if (sheets.some((s, i) => i !== idx && s.name === trimmed)) return
+      editor.renameSheet(idx, trimmed)
+      // The active sheet is tracked by NAME (`activeSheetName`), and a
+      // rename changes exactly that key out from under it. Without this, the
+      // render-time "pick a fallback active sheet" adjustment above (which
+      // only knows "the current activeSheetName no longer exists", not "it
+      // was renamed") falls back to `visibleSheets[0]` — silently switching
+      // the visible sheet to whichever tab happens to be first, unless the
+      // renamed sheet already WAS the first one (the only case the original
+      // single-sheet test for this happened to cover). Renaming the active
+      // sheet must keep IT active, under its new name.
+      if (sheetName === activeSheetName) {
+        setActiveSheetName(trimmed)
+      }
+    },
+    [sheets, editor, activeSheetName],
+  )
+
+  const saveFormats = useMemo(
+    () => WORKBOOK_SAVE_FORMATS.map((f) => ({ id: f.id, label: f.label })),
+    [],
+  )
+
+  const handleSaveAs = useCallback(
+    (formatId: string) => {
+      void editor.handleSaveAs(workbookTargetFor(formatId))
+    },
+    [editor],
+  )
 
   if (workbookState.status === 'error') {
     return <div className="spreadsheet-viewer__error">{workbookState.error}</div>
@@ -113,6 +337,9 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   if (sheets.length === 0) {
     return <div className="spreadsheet-viewer" />
   }
+
+  const rowMarkers: 'number' | { kind: 'number'; width: number; startIndex: number } =
+    frozenRowCount > 0 ? { kind: 'number', width: ROW_MARKER_WIDTH_PX, startIndex: frozenRowCount + 1 } : 'number'
 
   return (
     <div className="spreadsheet-viewer">
@@ -128,7 +355,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
       />
       <div className="spreadsheet-viewer__toolbar">
         <div className="spreadsheet-viewer__stats">
-          {activeSheet ? `${filteredRows.length} rows × ${activeSheet.grid.colCount} columns` : ''}
+          {activeSheet ? `${filteredRows.length} rows × ${activeSheet.colCount} columns` : ''}
         </div>
         <div className="spreadsheet-viewer__toolbar-actions">
           {hasHiddenSheets && (
@@ -153,6 +380,32 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
           </div>
         </div>
       </div>
+      <SpreadsheetEditToolbar
+        canUndo={editor.canUndo}
+        canRedo={editor.canRedo}
+        onUndo={editor.undo}
+        onRedo={editor.redo}
+        selection={selection}
+        onInsertRowAbove={(row) => activeSheetIndex >= 0 && editor.insertRowAt(activeSheetIndex, row)}
+        onDeleteRow={(row) => activeSheetIndex >= 0 && editor.deleteRowAt(activeSheetIndex, row)}
+        onInsertColumnLeft={(col) => activeSheetIndex >= 0 && editor.insertColumnAt(activeSheetIndex, col)}
+        onDeleteColumn={(col) => activeSheetIndex >= 0 && editor.deleteColumnAt(activeSheetIndex, col)}
+        onPaste={(row, col, values) => activeSheetIndex >= 0 && editor.pasteRange(activeSheetIndex, row, col, values)}
+        onSave={() => void editor.handleSave()}
+        saveFormats={saveFormats}
+        onSaveAs={handleSaveAs}
+      />
+      {editor.saveError && <div className="spreadsheet-viewer__save-error">{editor.saveError}</div>}
+      {frozenRowCount > 0 && (
+        <FrozenRowsStrip
+          rows={frozenRowsData}
+          formulas={frozenFormulasData}
+          columnWidthsPx={columns.map(columnWidthOf)}
+          rowMarkerWidthPx={ROW_MARKER_WIDTH_PX}
+          translateXPx={gridTranslateX}
+          onCommit={handleFrozenRowCommit}
+        />
+      )}
       <div className="spreadsheet-viewer__grid">
         {filteredRows.length === 0 ? (
           <div className="spreadsheet-viewer__empty">
@@ -166,20 +419,21 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
                 getCellContent={getCellContent}
                 getCellsForSelection={true}
                 columns={columns}
-                rows={filteredRows.length}
+                rows={bodyRows.length}
                 theme={theme}
                 width="100%"
                 height="100%"
                 smoothScrollX
                 smoothScrollY
-                rowMarkers="number"
-                // Fixed UX default, not derived from the file's own freeze-pane
-                // metadata — see the "Frozen panes" note in spreadsheetGrid.ts.
-                freezeColumns={1}
+                rowMarkers={rowMarkers}
+                freezeColumns={activeSheet?.freeze?.cols ?? 1}
                 headerHeight={36}
                 rowHeight={32}
                 onItemHovered={onItemHovered}
                 onColumnResize={onColumnResize}
+                onCellEdited={onCellEdited}
+                onPaste={handleGridPaste}
+                onVisibleRegionChanged={handleVisibleRegionChanged}
                 gridSelection={gridFind.gridSelection}
                 onGridSelectionChange={gridFind.onGridSelectionChange}
               />
@@ -189,18 +443,65 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
       </div>
       <div className="spreadsheet-viewer__tabs">
         {visibleSheets.map((sheet) => (
-          <button
+          <div
             key={sheet.name}
-            className={`spreadsheet-viewer__tab ${sheet.name === activeSheetName ? 'spreadsheet-viewer__tab--active' : ''} ${sheet.hidden ? 'spreadsheet-viewer__tab--hidden' : ''}`}
-            onClick={() => {
-              setActiveSheetName(sheet.name)
-              setSearch('')
-            }}
+            className={`spreadsheet-viewer__tab-wrap ${sheet.hidden ? 'spreadsheet-viewer__tab--hidden' : ''}`}
           >
-            <Table size={14} />
-            {sheet.name}
-          </button>
+            {renamingSheet === sheet.name ? (
+              <input
+                className="spreadsheet-viewer__tab-rename"
+                defaultValue={sheet.name}
+                autoFocus
+                aria-label={`Rename sheet ${sheet.name}`}
+                onBlur={(e) => {
+                  commitRename(sheet.name, e.currentTarget.value)
+                  setRenamingSheet(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur()
+                  if (e.key === 'Escape') setRenamingSheet(null)
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className={`spreadsheet-viewer__tab ${sheet.name === activeSheetName ? 'spreadsheet-viewer__tab--active' : ''}`}
+                onClick={() => {
+                  setActiveSheetName(sheet.name)
+                  setSearch('')
+                }}
+                onDoubleClick={() => setRenamingSheet(sheet.name)}
+                title="Double-click to rename"
+              >
+                <Table size={14} />
+                {sheet.name}
+              </button>
+            )}
+            {sheets.length > 1 && renamingSheet !== sheet.name && (
+              <button
+                type="button"
+                className="spreadsheet-viewer__tab-delete"
+                aria-label={`Delete sheet ${sheet.name}`}
+                title={`Delete sheet ${sheet.name}`}
+                onClick={() => {
+                  const idx = sheets.findIndex((s) => s.name === sheet.name)
+                  if (idx >= 0) editor.deleteSheet(idx)
+                }}
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
         ))}
+        <button
+          type="button"
+          className="spreadsheet-viewer__tab-add"
+          onClick={() => editor.addSheet()}
+          aria-label="Add sheet"
+          title="Add sheet"
+        >
+          <Plus size={14} />
+        </button>
       </div>
     </div>
   )

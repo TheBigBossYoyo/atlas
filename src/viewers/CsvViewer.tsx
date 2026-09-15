@@ -1,5 +1,6 @@
-import { memo, useEffect, useMemo, useState, useDeferredValue, lazy, Suspense } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState, useDeferredValue, lazy, Suspense } from 'react'
 import { FileSpreadsheet } from 'lucide-react'
+import type { Item } from '@glideapps/glide-data-grid'
 
 import type { ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats, useRegisterViewerFind } from './shared/useViewerContext'
@@ -8,6 +9,10 @@ import { useGridFind } from './shared/useGridFind'
 import { parseCsv } from './shared/csvParse'
 import { ViewerLoading } from '../components/ViewerLoading'
 import { SearchOverlay } from '../components/SearchOverlay'
+import { createDocumentFromRows } from './spreadsheet/spreadsheetDocument'
+import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from './spreadsheet/useSpreadsheetEditor'
+import { SpreadsheetEditToolbar } from './spreadsheet/SpreadsheetEditToolbar'
+import type { SpreadsheetDocument } from './spreadsheet/spreadsheetDocument'
 import './__styles__/viewer-spreadsheet.css'
 
 // Lazy load DataEditor and its CSS
@@ -26,6 +31,17 @@ type LoadState =
   | { status: 'loading' }
   | { status: 'ready'; data: CsvData }
   | { status: 'error'; error: string }
+
+const CSV_SAVE_FORMATS = [
+  { id: 'csv', label: 'CSV (comma-separated)' },
+  { id: 'tsv', label: 'TSV (tab-separated)' },
+] as const
+
+function targetFor(formatId: string): SpreadsheetSaveTarget {
+  return formatId === 'tsv'
+    ? { kind: 'delimited', delimiter: '\t', extension: 'tsv', filterName: 'Tab-Separated Values' }
+    : { kind: 'delimited', delimiter: ',', extension: 'csv', filterName: 'Comma-Separated Values' }
+}
 
 function CsvViewerBase({ file }: ViewerProps) {
   const setNavItems = useSetNavItems()
@@ -81,29 +97,72 @@ function CsvViewerBase({ file }: ViewerProps) {
 
   const data = state.status === 'ready' ? state.data : null
 
-  const filteredRows = useMemo(() => {
-    if (!data) return []
+  const initialDocument = useMemo<SpreadsheetDocument | null>(
+    () => (data ? createDocumentFromRows(data.rows, data.colCount) : null),
+    [data],
+  )
+
+  const defaultTarget = useMemo<SpreadsheetSaveTarget>(() => targetFor(file.format === 'tsv' ? 'tsv' : 'csv'), [file.format])
+
+  const editor = useSpreadsheetEditor(initialDocument, file.path, defaultTarget)
+  const sheet = editor.document.sheets[0]
+
+  // `filteredRowIndices[i]` is the actual (unfiltered) sheet row index grid
+  // row `i` corresponds to — see SpreadsheetViewer's identical mapping for
+  // why every grid-space row must be translated through this before being
+  // used as a document row index (a confirmed data-corruption bug otherwise:
+  // editing/pasting/inserting-around a row while "Search rows..." has
+  // dropped non-matching rows would silently target the wrong sheet row).
+  const filteredRowIndices = useMemo(() => {
+    if (!sheet) return []
     const q = deferredSearch.toLowerCase()
-    if (!q) return data.rows
-    return data.rows.filter((row) => row.some((cell) => String(cell).toLowerCase().includes(q)))
-  }, [data, deferredSearch])
+    if (!q) return sheet.rows.map((_, i) => i)
+    const indices: number[] = []
+    sheet.rows.forEach((row, i) => {
+      if (row.some((cell) => String(cell).toLowerCase().includes(q))) indices.push(i)
+    })
+    return indices
+  }, [sheet, deferredSearch])
+
+  const filteredRows = useMemo(
+    () => filteredRowIndices.map((i) => sheet!.rows[i]),
+    [filteredRowIndices, sheet],
+  )
+  // See SpreadsheetViewer's identical mapping and useSpreadsheetGrid's own
+  // header: a CSV/TSV cell can carry a formula too, once the user types
+  // "=..." into it, so this must reach the grid the same way.
+  const filteredFormulas = useMemo(
+    () => filteredRowIndices.map((i) => sheet!.formulas[i]),
+    [filteredRowIndices, sheet],
+  )
 
   useEffect(() => {
-    if (data) {
+    if (sheet) {
       setStats({
         kind: 'spreadsheet',
         sheet: 'data',
         rows: filteredRows.length,
-        cols: data.colCount,
+        cols: sheet.colCount,
       })
     } else {
       setStats(null)
     }
-  }, [setStats, data, filteredRows.length])
+  }, [setStats, sheet, filteredRows.length])
 
-  const { columns, getCellContent, onColumnResize, onItemHovered, theme } = useSpreadsheetGrid({
+  const handleCellEdited = useCallback(
+    (row: number, col: number, rawText: string) => {
+      const sheetRow = filteredRowIndices[row]
+      if (sheetRow === undefined) return
+      editor.setCellValue(0, sheetRow, col, rawText)
+    },
+    [editor, filteredRowIndices],
+  )
+
+  const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited } = useSpreadsheetGrid({
     rows: filteredRows,
-    colCount: data?.colCount ?? 0,
+    colCount: sheet?.colCount ?? 0,
+    onCellEdited: handleCellEdited,
+    formulas: filteredFormulas,
   })
 
   const gridFind = useGridFind(filteredRows)
@@ -111,6 +170,31 @@ function CsvViewerBase({ file }: ViewerProps) {
     registerFind(gridFind.open)
     return () => registerFind(null)
   }, [registerFind, gridFind.open])
+
+  const selection = useMemo(() => {
+    const cell = gridFind.gridSelection?.current?.cell
+    if (!cell) return null
+    const sheetRow = filteredRowIndices[cell[1]]
+    return sheetRow === undefined ? null : { row: sheetRow, col: cell[0] }
+  }, [gridFind.gridSelection, filteredRowIndices])
+
+  const handleGridPaste = useCallback(
+    (target: Item, values: readonly (readonly string[])[]): boolean => {
+      const [col, row] = target
+      const sheetRow = filteredRowIndices[row]
+      if (sheetRow === undefined) return false
+      // See SpreadsheetViewer's identical note: anchors correctly under an
+      // active search filter, but a multi-row paste still targets contiguous
+      // rows from that anchor.
+      editor.pasteRange(0, sheetRow, col, values.map((r) => [...r]))
+      return false
+    },
+    [editor, filteredRowIndices],
+  )
+
+  const saveFormats = useMemo(() => CSV_SAVE_FORMATS.map((f) => ({ id: f.id, label: f.label })), [])
+
+  const handleSaveAs = useCallback((formatId: string) => void editor.handleSaveAs(targetFor(formatId)), [editor])
 
   if (state.status === 'error') {
     return <div className="csv-viewer__error">{state.error}</div>
@@ -134,7 +218,7 @@ function CsvViewerBase({ file }: ViewerProps) {
       />
       <div className="csv-viewer__toolbar">
         <div className="csv-viewer__stats">
-          {filteredRows.length} rows × {data?.colCount ?? 0} columns
+          {filteredRows.length} rows × {sheet?.colCount ?? 0} columns
         </div>
         <div className="csv-viewer__search">
           <input
@@ -145,6 +229,22 @@ function CsvViewerBase({ file }: ViewerProps) {
           />
         </div>
       </div>
+      <SpreadsheetEditToolbar
+        canUndo={editor.canUndo}
+        canRedo={editor.canRedo}
+        onUndo={editor.undo}
+        onRedo={editor.redo}
+        selection={selection}
+        onInsertRowAbove={(row) => editor.insertRowAt(0, row)}
+        onDeleteRow={(row) => editor.deleteRowAt(0, row)}
+        onInsertColumnLeft={(col) => editor.insertColumnAt(0, col)}
+        onDeleteColumn={(col) => editor.deleteColumnAt(0, col)}
+        onPaste={(row, col, values) => editor.pasteRange(0, row, col, values)}
+        onSave={() => void editor.handleSave()}
+        saveFormats={saveFormats}
+        onSaveAs={handleSaveAs}
+      />
+      {editor.saveError && <div className="csv-viewer__error">{editor.saveError}</div>}
       <div className="csv-viewer__grid">
         {filteredRows.length === 0 ? (
           <div className="csv-viewer__empty">
@@ -164,14 +264,15 @@ function CsvViewerBase({ file }: ViewerProps) {
               smoothScrollX
               smoothScrollY
               rowMarkers="number"
-              // Fixed UX default — CSV/TSV have no file-level freeze-pane
-              // concept at all (that's an xlsx/ods-only feature); see the
-              // "Frozen panes" note in shared/spreadsheetGrid.ts.
+              // CSV/TSV have no file-level freeze-pane concept at all (that's
+              // an xlsx/ods-only feature — see shared/spreadsheetGrid.ts).
               freezeColumns={1}
               headerHeight={36}
               rowHeight={32}
               onItemHovered={onItemHovered}
               onColumnResize={onColumnResize}
+              onCellEdited={onCellEdited}
+              onPaste={handleGridPaste}
               gridSelection={gridFind.gridSelection}
               onGridSelectionChange={gridFind.onGridSelectionChange}
             />

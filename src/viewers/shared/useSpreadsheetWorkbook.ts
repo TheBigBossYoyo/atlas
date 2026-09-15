@@ -11,9 +11,10 @@
  */
 import { useEffect, useRef, useState } from 'react'
 
-import { parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
+import { attachFrozenPanes, parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
 import { XLSX_WORKER_BYTE_THRESHOLD } from './sizeThresholds'
 import type { SpreadsheetWorkerRequest, SpreadsheetWorkerResponse } from './spreadsheetWorker.worker'
+import { readFrozenPanes } from '../spreadsheet/spreadsheetPanes'
 
 export type SpreadsheetWorkbookState =
   | { readonly status: 'loading' }
@@ -52,7 +53,12 @@ export function useSpreadsheetWorkbook(buffer: ArrayBuffer | null): SpreadsheetW
       if (!shouldUseWorker(buffer.byteLength)) {
         try {
           const sheets = parseWorkbookBuffer(buffer)
-          if (!cancelled) setState({ status: 'ready', sheets })
+          // Small-file-only (guarded by the `shouldUseWorker` branch above):
+          // safe to also read frozen-pane metadata inline here (see
+          // spreadsheetPanes.ts's header on why this step is skipped on the
+          // main thread for large files instead).
+          const paneMap = await readFrozenPanes(buffer)
+          if (!cancelled) setState({ status: 'ready', sheets: attachFrozenPanes(sheets, paneMap) })
         } catch (err) {
           if (!cancelled) setState({ status: 'error', error: err instanceof Error ? err.message : String(err) })
         }

@@ -113,6 +113,8 @@ describe('detectByExtension', () => {
     ['draft.mkd', 'markdown'],
     ['macro.xlsm', 'xlsx'],
     ['binary.xlsb', 'xlsx'],
+    ['legacy.xls', 'xlsx'],
+    ['flat.fods', 'ods'],
     ['slides.pptm', 'pptx'],
     ['table.tab', 'tsv'],
     ['app.log', 'text'],

@@ -76,6 +76,10 @@ win:
       name: Excel Macro-Enabled Template
       description: Excel Macro-Enabled Template
       role: Viewer
+    - ext: xls
+      name: Excel 97-2003 Workbook
+      description: Excel 97-2003 Workbook
+      role: Viewer
     - ext: pptx
       name: PowerPoint Presentation
       description: PowerPoint Presentation
@@ -139,6 +143,10 @@ win:
     - ext: rtf
       name: Rich Text Document
       description: Rich Text Document
+      role: Viewer
+    - ext: fods
+      name: Flat OpenDocument Spreadsheet
+      description: Flat OpenDocument Spreadsheet
       role: Viewer
     - ext: ts
       name: Source Code

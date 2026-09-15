@@ -1,23 +1,34 @@
 /**
- * P1.12 (DAT-05 / DAT-06) regression test.
+ * P1.12 (DAT-05 / DAT-06) regression test — updated for wave 3.
  *
- * SpreadsheetViewer and CsvViewer used `allowOverlay: true` with no
- * `onCellEdited` wired up, so double-clicking a cell opened a phantom edit
- * box whose typed input silently vanished (DAT-06); neither grid passed
+ * Originally: SpreadsheetViewer and CsvViewer used `allowOverlay: true` with
+ * no `onCellEdited` wired up, so double-clicking a cell opened a phantom
+ * edit box whose typed input silently vanished (DAT-06); neither grid passed
  * `getCellsForSelection`, so Ctrl+C never actually copied a selection
- * (DAT-05). This test locks in the fix: cells report `allowOverlay: false`
- * and the grid is given `getCellsForSelection={true}`.
+ * (DAT-05). P1.12's interim fix locked in `allowOverlay: false` (the
+ * "disable it and be honest" option the findings register also offered).
+ *
+ * Wave 3 implements the findings register's OTHER listed resolution for
+ * DAT-06 instead — "wire real editing+save" — so the correct assertion is
+ * now the opposite of what this file originally checked: cells report
+ * `allowOverlay: true` again, but this time a committed edit via
+ * `onCellEdited` genuinely reaches the document model and is reflected back
+ * out through `getCellContent` on the next render, instead of vanishing.
+ * `getCellsForSelection` stays `true` either way (DAT-05 is unrelated to
+ * this change).
  */
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { EditableGridCell, Item } from '@glideapps/glide-data-grid'
 
 import type { LoadedFile } from '../../formats/types'
 import { ViewerProvider } from '../shared/ViewerContext'
 
-type CapturedCell = { readonly allowOverlay: boolean }
+type CapturedCell = { readonly allowOverlay: boolean; readonly displayData: string }
 type CapturedProps = {
   readonly getCellsForSelection?: unknown
   readonly getCellContent: (loc: readonly [number, number]) => CapturedCell
+  readonly onCellEdited?: (cell: Item, newValue: EditableGridCell) => void
 }
 
 let lastDataEditorProps: CapturedProps | null = null
@@ -33,9 +44,10 @@ vi.mock('@glideapps/glide-data-grid', async (importOriginal) => {
   }
 })
 
-// Only `read` is mocked (a fixed two-row worksheet) — `utils` stays real so
-// SpreadsheetViewer's direct `!ref`/`encode_cell` walk (T1/T4) behaves
-// exactly as it would against a genuine parsed workbook.
+// Only `read` is mocked (a fixed two-row worksheet) — `utils`/`write` stay
+// real so SpreadsheetViewer's direct `!ref`/`encode_cell` walk (T1/T4) and
+// its save path (wave 3) behave exactly as they would against a genuine
+// parsed workbook.
 vi.mock('xlsx', async (importOriginal) => {
   const actual = await importOriginal<typeof import('xlsx')>()
   return {
@@ -55,12 +67,17 @@ vi.mock('xlsx', async (importOriginal) => {
   }
 })
 
+function commitEdit(col: number, row: number, text: string): void {
+  const newValue = { kind: 'text', data: text, displayData: text, allowOverlay: true } as EditableGridCell
+  lastDataEditorProps!.onCellEdited?.([col, row], newValue)
+}
+
 beforeEach(() => {
   lastDataEditorProps = null
 })
 
-describe('grid editability honesty (DAT-05 / DAT-06)', () => {
-  it('SpreadsheetViewer: cells are non-editable and selection copy is enabled', async () => {
+describe('grid editability honesty (DAT-05 / DAT-06, closed for real in wave 3)', () => {
+  it('SpreadsheetViewer: cells are genuinely editable and selection copy is enabled', async () => {
     const { SpreadsheetViewer } = await import('../SpreadsheetViewer')
     const file: LoadedFile = {
       kind: 'binary',
@@ -80,10 +97,14 @@ describe('grid editability honesty (DAT-05 / DAT-06)', () => {
     })
 
     expect(lastDataEditorProps?.getCellsForSelection).toBe(true)
-    expect(lastDataEditorProps?.getCellContent([0, 0]).allowOverlay).toBe(false)
+    expect(lastDataEditorProps?.getCellContent([0, 0]).allowOverlay).toBe(true)
+
+    // The critical DAT-06 check: a committed edit must not silently vanish.
+    act(() => commitEdit(0, 1, 'Bob'))
+    await waitFor(() => expect(lastDataEditorProps?.getCellContent([0, 1]).displayData).toBe('Bob'))
   })
 
-  it('CsvViewer: cells are non-editable and selection copy is enabled', async () => {
+  it('CsvViewer: cells are genuinely editable and selection copy is enabled', async () => {
     const { CsvViewer } = await import('../CsvViewer')
     const file: LoadedFile = {
       kind: 'text',
@@ -103,6 +124,9 @@ describe('grid editability honesty (DAT-05 / DAT-06)', () => {
     })
 
     expect(lastDataEditorProps?.getCellsForSelection).toBe(true)
-    expect(lastDataEditorProps?.getCellContent([0, 0]).allowOverlay).toBe(false)
+    expect(lastDataEditorProps?.getCellContent([0, 0]).allowOverlay).toBe(true)
+
+    act(() => commitEdit(0, 1, 'Bob'))
+    await waitFor(() => expect(lastDataEditorProps?.getCellContent([0, 1]).displayData).toBe('Bob'))
   })
 })

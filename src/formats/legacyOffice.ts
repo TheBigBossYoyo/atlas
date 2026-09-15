@@ -1,14 +1,21 @@
 /**
  * P2.11 / LOAD-11 — legacy (pre-XML) Microsoft Office binary format
- * detection. `.doc`/`.xls`/`.ppt` (and their `.dot`/`.xlt`/`.pot`/`.pps`
- * template/show siblings) use the OLE2 Compound File Binary format, which
- * Atlas cannot parse — it is a completely different container from the ZIP-
- * based OOXML formats (`.docx`/`.xlsx`/`.pptx`) the app does support.
+ * detection. `.doc`/`.ppt` (and their `.dot`/`.pot`/`.pps` template/show
+ * siblings) use the OLE2 Compound File Binary format, which Atlas cannot
+ * parse — it is a completely different container from the ZIP-based OOXML
+ * formats (`.docx`/`.xlsx`/`.pptx`) the app does support.
  *
  * Rather than falling through to a bare "unknown format" empty state, a file
  * with the CFB magic header gets a specific, actionable message pointing at
  * the fix (re-save as the modern XML format). `UnknownViewer` is the only
  * consumer.
+ *
+ * Wave 3 exception: `.xls`/`.xlt` are ALSO CFB-container files, but SheetJS's
+ * `XLSX.read` has genuine native BIFF8 support and parses them correctly —
+ * so `extensionManifest.ts` now routes `.xls` straight to the spreadsheet
+ * viewer, which never reaches this module at all (only a genuinely-unknown
+ * extension gets this far). `.xlt` is left mapped below and still shown this
+ * message, since it was never in this wave's explicit scope.
  */
 
 /** The 8-byte OLE2/CFB signature shared by every legacy Office binary format. */

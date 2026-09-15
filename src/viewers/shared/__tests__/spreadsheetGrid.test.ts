@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 
-import { parseWorkbookBuffer, sheetToGrid } from '../spreadsheetGrid'
+import { attachFrozenPanes, parseWorkbookBuffer, sheetToGrid } from '../spreadsheetGrid'
 
 describe('sheetToGrid', () => {
   it('renders a formatted date via cell.w instead of a raw serial number (DAT-04)', () => {
@@ -82,7 +82,45 @@ describe('sheetToGrid', () => {
 
   it('returns an empty grid for a sheet with no !ref', () => {
     const grid = sheetToGrid({})
-    expect(grid).toEqual({ rows: [], colCount: 0, merges: [], colWidthsPx: [], rowHeightsPx: [] })
+    expect(grid).toEqual({
+      rows: [],
+      colCount: 0,
+      merges: [],
+      colWidthsPx: [],
+      rowHeightsPx: [],
+      formulas: [],
+    })
+  })
+
+  it('carries each cellformula text (no leading "=") alongside its formatted display text (wave 3 editing)', () => {
+    const ws: XLSX.WorkSheet = {
+      '!ref': 'A1:B1',
+      A1: { t: 'n', v: 3, w: '3' } as XLSX.CellObject,
+      B1: { t: 'n', v: 5, w: '5', f: 'A1+2' } as XLSX.CellObject,
+    }
+
+    const grid = sheetToGrid(ws)
+
+    expect(grid.formulas).toEqual([[undefined, 'A1+2']])
+  })
+})
+
+describe('attachFrozenPanes', () => {
+  it('merges frozen-pane info onto the sheet with a matching name', () => {
+    const sheets = [
+      { name: 'Sheet1', hidden: false, grid: sheetToGrid({}) },
+      { name: 'Sheet2', hidden: false, grid: sheetToGrid({}) },
+    ]
+
+    const result = attachFrozenPanes(sheets, { Sheet2: { cols: 1, rows: 2 } })
+
+    expect(result[0].freeze).toBeUndefined()
+    expect(result[1].freeze).toEqual({ cols: 1, rows: 2 })
+  })
+
+  it('leaves sheets unchanged when the pane map is empty', () => {
+    const sheets = [{ name: 'Sheet1', hidden: false, grid: sheetToGrid({}) }]
+    expect(attachFrozenPanes(sheets, {})).toEqual(sheets)
   })
 })
 
@@ -112,5 +150,24 @@ describe('parseWorkbookBuffer', () => {
     const sheets = parseWorkbookBuffer(buffer)
 
     expect(sheets[0].grid.rows[1][0]).toBe('$1,234.50')
+  })
+
+  // Legacy/flat formats (wave 3): SheetJS reads these through the exact
+  // same `XLSX.read` call as xlsx/ods — no format-specific branching exists
+  // anywhere in this module — so routing them here (extensionManifest.ts)
+  // is sufficient on its own; these lock in that the actual PARSE also
+  // genuinely works for each, not just the routing decision.
+  it.each(['xls', 'xlsb', 'fods'] as const)('parses a real .%s buffer', (bookType) => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Name', 'Score'], ['Alice', 10]]), 'Sheet1')
+
+    const buffer = XLSX.write(wb, { type: 'array', bookType }) as ArrayBuffer
+    const sheets = parseWorkbookBuffer(buffer)
+
+    expect(sheets).toHaveLength(1)
+    expect(sheets[0].grid.rows).toEqual([
+      ['Name', 'Score'],
+      ['Alice', '10'],
+    ])
   })
 })

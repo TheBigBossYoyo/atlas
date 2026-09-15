@@ -8,8 +8,16 @@
  * `spreadsheetGrid.ts`, which is plain, side-effect-free TS — this file is
  * only the postMessage plumbing, so the parsing logic itself stays testable
  * (and used) directly from the main-thread synchronous fallback path too.
+ *
+ * Also runs the frozen-pane reader (T4/DAT-10 remainder, `spreadsheetPanes.ts`)
+ * on the same buffer, for the same off-main-thread reason: unzipping and
+ * DOMParser-walking a large sheet's raw XML is exactly the kind of
+ * main-thread-blocking work T2 exists to move off the renderer's thread.
+ * Chromium exposes `DOMParser` on the Worker global scope, so this works
+ * unmodified here.
  */
-import { parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
+import { attachFrozenPanes, parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
+import { readFrozenPanes } from '../spreadsheet/spreadsheetPanes'
 
 export type SpreadsheetWorkerRequest = {
   readonly buffer: ArrayBuffer
@@ -19,10 +27,11 @@ export type SpreadsheetWorkerResponse =
   | { readonly ok: true; readonly sheets: ParsedSheet[] }
   | { readonly ok: false; readonly error: string }
 
-self.onmessage = (event: MessageEvent<SpreadsheetWorkerRequest>) => {
+self.onmessage = async (event: MessageEvent<SpreadsheetWorkerRequest>) => {
   try {
     const sheets = parseWorkbookBuffer(event.data.buffer)
-    const response: SpreadsheetWorkerResponse = { ok: true, sheets }
+    const paneMap = await readFrozenPanes(event.data.buffer)
+    const response: SpreadsheetWorkerResponse = { ok: true, sheets: attachFrozenPanes(sheets, paneMap) }
     self.postMessage(response)
   } catch (err) {
     const response: SpreadsheetWorkerResponse = {
