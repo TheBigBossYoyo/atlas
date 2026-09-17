@@ -3,20 +3,20 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { parsePptxSlides } from '../../parser'
 import { canEditNotes, deleteShape, insertTextBox, setShapeBox, setShapeText, setSlideNotes } from '../pptxEdits'
-import { loadPptxPackage, packageArchive, readPart, writePptxPackage, type PptxPackage } from '../pptxPackage'
+import { loadOfficePackage, packageArchive, readPart, writeOfficePackage, type OfficePackage } from '../../../../../office/officePackage'
 import { addSlide, deleteSlide, duplicateSlide, listSlides, moveSlide } from '../pptxSlideOps'
 import { buildEditableDeck } from './editableDeck'
 
 const SLIDE_1 = 'ppt/slides/slide1.xml'
 const SLIDE_2 = 'ppt/slides/slide2.xml'
 
-async function slides(pkg: PptxPackage) {
+async function slides(pkg: OfficePackage) {
   return parsePptxSlides(packageArchive(pkg), { cancelled: false })
 }
 
-let pkg: PptxPackage
+let pkg: OfficePackage
 beforeEach(async () => {
-  pkg = await loadPptxPackage(await buildEditableDeck())
+  pkg = await loadOfficePackage(await buildEditableDeck())
 })
 
 describe('shape edits', () => {
@@ -101,7 +101,7 @@ describe('slide operations', () => {
 
   it('moves slides and round-trips through a saved file', async () => {
     const moved = moveSlide(pkg, 1, 0)
-    const reopened = await loadPptxPackage((await writePptxPackage(moved)).buffer as ArrayBuffer)
+    const reopened = await loadOfficePackage((await writeOfficePackage(moved)).buffer as ArrayBuffer)
     const deck = await slides(reopened)
     expect(deck.map((s) => s.title)).toEqual(['Agenda', 'Quarterly review'])
     expect(reopened.parts.get('ppt/media/image1.png')).toEqual(pkg.parts.get('ppt/media/image1.png'))

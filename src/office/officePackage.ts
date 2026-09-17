@@ -1,23 +1,26 @@
 /**
- * USR-16 — the editable PPTX package: every part of the original zip held in
- * memory, immutably. Edits replace only the parts they touch (see
- * `pptxEdits.ts`/`pptxSlideOps.ts`), so masters, layouts, themes, media and
- * anything Atlas does not understand pass through a save byte-for-byte —
- * the same passthrough approach as the DOCX serializer. Undo keeps whole
- * package snapshots; they share every untouched part.
+ * USR-16 — an editable Office package (PPTX, ODP): every part of the original
+ * zip held in memory, immutably. Edits replace only the parts they touch, so
+ * masters, layouts, themes, media and anything Atlas does not understand pass
+ * through a save byte-for-byte — the same passthrough approach as the DOCX
+ * serializer. Undo keeps whole package snapshots; they share every untouched
+ * part.
+ *
+ * ODF note: `mimetype` must be the first entry in an ODF zip and must be
+ * stored uncompressed, so the writer puts it back exactly that way.
  */
 import JSZip from 'jszip'
 
-import type { ZipArchive, ZipEntry } from '../../shared/xmlUtils'
+import type { ZipArchive, ZipEntry } from '../viewers/slides/shared/xmlUtils'
 
-export type PptxPackage = {
+export type OfficePackage = {
   /** Part path -> content: XML/rels as text, everything else as bytes. Insertion order is the zip order on save. */
   readonly parts: ReadonlyMap<string, string | Uint8Array>
 }
 
 const TEXT_PART = /\.(xml|rels)$/i
 
-export async function loadPptxPackage(buffer: ArrayBuffer): Promise<PptxPackage> {
+export async function loadOfficePackage(buffer: ArrayBuffer): Promise<OfficePackage> {
   const zip = await JSZip.loadAsync(buffer)
   const parts = new Map<string, string | Uint8Array>()
   for (const entry of Object.values(zip.files)) {
@@ -37,7 +40,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /** Read-only `ZipArchive` view for the slide parser. */
-export function packageArchive(pkg: PptxPackage): ZipArchive {
+export function packageArchive(pkg: OfficePackage): ZipArchive {
   return {
     file(path: string): ZipEntry | null {
       const content = pkg.parts.get(path)
@@ -51,13 +54,13 @@ export function packageArchive(pkg: PptxPackage): ZipArchive {
   }
 }
 
-export function readPart(pkg: PptxPackage, path: string): string | null {
+export function readPart(pkg: OfficePackage, path: string): string | null {
   const content = pkg.parts.get(path)
   return typeof content === 'string' ? content : null
 }
 
 /** Returns a package with the given parts replaced/added (`null` removes a part). */
-export function withParts(pkg: PptxPackage, changes: Readonly<Record<string, string | null>>): PptxPackage {
+export function withParts(pkg: OfficePackage, changes: Readonly<Record<string, string | null>>): OfficePackage {
   const parts = new Map(pkg.parts)
   for (const [path, content] of Object.entries(changes)) {
     if (content === null) parts.delete(path)
@@ -66,8 +69,14 @@ export function withParts(pkg: PptxPackage, changes: Readonly<Record<string, str
   return { parts }
 }
 
-export async function writePptxPackage(pkg: PptxPackage): Promise<Uint8Array> {
+export async function writeOfficePackage(pkg: OfficePackage): Promise<Uint8Array> {
   const zip = new JSZip()
-  for (const [path, content] of pkg.parts) zip.file(path, content)
+  // ODF: `mimetype` first and uncompressed, or the file is not recognized.
+  const mimetype = pkg.parts.get('mimetype')
+  if (mimetype !== undefined) zip.file('mimetype', mimetype, { compression: 'STORE' })
+  for (const [path, content] of pkg.parts) {
+    if (path === 'mimetype') continue
+    zip.file(path, content)
+  }
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
 }

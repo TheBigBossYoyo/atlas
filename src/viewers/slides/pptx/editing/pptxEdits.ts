@@ -22,7 +22,7 @@ import {
   relsPathFor,
   serialize,
 } from './opcXml'
-import { readPart, withParts, type PptxPackage } from './pptxPackage'
+import { readPart, withParts, type OfficePackage } from '../../../../office/officePackage'
 
 export type ShapeBox = { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
 
@@ -39,11 +39,11 @@ function findShape(doc: XMLDocument, sourceId: string): Element | null {
 
 /** Applies `mutate` to the shape's slide DOM; returns the original package when the shape is missing. */
 function editShape(
-  pkg: PptxPackage,
+  pkg: OfficePackage,
   slidePath: string,
   sourceId: string,
   mutate: (shape: Element, doc: XMLDocument) => void,
-): PptxPackage {
+): OfficePackage {
   const xml = readPart(pkg, slidePath)
   if (xml === null) return pkg
   const doc = parse(xml)
@@ -90,7 +90,7 @@ export function replaceParagraphs(doc: XMLDocument, txBody: Element, text: strin
   for (const paragraph of created) txBody.appendChild(paragraph)
 }
 
-export function setShapeText(pkg: PptxPackage, slidePath: string, sourceId: string, text: string): PptxPackage {
+export function setShapeText(pkg: OfficePackage, slidePath: string, sourceId: string, text: string): OfficePackage {
   return editShape(pkg, slidePath, sourceId, (shape, doc) => {
     let txBody = firstChild(shape, 'txBody')
     if (!txBody) {
@@ -102,7 +102,7 @@ export function setShapeText(pkg: PptxPackage, slidePath: string, sourceId: stri
 }
 
 /** Writes the shape's own `a:xfrm` off/ext (creating it when the box was inherited from a placeholder). */
-export function setShapeBox(pkg: PptxPackage, slidePath: string, sourceId: string, box: ShapeBox): PptxPackage {
+export function setShapeBox(pkg: OfficePackage, slidePath: string, sourceId: string, box: ShapeBox): OfficePackage {
   return editShape(pkg, slidePath, sourceId, (shape, doc) => {
     let xfrm: Element | null
     if (shape.localName === 'graphicFrame') {
@@ -141,7 +141,7 @@ export function setShapeBox(pkg: PptxPackage, slidePath: string, sourceId: strin
   })
 }
 
-export function deleteShape(pkg: PptxPackage, slidePath: string, sourceId: string): PptxPackage {
+export function deleteShape(pkg: OfficePackage, slidePath: string, sourceId: string): OfficePackage {
   return editShape(pkg, slidePath, sourceId, (shape) => {
     shape.parentNode?.removeChild(shape)
   })
@@ -153,11 +153,11 @@ function nextShapeId(doc: XMLDocument): number {
 
 /** Adds a plain text box at `box`; returns the package and the new shape's id. */
 export function insertTextBox(
-  pkg: PptxPackage,
+  pkg: OfficePackage,
   slidePath: string,
   box: ShapeBox,
   text: string,
-): { readonly pkg: PptxPackage; readonly sourceId: string | null } {
+): { readonly pkg: OfficePackage; readonly sourceId: string | null } {
   const xml = readPart(pkg, slidePath)
   if (xml === null) return { pkg, sourceId: null }
   const doc = parse(xml)
@@ -181,18 +181,18 @@ export function insertTextBox(
 // Speaker notes
 // ---------------------------------------------------------------------------
 
-function notesMasterPath(pkg: PptxPackage): string | null {
+function notesMasterPath(pkg: OfficePackage): string | null {
   const rels = readRels(readPart(pkg, relsPathFor('ppt/presentation.xml')), 'ppt/presentation.xml')
   return rels.find((rel) => rel.type === REL_TYPE.notesMaster)?.target ?? null
 }
 
-function notesSlidePathFor(pkg: PptxPackage, slidePath: string): string | null {
+function notesSlidePathFor(pkg: OfficePackage, slidePath: string): string | null {
   const rels = readRels(readPart(pkg, relsPathFor(slidePath)), slidePath)
   return rels.find((rel) => rel.type === REL_TYPE.notesSlide)?.target ?? null
 }
 
 /** Notes can be edited when the slide already has a notes page or the deck has a notes master to create one from. */
-export function canEditNotes(pkg: PptxPackage, slidePath: string): boolean {
+export function canEditNotes(pkg: OfficePackage, slidePath: string): boolean {
   return notesSlidePathFor(pkg, slidePath) !== null || notesMasterPath(pkg) !== null
 }
 
@@ -213,7 +213,7 @@ function newNotesSlideXml(text: string): string {
   )
 }
 
-export function setSlideNotes(pkg: PptxPackage, slidePath: string, text: string): PptxPackage {
+export function setSlideNotes(pkg: OfficePackage, slidePath: string, text: string): OfficePackage {
   const existingPath = notesSlidePathFor(pkg, slidePath)
   if (existingPath) {
     const xml = readPart(pkg, existingPath)

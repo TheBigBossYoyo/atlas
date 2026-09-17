@@ -122,3 +122,33 @@ test('USR-16: add, delete and reorder slides, edit notes, presenter view', async
     kill(app)
   }
 })
+
+test('USR-16: an ODP presentation is editable too', async () => {
+  const source = path.join(projectRoot, 'tests', 'e2e', 'fixtures', 'sample.odp')
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-odp-editor-')), 'deck.odp')
+  fs.copyFileSync(source, file)
+
+  const { app, page } = await launch(file)
+  try {
+    const title = page.locator(`${main} .slide-shape--text`).first()
+    const box = (await title.boundingBox())!
+    await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2)
+    const editor = page.getByRole('textbox', { name: 'Edit slide text' })
+    await expect(editor).toBeFocused()
+    await page.keyboard.press('Control+A')
+    await page.keyboard.type('Edited in Atlas')
+    await page.keyboard.press('Escape')
+    await expect(shapeText(page, 'Edited in Atlas')).toBeVisible()
+
+    const before = fs.statSync(file).mtimeMs
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect.poll(() => fs.statSync(file).mtimeMs, { timeout: 10_000 }).toBeGreaterThan(before)
+    await page.waitForTimeout(300)
+
+    const zip = await JSZip.loadAsync(fs.readFileSync(file))
+    expect(Object.keys(zip.files)[0]).toBe('mimetype')
+    expect(await zip.file('content.xml')!.async('string')).toContain('Edited in Atlas')
+  } finally {
+    kill(app)
+  }
+})

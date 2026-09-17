@@ -49,12 +49,18 @@ function readOwnBox(shape: Element): { x: number; y: number; w: number; h: numbe
   return { x, y, w, h }
 }
 
-export type OdpPositionedShape = { readonly element: Element; readonly transform: SlideTransform }
+export type OdpPositionedShape = {
+  readonly element: Element
+  readonly transform: SlideTransform
+  /** USR-16 - nested in a draw:g, so its box is group-relative and it is not moved directly. */
+  readonly inGroup: boolean
+}
 
 /** Depth-first walk of a `draw:page` (or, recursively, a `draw:g`) accumulating group translate offsets. */
 export function traverseOdpShapes(
   container: Element,
   offset: GroupOffset = { dx: 0, dy: 0 },
+  inGroup: boolean = false,
 ): OdpPositionedShape[] {
   const results: OdpPositionedShape[] = []
 
@@ -62,7 +68,7 @@ export function traverseOdpShapes(
     try {
       if (child.localName === 'g') {
         const own = parseTranslateOffset(child.getAttribute('draw:transform'))
-        results.push(...traverseOdpShapes(child, { dx: offset.dx + own.dx, dy: offset.dy + own.dy }))
+        results.push(...traverseOdpShapes(child, { dx: offset.dx + own.dx, dy: offset.dy + own.dy }, true))
       } else if (LEAF_TAGS.has(child.localName)) {
         const box = readOwnBox(child)
         if (!box) {
@@ -72,6 +78,7 @@ export function traverseOdpShapes(
         results.push({
           element: child,
           transform: { x: box.x + offset.dx, y: box.y + offset.dy, w: box.w, h: box.h },
+          inGroup,
         })
       }
     } catch {

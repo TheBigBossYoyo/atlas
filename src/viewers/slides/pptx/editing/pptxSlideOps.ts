@@ -22,7 +22,7 @@ import {
   removeRels,
   serialize,
 } from './opcXml'
-import { readPart, withParts, type PptxPackage } from './pptxPackage'
+import { readPart, withParts, type OfficePackage } from '../../../../office/officePackage'
 
 const PRESENTATION = 'ppt/presentation.xml'
 const PRESENTATION_RELS = relsPathFor(PRESENTATION)
@@ -37,7 +37,7 @@ function isSlideListEntry(el: Element): boolean {
 }
 
 /** The deck's slides in presentation order. */
-export function listSlides(pkg: PptxPackage): SlideEntry[] {
+export function listSlides(pkg: OfficePackage): SlideEntry[] {
   const xml = readPart(pkg, PRESENTATION)
   if (xml === null) return []
   const targets = new Map(readRels(readPart(pkg, PRESENTATION_RELS), PRESENTATION).map((rel) => [rel.id, rel.target]))
@@ -51,7 +51,7 @@ export function listSlides(pkg: PptxPackage): SlideEntry[] {
 }
 
 /** Registers `slidePath` in the presentation right after `afterSldId` (or at the end). */
-function registerSlide(pkg: PptxPackage, slidePath: string, afterSldId: string | null): Record<string, string> | null {
+function registerSlide(pkg: OfficePackage, slidePath: string, afterSldId: string | null): Record<string, string> | null {
   const presentationXml = readPart(pkg, PRESENTATION)
   const contentTypes = readPart(pkg, CONTENT_TYPES)
   if (presentationXml === null || contentTypes === null) return null
@@ -89,12 +89,12 @@ function registerSlide(pkg: PptxPackage, slidePath: string, afterSldId: string |
   }
 }
 
-function layoutPathOf(pkg: PptxPackage, slidePath: string): string | null {
+function layoutPathOf(pkg: OfficePackage, slidePath: string): string | null {
   return readRels(readPart(pkg, relsPathFor(slidePath)), slidePath).find((rel) => rel.type === REL_TYPE.slideLayout)?.target ?? null
 }
 
 /** PowerPoint's "New Slide": the current slide's layout, except a title slide is followed by "Title and Content". */
-function layoutForNewSlide(pkg: PptxPackage, referencePath: string | null): string | null {
+function layoutForNewSlide(pkg: OfficePackage, referencePath: string | null): string | null {
   const layouts = [...pkg.parts.keys()].filter((path) => /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(path)).sort()
   const reference = referencePath ? layoutPathOf(pkg, referencePath) : null
   const typeOf = (path: string): string | null => {
@@ -105,7 +105,7 @@ function layoutForNewSlide(pkg: PptxPackage, referencePath: string | null): stri
   return layouts.find((path) => typeOf(path) === 'obj') ?? reference ?? layouts[0] ?? null
 }
 
-function newSlideXml(pkg: PptxPackage, layoutPath: string): string {
+function newSlideXml(pkg: OfficePackage, layoutPath: string): string {
   const layoutXml = readPart(pkg, layoutPath)
   const doc = parse(
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<p:sld xmlns:a="${NS.a}" xmlns:r="${NS.r}" xmlns:p="${NS.p}">` +
@@ -137,7 +137,7 @@ function newSlideXml(pkg: PptxPackage, layoutPath: string): string {
 }
 
 /** Inserts a new slide after `afterIndex` (-1 for the start); returns the package and the new slide's position. */
-export function addSlide(pkg: PptxPackage, afterIndex: number): { readonly pkg: PptxPackage; readonly index: number } {
+export function addSlide(pkg: OfficePackage, afterIndex: number): { readonly pkg: OfficePackage; readonly index: number } {
   const slides = listSlides(pkg)
   const reference = slides[Math.min(Math.max(afterIndex, 0), slides.length - 1)] ?? null
   const layout = layoutForNewSlide(pkg, reference?.path ?? null)
@@ -151,7 +151,7 @@ export function addSlide(pkg: PptxPackage, afterIndex: number): { readonly pkg: 
   return { pkg: next, index: afterIndex < 0 ? slides.length : afterIndex + 1 }
 }
 
-export function duplicateSlide(pkg: PptxPackage, index: number): PptxPackage {
+export function duplicateSlide(pkg: OfficePackage, index: number): OfficePackage {
   const source = listSlides(pkg)[index]
   const xml = source ? readPart(pkg, source.path) : null
   if (!source || xml === null) return pkg
@@ -167,7 +167,7 @@ export function duplicateSlide(pkg: PptxPackage, index: number): PptxPackage {
   return withParts(pkg, { ...registration, [slidePath]: xml, ...(rels ? { [relsPathFor(slidePath)]: rels } : {}) })
 }
 
-export function deleteSlide(pkg: PptxPackage, index: number): PptxPackage {
+export function deleteSlide(pkg: OfficePackage, index: number): OfficePackage {
   const slides = listSlides(pkg)
   const target = slides[index]
   const presentationXml = readPart(pkg, PRESENTATION)
@@ -193,7 +193,7 @@ export function deleteSlide(pkg: PptxPackage, index: number): PptxPackage {
   })
 }
 
-export function moveSlide(pkg: PptxPackage, from: number, to: number): PptxPackage {
+export function moveSlide(pkg: OfficePackage, from: number, to: number): OfficePackage {
   const xml = readPart(pkg, PRESENTATION)
   if (xml === null || from === to) return pkg
   const doc = parse(xml)

@@ -76,7 +76,7 @@ async function buildPageShapes(
   const positioned = traverseOdpShapes(page)
   const shapes: SlideShape[] = []
 
-  for (const [shapeIndex, { element, transform }] of positioned.entries()) {
+  for (const [shapeIndex, { element, transform, inGroup }] of positioned.entries()) {
     if (signal.cancelled) {
       break
     }
@@ -85,7 +85,9 @@ async function buildPageShapes(
       const id = `${page.getAttribute('draw:name') ?? 'page'}-shape-${shapeIndex}`
       const shape = await buildOdpShape(zip, element, id, transform, index, signal)
       if (shape) {
-        shapes.push(shape)
+        // USR-16 — a shape is addressed for editing by its position in this
+        // same traversal order (see odp/editing/odpEdits.ts).
+        shapes.push({ ...shape, sourceId: String(shapeIndex), movable: !inGroup })
       }
     } catch {
       continue
