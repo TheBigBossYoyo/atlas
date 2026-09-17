@@ -47,6 +47,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   image: {
     pick: () => ipcRenderer.invoke('image:pick'),
   },
+  // USR-19 — explicit, confirmed "Run" of an opened source file (see electron/lib/codeRunner.cjs).
+  codeRun: {
+    start: (path) => ipcRenderer.invoke('code:run', path),
+    stop: (runId) => ipcRenderer.invoke('code:stop', runId),
+    onOutput: (callback) => {
+      const handler = (_e, payload) => callback(payload);
+      ipcRenderer.on('code:run-output', handler);
+      return () => ipcRenderer.removeListener('code:run-output', handler);
+    },
+    onExit: (callback) => {
+      const handler = (_e, payload) => callback(payload);
+      ipcRenderer.on('code:run-exit', handler);
+      return () => ipcRenderer.removeListener('code:run-exit', handler);
+    },
+  },
   // USR-11 — installed font families for the DOCX font picker.
   fonts: {
     list: () => ipcRenderer.invoke('fonts:list'),

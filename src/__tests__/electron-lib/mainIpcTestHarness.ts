@@ -93,6 +93,7 @@ export function createElectronMock(tempDir: string) {
   const dialog = {
     showOpenDialog: vi.fn().mockResolvedValue({ canceled: true, filePaths: [] }),
     showSaveDialog: vi.fn().mockResolvedValue({ canceled: true }),
+    showMessageBox: vi.fn().mockResolvedValue({ response: 0 }),
     showMessageBoxSync: vi.fn(),
     showErrorBox: vi.fn(),
   }

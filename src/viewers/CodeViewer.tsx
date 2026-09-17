@@ -1,157 +1,235 @@
-import { memo, useEffect, useState, useMemo } from 'react'
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ListOrdered, Play, Save, Search, Square, Trash2, WrapText, X } from 'lucide-react'
 
-import type { ViewerProps, NavItem } from '../formats/types'
-import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
-import { getShikiThemeForAppTheme } from './shared/shikiTheme'
+import type { NavItem, ViewerProps } from '../formats/types'
 import { useTheme } from '../hooks/useTheme'
 import { getLangForExt } from './extToLang'
-import { VirtualizedPlainText } from './shared/VirtualizedPlainText'
-import { CODE_VIRTUALIZE_BYTE_THRESHOLD, CODE_VIRTUALIZE_LINE_THRESHOLD } from './shared/sizeThresholds'
+import type { CodeEditorApi } from './code/CodeEditor'
+import { useCodeRun } from './code/useCodeRun'
+import {
+  useRegisterViewerFind,
+  useRegisterViewerSave,
+  useSetNavItems,
+  useSetViewerDirty,
+  useSetViewerStats,
+} from './shared/useViewerContext'
 import './__styles__/viewer-code.css'
 
+/** USR-18 — CodeMirror is a sizeable chunk; only code files pay for it. */
+const LazyCodeEditor = lazy(async () => ({ default: (await import('./code/CodeEditor')).CodeEditor }))
+
+const DARK_THEMES = new Set(['dark', 'nord', 'dracula'])
+const WRAP_STORAGE_KEY = 'atlas.codeEditor.wrap'
+
+const SCRIPT_SYMBOLS: ReadonlyArray<RegExp> = [
+  /(?:export\s+)?(?:async\s+)?function\s+(\w+)/,
+  /(?:export\s+)?(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?\(/,
+  /class\s+(\w+)/,
+]
+
+const SYMBOL_PATTERNS: Readonly<Record<string, ReadonlyArray<RegExp>>> = {
+  typescript: SCRIPT_SYMBOLS,
+  tsx: SCRIPT_SYMBOLS,
+  javascript: SCRIPT_SYMBOLS,
+  jsx: SCRIPT_SYMBOLS,
+  python: [/^(?:def|class)\s+(\w+)/],
+  rust: [/^(?:pub\s+)?(?:fn|struct|enum)\s+(\w+)/],
+}
+
+function readWrapPreference(): boolean {
+  try {
+    return window.localStorage.getItem(WRAP_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function extensionOf(path: string): string {
+  const match = /\.([^./\\]+)$/.exec(path)
+  return match ? match[1] : ''
+}
+
+function baseName(path: string): string {
+  return path.replace(/\\/g, '/').split('/').pop() || path
+}
+
 function CodeViewerBase({ file }: ViewerProps) {
-  const content = file.kind === 'text' ? file.content : ''
-  const lines = useMemo(() => content.split('\n'), [content])
-  const linesCount = lines.length
-
-  // DAT-13 — shiki's tokenizer runs synchronously over the *entire* file on
-  // the main thread; above this size it is a genuine multi-hundred-ms freeze
-  // risk, so large files skip highlighting entirely rather than attempt it
-  // (there is no async/worker-friendly shiki API to fall back to instead).
-  const shouldVirtualize =
-    linesCount > CODE_VIRTUALIZE_LINE_THRESHOLD || content.length > CODE_VIRTUALIZE_BYTE_THRESHOLD
-
-  const { theme: appTheme } = useTheme()
-  const shikiTheme = getShikiThemeForAppTheme(appTheme)
-  
-  const extMatch = file.path.match(/\.[^.]+$/)
-  const ext = extMatch ? extMatch[0] : ''
-  const lang = getLangForExt(ext) || 'text'
-  
-  const [html, setHtml] = useState<string>('')
+  const original = file.kind === 'text' ? file.content : ''
+  const usesCrlf = original.includes('\r\n')
+  const lang = getLangForExt(`.${extensionOf(file.path)}`) || 'text'
+  const { theme } = useTheme()
 
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
+  const setDirty = useSetViewerDirty()
+  const registerSave = useRegisterViewerSave()
+  const registerFind = useRegisterViewerFind()
 
-  const navItems = useMemo(() => {
-    const lines = content.split('\n')
-    const items: NavItem[] = []
-    
-    let regexes: RegExp[] = []
-    if (['typescript', 'tsx', 'javascript', 'jsx'].includes(lang)) {
-      regexes = [
-        /(?:export\s+)?(?:async\s+)?function\s+(\w+)/,
-        /(?:export\s+)?(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?\(/,
-        /class\s+(\w+)/
-      ]
-    } else if (lang === 'python') {
-      regexes = [/^(?:def|class)\s+(\w+)/]
-    } else if (lang === 'rust') {
-      regexes = [/^(?:fn|struct|enum)\s+(\w+)/]
-    }
+  const apiRef = useRef<CodeEditorApi | null>(null)
+  const [lineCount, setLineCount] = useState(() => original.split('\n').length)
+  const [wrap, setWrap] = useState(readWrapPreference)
+  const [savePath, setSavePath] = useState(file.path)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [symbolSource, setSymbolSource] = useState(original)
+  const runner = useCodeRun(file.path)
 
-    if (regexes.length > 0) {
-      lines.forEach((line, idx) => {
-        for (const regex of regexes) {
-          const match = line.match(regex)
-          if (match && match[1]) {
-            items.push({
-              id: `line-${idx}`,
-              label: match[1],
-              onSelect: () => {
-                const els = document.querySelectorAll('.code-viewer__pre .line')
-                if (els[idx]) {
-                  els[idx].scrollIntoView({ behavior: 'smooth', block: 'start' })
-                }
-              }
-            })
-            break
-          }
-        }
-      })
+  const handleReady = useCallback((api: CodeEditorApi | null) => {
+    apiRef.current = api
+  }, [])
+
+  const handleDocChange = useCallback(
+    (lines: number) => {
+      setLineCount(lines)
+      setDirty(true)
+    },
+    [setDirty],
+  )
+
+  const save = useCallback(async (): Promise<boolean> => {
+    const api = apiRef.current
+    if (!api) return false
+    setSaveError(null)
+    const text = api.getText()
+    const content = usesCrlf ? text.replace(/\r?\n/g, '\r\n') : text
+    const extension = extensionOf(savePath)
+    const result = await window.electronAPI?.saveFile?.({
+      content,
+      suggestedName: baseName(savePath),
+      filters: extension ? [{ name: 'Source file', extensions: [extension] }] : [],
+      existingPath: savePath,
+    })
+    if (!result?.saved) {
+      setSaveError(result?.error ?? 'Save was cancelled or unavailable.')
+      return false
     }
-    
-    return items
-  }, [content, lang])
+    if (result.path) setSavePath(result.path)
+    setDirty(false)
+    setSymbolSource(text)
+    return true
+  }, [savePath, setDirty, usesCrlf])
+
+  useEffect(() => {
+    registerSave(save)
+    return () => registerSave(null)
+  }, [registerSave, save])
+
+  useEffect(() => {
+    registerFind(() => apiRef.current?.openSearch())
+    return () => registerFind(null)
+  }, [registerFind])
+
+  useEffect(() => {
+    setStats({ kind: 'code', language: lang, lines: lineCount })
+  }, [setStats, lang, lineCount])
+
+  // Outline of top-level symbols (refreshed on load and save, not per keystroke).
+  const navItems = useMemo<NavItem[]>(() => {
+    const patterns = SYMBOL_PATTERNS[lang] ?? []
+    if (patterns.length === 0) return []
+    return symbolSource.split('\n').flatMap((line, index) => {
+      const name = patterns.map((pattern) => pattern.exec(line)?.[1]).find(Boolean)
+      return name ? [{ id: `line-${index}`, label: name, onSelect: () => apiRef.current?.revealLine(index + 1) }] : []
+    })
+  }, [lang, symbolSource])
 
   useEffect(() => {
     setNavItems(navItems)
   }, [setNavItems, navItems])
 
-  useEffect(() => {
-    setStats({ kind: 'code', language: lang, lines: linesCount })
-  }, [setStats, lang, linesCount])
-
-  useEffect(() => {
-    if (shouldVirtualize) {
-      return
-    }
-
-    let cancelled = false
-
-    const load = async () => {
+  const toggleWrap = (): void => {
+    setWrap((current) => {
       try {
-        const { getSingletonHighlighter } = await import('shiki')
-        const langs = lang === 'text' ? [] : [lang]
-        
-        // We cast langs to any to bypass strict literal checks if needed, but Shiki handles strings well.
-        const highlighter = await getSingletonHighlighter({
-          themes: [shikiTheme],
-          langs: langs
-        })
-        
-        if (cancelled) return
-        
-        const loadedLangs = highlighter.getLoadedLanguages()
-        const finalLang = loadedLangs.includes(lang) ? lang : 'text'
-
-        const htmlStr = highlighter.codeToHtml(content, {
-          lang: finalLang,
-          theme: shikiTheme
-        })
-        
-        if (!cancelled) {
-          setHtml(htmlStr)
-        }
-      } catch (err) {
-        console.error('Failed to highlight code:', err)
-        if (!cancelled) {
-          setHtml(`<pre><code>${content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`)
-        }
+        window.localStorage.setItem(WRAP_STORAGE_KEY, current ? '0' : '1')
+      } catch {
+        // Preference only.
       }
-    }
-    
-    load()
-
-    return () => {
-      cancelled = true
-    }
-  }, [content, lang, shikiTheme, shouldVirtualize])
-
-  if (shouldVirtualize) {
-    return (
-      <div className="code-viewer code-viewer--virtualized">
-        <div className="code-viewer__virtualized-notice" role="status">
-          Large file — syntax highlighting is disabled for performance.
-        </div>
-        <VirtualizedPlainText
-          lines={lines}
-          className="code-viewer__virtualized-body"
-          lineClassName="code-viewer__virtualized-line"
-        />
-      </div>
-    )
+      return !current
+    })
   }
 
   return (
     <div className="code-viewer">
-      {html ? (
-        <div
-          className="code-viewer__pre"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      ) : (
-        <pre className="code-viewer__pre"><code>{content}</code></pre>
+      <div className="code-viewer__toolbar" role="toolbar" aria-label="Code editor">
+        <span className="code-viewer__language">{lang}</span>
+        <div className="code-viewer__actions">
+          {runner.isAvailable && (
+            <button
+              type="button"
+              className="code-viewer__button"
+              aria-label={runner.state.status === 'running' ? 'Stop' : 'Run'}
+              title={runner.state.status === 'running' ? 'Stop the running program' : 'Save and run this file'}
+              onClick={() => {
+                if (runner.state.status === 'running') {
+                  runner.stop()
+                  return
+                }
+                // The file on disk is what runs, so an edited file is saved first.
+                void save().then((saved) => (saved ? runner.run() : undefined))
+              }}
+            >
+              {runner.state.status === 'running' ? <Square size={15} /> : <Play size={15} />}
+              {runner.state.status === 'running' ? 'Stop' : 'Run'}
+            </button>
+          )}
+          <button type="button" className="code-viewer__button" aria-label="Find and replace" title="Find and replace (Ctrl+F)" onClick={() => apiRef.current?.openSearch()}>
+            <Search size={15} />
+          </button>
+          <button type="button" className="code-viewer__button" aria-label="Go to line" title="Go to line (Ctrl+G)" onClick={() => apiRef.current?.goToLine()}>
+            <ListOrdered size={15} />
+          </button>
+          <button type="button" className="code-viewer__button" aria-label="Word wrap" aria-pressed={wrap} title="Word wrap" onClick={toggleWrap}>
+            <WrapText size={15} />
+          </button>
+          <button type="button" className="code-viewer__button code-viewer__button--primary" aria-label="Save" title="Save (Ctrl+S)" onClick={() => void save()}>
+            <Save size={15} />
+            Save
+          </button>
+        </div>
+      </div>
+      {saveError && (
+        <div className="code-viewer__error" role="alert">
+          {saveError}
+        </div>
+      )}
+      <div className="code-viewer__body">
+        <Suspense fallback={<pre className="code-viewer__pre"><code>{original}</code></pre>}>
+          <LazyCodeEditor
+            initialText={original}
+            fileName={baseName(file.path)}
+            dark={DARK_THEMES.has(theme)}
+            wrap={wrap}
+            onDocChange={handleDocChange}
+            onReady={handleReady}
+          />
+        </Suspense>
+      </div>
+      {runner.isOpen && (
+        <div className="code-viewer__output" role="region" aria-label="Program output">
+          <div className="code-viewer__output-header">
+            <span className="code-viewer__output-status" role="status">
+              {runner.state.status === 'running'
+                ? 'Running…'
+                : runner.state.status === 'finished'
+                  ? runner.state.summary
+                  : 'Output'}
+            </span>
+            <div className="code-viewer__actions">
+              <button type="button" className="code-viewer__button" aria-label="Clear output" title="Clear output" onClick={runner.clear}>
+                <Trash2 size={14} />
+              </button>
+              <button type="button" className="code-viewer__button" aria-label="Close output" title="Close output" onClick={runner.close}>
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+          <pre className="code-viewer__output-body">
+            {runner.chunks.map((chunk, index) => (
+              <span key={index} className={`code-viewer__output-chunk code-viewer__output-chunk--${chunk.stream}`}>
+                {chunk.text}
+              </span>
+            ))}
+          </pre>
+        </div>
       )}
     </div>
   )

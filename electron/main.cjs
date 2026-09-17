@@ -6,6 +6,7 @@ const fs = require('fs');
 const { createPathAllowlist } = require('./lib/pathAllowlist.cjs');
 const { createRecentFilesStore } = require('./lib/recentFilesStore.cjs');
 const { listSystemFontFamilies } = require('./lib/systemFonts.cjs');
+const { createCodeRunner, runtimeFor: runCodeRuntimeFor } = require('./lib/codeRunner.cjs');
 const { atomicWriteFile, FileLockedError, classifyWriteError } = require('./lib/atomicWrite.cjs');
 const { printHtmlToPdfBuffer, PrintToPdfError } = require('./lib/printToPdf.cjs');
 const { decodeTextBuffer } = require('./lib/textDecoding.cjs');
@@ -973,6 +974,68 @@ ipcMain.handle('shell:reveal-in-folder', (event, filePath) => {
     logMainEvent('ERROR', 'shell:reveal-in-folder failed', err);
     return { ok: false };
   }
+});
+
+// USR-19 — explicit "Run" for an opened source file. Only allowlisted files
+// run, the file on disk is what runs, and a native confirmation (which the
+// renderer cannot answer) is required once per file per session. See
+// electron/lib/codeRunner.cjs for the process sandboxing rules.
+const approvedRunPaths = new Set();
+let codeRunner = null;
+
+function getCodeRunner() {
+  if (!codeRunner) {
+    codeRunner = createCodeRunner({
+      send: (channel, payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+      },
+    });
+  }
+  return codeRunner;
+}
+
+ipcMain.handle('code:run', async (event, filePath) => {
+  if (!isFromMainFrame(event)) return { ok: false, error: SENDER_FRAME_ERROR_MESSAGE };
+  if (typeof filePath !== 'string' || !pathAllowlist.has(filePath)) {
+    return { ok: false, error: NOT_ALLOWLISTED_MESSAGE };
+  }
+  const runtime = runCodeRuntimeFor(filePath);
+  if (!runtime) return { ok: false, error: 'Atlas cannot run this kind of file.' };
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+
+  if (!approvedRunPaths.has(filePath)) {
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Run', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+      title: 'Run code',
+      message: `Run ${path.basename(filePath)}?`,
+      detail:
+        `Atlas will run this file with ${runtime.language} in:\n${path.dirname(filePath)}\n\n` +
+        'A program can read and change your files and use the network. Only run code you trust. ' +
+        'It is stopped automatically after 60 seconds.',
+    });
+    if (response !== 0) return { ok: false, cancelled: true };
+    approvedRunPaths.add(filePath);
+  }
+
+  try {
+    return getCodeRunner().start(filePath);
+  } catch (err) {
+    logMainEvent('ERROR', 'code:run failed', err);
+    return { ok: false, error: 'The program could not be started.' };
+  }
+});
+
+ipcMain.handle('code:stop', (event, runId) => {
+  if (!isFromMainFrame(event) || typeof runId !== 'number') return false;
+  return codeRunner ? codeRunner.stop(runId) : false;
+});
+
+app.on('will-quit', () => {
+  if (codeRunner) codeRunner.dispose();
 });
 
 ipcMain.on('set-theme', (_event, theme) => {  currentOverlayColors = OVERLAY_COLORS[theme] || OVERLAY_COLORS.light;

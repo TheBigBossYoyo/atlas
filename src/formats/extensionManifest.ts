@@ -42,7 +42,7 @@ export interface ExtensionManifestEntry {
   /** Windows file-association description (electron-builder `description`). */
   readonly associationDescription: string
   readonly associationRole: WindowsAssociationRole
-  /** shiki bundled-language id. Present only for `format: 'code'` entries. */
+  /** Language id for `format: 'code'` entries — the code editor's language label and symbol-pattern key (USR-18). */
   readonly shikiLang?: string
 }
 
@@ -119,10 +119,9 @@ const MISC_DOCUMENT_ROWS: ReadonlyArray<RawEntry> = [
   ['fods', 'ods', 'Flat OpenDocument Spreadsheet', 'Flat OpenDocument Spreadsheet', 'Viewer'],
 ]
 
-// Source-code extensions -> shiki bundled-language id. `getSingletonHighlighter`
-// resolves both canonical shiki language ids and its own documented aliases
-// (e.g. `bash`, `cjs`, `bat` for `cmd`), so these values are deliberately a
-// mix of the two rather than always the "canonical" name.
+// Source-code extensions -> language id (historically shiki ids; kept as the
+// code editor's language label — see viewers/CodeViewer.tsx). Some are aliases
+// rather than canonical names (e.g. `bash` for `.zsh`, `bat` for `.cmd`).
 const CODE_ROWS: ReadonlyArray<RawEntry> = [
   ['ts', 'code', 'Source Code', 'Source Code', 'Viewer', 'typescript'],
   ['tsx', 'code', 'Source Code', 'Source Code', 'Viewer', 'tsx'],

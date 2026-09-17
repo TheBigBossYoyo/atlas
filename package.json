@@ -25,7 +25,15 @@
     "electron:preview": "npm run build && electron ."
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.5",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.43.12",
     "@glideapps/glide-data-grid": "^6.0.3",
+    "codemirror": "^6.0.2",
     "docx": "^9.6.1",
     "dompurify": "^3.4.15",
     "fast-xml-parser": "^5.8.0",
@@ -49,7 +57,6 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "rtf.js": "^3.0.9",
-    "shiki": "^4.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {

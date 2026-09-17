@@ -1,19 +1,18 @@
 /**
- * T11 (DAT-16) — CodeViewer render/parse fixture coverage, plus T2/DAT-13's
- * large-file virtualized-plain-text fallback.
+ * USR-18/USR-19 — code files open in a real editor (CodeMirror 6) with save,
+ * word wrap and an explicit Run action. T11's fixture coverage is kept: a
+ * real .ts fixture still renders through the editor.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { render, screen, waitFor } from '@testing-library/react'
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { LoadedFile } from '../../formats/types'
 import { ViewerProvider } from '../shared/ViewerContext'
-import { CODE_VIRTUALIZE_LINE_THRESHOLD } from '../shared/sizeThresholds'
 import { CodeViewer } from '../CodeViewer'
+import { isRunnable } from '../code/useCodeRun'
 
-// CodeViewer calls useTheme(), which reads window.matchMedia on mount; jsdom
-// doesn't implement it (mirrors viewerScrollContainers.test.tsx).
 beforeAll(() => {
   if (typeof window.matchMedia !== 'function') {
     window.matchMedia = ((query: string) => ({
@@ -29,75 +28,120 @@ beforeAll(() => {
   }
 })
 
-vi.mock('shiki', () => ({
-  getSingletonHighlighter: async () => ({
-    getLoadedLanguages: () => ['typescript', 'text'],
-    codeToHtml: (code: string, opts: { lang: string }) =>
-      `<pre class="shiki" data-lang="${opts.lang}"><code>${code.replace(/</g, '&lt;')}</code></pre>`,
-  }),
-}))
-
 const FIXTURES_DIR = path.resolve(process.cwd(), 'src/viewers/__fixtures__')
 
-function readFixtureText(name: string): string {
-  return readFileSync(path.join(FIXTURES_DIR, name), 'utf8')
+function codeFile(content: string, filePath = '/tmp/sample.ts'): LoadedFile {
+  return { kind: 'text', content, path: filePath, format: 'code' }
 }
 
-describe('CodeViewer — fixture render/parse (T11)', () => {
-  it('renders a real .ts fixture with shiki-highlighted output', async () => {
-    const file: LoadedFile = {
-      kind: 'text',
-      content: readFixtureText('sample.ts'),
-      path: '/tmp/sample.ts',
-      format: 'code',
-    }
+function renderViewer(file: LoadedFile) {
+  return render(
+    <ViewerProvider filePath={file.path}>
+      <CodeViewer file={file} />
+    </ViewerProvider>,
+  )
+}
 
-    const { container } = render(
-      <ViewerProvider filePath={file.path}>
-        <CodeViewer file={file} />
-      </ViewerProvider>,
-    )
+beforeEach(() => {
+  window.localStorage.clear()
+  window.electronAPI = {
+    saveFile: vi.fn().mockResolvedValue({ saved: true, path: '/tmp/sample.ts' }),
+  } as unknown as typeof window.electronAPI
+})
 
-    await waitFor(() => expect(container.querySelector('.shiki')).not.toBeNull())
-    expect(container.querySelector('.shiki')?.getAttribute('data-lang')).toBe('typescript')
-    expect(container.textContent).toContain('atlasFixture')
+describe('CodeViewer — editor (USR-18)', () => {
+  it('renders a real .ts fixture in the editor with its language and line count', async () => {
+    const content = readFileSync(path.join(FIXTURES_DIR, 'sample.ts'), 'utf8')
+    const { container } = renderViewer(codeFile(content))
+
+    await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull())
+    expect(container.querySelector('.cm-content')?.textContent).toContain('atlasFixture')
+    expect(screen.getByText('typescript')).toBeInTheDocument()
+    // Line numbers, not a plain <pre>.
+    expect(container.querySelector('.cm-gutters')).not.toBeNull()
   })
 
-  it('falls back to plain text when shiki fails, without crashing', async () => {
-    const file: LoadedFile = {
-      kind: 'text',
-      content: 'const x = 1\n',
-      path: '/tmp/example.unknownext',
-      format: 'code',
-    }
+  it('saves the edited document through the shared save contract', async () => {
+    const { container } = renderViewer(codeFile('const a = 1\n'))
+    await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull())
 
-    const { container } = render(
-      <ViewerProvider filePath={file.path}>
-        <CodeViewer file={file} />
-      </ViewerProvider>,
-    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-    await waitFor(() => expect(container.querySelector('.shiki')).not.toBeNull())
+    await waitFor(() => expect(window.electronAPI?.saveFile).toHaveBeenCalled())
+    const request = vi.mocked(window.electronAPI!.saveFile!).mock.calls[0][0]
+    expect(request).toMatchObject({ content: 'const a = 1\n', existingPath: '/tmp/sample.ts' })
+  })
+
+  it('remembers the word wrap preference', async () => {
+    const { container, unmount } = renderViewer(codeFile('const a = 1\n'))
+    await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull())
+
+    const wrapButton = screen.getByRole('button', { name: 'Word wrap' })
+    expect(wrapButton).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(wrapButton)
+    expect(wrapButton).toHaveAttribute('aria-pressed', 'true')
+    unmount()
+
+    renderViewer(codeFile('const a = 1\n'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Word wrap' })).toHaveAttribute('aria-pressed', 'true'))
   })
 })
 
-describe('CodeViewer — large-file virtualized fallback (T2/DAT-13)', () => {
-  it('skips shiki and renders virtualized plain text above the line threshold', async () => {
-    const bigContent = Array.from({ length: CODE_VIRTUALIZE_LINE_THRESHOLD + 10 }, (_, i) => `line ${i}`).join('\n')
-    const file: LoadedFile = {
-      kind: 'text',
-      content: bigContent,
-      path: '/tmp/huge.ts',
-      format: 'code',
-    }
+describe('CodeViewer — run (USR-19)', () => {
+  it('knows which files can be run', () => {
+    expect(isRunnable('/tmp/a.js')).toBe(true)
+    expect(isRunnable('/tmp/a.PY')).toBe(true)
+    expect(isRunnable('/tmp/a.ts')).toBe(true)
+    expect(isRunnable('/tmp/a.rs')).toBe(false)
+    expect(isRunnable('/tmp/Makefile')).toBe(false)
+  })
 
-    render(
-      <ViewerProvider filePath={file.path}>
-        <CodeViewer file={file} />
-      </ViewerProvider>,
-    )
+  it('offers Run only when the main process exposes it', async () => {
+    const { container, unmount } = renderViewer(codeFile('print(1)\n', '/tmp/a.py'))
+    await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull())
+    expect(screen.queryByRole('button', { name: 'Run' })).toBeNull()
+    unmount()
 
-    expect(screen.getByText(/syntax highlighting is disabled/i)).toBeInTheDocument()
-    expect(screen.getByText('line 0')).toBeInTheDocument()
+    window.electronAPI = {
+      ...window.electronAPI,
+      codeRun: { start: vi.fn(), stop: vi.fn(), onOutput: () => () => {}, onExit: () => () => {} },
+    } as unknown as typeof window.electronAPI
+
+    renderViewer(codeFile('print(1)\n', '/tmp/a.py'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument())
+  })
+
+  it('saves before running, and streams the program output into the panel', async () => {
+    const listeners: { output?: (p: unknown) => void; exit?: (p: unknown) => void } = {}
+    const start = vi.fn().mockResolvedValue({ ok: true, runId: 3 })
+    window.electronAPI = {
+      saveFile: vi.fn().mockResolvedValue({ saved: true, path: '/tmp/a.js' }),
+      codeRun: {
+        start,
+        stop: vi.fn(),
+        onOutput: (callback: (p: unknown) => void) => {
+          listeners.output = callback
+          return () => {}
+        },
+        onExit: (callback: (p: unknown) => void) => {
+          listeners.exit = callback
+          return () => {}
+        },
+      },
+    } as unknown as typeof window.electronAPI
+
+    const { container } = renderViewer(codeFile('console.log(1)\n', '/tmp/a.js'))
+    await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+    await waitFor(() => expect(start).toHaveBeenCalledWith('/tmp/a.js'))
+    expect(window.electronAPI?.saveFile).toHaveBeenCalled()
+    await screen.findByRole('button', { name: 'Stop' })
+
+    listeners.output?.({ runId: 3, stream: 'stdout', text: 'hello world' })
+    await screen.findByText('hello world')
+
+    listeners.exit?.({ runId: 3, code: 0, timedOut: false, stopped: false })
+    await screen.findByText('Finished (exit code 0).')
   })
 })

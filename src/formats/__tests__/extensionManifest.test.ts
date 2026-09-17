@@ -73,13 +73,14 @@ describe('CODE_EXTENSION_TO_SHIKI_LANG (T6/DAT-14)', () => {
     }
   })
 
-  it('every mapped language is a real shiki bundled language or alias', async () => {
-    const shikiLangs = await import('shiki/langs')
-    const bundled = (shikiLangs as { bundledLanguages?: Record<string, unknown> }).bundledLanguages ?? shikiLangs
-    const knownLangIds = new Set(Object.keys(bundled as Record<string, unknown>))
-
+  // USR-18 — highlighting moved to CodeMirror, which picks a language from the
+  // file name itself; these ids stay as the editor's language label and as the
+  // key for its symbol-outline patterns, so what matters is that they are
+  // well-formed and consistent, not that a particular library bundles them.
+  it('every mapped language is a well-formed, lowercase language id', () => {
     for (const [ext, lang] of Object.entries(CODE_EXTENSION_TO_SHIKI_LANG)) {
-      expect(knownLangIds.has(lang), `.${ext} -> "${lang}" is not a known shiki language/alias`).toBe(true)
+      expect(lang, `.${ext} has an empty language id`).toBeTruthy()
+      expect(lang, `.${ext} -> "${lang}" should be a lowercase id with no spaces`).toMatch(/^[a-z0-9+#-]+$/)
     }
   })
 })

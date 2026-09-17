@@ -1,59 +1,143 @@
-/* Code viewer container — mirrors the working .docx-viewer scroll pattern
-   (DAT-02 / UX-04): the shared `.content--viewer .preview-panel` sets
-   `overflow: hidden`, so the viewer root itself must own scrolling or
-   content past one screen is unreachable. */
+/* USR-18 — code files open in a CodeMirror 6 editor. The viewer root fills the
+   preview panel (which clips overflow); CodeMirror's own scroller scrolls. */
 .code-viewer {
+  display: flex;
+  flex-direction: column;
   height: 100%;
   width: 100%;
-  overflow: auto;
-  padding: 16px 24px;
-  background-color: var(--bg-secondary);
+  min-height: 0;
+  background-color: var(--bg-primary);
+}
+
+.code-viewer__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+}
+
+.code-viewer__language {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.code-viewer__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.code-viewer__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.code-viewer__button:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.code-viewer__button[aria-pressed='true'] {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+.code-viewer__button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.code-viewer__button--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.code-viewer__button--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.code-viewer__error {
+  padding: 6px 12px;
+  color: var(--danger, #d33);
+  border-bottom: 1px solid var(--border-primary);
+  font-size: 13px;
+}
+
+.code-viewer__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-editor {
+  height: 100%;
 }
 
 .code-viewer__pre {
   margin: 0;
-  /* --font-mono is not defined anywhere in the app (there is no such custom
-     property) — reference the same monospace stack every other code
-     surface uses (.editor-panel__textarea etc.) so the highlighted/fallback
-     text actually renders in JetBrains Mono instead of silently falling
-     through to a generic system monospace font. */
+  padding: 16px 24px;
+  height: 100%;
+  overflow: auto;
   font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
   font-size: 13px;
   line-height: 1.6;
 }
-
-.code-viewer__pre pre {
-  margin: 0;
-  background: transparent !important;
-}
-
-/* T2/DAT-13 — the large-file fallback (VirtualizedPlainText) owns its own
-   scrolling internally, so the outer container must not also scroll/pad
-   (that would double-scroll and misalign the notice banner). */
-.code-viewer--virtualized {
+/* USR-19 — output of an explicitly run program. */
+.code-viewer__output {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  padding: 0;
+  max-height: 40%;
+  min-height: 120px;
+  border-top: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
 }
 
-.code-viewer__virtualized-notice {
-  flex-shrink: 0;
-  padding: 8px 24px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  background-color: var(--bg-tertiary);
+.code-viewer__output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 12px;
   border-bottom: 1px solid var(--border-primary);
 }
 
-.code-viewer__virtualized-body {
-  flex: 1;
-  min-height: 0;
+.code-viewer__output-status {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
-.code-viewer__virtualized-line {
-  padding: 0 24px;
+.code-viewer__output-body {
+  flex: 1;
+  margin: 0;
+  padding: 8px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.code-viewer__output-chunk--stderr {
+  color: var(--danger, #d33);
+}
+
+.code-viewer__output-chunk--system {
+  color: var(--text-tertiary);
 }

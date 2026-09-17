@@ -87,6 +87,23 @@ interface ElectronAPI {
   image?: {
     pick: () => Promise<ImagePickResult>;
   };
+  /** USR-19 — explicit, confirmed run of an opened source file. */
+  codeRun?: {
+    start: (path: string) => Promise<{ ok: boolean; runId?: number; error?: string; cancelled?: boolean }>;
+    stop: (runId: number) => Promise<boolean>;
+    onOutput: (
+      callback: (payload: { runId: number; stream: "stdout" | "stderr" | "system"; text: string }) => void,
+    ) => () => void;
+    onExit: (
+      callback: (payload: {
+        runId: number;
+        code: number | null;
+        timedOut: boolean;
+        stopped: boolean;
+        error?: string;
+      }) => void,
+    ) => () => void;
+  };
   /** USR-11 — installed font family names (empty outside Windows). */
   fonts?: {
     list: () => Promise<string[]>;

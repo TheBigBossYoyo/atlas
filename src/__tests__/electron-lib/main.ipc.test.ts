@@ -26,6 +26,21 @@ import {
 } from './mainIpcTestHarness'
 
 const PRINT_TO_PDF_MODULE_PATH = nodeRequire.resolve('../../../electron/lib/printToPdf.cjs')
+const CODE_RUNNER_MODULE_PATH = nodeRequire.resolve('../../../electron/lib/codeRunner.cjs')
+
+/** USR-19 — stands in for electron/lib/codeRunner.cjs (its own behavior is covered by codeRunner.test.ts). */
+function createCodeRunnerMock() {
+  const start = vi.fn((filePath: string) => ({ ok: true, runId: 7, filePath }))
+  const stop = vi.fn(() => true)
+  const dispose = vi.fn()
+  return {
+    createCodeRunner: vi.fn(() => ({ start, stop, dispose })),
+    runtimeFor: vi.fn((filePath: string) =>
+      filePath.endsWith('.js') ? { language: 'JavaScript (Node.js)', candidates: [] } : null,
+    ),
+    handles: { start, stop, dispose },
+  }
+}
 
 // A real `BrowserWindow`/`webContents.printToPDF` round trip is exercised by
 // `tests/e2e/export.spec.ts` (real Electron, real hidden window); faking
@@ -54,6 +69,7 @@ describe('electron/main.cjs IPC handlers', () => {
   let tempDir: string
   let mocks: ReturnType<typeof createElectronMock>
   let printToPdfMock: ReturnType<typeof createPrintToPdfMock>
+  let codeRunnerMock: ReturnType<typeof createCodeRunnerMock>
   // main.cjs registers `process.on('uncaughtException'/'unhandledRejection', ...)`
   // at module scope (P1.15/ELEC-13) with no matching removeListener — it's
   // designed as a singleton app entry point, not something re-required many
@@ -68,12 +84,17 @@ describe('electron/main.cjs IPC handlers', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-main-ipc-'))
     mocks = createElectronMock(tempDir)
     printToPdfMock = createPrintToPdfMock()
-    await loadMainCjs(mocks, { [PRINT_TO_PDF_MODULE_PATH]: printToPdfMock })
+    codeRunnerMock = createCodeRunnerMock()
+    await loadMainCjs(mocks, {
+      [PRINT_TO_PDF_MODULE_PATH]: printToPdfMock,
+      [CODE_RUNNER_MODULE_PATH]: codeRunnerMock,
+    })
   })
 
   afterEach(() => {
     delete nodeRequire.cache[ELECTRON_MODULE_PATH]
     delete nodeRequire.cache[PRINT_TO_PDF_MODULE_PATH]
+    delete nodeRequire.cache[CODE_RUNNER_MODULE_PATH]
     delete nodeRequire.cache[MAIN_CJS_PATH]
     fs.rmSync(tempDir, { recursive: true, force: true })
 
@@ -659,6 +680,70 @@ describe('electron/main.cjs IPC handlers', () => {
       expect(mocks.dialog.showMessageBoxSync).not.toHaveBeenCalled()
     })
   })
+
+  describe('code:run / code:stop (USR-19)', () => {
+    async function allowlist(name: string): Promise<string> {
+      const filePath = path.join(tempDir, name)
+      fs.writeFileSync(filePath, 'console.log(1)')
+      mocks.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [filePath] })
+      await handler('dialog:openFileBinary')(ALLOWED_EVENT)
+      return filePath
+    }
+
+    it('rejects a request not from the main frame', async () => {
+      const result = (await handler('code:run')(REJECTED_EVENT, 'C:/x.js')) as { ok: boolean }
+      expect(result.ok).toBe(false)
+      expect(codeRunnerMock.handles.start).not.toHaveBeenCalled()
+    })
+
+    it('refuses a path that was never opened in Atlas', async () => {
+      const result = (await handler('code:run')(ALLOWED_EVENT, path.join(tempDir, 'stranger.js'))) as {
+        ok: boolean
+        error?: string
+      }
+      expect(result.ok).toBe(false)
+      expect(codeRunnerMock.handles.start).not.toHaveBeenCalled()
+      expect(mocks.dialog.showMessageBox).not.toHaveBeenCalled()
+    })
+
+    it('refuses a file type it cannot run, before asking the user anything', async () => {
+      const filePath = await allowlist('notes.txt')
+      const result = (await handler('code:run')(ALLOWED_EVENT, filePath)) as { ok: boolean }
+      expect(result.ok).toBe(false)
+      expect(mocks.dialog.showMessageBox).not.toHaveBeenCalled()
+    })
+
+    it('runs nothing when the confirmation dialog is declined', async () => {
+      const filePath = await allowlist('script.js')
+      mocks.dialog.showMessageBox.mockResolvedValueOnce({ response: 1 })
+      const result = (await handler('code:run')(ALLOWED_EVENT, filePath)) as { ok: boolean; cancelled?: boolean }
+      expect(result).toMatchObject({ ok: false, cancelled: true })
+      expect(codeRunnerMock.handles.start).not.toHaveBeenCalled()
+    })
+
+    it('asks once per file, then runs the file on disk', async () => {
+      const filePath = await allowlist('script.js')
+      const first = (await handler('code:run')(ALLOWED_EVENT, filePath)) as { ok: boolean; runId?: number }
+      const second = (await handler('code:run')(ALLOWED_EVENT, filePath)) as { ok: boolean }
+
+      expect(first).toMatchObject({ ok: true, runId: 7 })
+      expect(second.ok).toBe(true)
+      expect(mocks.dialog.showMessageBox).toHaveBeenCalledTimes(1)
+      expect(codeRunnerMock.handles.start).toHaveBeenNthCalledWith(1, filePath)
+      expect(codeRunnerMock.handles.start).toHaveBeenNthCalledWith(2, filePath)
+    })
+
+    it('stops only a numeric run id from the main frame', async () => {
+      const filePath = await allowlist('script.js')
+      await handler('code:run')(ALLOWED_EVENT, filePath)
+
+      expect(await handler('code:stop')(REJECTED_EVENT, 7)).toBe(false)
+      expect(await handler('code:stop')(ALLOWED_EVENT, 'seven')).toBe(false)
+      expect(await handler('code:stop')(ALLOWED_EVENT, 7)).toBe(true)
+      expect(codeRunnerMock.handles.stop).toHaveBeenCalledWith(7)
+    })
+  })
+
 })
 
 // wave-3 shell-polish follow-up — restoring saved window bounds happens at
