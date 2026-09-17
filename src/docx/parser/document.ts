@@ -1461,6 +1461,7 @@ function parseParaProps(element: OrderedXmlNode | undefined): ParaProps | undefi
   const shd = parseShading(child(element, 'w:shd'))
   const framePr = parseFrameProps(child(element, 'w:framePr'))
   const divId = parseInteger(attr(child(element, 'w:divId'), 'w:val'))
+  const bidi = parseToggleElement(child(element, 'w:bidi'))
   const sectPr = parseSectionProps(child(element, 'w:sectPr'))
 
   if (pStyle !== undefined) props.pStyle = pStyle
@@ -1483,6 +1484,7 @@ function parseParaProps(element: OrderedXmlNode | undefined): ParaProps | undefi
   if (shd !== undefined) props.shd = shd
   if (framePr !== undefined) props.framePr = framePr
   if (divId !== undefined) props.divId = divId
+  if (bidi !== undefined) props.bidi = bidi
   if (sectPr !== undefined) props.sectPr = sectPr
 
   return hasProps(props) ? props : undefined

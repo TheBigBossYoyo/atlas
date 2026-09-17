@@ -163,3 +163,72 @@ test('opening a 100k-row XLSX keeps every renderer main-thread task under 200ms'
     await fs.rm(largeXlsxPath, { force: true })
   }
 })
+
+/**
+ * D23 — typing in a long DOCX must not stall. Every keystroke re-paginates
+ * the document; before the per-paragraph line cache and the time-sliced
+ * yielding, a single character on a ~35-page document took about three
+ * seconds (most of it asleep, waiting on requestAnimationFrame, which
+ * Chromium throttles to ~1 Hz whenever the window is not focused — exactly
+ * the situation a Playwright-driven window is in).
+ *
+ * The budget is deliberately generous: CI hardware is slower than a
+ * developer machine, and the regression this guards against was an order of
+ * magnitude bigger.
+ */
+const TYPING_BUDGET_MS = 2_500
+
+test('typing in a 35-page DOCX stays responsive', async () => {
+  const { Document, Packer, Paragraph, TextRun } = await import('docx')
+  const children = Array.from(
+    { length: 300 },
+    (_, index) =>
+      new Paragraph({
+        children: [
+          new TextRun(
+            `Paragraph ${index + 1}. ${'The quick brown fox jumps over the lazy dog while the editor keeps every keystroke responsive. '.repeat(3)}`,
+          ),
+        ],
+      }),
+  )
+  const fixture = path.join(fixtureDir, 'long-typing.docx')
+  await fs.writeFile(fixture, await Packer.toBuffer(new Document({ sections: [{ children }] })))
+
+  const app = await electron.launch({
+    args: ['.', fixture],
+    cwd: projectRoot,
+    env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
+  })
+  try {
+    const page = await app.firstWindow()
+    await page.waitForSelector('[data-paragraph-path]', { timeout: 60_000 })
+    await page.waitForFunction(() => document.querySelectorAll('.docx-page').length > 5, null, { timeout: 60_000 })
+    await page.waitForTimeout(1_500)
+    expect(await page.locator('.docx-page').count()).toBeGreaterThan(20)
+
+    await page.locator('[data-paragraph-path="1"]').first().click()
+    await page.waitForTimeout(200)
+
+    const samples: number[] = []
+    for (let i = 0; i < 5; i++) {
+      const started = Date.now()
+      await page.keyboard.type('z')
+      await page.waitForFunction(
+        (count) => (document.querySelector('[data-paragraph-path="1"]')?.textContent ?? '').includes('z'.repeat(count)),
+        i + 1,
+        { timeout: 30_000, polling: 10 },
+      )
+      samples.push(Date.now() - started)
+    }
+
+    const median = [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]
+    expect(median, `keystroke latencies: ${samples.join(', ')} ms`).toBeLessThan(TYPING_BUDGET_MS)
+  } finally {
+    try {
+      execFileSync('taskkill', ['/PID', String(app.process().pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch {
+      app.process().kill()
+    }
+    await fs.rm(path.join(fixtureDir, 'long-typing.docx'), { force: true })
+  }
+})

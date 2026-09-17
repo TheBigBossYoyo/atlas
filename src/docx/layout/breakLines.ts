@@ -166,6 +166,10 @@ async function buildLineBox(
     lineHeight,
     isJustified: canJustify && spaceCount > 0,
     justificationStretch,
+    // DEFER-2 — a right-to-left paragraph (or one whose runs are all marked
+    // rtl) keeps its items in logical order; the renderer hands the line to
+    // the browser's bidi algorithm via dir="rtl".
+    ...(input.paraProps.bidi === true ? { rtl: true } : {}),
     ...(drawingClearancePt > 0 ? { drawingClearancePt } : {}),
     ...(endsWithPageBreak ? { endsWithPageBreak: true } : {}),
     ...(endsWithColumnBreak ? { endsWithColumnBreak: true } : {}),

@@ -348,6 +348,8 @@ export interface ParaProps {
   readonly shd?: Shading
   readonly framePr?: FrameProps
   readonly divId?: number
+  /** DEFER-2 — `w:bidi`: this paragraph reads right-to-left (alignment and text direction flip). */
+  readonly bidi?: OnOff
   readonly sectPr?: SectionProps
 }
 

@@ -20,6 +20,7 @@ import type {
 import { resolveParaProps, resolveRunProps } from '../parser/cascade'
 
 import { breakLines, resolveLeftIndentPt, resolveLineIndentExtraPt } from './breakLines'
+import { cachedParagraphLines, paragraphLineCacheKey } from './lineCache'
 import { itemizeRuns } from './itemize'
 import { layoutTable } from './layoutTable'
 import {
@@ -52,15 +53,26 @@ import type { LaidOutCell, LaidOutRow, LaidOutTable } from './tableTypes'
 import type { EffectiveParaProps, EffectiveRunProps, LineBox, LineItem, TabStop } from './types'
 
 /**
- * Yield to the event loop so the renderer can paint the loading indicator
- * and respond to user input between heavy itemize/measure blocks. Uses
- * requestAnimationFrame when available (aligns with browser paint cadence)
- * and falls back to setTimeout(0) in Node tests / non-DOM environments.
+ * Yield to the event loop so the renderer can paint the loading indicator and
+ * respond to user input between heavy itemize/measure blocks.
+ *
+ * D23 — this used to await `requestAnimationFrame`, which ties every yield to
+ * the frame cadence: Chromium throttles rAF hard (down to ~1 Hz) whenever the
+ * window is not the focused one, so re-paginating after a keystroke spent
+ * SECONDS asleep between batches while doing only a few ms of real work. A
+ * `MessageChannel` message is a plain macrotask: the renderer still gets to
+ * process input and paint between batches, but pagination is never held back
+ * by the frame clock. `setTimeout(0)` is the fallback for Node tests.
  */
 async function nextPaint(): Promise<void> {
   await new Promise<void>((resolve) => {
-    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(() => resolve())
+    if (typeof MessageChannel === 'function') {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = () => {
+        channel.port1.close()
+        resolve()
+      }
+      channel.port2.postMessage(undefined)
       return
     }
     setTimeout(resolve, 0)
@@ -68,19 +80,28 @@ async function nextPaint(): Promise<void> {
 }
 
 /**
- * Yield to the paint loop every YIELD_EVERY blocks while paginating long
- * documents (LaBoetie: 1494 blocks across 1 section). Lower numbers keep
- * the UI snappier; higher numbers reduce total wall time. 24 was chosen
- * empirically: ~50ms of itemize work per batch on typical hardware.
+ * How long pagination may hold the main thread before yielding. Time-sliced
+ * rather than counted in blocks (D23): with the per-paragraph line cache most
+ * blocks now cost almost nothing to re-lay-out, so a fixed "every 24 blocks"
+ * yield spent far more time waiting than working on an edit, while a document
+ * of heavy tables could still block for too long between yields.
  */
-const YIELD_EVERY = 24
+const YIELD_AFTER_MS = 8
+
+/** Start of the current uninterrupted slice; reset by `paginate`. */
+let sliceStartedAt = 0
+
+function resetYieldClock(): void {
+  sliceStartedAt = performance.now()
+}
 
 async function checkpoint(input: PaginatorInput, tick: number): Promise<void> {
   if (input.shouldCancel !== undefined && input.shouldCancel()) {
     throw new PaginationCancelledError()
   }
-  if (tick > 0 && tick % YIELD_EVERY === 0) {
+  if (tick > 0 && performance.now() - sliceStartedAt >= YIELD_AFTER_MS) {
     await nextPaint()
+    resetYieldClock()
   }
 }
 
@@ -214,6 +235,7 @@ type ActivePage = {
 }
 
 export async function paginate(input: PaginatorInput): Promise<ReadonlyArray<Page>> {
+  resetYieldClock()
   const pages: Page[] = []
   const evenAndOddHeaders = input.evenAndOddHeaders === true
   const headerFooterLines = mergeHeaderFooterLines(
@@ -1440,25 +1462,40 @@ function computeParagraphLineOffsetPt(
   const leftIndentPt = resolveLeftIndentPt(paraProps.ind)
   const lineIndentExtraPt = resolveLineIndentExtraPt(paraProps.ind, lineIndex)
   const lineLimitPt = Math.max(0, columnWidthPt - leftIndentPt - lineIndentExtraPt)
-  const alignmentOffsetPt = resolveAlignmentOffsetPt(paraProps.jc, lineLimitPt, line.width)
+  const alignmentOffsetPt = resolveAlignmentOffsetPt(
+    paraProps.jc,
+    lineLimitPt,
+    line.width,
+    paraProps.bidi === true,
+  )
 
   return leftIndentPt + lineIndentExtraPt + alignmentOffsetPt
 }
 
+/**
+ * `w:jc` is logical, not physical: `start`/`end` mean left/right in a
+ * left-to-right paragraph and right/left in a right-to-left one (DEFER-2).
+ * A bidi paragraph with no explicit alignment starts at the right edge, which
+ * is what Word shows.
+ */
 function resolveAlignmentOffsetPt(
   alignment: EffectiveParaProps['jc'],
   lineLimitPt: number,
   lineWidthPt: number,
+  bidi: boolean = false,
 ): number {
-  if (alignment === 'end') {
-    return Math.max(0, lineLimitPt - lineWidthPt)
-  }
+  const toEnd = Math.max(0, lineLimitPt - lineWidthPt)
 
   if (alignment === 'center') {
     return Math.max(0, (lineLimitPt - lineWidthPt) / 2)
   }
 
-  return 0
+  if (bidi) {
+    // Right-aligned unless the paragraph explicitly asks for its logical end.
+    return alignment === 'end' ? 0 : toEnd
+  }
+
+  return alignment === 'end' ? toEnd : 0
 }
 
 function placeLine(
@@ -1773,17 +1810,31 @@ async function buildParagraphUnit(
     }
   }
 
-  const lines = await breakLines({
-    paragraph,
-    paraProps,
-    runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, document, styleCache),
-    availableWidth: columnWidthPt,
+  // D23 — reuse this paragraph's lines when nothing that affects them has
+  // changed. A list marker or a note reference makes the layout depend on the
+  // rest of the document (counters, mark numbering), so those are never cached.
+  const cacheKey = paragraphLineCacheKey({
+    widthPt: columnWidthPt,
+    styles: document.styles,
+    numbering: document.numbering,
     fontResolver: input.fontResolver,
-    tabStops,
     theme: input.theme,
-    ...(leadingItems.length > 0 ? { leadingItems } : {}),
-    noteMarks: { footnote: noteState.footnoteMarkById, endnote: noteState.endnoteMarkById },
+    dependsOnDocumentState: leadingItems.length > 0 || referencedFootnoteIds.length > 0,
   })
+
+  const lines = await cachedParagraphLines(paragraph, cacheKey, () =>
+    breakLines({
+      paragraph,
+      paraProps,
+      runs: collectParagraphRuns(paragraph.children, paragraph.props?.pStyle, document, styleCache),
+      availableWidth: columnWidthPt,
+      fontResolver: input.fontResolver,
+      tabStops,
+      theme: input.theme,
+      ...(leadingItems.length > 0 ? { leadingItems } : {}),
+      noteMarks: { footnote: noteState.footnoteMarkById, endnote: noteState.endnoteMarkById },
+    }),
+  )
 
   return {
     kind: 'paragraph',

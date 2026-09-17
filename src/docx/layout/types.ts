@@ -81,6 +81,12 @@ export type LineItem =
 
 export type LineBox = {
   items: ReadonlyArray<LineItem>
+  /**
+   * DEFER-2 — the paragraph reads right-to-left (`w:bidi`). Line breaking
+   * stays in logical order; the renderer sets `dir="rtl"` on the line so the
+   * browser applies the Unicode bidirectional algorithm within it.
+   */
+  rtl?: boolean
   width: number
   ascent: number
   descent: number

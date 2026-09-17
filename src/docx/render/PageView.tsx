@@ -499,6 +499,7 @@ export const PageView: React.FC<PageViewProps> = ({
         key={key}
         className="docx-page__line"
         data-paragraph-path={paragraphPath?.join(',')}
+        {...(line.rtl === true ? { dir: 'rtl' as const } : {})}
         style={{
           top: `${topPt}px`,
           left: `${leftPt}px`,
