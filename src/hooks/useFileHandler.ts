@@ -88,6 +88,12 @@ export interface FileHandlerState {
 export interface FileHandlerActions {
   openDialog: () => Promise<void>;
   /**
+   * SHELL-17 — shows a file whose bytes the caller already holds (switching
+   * to another open document), with no disk read and no unsaved-changes
+   * prompt of its own: the caller owns that decision when it switches.
+   */
+  adopt: (loaded: LoadedFile) => void;
+  /**
    * @param prefetchedBuffer P4.10/LOAD-13 — when the caller already has the
    * file's bytes (e.g. from the Open dialog's own read), pass them here to
    * skip a redundant second disk read/IPC round trip.
@@ -336,6 +342,13 @@ export function useFileHandler({
   // Clear
   // -------------------------------------------------------------------------
 
+  const adopt = useCallback((loaded: LoadedFile) => {
+    setError(null);
+    setLoading(false);
+    setFile(loaded);
+    setLoadGeneration((generation) => generation + 1);
+  }, []);
+
   const clear = useCallback(() => {
     setFile(null);
     setError(null);
@@ -388,6 +401,7 @@ export function useFileHandler({
     loadGeneration,
     openDialog,
     loadFromPath,
+    adopt,
     clear,
     clearError,
     // Legacy shim

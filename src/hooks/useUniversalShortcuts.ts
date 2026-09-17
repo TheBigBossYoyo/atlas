@@ -79,6 +79,9 @@ export function useUniversalShortcuts({
           openExportMenu();
           return true;
         case 't':
+          // SHELL-17 — Ctrl+Shift+T reopens the last closed document; only the
+          // unshifted combo cycles the theme.
+          if (event.shiftKey) return false;
           event.preventDefault();
           cycleTheme();
           return true;

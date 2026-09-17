@@ -2,6 +2,20 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { ViewerRouter } from './components/ViewerRouter';
 import { useTheme } from './hooks/useTheme';
 import { useFileHandler } from './hooks/useFileHandler';
+import { useShellShortcut } from './hooks/useShortcutManager';
+import { TabBar } from './components/TabBar';
+import {
+  EMPTY_SESSIONS,
+  activateSession,
+  activeSession,
+  closeSession,
+  moveSession,
+  neighbourSession,
+  openSession,
+  renameSession,
+  reopenLastClosed,
+  type DocumentSessionsState,
+} from './session/documentSessions';
 import { useSearch } from './hooks/useSearch';
 import { useToc } from './hooks/useToc';
 import { useRecentFiles } from './hooks/useRecentFiles';
@@ -217,9 +231,16 @@ function AppShell() {
     loadGeneration,
     openDialog: openFile,
     loadFromPath: openFileFromPath,
+    adopt: adoptFile,
     clear,
     clearError,
   } = useFileHandler({ addRecent, confirmDiscardChanges });
+
+  // SHELL-17 — every open document, and which one is showing. The loaded
+  // bytes live here, so switching documents never re-reads the disk; only the
+  // active one is mounted, and the shell's existing Save/Discard/Cancel
+  // prompt runs before switching away from unsaved changes.
+  const [sessions, setSessions] = useState<DocumentSessionsState>(EMPTY_SESSIONS);
 
   // Derive isDirty / setMarkdown / saveFile / saveFileAs / drag handlers from
   // legacy autosave hook until W3.5 migrates App.tsx fully to LoadedFile.
@@ -253,6 +274,8 @@ function AppShell() {
     setLocalMarkdown(markdown);
     setIsDirty(false);
     setSaveError(null);
+    // SHELL-17 — a newly loaded (or re-activated) file becomes the showing tab.
+    if (file) setSessions((current) => openSession(current, file));
     // A real file just loaded (not the initial mount, since fileIdentityKey
     // and lastSyncedFileKey both start `null` and this branch never runs for
     // that first render) — dismiss any pending draft-recovery prompt rather
@@ -316,6 +339,13 @@ function AppShell() {
       setIsDirty(false);
       setSaveError(null);
       clearDraft();
+      // SHELL-17 — the document now lives at the chosen path: its tab (and the
+      // title bar) follow it there instead of still naming the old file.
+      if (result.path && file?.kind === 'text' && result.path !== file.path) {
+        const renamed: LoadedFile = { ...file, path: result.path, content: localMarkdown };
+        setSessions((current) => renameSession(current, file.path, renamed));
+        adoptFile(renamed);
+      }
       return true;
     }
     if (result.error) {
@@ -331,7 +361,7 @@ function AppShell() {
       setSaveError('Failed to save the file. Please try again.');
     }
     return false;
-  }, [fileName, filePath, isMarkdownDocument, localMarkdown]);
+  }, [adoptFile, file, fileName, filePath, isMarkdownDocument, localMarkdown]);
 
   const saveFileAs = useCallback(async (): Promise<boolean> => {
     if (!isMarkdownDocument) return false;
@@ -399,6 +429,88 @@ function AppShell() {
     if (!canProceed) return;
     clear();
   }, [clear, confirmDiscardChanges]);
+
+  // SHELL-17 — switching documents. The bytes are already in memory, so this
+  // shows the other document without touching the disk; unsaved changes in
+  // the one being left behind go through the same Save/Discard/Cancel prompt
+  // as opening or closing a file (only the showing document can be dirty,
+  // which is exactly why the prompt happens here).
+  const selectSession = useCallback(
+    async (id: string): Promise<void> => {
+      const target = sessions.sessions.find((session) => session.id === id);
+      if (!target || target.id === sessions.activeId) return;
+      const canProceed = await confirmDiscardChanges();
+      if (!canProceed) return;
+      setSessions((current) => activateSession(current, id));
+      adoptFile(target.file);
+    },
+    [adoptFile, confirmDiscardChanges, sessions],
+  );
+
+  const closeSessionById = useCallback(
+    async (id: string): Promise<void> => {
+      if (id === sessions.activeId) {
+        const canProceed = await confirmDiscardChanges();
+        if (!canProceed) return;
+      }
+      const next = closeSession(sessions, id);
+      setSessions(next);
+      const nowActive = activeSession(next);
+      if (nowActive) {
+        if (nowActive.id !== sessions.activeId) adoptFile(nowActive.file);
+      } else {
+        clear();
+      }
+    },
+    [adoptFile, clear, confirmDiscardChanges, sessions],
+  );
+
+  const closeActiveSession = useCallback(async (): Promise<void> => {
+    if (sessions.activeId === null) {
+      await closeFile();
+      return;
+    }
+    await closeSessionById(sessions.activeId);
+  }, [closeFile, closeSessionById, sessions.activeId]);
+
+  const stepSession = useCallback(
+    (delta: 1 | -1): void => {
+      const target = neighbourSession(sessions, delta);
+      if (target) void selectSession(target.id);
+    },
+    [selectSession, sessions],
+  );
+
+  const reopenClosedSession = useCallback((): void => {
+    const next = reopenLastClosed(sessions);
+    if (next === sessions) return;
+    const reopened = activeSession(next);
+    if (!reopened) return;
+    setSessions(next);
+    adoptFile(reopened.file);
+  }, [adoptFile, sessions]);
+
+  // SHELL-17 — Ctrl+Tab / Ctrl+Shift+Tab walk the open documents, and
+  // Ctrl+Shift+T brings back the last one that was closed.
+  useShellShortcut(
+    useCallback(
+      (event: KeyboardEvent): boolean => {
+        if (!(event.ctrlKey || event.metaKey)) return false;
+        if (event.key === 'Tab') {
+          event.preventDefault();
+          stepSession(event.shiftKey ? -1 : 1);
+          return true;
+        }
+        if (event.shiftKey && event.key.toLowerCase() === 't') {
+          event.preventDefault();
+          reopenClosedSession();
+          return true;
+        }
+        return false;
+      },
+      [reopenClosedSession, stepSession],
+    ),
+  );
 
   const handleRestoreDraft = useCallback(() => {
     if (!pendingDraft) return;
@@ -714,7 +826,7 @@ function AppShell() {
     toggleSidebar: () => setSidebarOpen(prev => !prev),
     setViewMode,
     toggleShortcuts: () => setShortcutsOpen(prev => !prev),
-    closeFile: () => void closeFile(),
+    closeFile: () => void closeActiveSession(),
     isMarkdown: isMarkdownDocument,
   });
 
@@ -796,7 +908,7 @@ function AppShell() {
         onToggleSidebar={() => setSidebarOpen(prev => !prev)}
         onOpenFile={openFile}
         onSave={() => void saveFile()}
-        onCloseFile={() => void closeFile()}
+        onCloseFile={() => void closeActiveSession()}
         onExport={(fmt) => void handleExport(fmt)}
         onOpenSearch={openSearch}
         onShowShortcuts={() => setShortcutsOpen(true)}
@@ -804,6 +916,15 @@ function AppShell() {
         onDecreaseFont={decrease}
         onResetFont={reset}
         onExportMenuOpenChange={setExportMenuOpen}
+      />
+
+      <TabBar
+        sessions={sessions.sessions}
+        activeId={sessions.activeId}
+        isActiveDirty={combinedDirty}
+        onSelect={(id) => void selectSession(id)}
+        onClose={(id) => void closeSessionById(id)}
+        onReorder={(fromIndex, toIndex) => setSessions((current) => moveSession(current, fromIndex, toIndex))}
       />
 
       <FileStatusBanner loading={loading} error={error ?? saveError} onDismissError={handleDismissStatusError} />
