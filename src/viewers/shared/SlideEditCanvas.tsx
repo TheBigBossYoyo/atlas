@@ -17,20 +17,19 @@ import {
 
 import { SlideCanvas } from './SlideCanvas'
 import type { SlideData, SlideShape, SlideTextBox, SlideTransform } from './SlideDeck.types'
+import { isPointInShape, resizeBox, type DragMode, type Handle } from './slideGeometry'
 import { textBodyToCss } from './slideStyleHelpers'
 
 export type SlideShapeBox = { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
 
-type Handle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 const HANDLES: ReadonlyArray<Handle> = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 const HANDLE_SCREEN_PX = 9
-const MIN_SHAPE_PX = 8
 const DRAG_THRESHOLD_PX = 2
 
 type Drag = {
   readonly shapeId: string
   readonly sourceId: string
-  readonly handle: Handle | 'move'
+  readonly handle: DragMode
   readonly startX: number
   readonly startY: number
   readonly origin: SlideTransform
@@ -49,35 +48,18 @@ export type SlideEditCanvasProps = {
   readonly onDeleteShape: (sourceId: string) => void
 }
 
-function resize(origin: SlideTransform, handle: Handle | 'move', dx: number, dy: number): SlideTransform {
-  if (handle === 'move') return { ...origin, x: origin.x + dx, y: origin.y + dy }
-  let { x, y, w, h } = origin
-  if (handle.includes('e')) w = Math.max(MIN_SHAPE_PX, origin.w + dx)
-  if (handle.includes('s')) h = Math.max(MIN_SHAPE_PX, origin.h + dy)
-  if (handle.includes('w')) {
-    w = Math.max(MIN_SHAPE_PX, origin.w - dx)
-    x = origin.x + origin.w - w
-  }
-  if (handle.startsWith('n')) {
-    h = Math.max(MIN_SHAPE_PX, origin.h - dy)
-    y = origin.y + origin.h - h
-  }
-  return { ...origin, x, y, w, h }
-}
-
+/** Handle position INSIDE the selection layer, which is already placed and rotated over the shape. */
 function handleStyle(handle: Handle, box: SlideTransform, size: number): CSSProperties {
-  const left = handle.includes('w') ? box.x : handle.includes('e') ? box.x + box.w : box.x + box.w / 2
-  const top = handle.startsWith('n') ? box.y : handle.startsWith('s') ? box.y + box.h : box.y + box.h / 2
+  const left = handle.includes('w') ? 0 : handle.includes('e') ? box.w : box.w / 2
+  const top = handle.startsWith('n') ? 0 : handle.startsWith('s') ? box.h : box.h / 2
   return { left: left - size / 2, top: top - size / 2, width: size, height: size }
 }
 
+/** Topmost editable shape under a slide-space point (rotation included). */
 function hitTest(shapes: ReadonlyArray<SlideShape>, x: number, y: number): SlideShape | null {
   for (let i = shapes.length - 1; i >= 0; i--) {
-    const { transform, sourceId } = shapes[i]
-    if (!sourceId) continue
-    if (x >= transform.x && x <= transform.x + transform.w && y >= transform.y && y <= transform.y + transform.h) {
-      return shapes[i]
-    }
+    const shape = shapes[i]
+    if (shape.sourceId && isPointInShape({ x, y }, shape.transform)) return shape
   }
   return null
 }
@@ -181,7 +163,7 @@ function SlideEditCanvasBase({
     return { x: (event.clientX - rect.left) / scale, y: (event.clientY - rect.top) / scale }
   }
 
-  const startDrag = (event: PointerEvent<HTMLDivElement>, shape: SlideShape, handle: Handle | 'move'): void => {
+  const startDrag = (event: PointerEvent<HTMLDivElement>, shape: SlideShape, handle: DragMode): void => {
     if (!shape.sourceId || !shape.movable) return
     const point = toSlidePoint(event)
     layerRef.current?.setPointerCapture(event.pointerId)
@@ -208,7 +190,8 @@ function SlideEditCanvasBase({
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>): void => {
     if (!drag) return
     const point = toSlidePoint(event)
-    setDrag({ ...drag, current: resize(drag.origin, drag.handle, point.x - drag.startX, point.y - drag.startY) })
+    const delta = { x: point.x - drag.startX, y: point.y - drag.startY }
+    setDrag({ ...drag, current: resizeBox(drag.origin, drag.handle, delta) })
   }
 
   const handlePointerUp = (event: PointerEvent<HTMLDivElement>): void => {
@@ -272,17 +255,17 @@ function SlideEditCanvasBase({
         onKeyDown={handleKeyDown}
       />
       {selectionBox && !editing && (
-        <>
-          <div
-            className="slide-edit__selection"
-            style={{
-              left: selectionBox.x,
-              top: selectionBox.y,
-              width: selectionBox.w,
-              height: selectionBox.h,
-              outlineWidth: lineWidth,
-            }}
-          />
+        <div
+          className="slide-edit__selection-layer"
+          style={{
+            left: selectionBox.x,
+            top: selectionBox.y,
+            width: selectionBox.w,
+            height: selectionBox.h,
+            transform: selectionBox.rotationDeg ? `rotate(${selectionBox.rotationDeg}deg)` : undefined,
+          }}
+        >
+          <div className="slide-edit__selection" style={{ outlineWidth: lineWidth }} />
           {selected?.movable &&
             HANDLES.map((handle) => (
               <div
@@ -296,7 +279,7 @@ function SlideEditCanvasBase({
                 }}
               />
             ))}
-        </>
+        </div>
       )}
       {editing?.sourceId && (
         <TextShapeEditor

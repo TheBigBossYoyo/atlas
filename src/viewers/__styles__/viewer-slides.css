@@ -357,9 +357,17 @@
   outline: none;
 }
 
-.slide-edit__selection {
+/* Placed over the shape and rotated with it, so the selection and its handles
+   follow a rotated shape instead of boxing its unrotated bounds (USR-16). */
+.slide-edit__selection-layer {
   position: absolute;
   z-index: 11;
+  pointer-events: none;
+}
+
+.slide-edit__selection {
+  position: absolute;
+  inset: 0;
   box-sizing: border-box;
   outline-style: solid;
   outline-color: var(--accent);
@@ -369,6 +377,7 @@
 .slide-edit__handle {
   position: absolute;
   z-index: 12;
+  pointer-events: auto;
   box-sizing: border-box;
   border-style: solid;
   border-color: var(--accent);
