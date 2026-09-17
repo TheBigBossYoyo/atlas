@@ -269,6 +269,14 @@ export type RejectAllRevisionsCommand = {
   readonly kind: 'reject-all-revisions'
 }
 
+/** D29 — replaces one header/footer part's text (one paragraph per line). */
+export interface SetHeaderFooterTextCommand {
+  readonly kind: 'set-header-footer-text'
+  readonly target: 'header' | 'footer'
+  readonly id: string
+  readonly text: string
+}
+
 export type Command =
   | InsertTextCommand
   | DeleteRangeCommand
@@ -297,6 +305,7 @@ export type Command =
   | ResizeTableColumnCommand
   | ReplaceTableCommand
   | ApplyTablePropsCommand
+  | SetHeaderFooterTextCommand
 
 export function acceptRevision(id: string): AcceptRevisionCommand {
   return {

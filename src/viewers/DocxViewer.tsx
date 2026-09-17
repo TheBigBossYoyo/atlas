@@ -12,7 +12,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 
-import { ListTree, Printer, RefreshCw, Save, SaveAll, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { ListTree, PanelTop, Printer, RefreshCw, Save, SaveAll, X, ZoomIn, ZoomOut } from 'lucide-react'
 
 import type { NavItem, ViewerProps } from '../formats/types'
 import { loadDocx, saveDocx, type DocxBundle } from '../docx'
@@ -81,6 +81,8 @@ import {
   type Position,
   type Range,
   type TrackChangesContext,
+  listHeaderFooterParts,
+  type HeaderFooterPart,
 } from '../docx/editor'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
 import { comparePositions } from '../docx/editor/Selection'
@@ -771,6 +773,7 @@ function DocxEditor({
   // inline status message instead.
   const [fieldUpdateMessage, setFieldUpdateMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
+  const [headerFooterOpen, setHeaderFooterOpen] = useState(false)
   const [range, setRange] = useState<Range | null>(null)
   // DXE-14 — right-click table-editing context menu; `null` when closed.
   // Screen coordinates only (not which table/cell), since by the time a
@@ -1976,6 +1979,18 @@ function DocxEditor({
     setFieldUpdateMessage('Table of contents updated.')
   }, [documentModel, pages])
 
+  // D29 — headers and footers are edited as plain text, one paragraph per
+  // line, through the normal command path so the change is undoable and the
+  // save path writes the part back out.
+  const headerFooterParts = useMemo(() => listHeaderFooterParts(documentModel), [documentModel])
+
+  const handleHeaderFooterChange = useCallback(
+    (part: HeaderFooterPart, text: string) => {
+      applyEditorCommand({ kind: 'set-header-footer-text', target: part.kind, id: part.id, text })
+    },
+    [applyEditorCommand],
+  )
+
   // D24/DXL-19
   const handleZoomIn = useCallback(() => {
     setZoom((current) => clampZoom(current + ZOOM_STEP))
@@ -2167,6 +2182,18 @@ function DocxEditor({
               >
                 <ListTree aria-hidden="true" />
               </button>
+              {headerFooterParts.length > 0 && (
+                <button
+                  className="docx-toolbar__action"
+                  type="button"
+                  onClick={() => setHeaderFooterOpen((open) => !open)}
+                  aria-label="Header and footer"
+                  aria-pressed={headerFooterOpen}
+                  title="Edit header and footer"
+                >
+                  <PanelTop aria-hidden="true" />
+                </button>
+              )}
               <button className="docx-toolbar__action" type="button" onClick={handlePrint} aria-label="Print document" title="Print (Ctrl+P)">
                 <Printer aria-hidden="true" />
               </button>
@@ -2192,6 +2219,41 @@ function DocxEditor({
         matchCount={matches.length}
         currentMatchIndex={currentMatchIndex}
       />
+      {headerFooterOpen && headerFooterParts.length > 0 ? (
+        <div className="docx-viewer__header-footer" role="group" aria-label="Header and footer">
+          <div className="docx-viewer__header-footer-title">
+            <span>Header and footer (text only)</span>
+            <button
+              type="button"
+              className="docx-viewer__error-dismiss"
+              onClick={() => setHeaderFooterOpen(false)}
+              aria-label="Close header and footer"
+            >
+              <X aria-hidden="true" />
+            </button>
+          </div>
+          {headerFooterParts.map((part) => {
+            const label = `${part.kind === 'header' ? 'Header' : 'Footer'}${part.type === 'default' ? '' : ` (${part.type} page)`}`
+            return (
+              <label key={`${part.kind}-${part.id}`} className="docx-viewer__header-footer-field">
+                <span>{label}</span>
+                <textarea
+                  defaultValue={part.text}
+                  aria-label={label}
+                  rows={2}
+                  onBlur={(event) => handleHeaderFooterChange(part, event.currentTarget.value)}
+                />
+                {part.hasRichContent && (
+                  <span className="docx-viewer__meta">
+                    This one also holds content beyond plain text (a table, a picture or a field); editing it here keeps
+                    only the text.
+                  </span>
+                )}
+              </label>
+            )
+          })}
+        </div>
+      ) : null}
       <div className="docx-viewer__workspace">
         <div
           ref={editorRootRef}

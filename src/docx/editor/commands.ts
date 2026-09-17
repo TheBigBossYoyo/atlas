@@ -20,6 +20,7 @@ import type {
   Twip,
 } from '../model'
 import { twip } from '../model'
+import { blocksToText, setHeaderFooterText } from './headerFooter'
 
 import type {
   ApplyParaFormatCommand,
@@ -114,6 +115,8 @@ export function applyCommand(
   range?: Range
 } {
   switch (cmd.kind) {
+    case 'set-header-footer-text':
+      return applySetHeaderFooterText(doc, cmd)
     case 'insert-text':
       return applyInsertText(doc, cmd, trackChanges)
     case 'delete-range':
@@ -209,6 +212,20 @@ function applyComposite(
     document: workingDocument,
     inverse: inverses.length === 1 ? inverses[0] : { kind: 'composite', commands: inverses },
     ...(lastRange !== undefined ? { range: lastRange } : {}),
+  }
+}
+
+/** D29 — swaps one header/footer part's text; the inverse restores what was there. */
+function applySetHeaderFooterText(
+  doc: Document,
+  cmd: Extract<Command, { kind: 'set-header-footer-text' }>,
+): { document: Document; inverse: Command } {
+  const before = blocksToText(
+    (cmd.target === 'header' ? doc.headers.get(cmd.id) : doc.footers.get(cmd.id))?.blocks ?? [],
+  )
+  return {
+    document: setHeaderFooterText(doc, cmd.target, cmd.id, cmd.text),
+    inverse: { kind: 'set-header-footer-text', target: cmd.target, id: cmd.id, text: before },
   }
 }
 

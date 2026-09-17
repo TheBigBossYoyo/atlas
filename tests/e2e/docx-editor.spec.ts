@@ -207,3 +207,44 @@ test('USR-05/USR-13: clicking beside a line puts the caret on that line; page co
     kill(app)
   }
 })
+
+test('D29: the header and footer can be edited and saved', async () => {
+  const { Document, Packer, Paragraph, TextRun, Header, Footer } = await import('docx')
+  const doc = new Document({
+    sections: [
+      {
+        headers: { default: new Header({ children: [new Paragraph({ children: [new TextRun('Draft header')] })] }) },
+        footers: { default: new Footer({ children: [new Paragraph({ children: [new TextRun('Page footer')] })] }) },
+        children: [new Paragraph({ children: [new TextRun('Body text')] })],
+      },
+    ],
+  })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-docx-hf-'))
+  const file = path.join(dir, 'with-header.docx')
+  fs.writeFileSync(file, await Packer.toBuffer(doc))
+
+  const { app, page } = await launch(file)
+  try {
+    // A narrow window wraps the document toolbar; give it room so the action is on one row.
+    await page.setViewportSize({ width: 1400, height: 900 })
+    await page.waitForTimeout(300)
+    await page.getByRole('button', { name: 'Header and footer' }).click()
+    const headerField = page.getByRole('textbox', { name: 'Header' })
+    await expect(headerField).toHaveValue('Draft header')
+
+    await headerField.fill('Final header')
+    await page.getByRole('textbox', { name: 'Footer' }).click() // blur commits
+    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeVisible()
+
+    const before = fs.statSync(file).mtimeMs
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect.poll(() => fs.statSync(file).mtimeMs, { timeout: 10_000 }).toBeGreaterThan(before)
+    await page.waitForTimeout(400)
+
+    const zip = await (await import('jszip')).default.loadAsync(fs.readFileSync(file))
+    const headerPart = Object.keys(zip.files).find((name) => /^word\/header\d+\.xml$/.test(name))!
+    expect(await zip.file(headerPart)!.async('string')).toContain('Final header')
+  } finally {
+    kill(app)
+  }
+})

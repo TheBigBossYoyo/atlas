@@ -48,3 +48,6 @@ export { htmlToPasteBlocks } from './pasteBlocks'
 export type { PasteBlock, PasteParagraph, PasteTable } from './pasteBlocks'
 export { buildRichPasteCommands, bundleContextFor } from './pasteRich'
 export type { RichPasteBundleContext, RichPasteBundlePatch, RichPasteResult } from './pasteRich'
+
+// D29 — header/footer editing.
+export { listHeaderFooterParts, setHeaderFooterText, blocksToText, type HeaderFooterPart, type HeaderFooterKind } from './headerFooter'
