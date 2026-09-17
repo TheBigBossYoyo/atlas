@@ -53,6 +53,40 @@ export type EditableSheet = {
   readonly freeze?: FrozenPanes
   /** Excel tables (USR-17), kept in step with row/column inserts and deletes. */
   readonly tables?: ReadonlyArray<SheetTable>
+  /**
+   * Save-through-the-original bookkeeping (USR-17, see `xlsxPassthrough.ts`):
+   * the worksheet part this sheet was read from, where each row/column came
+   * from in that part (`null` = added here), and which cells the user has
+   * actually changed. Together they let a save keep every untouched cell —
+   * with its number format, style, type and cached formula value — exactly as
+   * the original file had it, instead of rewriting the workbook from display
+   * text. Absent for CSV/TSV and for sheets Atlas created itself.
+   */
+  readonly sourcePath?: string
+  readonly rowSources?: ReadonlyArray<number | null>
+  readonly colSources?: ReadonlyArray<number | null>
+  /** `"row:col"` (current indexes) of every cell edited since load. */
+  readonly editedCells?: ReadonlySet<string>
+}
+
+/** Key for `editedCells`. */
+export function cellKey(row: number, col: number): string {
+  return `${row}:${col}`
+}
+
+/** Remaps `editedCells` after rows or columns move, dropping the ones that were deleted. */
+function remapEditedCells(
+  edited: ReadonlySet<string> | undefined,
+  remap: (row: number, col: number) => readonly [number, number] | null,
+): ReadonlySet<string> | undefined {
+  if (!edited) return undefined
+  const next = new Set<string>()
+  for (const key of edited) {
+    const [row, col] = key.split(':').map(Number)
+    const moved = remap(row, col)
+    if (moved) next.add(cellKey(moved[0], moved[1]))
+  }
+  return next
 }
 
 export type SpreadsheetDocument = {
@@ -94,6 +128,14 @@ export function createDocument(parsedSheets: ReadonlyArray<ParsedSheet>): Spread
         rowHeightsPx: sheet.grid.rowHeightsPx,
         ...(sheet.freeze ? { freeze: sheet.freeze } : {}),
         ...(sheet.tables ? { tables: sheet.tables } : {}),
+        ...(sheet.sourcePath !== undefined
+          ? {
+              sourcePath: sheet.sourcePath,
+              rowSources: sheet.grid.rows.map((_, i) => i),
+              colSources: Array.from({ length: sheet.grid.colCount }, (_, i) => i),
+              editedCells: new Set<string>(),
+            }
+          : {}),
       }),
     ),
   }
@@ -229,7 +271,8 @@ export function setCellValue(
   // value cell this IS the final stored display text.
   rows[row][col] = rawInput
 
-  const updated = recalculateSheet({ ...sheet, rows, formulas })
+  const editedCells = sheet.editedCells ? new Set(sheet.editedCells).add(cellKey(row, col)) : undefined
+  const updated = recalculateSheet({ ...sheet, rows, formulas, ...(editedCells ? { editedCells } : {}) })
   return replaceSheet(doc, sheetIndex, updated)
 }
 
@@ -256,7 +299,23 @@ export function insertRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
   })
 
   const tables = shiftedTables(sheet, tablesAfterRowInsert, atIndex)
-  return replaceSheet(doc, sheetIndex, recalculateSheet({ ...sheet, rows, formulas, rowHeightsPx, merges, ...tables }))
+  const sources = sheet.rowSources ? [...sheet.rowSources] : null
+  if (sources) sources.splice(atIndex, 0, null)
+  const editedCells = remapEditedCells(sheet.editedCells, (r, c) => [r >= atIndex ? r + 1 : r, c])
+  return replaceSheet(
+    doc,
+    sheetIndex,
+    recalculateSheet({
+      ...sheet,
+      rows,
+      formulas,
+      rowHeightsPx,
+      merges,
+      ...tables,
+      ...(sources ? { rowSources: sources } : {}),
+      ...(editedCells ? { editedCells } : {}),
+    }),
+  )
 }
 
 /** Deletes the row at `atIndex`. A no-op if it would leave the sheet with zero rows. */
@@ -286,7 +345,24 @@ export function deleteRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
     }))
 
   const tables = shiftedTables(sheet, tablesAfterRowDelete, atIndex)
-  return replaceSheet(doc, sheetIndex, recalculateSheet({ ...sheet, rows, formulas, rowHeightsPx, merges, ...tables }))
+  const rowSources = sheet.rowSources?.filter((_, i) => i !== atIndex)
+  const editedCells = remapEditedCells(sheet.editedCells, (r, c) =>
+    r === atIndex ? null : [r > atIndex ? r - 1 : r, c],
+  )
+  return replaceSheet(
+    doc,
+    sheetIndex,
+    recalculateSheet({
+      ...sheet,
+      rows,
+      formulas,
+      rowHeightsPx,
+      merges,
+      ...tables,
+      ...(rowSources ? { rowSources } : {}),
+      ...(editedCells ? { editedCells } : {}),
+    }),
+  )
 }
 
 /** Inserts one empty column at `atIndex` (0-based; may equal `colCount` to append at the end). */
@@ -326,6 +402,13 @@ export function insertColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
       colCount: sheet.colCount + 1,
       merges,
       ...shiftedTables(sheet, tablesAfterColumnInsert, atIndex),
+      ...(sheet.colSources
+        ? { colSources: [...sheet.colSources.slice(0, atIndex), null, ...sheet.colSources.slice(atIndex)] }
+        : {}),
+      ...(() => {
+        const editedCells = remapEditedCells(sheet.editedCells, (r, c) => [r, c >= atIndex ? c + 1 : c])
+        return editedCells ? { editedCells } : {}
+      })(),
     }),
   )
 }
@@ -362,6 +445,13 @@ export function deleteColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
       colCount: sheet.colCount - 1,
       merges,
       ...shiftedTables(sheet, tablesAfterColumnDelete, atIndex),
+      ...(sheet.colSources ? { colSources: sheet.colSources.filter((_, i) => i !== atIndex) } : {}),
+      ...(() => {
+        const editedCells = remapEditedCells(sheet.editedCells, (r, c) =>
+          c === atIndex ? null : [r, c > atIndex ? c - 1 : c],
+        )
+        return editedCells ? { editedCells } : {}
+      })(),
     }),
   )
 }
@@ -425,10 +515,32 @@ export function pasteRange(
   const rowHeightsPx = [...sheet.rowHeightsPx]
   while (rowHeightsPx.length < rows.length) rowHeightsPx.push(undefined)
 
+  // Rows/columns the paste added have no counterpart in the original file.
+  const rowSources = sheet.rowSources ? [...sheet.rowSources] : null
+  while (rowSources && rowSources.length < rows.length) rowSources.push(null)
+  const colSources = sheet.colSources ? [...sheet.colSources] : null
+  while (colSources && colSources.length < colCount) colSources.push(null)
+  const editedCells = sheet.editedCells ? new Set(sheet.editedCells) : null
+  if (editedCells) {
+    for (let r = 0; r < values.length; r++) {
+      for (let c = 0; c < values[r].length; c++) editedCells.add(cellKey(startRow + r, startCol + c))
+    }
+  }
+
   return replaceSheet(
     doc,
     sheetIndex,
-    recalculateSheet({ ...sheet, rows, formulas, colCount, colWidthsPx, rowHeightsPx }),
+    recalculateSheet({
+      ...sheet,
+      rows,
+      formulas,
+      colCount,
+      colWidthsPx,
+      rowHeightsPx,
+      ...(rowSources ? { rowSources } : {}),
+      ...(colSources ? { colSources } : {}),
+      ...(editedCells ? { editedCells } : {}),
+    }),
   )
 }
 

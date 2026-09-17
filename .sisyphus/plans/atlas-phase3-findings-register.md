@@ -451,8 +451,8 @@ Fixed in wave 4 (branch `wave4/code-editor`, stacked on `wave4/docx-editor-ux` �
 Still open after wave 4:
 
 - **ODP editing** — `.odp` decks stay read-only; the editing layer is PPTX-only (the ODF writer is a separate piece of work).
-- **Rotated shapes** — the slide editor's selection box and hit test ignore `rot`, so a rotated shape is selected by its unrotated bounding box.
-- **Spreadsheet styling on save** — unchanged from wave 3: Atlas writes a fresh workbook, so per-cell fonts/fills/number formats on untouched cells are still lost (documented in `spreadsheetWrite.ts`); Excel tables are now the exception, grafted back in.
+- ~~**Spreadsheet styling on save**~~ — fixed after the wave-4 review: an .xlsx/.xlsm is now saved THROUGH the file it was opened from (`viewers/spreadsheet/xlsxPassthrough.ts`), so untouched cells keep their exact XML (type, style, number format, cached formula value) and styles/charts/filters/pivots pass through; the stale calc chain is dropped and the workbook is marked "recalculate on load". The fresh-workbook writer remains the fallback for CSV, format changes, and sheet add/delete, and references outside the model (conditional formatting, data validation, defined names) are not re-anchored when rows/columns move.
+- ~~**Rotated shapes**~~ — fixed: hit testing, the selection box and handle resizing all work in the shape's own rotated space (`viewers/shared/slideGeometry.ts`).
 - **No Office verification** — the grafted OOXML was validated by structure and round-trip through SheetJS/the parsers; nobody opened the output in Microsoft Office, which is the only real proof of "no repair prompt".
 
 ---

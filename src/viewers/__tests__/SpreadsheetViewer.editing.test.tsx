@@ -299,6 +299,7 @@ describe('SpreadsheetViewer — save', () => {
       fireEvent.click(saveButton)
     })
 
+    await waitFor(() => expect(window.electronAPI!.saveBinaryFile).toHaveBeenCalled())
     const savedBytes = (window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls[0][0]
       .content as Uint8Array
 
@@ -336,6 +337,7 @@ describe('SpreadsheetViewer — save', () => {
       fireEvent.click(saveButton)
     })
 
+    await waitFor(() => expect(window.electronAPI!.saveBinaryFile).toHaveBeenCalled())
     const savedBytes = (window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls[0][0]
       .content as Uint8Array
 
@@ -375,6 +377,7 @@ describe('SpreadsheetViewer — legacy formats are "view + save-as-xlsx only" (p
       fireEvent.click(saveButton)
     })
 
+    await waitFor(() => expect(window.electronAPI!.saveBinaryFile).toHaveBeenCalled())
     const call = (window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls[0][0]
     // No existingPath: main process shows the save dialog rather than
     // silently overwriting legacy.xls with re-encoded (xlsx-shaped) bytes.
@@ -400,10 +403,18 @@ describe('SpreadsheetViewer — legacy formats are "view + save-as-xlsx only" (p
     await act(async () => {
       fireEvent.click(saveButton) // first save -> dialog resolves to /tmp/saved.xlsx (mocked)
     })
+    // The save is async (it may rewrite the original package), so the second
+    // click must wait for the first one to record its chosen path.
+    await waitFor(() =>
+      expect((window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1),
+    )
     await act(async () => {
       fireEvent.click(saveButton) // second save -> should now overwrite the chosen path
     })
 
+    await waitFor(() =>
+      expect((window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2),
+    )
     const calls = (window.electronAPI!.saveBinaryFile as ReturnType<typeof vi.fn>).mock.calls
     expect(calls[1][0].existingPath).toBe('/tmp/saved.xlsx')
   })

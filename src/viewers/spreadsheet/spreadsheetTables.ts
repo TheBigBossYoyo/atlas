@@ -36,6 +36,8 @@ export type SheetTable = {
   readonly totalsRow: boolean
   /** Original table part XML, rewritten and grafted back on save. */
   readonly xml: string
+  /** Where that part lives in the original package — set when the table was read from a file. */
+  readonly partPath?: string
   /** Per current column: index of the original `<tableColumn>` it came from, or `null` for a column inserted in Atlas. */
   readonly columnSources: ReadonlyArray<number | null>
 }
@@ -57,7 +59,7 @@ function decodeCell(ref: string): { r: number; c: number } | null {
   return { r: Number(match[2]) - 1, c: c - 1 }
 }
 
-function encodeCol(col: number): string {
+export function encodeCol(col: number): string {
   let title = ''
   let n = col
   while (n >= 0) {
@@ -117,6 +119,19 @@ export function parseTableXml(xml: string): SheetTable | null {
   }
 }
 
+/** Worksheet part paths in workbook order (USR-17 save-through-original); `[]` for a non-OOXML file. */
+export async function readSheetPartPaths(buffer: ArrayBuffer): Promise<string[]> {
+  try {
+    const zip = await JSZip.loadAsync(buffer)
+    const workbookXml = await zip.file('xl/workbook.xml')?.async('string')
+    if (!workbookXml) return []
+    const relsXml = (await zip.file('xl/_rels/workbook.xml.rels')?.async('string')) ?? null
+    return readSheetParts(workbookXml, relsXml).map((part) => part.path)
+  } catch {
+    return []
+  }
+}
+
 /** Sheet name -> tables, read from an OOXML workbook buffer. Resolves `{}` (never rejects) for any other format. */
 export async function readSheetTables(buffer: ArrayBuffer): Promise<Readonly<Record<string, ReadonlyArray<SheetTable>>>> {
   try {
@@ -134,9 +149,10 @@ export async function readSheetTables(buffer: ArrayBuffer): Promise<Readonly<Rec
       for (const rel of Array.from(relsDoc.getElementsByTagName('Relationship'))) {
         const target = rel.getAttribute('Target')
         if (rel.getAttribute('Type') !== TABLE_REL_TYPE || !target) continue
-        const tableXml = await zip.file(resolvePartPath(sheetDir, target))?.async('string')
+        const partPath = resolvePartPath(sheetDir, target)
+        const tableXml = await zip.file(partPath)?.async('string')
         const table = tableXml ? parseTableXml(tableXml) : null
-        if (table) (result[name] ??= []).push(table)
+        if (table) (result[name] ??= []).push({ ...table, partPath })
       }
     }
     return result

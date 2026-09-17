@@ -3,6 +3,13 @@
  * relationships, content types) during PPTX editing.
  */
 import { EMU_PER_PIXEL } from '../../shared/units'
+import {
+  childElements,
+  descendantElements,
+  firstChildElement,
+  parseXmlPart,
+  serializeXmlPart,
+} from '../../../../office/ooxmlDom'
 
 export const NS = {
   p: 'http://schemas.openxmlformats.org/presentationml/2006/main',
@@ -24,29 +31,12 @@ export const CONTENT_TYPE = {
   notesSlide: 'application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml',
 } as const
 
-const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-
-export function parse(xml: string): XMLDocument {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml')
-  if (doc.getElementsByTagName('parsererror').length > 0) throw new Error('Invalid XML part.')
-  return doc
-}
-
-export function serialize(doc: XMLDocument): string {
-  return XML_DECLARATION + new XMLSerializer().serializeToString(doc).replace(/^<\?xml[^>]*\?>\s*/, '')
-}
-
-export function children(element: Element, localName: string): Element[] {
-  return Array.from(element.children).filter((child) => child.localName === localName)
-}
-
-export function firstChild(element: Element, localName: string): Element | null {
-  return children(element, localName)[0] ?? null
-}
-
-export function descendants(root: Document | Element, localName: string): Element[] {
-  return Array.from(root.getElementsByTagNameNS('*', localName))
-}
+/** Re-exported under this module's shorter names (see src/office/ooxmlDom.ts). */
+export const parse = parseXmlPart
+export const serialize = serializeXmlPart
+export const children = childElements
+export const firstChild = firstChildElement
+export const descendants = descendantElements
 
 /** Parses an XML fragment (with `p:`/`a:`/`r:` prefixes available) and imports it into `doc`. */
 export function importFragment(doc: XMLDocument, xml: string): Element {

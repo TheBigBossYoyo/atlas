@@ -109,7 +109,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     [fileExtension, isLegacySaveAsOnly],
   )
 
-  const editor = useSpreadsheetEditor(initialDocument, file.path, defaultSaveTarget, !isLegacySaveAsOnly)
+  const editor = useSpreadsheetEditor(initialDocument, file.path, defaultSaveTarget, !isLegacySaveAsOnly, buffer)
   const sheets = editor.document.sheets
 
   const hasHiddenSheets = useMemo(() => sheets.some((s) => s.hidden), [sheets])

@@ -11,11 +11,11 @@
  */
 import { useEffect, useRef, useState } from 'react'
 
-import { attachFrozenPanes, attachTables, parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
+import { attachFrozenPanes, attachSheetSources, attachTables, parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
 import { XLSX_WORKER_BYTE_THRESHOLD } from './sizeThresholds'
 import type { SpreadsheetWorkerRequest, SpreadsheetWorkerResponse } from './spreadsheetWorker.worker'
 import { readFrozenPanes } from '../spreadsheet/spreadsheetPanes'
-import { readSheetTables } from '../spreadsheet/spreadsheetTables'
+import { readSheetPartPaths, readSheetTables } from '../spreadsheet/spreadsheetTables'
 
 export type SpreadsheetWorkbookState =
   | { readonly status: 'loading' }
@@ -58,9 +58,16 @@ export function useSpreadsheetWorkbook(buffer: ArrayBuffer | null): SpreadsheetW
           // safe to also read frozen-pane metadata inline here (see
           // spreadsheetPanes.ts's header on why this step is skipped on the
           // main thread for large files instead).
-          const [paneMap, tableMap] = await Promise.all([readFrozenPanes(buffer), readSheetTables(buffer)])
+          const [paneMap, tableMap, partPaths] = await Promise.all([
+            readFrozenPanes(buffer),
+            readSheetTables(buffer),
+            readSheetPartPaths(buffer),
+          ])
           if (!cancelled) {
-            setState({ status: 'ready', sheets: attachTables(attachFrozenPanes(sheets, paneMap), tableMap) })
+            setState({
+              status: 'ready',
+              sheets: attachSheetSources(attachTables(attachFrozenPanes(sheets, paneMap), tableMap), partPaths),
+            })
           }
         } catch (err) {
           if (!cancelled) setState({ status: 'error', error: err instanceof Error ? err.message : String(err) })

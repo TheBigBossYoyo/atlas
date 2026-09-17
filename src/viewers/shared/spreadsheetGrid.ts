@@ -87,6 +87,19 @@ export type ParsedSheet = {
   readonly freeze?: FrozenPanes
   /** Excel tables on this sheet (USR-17, OOXML only — see `spreadsheet/spreadsheetTables.ts`). */
   readonly tables?: ReadonlyArray<SheetTable>
+  /** Worksheet part this sheet was parsed from (OOXML only) — lets a save write through the original file. */
+  readonly sourcePath?: string
+}
+
+/** Attaches each sheet's worksheet part path, by workbook order (USR-17 save-through-original). */
+export function attachSheetSources(
+  sheets: ReadonlyArray<ParsedSheet>,
+  partPaths: ReadonlyArray<string>,
+): ParsedSheet[] {
+  return sheets.map((sheet, index) => {
+    const sourcePath = partPaths[index]
+    return sourcePath ? { ...sheet, sourcePath } : sheet
+  })
 }
 
 /** Merges a sheet-name-keyed table map (from `readSheetTables`) onto already-parsed sheets. Pure/sync. */

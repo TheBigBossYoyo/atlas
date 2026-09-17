@@ -36,6 +36,7 @@ import {
   type SpreadsheetDocument,
 } from './spreadsheetDocument'
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
+import { writeWorkbookThroughOriginal } from './xlsxPassthrough'
 import { useUndoableState } from './useUndoableState'
 import { useRegisterViewerSave, useSetViewerDirty } from '../shared/useViewerContext'
 import { useViewerShortcuts } from '../../hooks/useShortcutManager'
@@ -63,16 +64,28 @@ function withExtension(name: string, extension: string): string {
   return `${stem}.${extension}`
 }
 
+/** Formats whose package Atlas can patch in place, keeping styles and everything it does not model. */
+const PASSTHROUGH_BOOK_TYPES: ReadonlySet<string> = new Set(['xlsx', 'xlsm'])
+
 async function writeToDisk(
   doc: SpreadsheetDocument,
   target: SpreadsheetSaveTarget,
   suggestedName: string,
   existingPath: string | undefined,
+  originalBuffer: ArrayBuffer | null,
 ): Promise<{ readonly saved: boolean; readonly path?: string; readonly error?: string }> {
   const filters = [{ name: target.filterName, extensions: [target.extension] }]
 
   if (target.kind === 'workbook') {
-    const bytes = await writeWorkbookBytesWithTables(doc, target.bookType)
+    // USR-17 — rewrite the file the user opened (keeping every style, chart
+    // and filter Atlas does not model) whenever that is possible; the
+    // fresh-workbook writer is the fallback for other formats and for
+    // structural changes it cannot express.
+    const throughOriginal =
+      originalBuffer && PASSTHROUGH_BOOK_TYPES.has(target.bookType)
+        ? await writeWorkbookThroughOriginal(originalBuffer, doc)
+        : null
+    const bytes = throughOriginal ?? (await writeWorkbookBytesWithTables(doc, target.bookType))
     const result = await window.electronAPI?.saveBinaryFile?.({
       content: bytes,
       suggestedName,
@@ -125,6 +138,8 @@ export function useSpreadsheetEditor(
   // saved once, the *new* path they chose becomes the seed for subsequent
   // plain saves, same as any other format.
   seedExistingPath: boolean = true,
+  /** The bytes the workbook was opened from, for save-through-original (USR-17). */
+  originalBuffer: ArrayBuffer | null = null,
 ): UseSpreadsheetEditorResult {
   const history = useUndoableState<SpreadsheetDocument>(EMPTY_DOCUMENT)
   const hydratedRef = useRef(false)
@@ -227,6 +242,7 @@ export function useSpreadsheetEditor(
           saveTarget,
           suggestedName,
           forceDialog ? undefined : savePath,
+          originalBuffer,
         )
 
         if (!result.saved) {
@@ -247,7 +263,7 @@ export function useSpreadsheetEditor(
         return false
       }
     },
-    [filePath, history.present, savePath],
+    [filePath, history.present, savePath, originalBuffer],
   )
 
   const handleSave = useCallback(() => handleSaveWith(target, false), [handleSaveWith, target])
