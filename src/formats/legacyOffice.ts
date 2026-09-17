@@ -16,6 +16,13 @@
  * viewer, which never reaches this module at all (only a genuinely-unknown
  * extension gets this far). `.xlt` is left mapped below and still shown this
  * message, since it was never in this wave's explicit scope.
+ *
+ * Wave 4 exception: `.doc`/`.ppt` are likewise routed straight past this
+ * module now — `extensionManifest.ts` sends them to `LegacyDocViewer`/
+ * `LegacyPptViewer`, a hand-rolled read-only, text-only reader (`src/legacy/`)
+ * for these two specifically. Their `.dot`/`.pot`/`.pps` template/show
+ * siblings were not in that wave's scope either, so they (like `.xlt`) still
+ * reach `UnknownViewer` and this module's honest "not supported" message.
  */
 
 /** The 8-byte OLE2/CFB signature shared by every legacy Office binary format. */

@@ -1,0 +1,24 @@
+/* Legacy .ppt viewer container — a legacy-format banner (fixed, non-
+   scrolling) above the shared `SlideDeck`, which owns its own layout/scroll
+   behavior (`viewer-slides.css`). */
+.legacy-ppt-viewer {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.legacy-ppt-viewer__deck {
+  flex: 1;
+  min-height: 0;
+}
+
+.legacy-ppt-viewer--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--hl-keyword, #e5534b);
+  text-align: center;
+}

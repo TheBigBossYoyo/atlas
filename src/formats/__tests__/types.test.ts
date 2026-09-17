@@ -18,12 +18,12 @@ import {
 } from '../types'
 
 describe('FormatId constants', () => {
-  it('KNOWN_FORMAT_IDS has exactly 13 entries (every format except unknown)', () => {
-    expect(KNOWN_FORMAT_IDS).toHaveLength(13)
+  it('KNOWN_FORMAT_IDS has exactly 15 entries (every format except unknown)', () => {
+    expect(KNOWN_FORMAT_IDS).toHaveLength(15)
   })
 
-  it('ALL_FORMAT_IDS has exactly 14 entries and contains unknown', () => {
-    expect(ALL_FORMAT_IDS).toHaveLength(14)
+  it('ALL_FORMAT_IDS has exactly 16 entries and contains unknown', () => {
+    expect(ALL_FORMAT_IDS).toHaveLength(16)
     expect(ALL_FORMAT_IDS).toContain('unknown')
   })
 
@@ -68,6 +68,10 @@ describe('compile-time exhaustiveness (proves assertNever guards FormatId)', () 
         return 'odp'
       case 'rtf':
         return 'rtf'
+      case 'doc':
+        return 'doc'
+      case 'ppt':
+        return 'ppt'
       case 'unknown':
         return 'unknown'
       default:

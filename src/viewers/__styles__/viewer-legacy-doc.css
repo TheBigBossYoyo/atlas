@@ -1,0 +1,46 @@
+/* Legacy .doc viewer container — mirrors the working .docx-viewer/.odt-viewer
+   scroll pattern (DAT-02 / UX-04): the shared `.content--viewer
+   .preview-panel` sets `overflow: hidden`, so the viewer root itself must
+   own scrolling (via its `.legacy-doc-viewer__body`) or content past one
+   screen is unreachable. The legacy-format banner sits outside the
+   scrolling body so it stays visible while the document scrolls beneath it. */
+.legacy-doc-viewer {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+/* `VirtualizedPlainText` renders each line with an inline `white-space: pre`
+   (see its own source) — padding/typography live on the line class below,
+   not here, the same split `UnknownViewer`'s as-text mode uses. */
+.legacy-doc-viewer__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.legacy-doc-viewer__line {
+  padding: 0 32px;
+  font-size: 0.95rem;
+}
+
+.legacy-doc-viewer__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.legacy-doc-viewer--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--hl-keyword, #e5534b);
+  text-align: center;
+}

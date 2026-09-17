@@ -104,6 +104,14 @@ win:
       name: PowerPoint Macro-Enabled Slide Show
       description: PowerPoint Macro-Enabled Slide Show
       role: Viewer
+    - ext: doc
+      name: Word 97-2003 Document
+      description: Word 97-2003 Document
+      role: Viewer
+    - ext: ppt
+      name: PowerPoint 97-2003 Presentation
+      description: PowerPoint 97-2003 Presentation
+      role: Viewer
     - ext: pdf
       name: PDF Document
       description: PDF Document
