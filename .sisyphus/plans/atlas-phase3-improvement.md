@@ -985,4 +985,21 @@ After installing Atlas 3.1.0 (`487d9fc`), the owner tested the DOCX editor on a 
 
 ---
 
+## Wave 4 — owner-reported editor defects (2026-09-17)
+
+Executed sequentially in one session (the owner asked for no parallel execution to protect their usage limits), branch-per-area stacked on top of `main` at `487d9fc`:
+
+| Branch | Commits | Covers |
+|---|---|---|
+| `wave4/docx-editor-ux` | `4c39700`, `ef1965f` | USR-01…USR-14 (DOCX typing, selection, toggles, Find, fonts, toolbar) |
+| `wave4/sheets-editing-fix` | `49924b6` | USR-17 (spreadsheet editing, Excel tables) |
+| `wave4/slides-editor` | `34f2b52`, `39b4622` | USR-15, USR-16 (slide text rendering, PowerPoint editing) |
+| `wave4/code-editor` | `9a89f36` | USR-18, USR-19 (code editor, sandboxed Run) |
+
+Per-item status, evidence and what is still open: see section 14c of `atlas-phase3-findings-register.md`.
+
+**Process lesson, repeated:** two of the three worst defects (DOCX typing, spreadsheet editing) were invisible to the unit suite because it mocks the very surface that was broken (contentEditable input, the canvas grid's editor overlay). Every editor change now ships with a Playwright scenario that drives the real app.
+
+---
+
 *End of plan. See the companion document `atlas-phase3-findings-register.md` for the complete per-finding detail (locations, evidence, verification status) behind every task above.*

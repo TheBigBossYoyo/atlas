@@ -433,6 +433,28 @@ Reported by the owner while editing a real document (`C:\Users\Youssef\Downloads
 | USR-18 | HIGH | feature-gap | OWNER | **Code files (e.g. .js) are "not done at all"**: read-only highlighting, no features. | A real code editor: editing with undo/redo, save, line numbers, find/replace, go to line, code folding, bracket matching, auto-indent, multi-cursor, word wrap toggle, minimap optional, language detection. | Replace the Shiki read-only viewer with a lazily-loaded CodeMirror 6 (or Monaco) editor wired to the ViewerContext session contract (dirty/save) and the shortcut dispatcher; keep Shiki themes or map themes. Needs new npm dependencies (worktree with its own install). | L |
 | USR-19 | MEDIUM | feature-gap | OWNER | **No code execution** ("exécution etc."). | Explicit "Run" for supported languages (JS/TS via Node, Python if installed…) with an output panel, stop button, and clear warnings. | Security-sensitive: running code from an opened file must be an explicit user action, never automatic; run in a separate child process from the main process (no renderer access, no Node integration in the renderer), with timeout/kill, working-directory choice, and a first-run consent dialog. Design review before implementation. | L |
 
+
+### 14c. Wave-4 resolution status (2026-09-17)
+
+Fixed in wave 4 (branch `wave4/code-editor`, stacked on `wave4/docx-editor-ux` → `wave4/sheets-editing-fix` → `wave4/slides-editor`), each with real-app Playwright coverage, because the 2 527-test unit suite had passed while typing into a DOCX was completely broken:
+
+| ID | Status | Where | Evidence |
+|---|---|---|---|
+| USR-01…USR-09, USR-13 | Fixed | `4c39700` | Native `beforeinput` listener (React's synthetic `onBeforeInput` is built on legacy `textInput` and carries no `inputType`), pointer hit-testing in `docx/editor/Cursor.ts`, toolbar toggles, CSS Custom Highlight for Find, page-count stats — `tests/e2e/docx-editor.spec.ts` (7 scenarios) |
+| USR-10, USR-11, USR-12 | Fixed | `ef1965f` | Searchable `FontPicker` fed by installed Windows fonts (`electron/lib/systemFonts.cjs` + `fonts:list` IPC) and a compact document toolbar |
+| USR-14 | Verified, no defect | — | The reported document has no heading styles, so an empty outline is correct |
+| USR-17 | Fixed | `49924b6` | Root cause: `index.html` had no `#portal` element, which glide-data-grid requires to mount ANY cell editor — every spreadsheet/CSV cell was uneditable in 3.1.0. Also fixes edits dropped when Enter follows typing within one frame, adds an Excel-like blank margin past the data, and reads/keeps Excel tables (`viewers/spreadsheet/spreadsheetTables.ts`) — `tests/e2e/spreadsheet-editor.spec.ts` |
+| USR-15 | Fixed | `34f2b52` | `a:bodyPr` insets/anchor/wrap resolved through the layout/master chain, PowerPoint's ~1.2 line spacing, and text no longer clipped by a tight box; wider thumbnail rail |
+| USR-16 | Fixed | `39b4622` | XML-passthrough PPTX editing (`viewers/slides/pptx/editing/`): edit text in place, move/resize/delete shapes, insert text boxes, add/duplicate/delete/reorder slides, speaker notes, presenter view, Save/Save As — `tests/e2e/pptx-editor.spec.ts` |
+| USR-18, USR-19 | Fixed | `9a89f36` | CodeMirror 6 editor (find/replace, go to line, folding, multi-cursor, wrap, save) and an explicit Run gated by a native confirmation, running the file on disk in a shell-less child process with a 60 s limit, output cap and Stop |
+
+Still open after wave 4:
+
+- **ODP editing** — `.odp` decks stay read-only; the editing layer is PPTX-only (the ODF writer is a separate piece of work).
+- **Rotated shapes** — the slide editor's selection box and hit test ignore `rot`, so a rotated shape is selected by its unrotated bounding box.
+- **Spreadsheet styling on save** — unchanged from wave 3: Atlas writes a fresh workbook, so per-cell fonts/fills/number formats on untouched cells are still lost (documented in `spreadsheetWrite.ts`); Excel tables are now the exception, grafted back in.
+- **No Office verification** — the grafted OOXML was validated by structure and round-trip through SheetJS/the parsers; nobody opened the output in Microsoft Office, which is the only real proof of "no repair prompt".
+
 ---
 
 ## Refuted During Verification
