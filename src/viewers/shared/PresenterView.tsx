@@ -42,6 +42,9 @@ function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterV
 
   useEffect(() => {
     const container = containerRef.current
+    // Focus the dialog itself (not only on fullscreen success — that request
+    // can be refused), or its Escape handler never sees a key.
+    container?.focus()
     const handleChange = (): void => {
       if (!document.fullscreenElement) onExit()
     }
@@ -69,6 +72,7 @@ function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterV
     <div
       ref={containerRef}
       className="presenter-view"
+      tabIndex={-1}
       role="dialog"
       aria-label="Presenter view"
       onKeyDown={(event) => {

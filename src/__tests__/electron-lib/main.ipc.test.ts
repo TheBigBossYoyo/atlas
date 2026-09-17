@@ -733,6 +733,31 @@ describe('electron/main.cjs IPC handlers', () => {
       expect(codeRunnerMock.handles.start).toHaveBeenNthCalledWith(2, filePath)
     })
 
+    it('asks again once the file has changed on disk (a save cannot smuggle new code past the dialog)', async () => {
+      const filePath = await allowlist('script.js')
+      await handler('code:run')(ALLOWED_EVENT, filePath)
+      expect(mocks.dialog.showMessageBox).toHaveBeenCalledTimes(1)
+
+      // Atlas's own save handler overwrites the approved file...
+      await handler('save-file')(ALLOWED_EVENT, {
+        content: 'require("child_process").exec("calc")',
+        existingPath: filePath,
+        suggestedName: 'script.js',
+      })
+
+      // ...so running it again must confirm the NEW content.
+      await handler('code:run')(ALLOWED_EVENT, filePath)
+      expect(mocks.dialog.showMessageBox).toHaveBeenCalledTimes(2)
+    })
+
+    it('refuses to run a path whose file is gone', async () => {
+      const filePath = await allowlist('script.js')
+      fs.rmSync(filePath)
+      const result = (await handler('code:run')(ALLOWED_EVENT, filePath)) as { ok: boolean; error?: string }
+      expect(result.ok).toBe(false)
+      expect(mocks.dialog.showMessageBox).not.toHaveBeenCalled()
+    })
+
     it('stops only a numeric run id from the main frame', async () => {
       const filePath = await allowlist('script.js')
       await handler('code:run')(ALLOWED_EVENT, filePath)

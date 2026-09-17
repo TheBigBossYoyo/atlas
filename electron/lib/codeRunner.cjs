@@ -7,7 +7,8 @@
  *  - only a file already on the main-process path allowlist can run, and the
  *    file on disk is what runs (never code text sent by the renderer);
  *  - main.cjs asks for confirmation in a native dialog the renderer cannot
- *    answer, once per file per session;
+ *    answer, and that approval is tied to the file's size+mtime, so an edited
+ *    (or overwritten) file is confirmed again before it runs;
  *  - the program is a separate child process with no shell (no command-line
  *    injection), its working directory is the file's folder, Electron's own
  *    environment variables are stripped, stdin is closed, output is capped and

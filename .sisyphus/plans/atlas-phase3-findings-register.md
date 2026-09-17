@@ -446,7 +446,7 @@ Fixed in wave 4 (branch `wave4/code-editor`, stacked on `wave4/docx-editor-ux` �
 | USR-17 | Fixed | `49924b6` | Root cause: `index.html` had no `#portal` element, which glide-data-grid requires to mount ANY cell editor — every spreadsheet/CSV cell was uneditable in 3.1.0. Also fixes edits dropped when Enter follows typing within one frame, adds an Excel-like blank margin past the data, and reads/keeps Excel tables (`viewers/spreadsheet/spreadsheetTables.ts`) — `tests/e2e/spreadsheet-editor.spec.ts` |
 | USR-15 | Fixed | `34f2b52` | `a:bodyPr` insets/anchor/wrap resolved through the layout/master chain, PowerPoint's ~1.2 line spacing, and text no longer clipped by a tight box; wider thumbnail rail |
 | USR-16 | Fixed | `39b4622` | XML-passthrough PPTX editing (`viewers/slides/pptx/editing/`): edit text in place, move/resize/delete shapes, insert text boxes, add/duplicate/delete/reorder slides, speaker notes, presenter view, Save/Save As — `tests/e2e/pptx-editor.spec.ts` |
-| USR-18, USR-19 | Fixed | `9a89f36` | CodeMirror 6 editor (find/replace, go to line, folding, multi-cursor, wrap, save) and an explicit Run gated by a native confirmation, running the file on disk in a shell-less child process with a 60 s limit, output cap and Stop |
+| USR-18, USR-19 | Fixed | `9a89f36` | CodeMirror 6 editor (find/replace, go to line, folding, multi-cursor, wrap, save) and an explicit Run gated by a native confirmation tied to the file's content (size+mtime, re-confirmed whenever it changes), running the file on disk in a shell-less child process with a 60 s limit, output cap and Stop |
 
 Still open after wave 4:
 

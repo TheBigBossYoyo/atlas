@@ -147,6 +147,8 @@ function TextShapeEditor({
         event.stopPropagation()
         if (event.key === 'Escape') {
           event.preventDefault()
+          // PowerPoint's behavior: Escape leaves text editing and KEEPS what
+          // was typed (Ctrl+Z undoes it), rather than discarding it silently.
           finish(true)
         }
       }}

@@ -978,9 +978,30 @@ ipcMain.handle('shell:reveal-in-folder', (event, filePath) => {
 
 // USR-19 — explicit "Run" for an opened source file. Only allowlisted files
 // run, the file on disk is what runs, and a native confirmation (which the
-// renderer cannot answer) is required once per file per session. See
+// renderer cannot answer) is required before running it. See
 // electron/lib/codeRunner.cjs for the process sandboxing rules.
-const approvedRunPaths = new Set();
+//
+// The approval is tied to the file's CONTENT, not just its path: the child
+// process reads the file from disk when it starts, and Atlas's own
+// `save-file`/`save-binary-file` handlers will overwrite any allowlisted
+// path with renderer-supplied bytes. Keying approval on the path alone would
+// therefore let a compromised renderer overwrite an already-approved script
+// and re-run it with no dialog at all. Each approval records the file's
+// size+mtime and is re-checked immediately before every run, so any change —
+// from Atlas, another editor, or an attacker — re-prompts.
+/** @type {Map<string, string>} approved path -> file fingerprint at approval time */
+const approvedRunPaths = new Map();
+
+/** `size:mtime` of the file, or null when it cannot be read. */
+function runFingerprint(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    if (!stats.isFile()) return null;
+    return `${stats.size}:${stats.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
 let codeRunner = null;
 
 function getCodeRunner() {
@@ -1003,7 +1024,10 @@ ipcMain.handle('code:run', async (event, filePath) => {
   if (!runtime) return { ok: false, error: 'Atlas cannot run this kind of file.' };
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
 
-  if (!approvedRunPaths.has(filePath)) {
+  const fingerprint = runFingerprint(filePath);
+  if (fingerprint === null) return { ok: false, error: 'This file could not be read.' };
+
+  if (approvedRunPaths.get(filePath) !== fingerprint) {
     const { response } = await dialog.showMessageBox(mainWindow, {
       type: 'warning',
       buttons: ['Run', 'Cancel'],
@@ -1018,7 +1042,10 @@ ipcMain.handle('code:run', async (event, filePath) => {
         'It is stopped automatically after 60 seconds.',
     });
     if (response !== 0) return { ok: false, cancelled: true };
-    approvedRunPaths.add(filePath);
+    // Re-read the fingerprint: the file may have changed while the dialog was open.
+    const approvedFingerprint = runFingerprint(filePath);
+    if (approvedFingerprint === null) return { ok: false, error: 'This file could not be read.' };
+    approvedRunPaths.set(filePath, approvedFingerprint);
   }
 
   try {

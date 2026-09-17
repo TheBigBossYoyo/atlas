@@ -113,6 +113,18 @@ export function usePptxEditor(buffer: ArrayBuffer | null, filePath: string) {
       return path ? edit(pkg, path) : pkg
     })
 
+  // Undo/redo run through the SAME queue as edits: an edit job reads the
+  // present state when it starts and writes its result when its re-parse
+  // finishes, so an undo landing in between would be silently undone again by
+  // that in-flight job (and its redo entry dropped by the next history.set).
+  const undo = useCallback((): void => {
+    queueRef.current = queueRef.current.then(() => history.undo())
+  }, [history])
+
+  const redo = useCallback((): void => {
+    queueRef.current = queueRef.current.then(() => history.redo())
+  }, [history])
+
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
   useEffect(() => {
@@ -164,17 +176,17 @@ export function usePptxEditor(buffer: ArrayBuffer | null, filePath: string) {
         const key = event.key.toLowerCase()
         if (key === 'z' && !event.shiftKey) {
           event.preventDefault()
-          history.undo()
+          undo()
           return true
         }
         if (key === 'y' || (key === 'z' && event.shiftKey)) {
           event.preventDefault()
-          history.redo()
+          redo()
           return true
         }
         return false
       },
-      [history],
+      [undo, redo],
     ),
   )
 
@@ -185,8 +197,8 @@ export function usePptxEditor(buffer: ArrayBuffer | null, filePath: string) {
     slides: history.present.slides,
     canUndo: history.canUndo,
     canRedo: history.canRedo,
-    undo: history.undo,
-    redo: history.redo,
+    undo,
+    redo,
     save: handleSave,
     saveAs: useCallback(() => save(true), [save]),
     canEditNotes: (index: number): boolean => {
