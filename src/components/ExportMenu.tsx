@@ -74,6 +74,14 @@ export function ExportMenu({ onExport, format, open, onOpenChange, disabled, can
       return [{ value: 'copy', label: 'Save a copy', Icon: FileDown }] as const;
     }
 
+    // wave-4 legacy-office — LegacyDocViewer/LegacyPptViewer are read-only,
+    // text-only previews with no render surface the PDF/HTML export helpers
+    // know how to print; no export item is offered rather than one that
+    // always fails (see App.tsx's `handleNonMarkdownExport`).
+    if (format === 'doc' || format === 'ppt') {
+      return [] as const;
+    }
+
     // X1 — a real per-format PDF export now exists for every format (table
     // PDF for xlsx/ods, from the parsed workbook — see `spreadsheetPdf.ts`),
     // so xlsx/ods additionally get a native "Save a copy" of their own bytes

@@ -19,6 +19,8 @@ import { CodeViewer } from '../CodeViewer'
 import { RtfViewer } from '../RtfViewer'
 import { OdtViewer } from '../OdtViewer'
 import { UnknownViewer } from '../UnknownViewer'
+import { LegacyDocViewer } from '../LegacyDocViewer'
+import { LegacyPptViewer } from '../LegacyPptViewer'
 
 // CodeViewer calls useTheme(), which reads window.matchMedia on mount; jsdom
 // doesn't implement it.
@@ -95,5 +97,29 @@ describe('viewer scroll containers (DAT-02 / UX-04)', () => {
 
     const { container } = renderWithProvider(file, UnknownViewer)
     expect(container.querySelector('.unknown-viewer')).not.toBeNull()
+  })
+
+  it('LegacyDocViewer root carries the scrollable .legacy-doc-viewer class', () => {
+    const file: LoadedFile = {
+      kind: 'binary',
+      content: new ArrayBuffer(0),
+      path: '/tmp/example.doc',
+      format: 'doc',
+    }
+
+    const { container } = renderWithProvider(file, LegacyDocViewer)
+    expect(container.querySelector('.legacy-doc-viewer')).not.toBeNull()
+  })
+
+  it('LegacyPptViewer root carries the .legacy-ppt-viewer class', () => {
+    const file: LoadedFile = {
+      kind: 'binary',
+      content: new ArrayBuffer(0),
+      path: '/tmp/example.ppt',
+      format: 'ppt',
+    }
+
+    const { container } = renderWithProvider(file, LegacyPptViewer)
+    expect(container.querySelector('.legacy-ppt-viewer')).not.toBeNull()
   })
 })

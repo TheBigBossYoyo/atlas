@@ -643,6 +643,13 @@ function AppShell() {
         case 'pdf':
           if (file.kind === 'binary') await exportPdfCopy(file.content, baseName);
           break;
+        case 'doc':
+        case 'ppt':
+          // wave-4 legacy-office — read-only, text-only viewers with no
+          // render surface these export helpers know how to print; export
+          // is explicitly out of scope for these two formats (see
+          // `legacy/doc`/`legacy/ppt` module headers).
+          throw new Error('PDF export failed: this file type is not supported.');
         case 'unknown':
           throw new Error('PDF export failed: this file type is not supported.');
         case 'markdown':

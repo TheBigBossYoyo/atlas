@@ -17,6 +17,8 @@ export const viewerRegistry: Readonly<Record<FormatId, ViewerLoader>> = {
   docx: () => import('../viewers/DocxViewer').then((m) => pick(m, 'DocxViewer')),
   xlsx: () => import('../viewers/XlsxViewer').then((m) => pick(m, 'XlsxViewer')),
   pptx: () => import('../viewers/PptxViewer').then((m) => pick(m, 'PptxViewer')),
+  doc: () => import('../viewers/LegacyDocViewer').then((m) => pick(m, 'LegacyDocViewer')),
+  ppt: () => import('../viewers/LegacyPptViewer').then((m) => pick(m, 'LegacyPptViewer')),
   pdf: () => import('../viewers/PdfViewer').then((m) => pick(m, 'PdfViewer')),
   csv: () => import('../viewers/CsvViewer').then((m) => pick(m, 'CsvViewer')),
   tsv: () => import('../viewers/TsvViewer').then((m) => pick(m, 'TsvViewer')),

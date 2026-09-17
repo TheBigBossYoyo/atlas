@@ -1,0 +1,19 @@
+/* Shared "legacy format, read-only" banner (LegacyDocViewer/LegacyPptViewer)
+   — mirrors OdtViewer's tracked-changes banner: a fixed, non-scrolling strip
+   above the document body. */
+.legacy-format-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.legacy-format-banner__icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}

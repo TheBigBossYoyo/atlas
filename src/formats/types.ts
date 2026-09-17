@@ -27,6 +27,12 @@ export type FormatId =
   | 'ods'
   | 'odp'
   | 'rtf'
+  // wave-4 legacy-office — legacy binary (pre-XML) Word/PowerPoint formats.
+  // Distinct from 'docx'/'pptx': read-only, text-only best-effort extraction
+  // via `src/legacy/` (no OLE2/CFB parsing in common with the ZIP-based
+  // OOXML formats) — see `viewers/LegacyDocViewer.tsx`/`LegacyPptViewer.tsx`.
+  | 'doc'
+  | 'ppt'
   | 'unknown'
 
 /** All non-`unknown` FormatIds, useful for iteration / registry exhaustiveness. */
@@ -44,6 +50,8 @@ export const KNOWN_FORMAT_IDS = [
   'ods',
   'odp',
   'rtf',
+  'doc',
+  'ppt',
 ] as const satisfies ReadonlyArray<Exclude<FormatId, 'unknown'>>
 
 /** All FormatIds including `unknown`. Order matches `FormatId` declaration. */

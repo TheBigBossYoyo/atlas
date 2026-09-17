@@ -101,6 +101,24 @@ const PPTX_ROWS: ReadonlyArray<RawEntry> = [
   ['ppsm', 'pptx', 'PowerPoint Macro-Enabled Slide Show', 'PowerPoint Macro-Enabled Slide Show', 'Viewer'],
 ]
 
+// wave-4 legacy-office — unlike `.xls` (genuine SheetJS BIFF8 read/write
+// support, routed to the spreadsheet viewer above), `.doc`/`.ppt` get a
+// hand-rolled, read-only, text-only best-effort reader (`src/legacy/`):
+// OLE2/CFB container + FIB/piece-table (.doc) or PPT binary record tree
+// (.ppt), with no writer at all. `associationRole: 'Viewer'` reflects that —
+// no Save, Save As-only (through the existing modern DOCX/PPTX writers) if
+// that ever gets wired up. Their `.dot`/`.pot`/`.pps` template/show siblings
+// are deliberately left out of this wave's scope — they still fall through
+// to `formats/legacyOffice.ts`'s honest "not supported" message via
+// `UnknownViewer`, same as `.xlt` since wave 3.
+const LEGACY_DOC_ROWS: ReadonlyArray<RawEntry> = [
+  ['doc', 'doc', 'Word 97-2003 Document', 'Word 97-2003 Document', 'Viewer'],
+]
+
+const LEGACY_PPT_ROWS: ReadonlyArray<RawEntry> = [
+  ['ppt', 'ppt', 'PowerPoint 97-2003 Presentation', 'PowerPoint 97-2003 Presentation', 'Viewer'],
+]
+
 const MISC_DOCUMENT_ROWS: ReadonlyArray<RawEntry> = [
   ['pdf', 'pdf', 'PDF Document', 'PDF Document', 'Viewer'],
   ['csv', 'csv', 'Comma-Separated Values', 'Comma-Separated Values File', 'Viewer'],
@@ -191,6 +209,8 @@ const RAW_ENTRIES: ReadonlyArray<RawEntry> = [
   ...DOCX_ROWS,
   ...XLSX_ROWS,
   ...PPTX_ROWS,
+  ...LEGACY_DOC_ROWS,
+  ...LEGACY_PPT_ROWS,
   ...MISC_DOCUMENT_ROWS,
   ...CODE_ROWS,
 ]

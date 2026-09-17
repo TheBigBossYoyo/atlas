@@ -13,7 +13,7 @@ const TEXT_CLASS_FORMATS = new Set<FormatId>([
 ]);
 
 const BINARY_CLASS_FORMATS = new Set<FormatId>([
-  'pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf',
+  'pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'doc', 'ppt',
 ]);
 
 const BROWSER_MODE_ERROR =
@@ -31,6 +31,8 @@ const FORMAT_LABELS: Partial<Record<FormatId, string>> = {
   ods: 'OpenDocument Spreadsheet (.ods)',
   odp: 'OpenDocument Presentation (.odp)',
   rtf: 'Rich Text (.rtf)',
+  doc: 'Word 97-2003 (.doc)',
+  ppt: 'PowerPoint 97-2003 (.ppt)',
 };
 
 function formatLabel(format: FormatId): string {
