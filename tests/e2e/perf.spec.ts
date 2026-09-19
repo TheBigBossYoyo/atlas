@@ -107,6 +107,13 @@ async function assertNoLongTasksOpening(filePath: string, dataViewer: string, st
 
     const page = await electronApp.firstWindow()
 
+    // The first window can still be on its initial blank document, which is
+    // about to be replaced by the app's own: evaluating into it would race
+    // that navigation (and, since Electron 44, reliably lose it). Waiting for
+    // the app root means the document below is the final one — the init
+    // script above has already installed the observer in it.
+    await page.waitForSelector('#root', { timeout: 30_000 })
+
     // Redundant with the init script above in the common case; only does
     // real work if the window's document had already started executing by
     // the time addInitScript was registered.
