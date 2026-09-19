@@ -46,6 +46,7 @@ The authoritative list is the in-app `ShortcutsModal` (`Ctrl+/`,
 
 | Shortcut | Action |
 |---|---|
+| `Ctrl+N` | New document menu |
 | `Ctrl+O` | Open file |
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save As |
@@ -55,6 +56,7 @@ The authoritative list is the in-app `ShortcutsModal` (`Ctrl+/`,
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` | Preview / Split / Editor view (Markdown only) |
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+T` | Cycle theme |
+| `Ctrl+Shift+T` | Reopen last closed document |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Increase / decrease / reset font size |
 | `Ctrl+F` | Find in document (Markdown, Text, Code, RTF, ODT) |
 | `Enter` / `Shift+Enter` | Next / previous find match |

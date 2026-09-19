@@ -38,4 +38,20 @@ describe('ThemeMenu', () => {
     expect(onSelect).toHaveBeenCalledWith('sepia');
     expect(screen.queryByRole('list', { name: 'Theme options' })).not.toBeInTheDocument();
   });
+
+  // UX — picking an item (or Escape) closes the menu by unmounting the
+  // `<ul>`; a focused item inside it is then removed from the DOM, and
+  // without `useRestoreFocusOnClose` focus fell back to nothing (document
+  // .body) instead of returning to the icon button that opened the menu.
+  it('restores focus to the trigger button after selecting a theme', () => {
+    render(<ThemeMenu current="light" themes={THEMES} onSelect={() => {}} />);
+    const trigger = screen.getByRole('button', { name: 'Theme' });
+    fireEvent.click(trigger);
+
+    const sepiaOption = screen.getByRole('button', { name: /^Sepia/ });
+    sepiaOption.focus();
+    fireEvent.click(sepiaOption);
+
+    expect(trigger).toHaveFocus();
+  });
 });

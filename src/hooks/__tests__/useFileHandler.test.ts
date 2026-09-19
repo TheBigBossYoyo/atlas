@@ -610,6 +610,30 @@ describe('useFileHandler', () => {
     expect(result.current.error).toMatch(/desktop app/i);
   });
 
+  // UX — a markdown/text file whose path was valid when the load started
+  // (e.g. a "Recent" entry, or reopening via the OS) but no longer exists on
+  // disk — deleted, renamed, or moved out from under Atlas. `openFileByPath`
+  // resolves to `null` for this case (electron/main.cjs's `open-file-by-path`
+  // handler) rather than rejecting; previously this surfaced as the raw,
+  // path-leaking `Failed to read file: /abs/gone.md` instead of a message a
+  // non-technical user could act on.
+  it('loadFromPath surfaces a friendly "not found" error, without leaking the raw path, when the file no longer exists', async () => {
+    window.electronAPI = buildElectronAPI({
+      openFileByPath: vi.fn().mockResolvedValue(null),
+    });
+
+    const { result } = renderFileHandler();
+
+    await act(async () => {
+      await result.current.loadFromPath('/abs/gone.md');
+    });
+
+    expect(result.current.error).toMatch(/could not be found/i);
+    expect(result.current.error).not.toContain('/abs/gone.md');
+    expect(result.current.file).toBeNull();
+    expect(result.current.loading).toBe(false);
+  });
+
   // ---------------------------------------------------------------------------
   // P2.11/LOAD-10 — extensionless text sniff
   // ---------------------------------------------------------------------------

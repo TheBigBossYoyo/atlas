@@ -200,6 +200,23 @@ describe('electron/main.cjs IPC handlers', () => {
     it('rejects a non-string path', async () => {
       await expect(handler('file:readBinaryByPath')(ALLOWED_EVENT, 42)).rejects.toThrow(/not selected through Atlas/i)
     })
+
+    // UX — an allowlisted binary file (opened earlier in the session) that
+    // has since been deleted/renamed/moved out from under Atlas. Used to
+    // throw the bare, dev-facing `Error('Invalid path')`; must now say
+    // something a non-technical user can act on instead.
+    it('surfaces a friendly "not found" message for an allowlisted file that no longer exists on disk', async () => {
+      const filePath = path.join(tempDir, 'was-here.docx')
+      fs.writeFileSync(filePath, 'x')
+      mocks.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [filePath] })
+      await handler('dialog:openFileBinary')(ALLOWED_EVENT)
+
+      fs.rmSync(filePath)
+
+      await expect(handler('file:readBinaryByPath')(ALLOWED_EVENT, filePath)).rejects.toThrow(
+        /could not be found/i,
+      )
+    })
   })
 
   describe('open-file-by-path', () => {

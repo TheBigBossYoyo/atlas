@@ -19,6 +19,16 @@ const BINARY_CLASS_FORMATS = new Set<FormatId>([
 const BROWSER_MODE_ERROR =
   'This feature requires the Atlas desktop app — file access is unavailable in a plain browser tab.';
 
+// UX — `open-file-by-path` (main process) resolves to `null`, rather than
+// throwing, when the target no longer exists on disk (a stale "Recent"
+// entry, or the file being deleted/moved out from under Atlas while it was
+// open elsewhere). Mirrors `FILE_NOT_FOUND_MESSAGE` in `electron/main.cjs`'s
+// `file:readBinaryByPath` handler (the binary-class equivalent of this same
+// failure) instead of the old `Failed to read file: ${absPath}`, which read
+// as a raw dev-facing string and leaked the full filesystem path into the UI.
+const FILE_NOT_FOUND_ERROR =
+  'This file could not be found — it may have been moved, renamed, or deleted.';
+
 // P2.14/LOAD-04 — human-readable labels for the "extension vs. actual
 // contents disagree" confirm prompt below. Falls back to the bare FormatId
 // for anything not worth a friendlier label.
@@ -204,7 +214,7 @@ export function useFileHandler({
           };
         } else {
           const data = await electronAPI.openFileByPath(absPath);
-          if (!data) throw new Error(`Failed to read file: ${absPath}`);
+          if (!data) throw new Error(FILE_NOT_FOUND_ERROR);
           loaded = {
             kind: 'text',
             content: data.content,

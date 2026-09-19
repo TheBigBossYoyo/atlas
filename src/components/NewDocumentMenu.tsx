@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { FilePlus, FileText, FileSpreadsheet, FileType, Presentation } from 'lucide-react';
 import type { NewDocumentFormat } from '../electron';
 import { useShellShortcut } from '../hooks/useShortcutManager';
+import { useRestoreFocusOnClose } from '../hooks/useRestoreFocusOnClose';
 
 interface NewDocumentMenuProps {
   onCreate: (format: NewDocumentFormat) => void;
@@ -30,6 +31,8 @@ const NEW_DOCUMENT_ITEMS: readonly NewDocumentMenuItem[] = [
 /** NEW-01 — a toolbar dropdown offering every "New document" type, styled and behaving exactly like ExportMenu (outside-click/Escape-to-close, plain labeled buttons rather than the `role="menu"` pattern). */
 export function NewDocumentMenu({ onCreate, open, onOpenChange }: NewDocumentMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useRestoreFocusOnClose(open, triggerRef);
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -68,6 +71,7 @@ export function NewDocumentMenu({ onCreate, open, onOpenChange }: NewDocumentMen
   return (
     <div className="dropdown" ref={ref}>
       <button
+        ref={triggerRef}
         className="toolbar__btn toolbar__nodrag"
         title="New document (Ctrl+N)"
         aria-haspopup="true"

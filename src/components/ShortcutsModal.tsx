@@ -90,6 +90,7 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
             <dt>{renderKeys('Ctrl+S')}</dt><dd>Save</dd>
             <dt>{renderKeys('Ctrl+Shift+S')}</dt><dd>Save As</dd>
             <dt>{renderKeys('Ctrl+W')}</dt><dd>Close file</dd>
+            <dt>{renderKeys('Ctrl+Shift+T')}</dt><dd>Reopen last closed document</dd>
             <dt>{renderKeys('Ctrl+P')}</dt><dd>Print / export</dd>
             <dt>{renderKeys('Ctrl+E')}</dt><dd>Export menu</dd>
           </dl>
