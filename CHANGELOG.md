@@ -85,6 +85,25 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   the Atlas icon even unsigned; see `docs/RELEASE.md` for what real code
   signing would still require (ELEC-09/ELEC-10).
 
+- DOCX: typing in a long document is roughly 2x faster again on top of the
+  D23-PERF fix above (D23-PERF-2). Measuring the same keystroke split into
+  command-apply/pagination/React-commit/browser-layout-paint found the
+  React commit and browser paint steps — not pagination, already cheap
+  thanks to the line cache — dominating: `paginate()` hands back a
+  brand-new `Page` object for every page on every call, so even with
+  `PageStack`/`PageView` memoized, every page on screen still failed its
+  memo check and remounted a full DOM subtree on every keystroke regardless
+  of whether it was actually visible. `PageStack` now virtualizes: only
+  pages near the scroll container's viewport (plus a small buffer, plus
+  whichever page holds the caret/selection) mount a real `PageView`; the
+  rest render as a lightweight placeholder that reserves the same box, so
+  scroll height/the scrollbar/the page-count status bar are unaffected.
+  Printing and PDF export force every page to mount first (both read the
+  live DOM). Measured back-to-back on the same machine: React commit
+  dropped from ~40-50ms to ~4-10ms and browser paint from ~50-60ms to
+  ~10-20ms per keystroke; wall-clock median across 5 keystrokes on a
+  35-page document went from ~280-300ms to ~141-155ms.
+
 ### Changed
 - Strict-mode ratchet (P4.1): `electron/` (`main.cjs`, `preload.cjs`,
   `lib/*.cjs`) is now type-checked — a new `tsconfig.electron.json`

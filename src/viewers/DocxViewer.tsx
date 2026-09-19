@@ -11,6 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
+import { flushSync } from 'react-dom'
 
 import { ListTree, PanelTop, Printer, RefreshCw, Save, SaveAll, X, ZoomIn, ZoomOut } from 'lucide-react'
 
@@ -42,6 +43,14 @@ import {
 import { type Document as DocxDocument, type Paragraph, type ParagraphChild, type Run, type RunChild } from '../docx/model'
 import { resolveParaProps } from '../docx/parser/cascade'
 import { MediaContext, PageStack } from '../docx/render'
+// D23-PERF-2 — imported from the concrete module, not the `docx/render`
+// barrel: `DocxViewer.editor.test.tsx`/`.fields.test.tsx`/`.load.test.tsx`
+// each `vi.mock('../../docx/render', ...)` with a bare-bones fake `PageStack`
+// (they don't exercise real pagination/rendering), and going through the
+// barrel here would make this a required export of that mock too.
+// `findPagesForParagraphPath` is a pure function with no rendering
+// dependency, so importing it directly sidesteps that entirely.
+import { findPagesForParagraphPath } from '../docx/render/pageVirtualization'
 import { useArchiveMediaResolver } from '../docx/render/archiveMedia'
 import {
   CommentsPane,
@@ -109,6 +118,11 @@ type HeadingNavSeed = {
   level: number
   paragraphIndex: number
 }
+
+/** D23-PERF-2 — stable empty-Set reference for `pinnedPageIndices` when
+ * there's nothing to pin, so an unchanged render doesn't hand `PageStack` a
+ * fresh `Set` object every time (see `PageStack`'s own `memo` doc comment). */
+const EMPTY_PINNED_PAGE_INDICES: ReadonlySet<number> = new Set()
 
 const DEFAULT_FIND_OPTIONS: FindOptions = {
   caseSensitive: false,
@@ -801,6 +815,12 @@ function DocxEditor({
   // between an edit and its repagination — e.g. an insert/delete shifting
   // later block indices.
   const [pagesDocument, setPagesDocument] = useState(bundle.document)
+  // D23-PERF-2 — bypasses PageStack's page virtualization while true, so
+  // print (`handlePrint`) and PDF export (the `atlas:docx-*-full-render`
+  // window events below, dispatched by `exportDocxPdf`) always see every
+  // page in the live DOM instead of whatever happened to be scrolled into
+  // view. See `PageStack.tsx`'s `forceRenderAll` prop doc comment.
+  const [forceRenderAll, setForceRenderAll] = useState(false)
   const [paginationProgress, setPaginationProgress] = useState<PaginationProgress | null>(null)
   const [paginationError, setPaginationError] = useState<string | null>(null)
   const [savePath, setSavePath] = useState(file.path)
@@ -865,6 +885,26 @@ function DocxEditor({
   }, [documentModel, findOptions, findQuery])
 
   const currentMatchIndex = useMemo(() => getCurrentMatchIndex(matches, range), [matches, range])
+
+  // D23-PERF-2 — pages that must stay mounted no matter where the viewport
+  // currently is: whichever page(s) hold the caret/selection. Computed
+  // straight from `range`/`pages` during render (not in a `useEffect`) so
+  // that the SAME commit that moves `range` (a click, arrow-key motion, or
+  // Find revealing a match via `revealSelectionRef`) also mounts that page's
+  // real DOM — the selection-sync `useLayoutEffect` further below runs
+  // immediately after that commit and needs `positionToDomRange` to find a
+  // real node, not a placeholder.
+  const pinnedPageIndices = useMemo(() => {
+    if (pages === null || range === null) {
+      return EMPTY_PINNED_PAGE_INDICES
+    }
+    const anchorPages = findPagesForParagraphPath(pages, range.anchor.paragraphPath)
+    const focusPages = findPagesForParagraphPath(pages, range.focus.paragraphPath)
+    if (anchorPages.length === 0 && focusPages.length === 0) {
+      return EMPTY_PINNED_PAGE_INDICES
+    }
+    return new Set([...anchorPages, ...focusPages])
+  }, [pages, range])
 
   const toolbarState = useMemo(
     () => createToolbarState(documentModel, range, { spellCheck: spellCheckEnabled, trackChanges: trackChangesEnabled }),
@@ -1635,15 +1675,42 @@ function DocxEditor({
     applyEditorCommands(commands, range)
   }, [applyEditorCommands, containerRef, documentModel, findOptions, findQuery, range])
 
+  // D23-PERF-2 — outline/heading navigation addresses a paragraph by its
+  // running position among every `.docx-page__line[data-paragraph-path]` in
+  // the document (matching how `collectDocxMetrics` numbered `navSeeds`),
+  // not by the model's own `paragraphPath`, so it can't reuse
+  // `pinnedPageIndices`' path-based lookup — that positional line simply
+  // doesn't exist in the DOM yet when its page has been virtualized out.
+  // Try the fast path first (works whenever the target is already mounted —
+  // on-screen, or incidentally pinned); if it isn't there, force every page
+  // to mount synchronously (`flushSync`, so the DOM is actually updated
+  // before the retry runs, not just scheduled), retry, then hand back to
+  // the normal virtualized window on the next frame. Jumping via the
+  // outline is a deliberate, infrequent action, not a hot path — unlike
+  // typing, a one-time full mount here is an acceptable cost.
   const handleScrollToParagraph = useCallback((paragraphIndex: number) => {
     const root = editorRootRef.current
     if (root === null) {
       return
     }
 
-    const lines = root.querySelectorAll<HTMLElement>('.docx-page__line[data-paragraph-path]')
-    const target = lines.item(paragraphIndex)
-    target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const tryScroll = (): boolean => {
+      const lines = root.querySelectorAll<HTMLElement>('.docx-page__line[data-paragraph-path]')
+      const target = lines.item(paragraphIndex)
+      if (target === null) {
+        return false
+      }
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return true
+    }
+
+    if (tryScroll()) {
+      return
+    }
+
+    flushSync(() => setForceRenderAll(true))
+    tryScroll()
+    requestAnimationFrame(() => setForceRenderAll(false))
   }, [])
 
   // DXE-08 — accepting a suggestion used to only call Electron's native
@@ -1992,6 +2059,15 @@ function DocxEditor({
     if (typeof window === 'undefined') {
       return
     }
+    // D23-PERF-2 — `window.print()`'s `@media print` pass reads whatever is
+    // ACTUALLY in the DOM at the moment it's called; a virtualized page
+    // that's currently a placeholder would print blank. `flushSync` forces
+    // the `forceRenderAll` state update (and PageStack's resulting mount of
+    // every page) to commit synchronously, so every page is real before
+    // `window.print()` ever runs — a plain `setForceRenderAll(true)` would
+    // only schedule that render, racing the synchronous print call right
+    // after it.
+    flushSync(() => setForceRenderAll(true))
     // Print uses native browser print dialog. The print stylesheet in
     // viewer-docx.css hides toolbar/comments/save UI and forces a page
     // break after each .docx-page so output matches on-screen pagination.
@@ -2000,6 +2076,32 @@ function DocxEditor({
       window.print()
     } finally {
       document.body.classList.remove('atlas-printing')
+      setForceRenderAll(false)
+    }
+  }, [])
+
+  // D23-PERF-2 — `src/utils/export/pdf.ts`'s `exportDocxPdf` clones the live
+  // `.docx-page-stack` from OUTSIDE this component (it's invoked generically
+  // by element id from `App.tsx`'s export menu, with no reference into this
+  // viewer's own state), so it can't call `setForceRenderAll` directly. It
+  // instead dispatches these two `window` events immediately before/after
+  // reading the DOM; `dispatchEvent` invokes listeners synchronously, and
+  // `flushSync` below forces the resulting full-mount render to actually
+  // commit before `dispatchEvent` returns — so by the time `exportDocxPdf`
+  // resumes and queries `.docx-page-stack`, every page is real, not a
+  // placeholder. See that file's own doc comment.
+  useEffect(() => {
+    const handleForceFullRender = (): void => {
+      flushSync(() => setForceRenderAll(true))
+    }
+    const handleReleaseFullRender = (): void => {
+      setForceRenderAll(false)
+    }
+    window.addEventListener('atlas:docx-force-full-render', handleForceFullRender)
+    window.addEventListener('atlas:docx-release-full-render', handleReleaseFullRender)
+    return () => {
+      window.removeEventListener('atlas:docx-force-full-render', handleForceFullRender)
+      window.removeEventListener('atlas:docx-release-full-render', handleReleaseFullRender)
     }
   }, [])
 
@@ -2472,6 +2574,21 @@ function DocxEditor({
                 theme={bundle.theme}
                 relationships={bundle.relationships}
                 onResizeTableColumn={handleResizeTableColumn}
+                // D23-PERF-2 — `containerRef` (the outer `.docx-viewer`,
+                // owned by the parent `DocxViewer` component, threaded down
+                // as a prop) is the element that actually scrolls: it's the
+                // one with a real `height`/`overflow: auto` in the cascade
+                // (`index.css`'s `.docx-viewer` rule). `editorRootRef` (the
+                // inner `.docx-viewer__surface`, this contentEditable) sits
+                // one level in and never itself overflows — its own
+                // `overflow: auto` never engages because nothing constrains
+                // its height below its content's — so measuring scroll
+                // position against it would see a `clientHeight` that
+                // always equals the full document height and "virtualize"
+                // nothing.
+                scrollContainerRef={containerRef}
+                pinnedPageIndices={pinnedPageIndices}
+                forceRenderAll={forceRenderAll}
               />
             </MediaContext.Provider>
           ) : paginationError !== null ? (
