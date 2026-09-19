@@ -4,8 +4,9 @@
  * A pure, immutable model of which files are open, which one is showing, and
  * which ones were closed recently (so Ctrl+Shift+T can bring one back). The
  * shell owns the side effects: prompting about unsaved changes before it
- * switches away from a document, and handing the newly-activated session's
- * already-loaded bytes back to the file handler instead of re-reading disk.
+ * switches away from a document, and re-reading the newly-activated document
+ * from disk (`reloadSessionFile`) so it never shows bytes older than its last
+ * save.
  *
  * A file is identified by its path: opening a path that is already open just
  * activates that tab, exactly like every editor does.
@@ -136,5 +137,33 @@ export function renameSession(state: DocumentSessionsState, id: string, file: Lo
     sessions: state.sessions.map((session, position) => (position === index ? renamed : session)),
     activeId: state.activeId === id ? renamed.id : state.activeId,
     recentlyClosed: state.recentlyClosed,
+  }
+}
+
+/** The two reads `reloadSessionFile` needs — a subset of `window.electronAPI`. */
+export type SessionFileReader = {
+  readonly openFileByPath: (path: string) => Promise<{ content: string } | null>
+  readonly readBinaryByPath: (path: string) => Promise<{ buffer: ArrayBuffer }>
+}
+
+/**
+ * The current contents of a document being shown again (tab switch, close,
+ * Ctrl+Shift+T). A session keeps the bytes it was opened with, but every save
+ * since then went to disk only, so showing the kept bytes would display the
+ * pre-save version, and the next save would overwrite the saved work with
+ * edits made on top of that stale copy. Falls back to the kept bytes when the
+ * file can no longer be read (moved, deleted, no Electron bridge).
+ */
+export async function reloadSessionFile(file: LoadedFile, reader: SessionFileReader | undefined): Promise<LoadedFile> {
+  if (!reader) return file
+  try {
+    if (file.kind === 'text') {
+      const data = await reader.openFileByPath(file.path)
+      return data ? { ...file, content: data.content } : file
+    }
+    const { buffer } = await reader.readBinaryByPath(file.path)
+    return { ...file, content: buffer }
+  } catch {
+    return file
   }
 }

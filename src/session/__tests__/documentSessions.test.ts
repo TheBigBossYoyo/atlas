@@ -1,5 +1,5 @@
 /** SHELL-17 — the open-documents model. */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { LoadedFile } from '../../formats/types'
 import {
@@ -11,6 +11,7 @@ import {
   neighbourSession,
   openSession,
   renameSession,
+  reloadSessionFile,
   reopenLastClosed,
 } from '../documentSessions'
 
@@ -93,5 +94,36 @@ describe('navigating and reordering', () => {
     const state = renameSession(openAll('/a.md', '/b.md'), '/b.md', file('/renamed.md'))
     expect(state.sessions.map((session) => session.name)).toEqual(['a.md', 'renamed.md'])
     expect(activeSession(state)?.id).toBe('/renamed.md')
+  })
+})
+
+describe('reloadSessionFile', () => {
+  it('shows a text document as it is on disk now, not as it was opened', async () => {
+    const reader = { openFileByPath: vi.fn(async () => ({ content: 'saved later' })), readBinaryByPath: vi.fn() }
+    const reloaded = await reloadSessionFile(file('/a.md', 'as opened'), reader)
+    expect(reader.openFileByPath).toHaveBeenCalledWith('/a.md')
+    expect(reloaded).toEqual(file('/a.md', 'saved later'))
+  })
+
+  it('re-reads a binary document too', async () => {
+    const fresh = new ArrayBuffer(4)
+    const stored: LoadedFile = { kind: 'binary', content: new ArrayBuffer(2), path: '/b.docx', format: 'docx' }
+    const reader = { openFileByPath: vi.fn(), readBinaryByPath: vi.fn(async () => ({ buffer: fresh })) }
+    const reloaded = await reloadSessionFile(stored, reader)
+    expect(reloaded.content).toBe(fresh)
+    expect(reloaded.path).toBe('/b.docx')
+  })
+
+  it('keeps the stored bytes when the file can no longer be read', async () => {
+    const stored = file('/gone.md', 'kept')
+    const failing = {
+      openFileByPath: vi.fn(async () => {
+        throw new Error('ENOENT')
+      }),
+      readBinaryByPath: vi.fn(),
+    }
+    expect(await reloadSessionFile(stored, failing)).toBe(stored)
+    expect(await reloadSessionFile(stored, { openFileByPath: vi.fn(async () => null), readBinaryByPath: vi.fn() })).toBe(stored)
+    expect(await reloadSessionFile(stored, undefined)).toBe(stored)
   })
 })

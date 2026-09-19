@@ -15,6 +15,7 @@ import {
   renameSession,
   reopenLastClosed,
   type DocumentSessionsState,
+  reloadSessionFile,
 } from './session/documentSessions';
 import { useSearch } from './hooks/useSearch';
 import { useToc } from './hooks/useToc';
@@ -315,6 +316,19 @@ function AppShell() {
     dirtyGuardStateRef.current = { isMarkdownDocument, isDirty, viewerDirty };
   }, [isMarkdownDocument, isDirty, viewerDirty]);
 
+  // SHELL-17 — after a save to a new path the document lives there: its tab,
+  // the title bar and every later Ctrl+S follow it instead of still naming
+  // (and silently overwriting) the old file.
+  const followSavedPath = useCallback(
+    (savedPath: string | undefined): void => {
+      if (!savedPath || file?.kind !== 'text' || savedPath === file.path) return;
+      const renamed: LoadedFile = { ...file, path: savedPath, content: localMarkdown };
+      setSessions((current) => renameSession(current, file.path, renamed));
+      adoptFile(renamed);
+    },
+    [adoptFile, file, localMarkdown],
+  );
+
   const saveFile = useCallback(async (): Promise<boolean> => {
     if (!isMarkdownDocument) {
       // P1.1/SHELL-10/DXE-07/RUN-03 — route the global Save/Ctrl+S to
@@ -339,13 +353,7 @@ function AppShell() {
       setIsDirty(false);
       setSaveError(null);
       clearDraft();
-      // SHELL-17 — the document now lives at the chosen path: its tab (and the
-      // title bar) follow it there instead of still naming the old file.
-      if (result.path && file?.kind === 'text' && result.path !== file.path) {
-        const renamed: LoadedFile = { ...file, path: result.path, content: localMarkdown };
-        setSessions((current) => renameSession(current, file.path, renamed));
-        adoptFile(renamed);
-      }
+      followSavedPath(result.path);
       return true;
     }
     if (result.error) {
@@ -361,7 +369,7 @@ function AppShell() {
       setSaveError('Failed to save the file. Please try again.');
     }
     return false;
-  }, [adoptFile, file, fileName, filePath, isMarkdownDocument, localMarkdown]);
+  }, [fileName, filePath, followSavedPath, isMarkdownDocument, localMarkdown]);
 
   const saveFileAs = useCallback(async (): Promise<boolean> => {
     if (!isMarkdownDocument) return false;
@@ -374,6 +382,7 @@ function AppShell() {
       setIsDirty(false);
       setSaveError(null);
       clearDraft();
+      followSavedPath(result.path);
       return true;
     }
     // A dialog-based save with no specific `error` is an ordinary user
@@ -382,7 +391,7 @@ function AppShell() {
       setSaveError(result.error);
     }
     return false;
-  }, [fileName, isMarkdownDocument, localMarkdown]);
+  }, [fileName, followSavedPath, isMarkdownDocument, localMarkdown]);
 
   // Counts nested dragenter/dragleave pairs so the overlay only hides once
   // the drag has actually left the window, not merely a child element
@@ -430,8 +439,20 @@ function AppShell() {
     clear();
   }, [clear, confirmDiscardChanges]);
 
-  // SHELL-17 — switching documents. The bytes are already in memory, so this
-  // shows the other document without touching the disk; unsaved changes in
+  // SHELL-17 — showing another open document re-reads it from disk: saves only
+  // ever write to disk, so the bytes kept in its session can predate its last
+  // save. Only the latest request lands when switches overlap.
+  const showRequestRef = useRef(0);
+  const showSessionFile = useCallback(
+    async (stored: LoadedFile): Promise<void> => {
+      const request = ++showRequestRef.current;
+      const current = await reloadSessionFile(stored, window.electronAPI);
+      if (request === showRequestRef.current) adoptFile(current);
+    },
+    [adoptFile],
+  );
+
+  // SHELL-17 — switching documents. Unsaved changes in
   // the one being left behind go through the same Save/Discard/Cancel prompt
   // as opening or closing a file (only the showing document can be dirty,
   // which is exactly why the prompt happens here).
@@ -442,9 +463,9 @@ function AppShell() {
       const canProceed = await confirmDiscardChanges();
       if (!canProceed) return;
       setSessions((current) => activateSession(current, id));
-      adoptFile(target.file);
+      await showSessionFile(target.file);
     },
-    [adoptFile, confirmDiscardChanges, sessions],
+    [confirmDiscardChanges, sessions, showSessionFile],
   );
 
   const closeSessionById = useCallback(
@@ -457,12 +478,12 @@ function AppShell() {
       setSessions(next);
       const nowActive = activeSession(next);
       if (nowActive) {
-        if (nowActive.id !== sessions.activeId) adoptFile(nowActive.file);
+        if (nowActive.id !== sessions.activeId) await showSessionFile(nowActive.file);
       } else {
         clear();
       }
     },
-    [adoptFile, clear, confirmDiscardChanges, sessions],
+    [clear, confirmDiscardChanges, sessions, showSessionFile],
   );
 
   const closeActiveSession = useCallback(async (): Promise<void> => {
@@ -487,8 +508,8 @@ function AppShell() {
     const reopened = activeSession(next);
     if (!reopened) return;
     setSessions(next);
-    adoptFile(reopened.file);
-  }, [adoptFile, sessions]);
+    void showSessionFile(reopened.file);
+  }, [sessions, showSessionFile]);
 
   // SHELL-17 — Ctrl+Tab / Ctrl+Shift+Tab walk the open documents, and
   // Ctrl+Shift+T brings back the last one that was closed.

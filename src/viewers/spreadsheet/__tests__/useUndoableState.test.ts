@@ -84,4 +84,19 @@ describe('useUndoableState', () => {
     expect(result.current.present).toBe(1)
     expect(result.current.canUndo).toBe(false)
   })
+
+  it('undo()/redo() return the new present at once, and calls in one tick see each other', () => {
+    const { result } = renderHook(() => useUndoableState(0))
+    act(() => {
+      const api = result.current
+      api.set(1)
+      api.set(2)
+      expect(api.undo()).toBe(1)
+      expect(api.undo()).toBe(0)
+      expect(api.redo()).toBe(1)
+    })
+    expect(result.current.present).toBe(1)
+    expect(result.current.canUndo).toBe(true)
+    expect(result.current.canRedo).toBe(true)
+  })
 })

@@ -68,3 +68,44 @@ test('opens documents in tabs, switches between them and closes them', async () 
     kill(app)
   }
 })
+
+test('a saved document still shows its saved text after switching tabs and back', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-tabs-'))
+  const first = path.join(dir, 'first.md')
+  const second = path.join(dir, 'second.md')
+  fs.writeFileSync(first, '# First as opened\n')
+  fs.writeFileSync(second, '# Second document\n')
+
+  const app = await electron.launch({
+    args: ['.', first],
+    cwd: projectRoot,
+    env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
+  })
+  try {
+    const page = await app.firstWindow()
+    await expect(page.getByRole('tab', { name: 'first.md' })).toBeVisible({ timeout: 20_000 })
+    await app.evaluate(async ({ dialog }, filePath) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [filePath] })) as typeof dialog.showOpenDialog
+    }, second)
+    await page.getByRole('button', { name: 'Open', exact: true }).click()
+    await expect(page.getByRole('tab', { name: 'second.md' })).toHaveAttribute('aria-selected', 'true', { timeout: 20_000 })
+
+    // Edit and save the first document in place.
+    await page.getByRole('tab', { name: 'first.md' }).click()
+    await page.getByRole('button', { name: 'Editor' }).click()
+    const textarea = page.locator('.editor-panel__textarea')
+    await expect(textarea).toHaveValue('# First as opened\n', { timeout: 10_000 })
+    await textarea.fill('# First after save\n')
+    await page.keyboard.press('Control+s')
+    await expect.poll(() => fs.readFileSync(first, 'utf8'), { timeout: 10_000 }).toBe('# First after save\n')
+
+    // Away and back: the saved text, not the text the tab was opened with.
+    await page.getByRole('tab', { name: 'second.md' }).click()
+    await expect(page.getByRole('tab', { name: 'second.md' })).toHaveAttribute('aria-selected', 'true')
+    await page.getByRole('tab', { name: 'first.md' }).click()
+    await expect(page.getByRole('tab', { name: 'first.md' })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.editor-panel__textarea')).toHaveValue('# First after save\n', { timeout: 10_000 })
+  } finally {
+    kill(app)
+  }
+})

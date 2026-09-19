@@ -109,12 +109,18 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
 
   // Undo/redo join the same queue: an undo landing between an edit and its
   // re-parse would otherwise be silently undone by that in-flight edit.
+  // They also move presentRef at once, so a Save (or edit) queued right
+  // behind an undo works on the undone deck, not the one before it.
   const undo = useCallback((): void => {
-    queueRef.current = queueRef.current.then(() => history.undo())
+    queueRef.current = queueRef.current.then(() => {
+      presentRef.current = history.undo()
+    })
   }, [history])
 
   const redo = useCallback((): void => {
-    queueRef.current = queueRef.current.then(() => history.redo())
+    queueRef.current = queueRef.current.then(() => {
+      presentRef.current = history.redo()
+    })
   }, [history])
 
   const setDirty = useSetViewerDirty()

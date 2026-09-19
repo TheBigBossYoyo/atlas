@@ -19,7 +19,7 @@
  * `spreadsheetDocument.ts`), so this is far cheaper than it looks even for a
  * large sheet.
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 
 const DEFAULT_MAX_HISTORY = 100
 
@@ -35,56 +35,60 @@ export type UndoableState<T> = {
   readonly canRedo: boolean
   /** Pushes `next` as a new present, clearing redo history — one call per committed edit. */
   readonly set: (next: T) => void
-  readonly undo: () => void
-  readonly redo: () => void
+  /** Steps back; returns the new present right away (callers that must not wait for a render use it). */
+  readonly undo: () => T
+  /** Steps forward; returns the new present right away. */
+  readonly redo: () => T
   /** Replaces the present AND clears all undo/redo history (e.g. right after a successful save, or on load). */
   readonly reset: (next: T) => void
 }
 
 export function useUndoableState<T>(initial: T, maxHistory: number = DEFAULT_MAX_HISTORY): UndoableState<T> {
   const [history, setHistory] = useState<History<T>>({ past: [], present: initial, future: [] })
+  // The authoritative history, updated synchronously: several calls within one
+  // tick (or an undo followed at once by a save) must see each other's result
+  // before React re-renders.
+  const historyRef = useRef(history)
+  const commit = useCallback((next: History<T>) => {
+    historyRef.current = next
+    setHistory(next)
+  }, [])
 
   const set = useCallback(
     (next: T) => {
-      setHistory((prev) => {
-        const past = [...prev.past, prev.present]
-        return {
-          past: past.length > maxHistory ? past.slice(past.length - maxHistory) : past,
-          present: next,
-          future: [],
-        }
+      const prev = historyRef.current
+      const past = [...prev.past, prev.present]
+      commit({
+        past: past.length > maxHistory ? past.slice(past.length - maxHistory) : past,
+        present: next,
+        future: [],
       })
     },
-    [maxHistory],
+    [commit, maxHistory],
   )
 
-  const undo = useCallback(() => {
-    setHistory((prev) => {
-      if (prev.past.length === 0) return prev
-      const previous = prev.past[prev.past.length - 1]
-      return {
-        past: prev.past.slice(0, -1),
-        present: previous,
-        future: [prev.present, ...prev.future],
-      }
-    })
-  }, [])
+  const undo = useCallback((): T => {
+    const prev = historyRef.current
+    if (prev.past.length === 0) return prev.present
+    const previous = prev.past[prev.past.length - 1]
+    commit({ past: prev.past.slice(0, -1), present: previous, future: [prev.present, ...prev.future] })
+    return previous
+  }, [commit])
 
-  const redo = useCallback(() => {
-    setHistory((prev) => {
-      if (prev.future.length === 0) return prev
-      const [next, ...rest] = prev.future
-      return {
-        past: [...prev.past, prev.present],
-        present: next,
-        future: rest,
-      }
-    })
-  }, [])
+  const redo = useCallback((): T => {
+    const prev = historyRef.current
+    if (prev.future.length === 0) return prev.present
+    const [next, ...rest] = prev.future
+    commit({ past: [...prev.past, prev.present], present: next, future: rest })
+    return next
+  }, [commit])
 
-  const reset = useCallback((next: T) => {
-    setHistory({ past: [], present: next, future: [] })
-  }, [])
+  const reset = useCallback(
+    (next: T) => {
+      commit({ past: [], present: next, future: [] })
+    },
+    [commit],
+  )
 
   return useMemo(
     () => ({
