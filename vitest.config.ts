@@ -112,6 +112,31 @@ export default defineConfig({
         branches: 63,
         functions: 80,
         lines: 78,
+        // Per-file floors — P4.7 (viewer coverage sweep). These three PDF
+        // sub-components were called out in the plan's status section as
+        // badly under-covered (measured via `npx vitest run src/viewers/pdf
+        // --coverage --maxWorkers=1` on 2026-09-19, against this worktree's
+        // HEAD @ 8bf6f0f): PdfToolbar.tsx ~29% statements, PdfThumbnailRail
+        // ~4%, and the dialog the plan calls "PdfWordDialog.tsx" — which
+        // doesn't exist; the actual low-coverage dialog file in
+        // `src/viewers/pdf` is `PdfPasswordDialog.tsx` (a password prompt,
+        // not a word-lookup dialog) — ~41%. New behavioural RTL tests now
+        // bring them to (per `coverage-summary.json`, the authoritative
+        // source — the v8 text-reporter's own directory table intermittently
+        // drops fully-covered rows, a pre-existing reporter quirk unrelated
+        // to this change): PdfToolbar 100/91.66/100/100 (stmts/branch/func/
+        // line), PdfThumbnailRail 92.3/70/100/97.14, PdfPasswordDialog
+        // 100/100/100/100. Floored to the next whole percent below, same as
+        // the global floor above, with per-FILE glob keys (not a global
+        // bump) precisely because these numbers were only measured over
+        // `src/viewers/pdf` — a global bump based on this one directory
+        // could false-fail CI's whole-project `npm run coverage` if other
+        // concurrently-landing work shifts the rest of the codebase's
+        // coverage down. Never lower — only raise once a future change
+        // measurably improves one of these further.
+        'src/viewers/pdf/PdfToolbar.tsx': { statements: 99, branches: 90, functions: 99, lines: 99 },
+        'src/viewers/pdf/PdfThumbnailRail.tsx': { statements: 91, branches: 69, functions: 99, lines: 96 },
+        'src/viewers/pdf/PdfPasswordDialog.tsx': { statements: 99, branches: 99, functions: 99, lines: 99 },
       },
     },
   },
