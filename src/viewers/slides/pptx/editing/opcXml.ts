@@ -9,6 +9,7 @@ import {
   firstChildElement,
   parseXmlPart,
   serializeXmlPart,
+  xmlSafeText,
 } from '../../../../office/ooxmlDom'
 
 export const NS = {
@@ -49,7 +50,7 @@ export function pxToEmu(px: number): number {
 }
 
 export function escapeXml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  return xmlSafeText(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 // ---------------------------------------------------------------------------

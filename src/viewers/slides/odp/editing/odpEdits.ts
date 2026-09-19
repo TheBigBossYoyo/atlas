@@ -16,6 +16,7 @@ import {
   firstChildElement,
   parseXmlPart,
   serializeXmlPart,
+  xmlSafeText,
 } from '../../../../office/ooxmlDom'
 import { readPart, withParts, type OfficePackage } from '../../../../office/officePackage'
 import { CENTIMETERS_TO_PIXELS } from '../../shared/units'
@@ -83,7 +84,7 @@ function writeParagraphs(doc: XMLDocument, container: Element, text: string): vo
   for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
     const paragraph = doc.createElementNS(NS.text, 'text:p')
     if (styleName) paragraph.setAttribute('text:style-name', styleName)
-    if (line !== '') paragraph.textContent = line
+    if (line !== '') paragraph.textContent = xmlSafeText(line)
     container.appendChild(paragraph)
   }
 }

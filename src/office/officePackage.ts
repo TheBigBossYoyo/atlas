@@ -11,6 +11,8 @@
  */
 import JSZip from 'jszip'
 
+import { DocxParseError, unzipDocx } from '../docx/parser/unzip'
+
 import type { ZipArchive, ZipEntry } from '../viewers/slides/shared/xmlUtils'
 
 export type OfficePackage = {
@@ -20,12 +22,23 @@ export type OfficePackage = {
 
 const TEXT_PART = /\.(xml|rels)$/i
 
+/**
+ * Reads every part through the DOCX reader's size-budgeted extraction, so a
+ * crafted package whose parts inflate to gigabytes is refused (declared sizes
+ * first, actual sizes as a backstop) instead of exhausting the renderer.
+ */
 export async function loadOfficePackage(buffer: ArrayBuffer): Promise<OfficePackage> {
-  const zip = await JSZip.loadAsync(buffer)
+  let files: ReadonlyMap<string, Uint8Array>
+  try {
+    files = (await unzipDocx(buffer)).files
+  } catch (err: unknown) {
+    if (err instanceof DocxParseError) throw new Error(err.message.replace(/\bDOCX\b/g, 'package'))
+    throw err
+  }
+  const decoder = new TextDecoder()
   const parts = new Map<string, string | Uint8Array>()
-  for (const entry of Object.values(zip.files)) {
-    if (entry.dir) continue
-    parts.set(entry.name, TEXT_PART.test(entry.name) ? await entry.async('string') : await entry.async('uint8array'))
+  for (const [path, bytes] of files) {
+    parts.set(path, TEXT_PART.test(path) ? decoder.decode(bytes) : bytes)
   }
   return { parts }
 }

@@ -33,6 +33,13 @@ import { collectSlideTextGroups, type PptTextGroup } from './text'
 
 const RT_SLIDE = 1006
 
+/**
+ * Real decks stay far below this. Each empty slide container costs only 8
+ * bytes, so without a cap a few MB of crafted records would make the viewer
+ * build and render hundreds of thousands of slides.
+ */
+export const MAX_LEGACY_SLIDES = 5_000
+
 // No real slide geometry survives this text-only extraction (see module
 // header) — these mirror the PPTX/ODP parsers' own 16:9 fallback default
 // (`viewers/slides/pptx/parser.ts`'s `DEFAULT_SLIDE_WIDTH`/`_HEIGHT`) so a
@@ -105,6 +112,9 @@ function findSlideContainers(reader: BinaryReader): ReadonlyArray<PptRecordHeade
   const slides: PptRecordHeader[] = []
   walkPptRecords(reader, 0, reader.length, (header) => {
     if (header.type === RT_SLIDE) {
+      if (slides.length >= MAX_LEGACY_SLIDES) {
+        throw new LegacyFormatError(`This presentation has more than ${MAX_LEGACY_SLIDES.toLocaleString('en-US')} slides, which is more than Atlas can show.`)
+      }
       slides.push(header)
     }
   })

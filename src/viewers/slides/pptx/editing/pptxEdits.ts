@@ -23,6 +23,7 @@ import {
   serialize,
 } from './opcXml'
 import { readPart, withParts, type OfficePackage } from '../../../../office/officePackage'
+import { xmlSafeText } from '../../../../office/ooxmlDom'
 
 export type ShapeBox = { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
 
@@ -79,7 +80,7 @@ export function replaceParagraphs(doc: XMLDocument, txBody: Element, text: strin
         run.appendChild(fromEnd)
       }
       const t = doc.createElementNS(NS.a, 'a:t')
-      t.textContent = line
+      t.textContent = xmlSafeText(line)
       run.appendChild(t)
       paragraph.appendChild(run)
     }

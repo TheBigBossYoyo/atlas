@@ -5,6 +5,16 @@
  */
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 
+/**
+ * Text as XML 1.0 allows it. User text can carry C0 control characters
+ * (pasted from another program); `XMLSerializer` would write them raw, and
+ * Office refuses (or "repairs") a part that contains them.
+ */
+export function xmlSafeText(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '')
+}
+
 export function parseXmlPart(xml: string): XMLDocument {
   const doc = new DOMParser().parseFromString(xml, 'application/xml')
   if (doc.getElementsByTagName('parsererror').length > 0) throw new Error('Invalid XML part.')

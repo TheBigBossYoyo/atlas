@@ -38,6 +38,7 @@ import {
   firstChildElement,
   parseXmlPart,
   serializeXmlPart,
+  xmlSafeText,
 } from '../../office/ooxmlDom'
 import { readSheetParts } from './spreadsheetPanes'
 import { cellKey, type EditableSheet, type SpreadsheetDocument } from './spreadsheetDocument'
@@ -126,7 +127,7 @@ function buildCell(
 
   if (formula !== undefined) {
     const formulaElement = doc.createElementNS(namespace, 'f')
-    formulaElement.textContent = formula
+    formulaElement.textContent = xmlSafeText(formula)
     cell.appendChild(formulaElement)
   }
 
@@ -142,7 +143,7 @@ function buildCell(
   if (formula !== undefined) {
     cell.setAttribute('t', 'str')
     const value = doc.createElementNS(namespace, 'v')
-    value.textContent = text
+    value.textContent = xmlSafeText(text)
     cell.appendChild(value)
     return cell
   }
@@ -152,7 +153,7 @@ function buildCell(
   const inlineString = doc.createElementNS(namespace, 'is')
   const textElement = doc.createElementNS(namespace, 't')
   textElement.setAttribute('xml:space', 'preserve')
-  textElement.textContent = text
+  textElement.textContent = xmlSafeText(text)
   inlineString.appendChild(textElement)
   cell.appendChild(inlineString)
   return cell

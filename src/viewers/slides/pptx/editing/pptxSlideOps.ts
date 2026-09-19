@@ -12,6 +12,7 @@ import {
   addRel,
   children,
   descendants,
+  escapeXml,
   firstChild,
   importFragment,
   nextPartName,
@@ -123,7 +124,8 @@ function newSlideXml(pkg: OfficePackage, layoutPath: string): string {
     const type = ph.getAttribute('type')
     const idx = ph.getAttribute('idx')
     const name = firstChild(nvSpPr, 'cNvPr')?.getAttribute('name') ?? `Placeholder ${nextId}`
-    const phXml = `<p:ph${type ? ` type="${type}"` : ''}${idx ? ` idx="${idx}"` : ''}/>`
+    // type/idx come from the (untrusted) layout part: escape them like any text.
+    const phXml = `<p:ph${type ? ` type="${escapeXml(type)}"` : ''}${idx ? ` idx="${escapeXml(idx)}"` : ''}/>`
     spTree.appendChild(
       importFragment(
         doc,
