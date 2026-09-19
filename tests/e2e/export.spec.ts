@@ -50,7 +50,9 @@ async function waitForFile(filePath: string): Promise<void> {
           return 0
         }
       },
-      { timeout: 30_000, intervals: [250, 500, 1000] },
+      // Rendering a document to PDF through Chromium's print pipeline is slow
+      // on a loaded CI runner — this timed out once at 30 s there.
+      { timeout: 60_000, intervals: [250, 500, 1000] },
     )
     .toBeGreaterThan(0)
 }

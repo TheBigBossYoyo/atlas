@@ -152,6 +152,9 @@ test('PDF: Ctrl+F opens the PDF find bar (not the shared search overlay); Ctrl+B
     await expect(page.getByPlaceholder('Find in document…')).toBeVisible({ timeout: 5_000 })
     await expect(page.locator('.search-overlay')).toHaveCount(0)
     await page.keyboard.press('Escape')
+    // Wait for the find bar to actually close: Ctrl+B pressed while its input
+    // still has focus goes to the input, not the shell (flaky on slow CI).
+    await expect(page.getByPlaceholder('Find in document…')).toHaveCount(0, { timeout: 5_000 })
 
     // PDF's own shortcut set (zoom/print/page-nav/find) never reserves
     // Ctrl+B — confirms the new viewer-tier find registration didn't
