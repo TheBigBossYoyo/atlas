@@ -478,11 +478,23 @@ Wave 5 (2026-09-19, after 3.2.0; parallel agents in worktrees, merged and fully 
 | D29 follow-up | Fixed | `79649ee` | Header/footer editing per paragraph: images, fields, tables and untouched run formatting are preserved; Ctrl+S while the header field has focus now saves the new text. A paragraph mixing text with a field/image is shown read-only |
 | D23-PERF | Improved | `c0d969e` | Every page no longer re-renders twice per keystroke (96 → 24 page renders); typing on the 35-page perf fixture ~160-180 ms (was ~240-390 ms); footnote line-cache over-invalidation fixed. Page virtualization / incremental re-pagination still not done |
 
+Wave 6 (2026-09-20, released as 3.3.0; 5 parallel agents, merged and re-verified: 2839 unit tests, 57/57 e2e):
+
+| ID | Status | Where | Evidence |
+|---|---|---|---|
+| D23-PERF-2 | Fixed | `39653bc` | Page virtualization (`src/docx/render/pageVirtualization.ts`): only pages near the viewport (plus the caret's page) mount; placeholders keep scroll height, page count, Find, print and PDF export intact. Typing on the 35-page fixture ~145 ms/keystroke (was ~280-300 before this round, ~0.5 s before wave 5) |
+| P4.1 | Done | `f032733` | `tsconfig.electron.json` puts `electron/**/*.cjs` under `checkJs` + `strict` in `tsc -b`; 95 errors fixed with real JSDoc types. Two latent bugs found: unvalidated renderer-supplied theme key indexing the overlay table, and `mainWindow.show()` without a destroyed guard |
+| ELEC-09, ELEC-10 | Fixed / documented | `3688ab8` | `signAndEditExecutable: false` was also disabling icon and version metadata — the packaged exe shipped bare; now `signExecutable: false` keeps metadata. Code signing needs a paid certificate: `docs/RELEASE.md` states what it costs and changes |
+| ELEC-07 | Fixed | `3688ab8` | A file opened via a second launch between window creation and renderer mount was dropped; the request now waits for the renderer to prove it is listening (`electron/lib/fileOpenRouting.cjs`) |
+| P4.4, P4.11 | Done | `a9f1f71` | Peer-dependency `overrides`; `npm audit` 0; dead `ENABLE_VIEWER_ROUTER` and a dead DOM hack removed; `build-icon.mjs` wired to packaging; markdown export CSS re-synced with the live preview (UX-20) with a cross-reference test |
+| P4.7 | Done | `7be44f4` | PdfToolbar 29 → 100%, PdfThumbnailRail 4 → 92%, PdfPasswordDialog 41 → 100%; per-file coverage thresholds pin the gain |
+| PDF find bar | Fixed | `314b267` | Escape now closes the find bar wherever the focus is — it keyed off an input that takes focus 50 ms late, so the bar stayed open and swallowed the next shell shortcut (this is what flaked in CI, not the test) |
+
 Still open after wave 4:
 
 - ~~**ODP editing**~~ — fixed in `0aea4da`.
 - **Legacy .doc/.ppt** are text-only and read-only; header/footer editing is plain text only.
-- **Long DOCX typing** is ~160-180 ms per keystroke on the 35-page perf fixture after wave 5 (page virtualization / incremental pagination not done).
+- **Long DOCX typing** is ~145 ms per keystroke on the 35-page perf fixture after wave 6 (page virtualization done; incremental re-pagination deliberately not done — measurement showed rendering, not pagination, was the cost).
 - Review leftovers (MEDIUM/LOW, not fixed): header/footer text is committed on blur, so Ctrl+S pressed while the header field still has focus saves the previous text; a markdown save still in flight when the user switches tabs can clear the new tab's dirty flag and the single global crash-recovery draft; the D23 line cache skips every paragraph after the first footnote reference in a section (slower, not wrong); other JSZip readers (spreadsheet panes/tables, slide PDF export) still have no size budget.
 - ~~**Spreadsheet styling on save**~~ — fixed after the wave-4 review: an .xlsx/.xlsm is now saved THROUGH the file it was opened from (`viewers/spreadsheet/xlsxPassthrough.ts`), so untouched cells keep their exact XML (type, style, number format, cached formula value) and styles/charts/filters/pivots pass through; the stale calc chain is dropped and the workbook is marked "recalculate on load". The fresh-workbook writer remains the fallback for CSV, format changes, and sheet add/delete, and references outside the model (conditional formatting, data validation, defined names) are not re-anchored when rows/columns move.
 - ~~**Rotated shapes**~~ — fixed: hit testing, the selection box and handle resizing all work in the shape's own rotated space (`viewers/shared/slideGeometry.ts`).

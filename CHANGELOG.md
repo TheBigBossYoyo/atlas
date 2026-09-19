@@ -8,7 +8,7 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
-## [Unreleased]
+## [3.3.0] — 2026-09-20 (waves 5-6: new documents, long-document speed, release hardening)
 
 ### Added
 - **New document** (NEW-01): a "New" button/menu in the toolbar next to Open,
