@@ -103,6 +103,10 @@ function toolbarFilenameText(): string {
   return el?.firstChild?.textContent?.trim() ?? '';
 }
 
+function toolbarIsDirty(): boolean {
+  return document.querySelector('.toolbar__dirty') !== null;
+}
+
 beforeEach(() => {
   localStorage.clear();
   document.title = '';
@@ -456,5 +460,80 @@ describe('App — markdown save-failure surfacing (a wave1 follow-up: saveFile e
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+});
+
+describe('App — a save still in flight while the tab it belongs to is switched away (review fix)', () => {
+  // `saveFile` closes over the tab active when it *started*: the awaited
+  // `window.electronAPI.saveFile(...)` can resolve well after the user has
+  // switched (via Discard, through the unsaved-changes guard) to a different
+  // tab. Before this fix, the continuation ran unconditionally against
+  // whichever tab was showing by then — clearing that tab's dirty dot and
+  // wiping the single shared autosave draft even though neither belonged to
+  // the document actually written to disk.
+  it('leaves the newly active tab dirty and its autosave draft intact once the old tab\'s save resolves', async () => {
+    let resolveSave: ((result: { saved: boolean; path?: string }) => void) | undefined;
+
+    render(<App />);
+
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    // A second, clean document — opening it while a.md is clean needs no
+    // confirmation, and leaves a.md as a background tab.
+    mockOpenMarkdownFile('/abs/b.md', '# B');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('b.md'));
+
+    // Switch back to a.md and dirty it.
+    fireEvent.click(screen.getByRole('tab', { name: 'a.md' }));
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (edited)' },
+    });
+    await waitFor(() => expect(toolbarIsDirty()).toBe(true));
+
+    // Start a save that never resolves on its own.
+    window.electronAPI!.saveFile = vi.fn().mockImplementation(
+      () => new Promise<{ saved: boolean; path?: string }>((resolve) => { resolveSave = resolve; }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalledTimes(1));
+
+    // While that save is still pending, switch to b.md — a.md is still
+    // (from the app's perspective) dirty, so this goes through the
+    // unsaved-changes guard; Discard proceeds with the switch.
+    fireEvent.click(screen.getByRole('tab', { name: 'b.md' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(toolbarFilenameText()).toBe('b.md'));
+
+    // Dirty b.md and let its own autosave draft actually land — the real
+    // 800ms debounce, not a seeded fixture, so this proves the live hook's
+    // draft (not just a hand-placed one) survives the stale continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# B (edited)' },
+    });
+    await waitFor(() => expect(toolbarIsDirty()).toBe(true));
+    await waitFor(
+      () => expect(localStorage.getItem('atlas-draft')).not.toBeNull(),
+      { timeout: 2000 },
+    );
+    const draftBeforeResolve = localStorage.getItem('atlas-draft');
+    expect(draftBeforeResolve).toContain('B (edited)');
+
+    // The stale a.md save now finishes successfully.
+    await act(async () => {
+      resolveSave?.({ saved: true });
+    });
+
+    // b.md is still showing, still dirty, and its draft was never touched.
+    expect(toolbarFilenameText()).toBe('b.md');
+    expect(toolbarIsDirty()).toBe(true);
+    expect(screen.getByPlaceholderText('Type or paste markdown here...')).toHaveValue('# B (edited)');
+    expect(localStorage.getItem('atlas-draft')).toBe(draftBeforeResolve);
   });
 });

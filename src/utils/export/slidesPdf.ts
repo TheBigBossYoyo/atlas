@@ -17,9 +17,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { SlideCanvas } from '../../viewers/shared/SlideCanvas';
 import type { SlideData } from '../../viewers/shared/SlideDeck.types';
-import type { CancelSignal, ZipArchive } from '../../viewers/slides/shared/xmlUtils';
+import type { CancelSignal } from '../../viewers/slides/shared/xmlUtils';
 import { parsePptxSlides } from '../../viewers/slides/pptx/parser';
 import { parseOdpSlides } from '../../viewers/slides/odp/parser';
+import { loadOfficePackage, packageArchive } from '../../office/officePackage';
 import { renderHtmlToPdfFile } from './printDocument';
 import { toFriendlyError } from '../friendlyLibraryError';
 
@@ -42,8 +43,12 @@ body { margin: 0; background: #ffffff; }
 `;
 
 async function loadSlides(buffer: ArrayBuffer, format: 'pptx' | 'odp'): Promise<ReadonlyArray<SlideData>> {
-  const { default: JSZip } = await import('jszip');
-  const zip = (await JSZip.loadAsync(buffer)) as unknown as ZipArchive;
+  // Review fix — route through the same size-budgeted reader the live
+  // viewer/editor use (`loadOfficePackage`/`unzipDocx`) instead of a bare
+  // `JSZip.loadAsync`, so exporting a crafted/bombed deck to PDF is refused
+  // up front rather than exhausting the renderer while decompressing it.
+  const pkg = await loadOfficePackage(buffer);
+  const zip = packageArchive(pkg);
   const signal: CancelSignal = { cancelled: false };
   const slides = format === 'pptx' ? await parsePptxSlides(zip, signal) : await parseOdpSlides(zip, signal);
   // S14 — a deck's hidden slides are excluded from the default on-screen
