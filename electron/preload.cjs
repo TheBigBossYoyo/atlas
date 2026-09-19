@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   reportSaveBeforeCloseResult: (result) => ipcRenderer.send('save-before-close-result', result),
   openFileBinary: () => ipcRenderer.invoke('dialog:openFileBinary'),
+  // NEW-01 — creates a brand-new document (native Save dialog + a blank
+  // template written atomically) for the toolbar's "New" action / Ctrl+N.
+  newDocument: (formatId) => ipcRenderer.invoke('document:new', formatId),
   readBinaryByPath: (path) => ipcRenderer.invoke('file:readBinaryByPath', path),
   onFileOpenedPath: (callback) => {
     const handler = (_e, path) => callback(path);

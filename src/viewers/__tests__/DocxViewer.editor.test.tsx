@@ -275,6 +275,7 @@ describe('DocxViewer editor', () => {
       onFileOpened: vi.fn(),
       setTheme: vi.fn(),
       openFileBinary: vi.fn(),
+      newDocument: vi.fn(),
       readBinaryByPath: vi.fn(),
       onFileOpenedPath: vi.fn(),
       getPathForFile: vi.fn(),

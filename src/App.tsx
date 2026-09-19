@@ -57,7 +57,9 @@ import {
   exportTextHtml,
 } from './utils/export';
 import { assertNever, type FormatId, type LoadedFile, type NavItem } from './formats/types';
+import type { NewDocumentFormat } from './electron';
 import { resolveDroppedFilePath } from './utils/dragDropPath';
+import { EmptyFileNotice } from './components/EmptyFileNotice';
 import { ViewerProvider } from './viewers/shared/ViewerContext';
 import {
   useSetNavItems,
@@ -576,6 +578,7 @@ function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [newMenuOpen, setNewMenuOpen] = useState(false);
 
   const contentRef = useRef<HTMLDivElement>(null);
   const tocItems = useToc(localMarkdown);
@@ -595,9 +598,17 @@ function AppShell() {
       })),
     [tocItems]
   );
+  // NEW-01 — this used to key off `isMarkdownDocument ? localMarkdown.length
+  // > 0 : ...`, so a genuinely loaded but EMPTY markdown file (a 0-byte
+  // `.md`, or one just emptied by the user) fell through to the Welcome
+  // screen instead of showing an (empty) editor bound to that path — the
+  // opposite of every other format, where merely having a `file` loaded is
+  // enough. A real `file` always means content, even zero-length content;
+  // only the no-file "typed/loaded sample markdown into a blank untitled
+  // session" case still depends on the draft's own length.
   const hasContent = useMemo(
-    () => (isMarkdownDocument ? localMarkdown.length > 0 : file !== null),
-    [file, isMarkdownDocument, localMarkdown.length]
+    () => (file ? true : localMarkdown.length > 0),
+    [file, localMarkdown.length]
   );
   const currentFormat = useMemo(() => {
     if (file) {
@@ -690,6 +701,33 @@ function AppShell() {
       removeRecent(key);
     },
     [removeRecent]
+  );
+
+  // NEW-01 — main shows a native Save dialog and writes a blank template
+  // atomically (see electron/main.cjs's `document:new`); the renderer never
+  // picks the destination path itself. `openFileFromPath` then opens the
+  // freshly created file through the exact same guarded path Open/Recent/
+  // drag-drop already use — its own `confirmDiscardChanges` check (inside
+  // `useFileHandler`) still runs before any current unsaved work is
+  // replaced, exactly as if the user had picked this brand-new file from
+  // the Open dialog.
+  const handleNewDocument = useCallback(
+    async (format: NewDocumentFormat): Promise<void> => {
+      if (!window.electronAPI?.newDocument) {
+        // Mirrors useFileHandler's own BROWSER_MODE_ERROR messaging — "New"
+        // needs the desktop app's native Save dialog + main-owned write
+        // path, same as Open/Save already do.
+        showToast('This feature requires the Atlas desktop app — file access is unavailable in a plain browser tab.', 'error');
+        return;
+      }
+      const result = await window.electronAPI.newDocument(format);
+      if (result.created) {
+        await openFileFromPath(result.path);
+      } else if (result.error) {
+        showToast(result.error, 'error');
+      }
+    },
+    [openFileFromPath, showToast]
   );
 
   const handleNonMarkdownExport = useCallback(
@@ -850,6 +888,7 @@ function AppShell() {
     saveFileAs,
     exportPrimary: () => handleExport('pdf'),
     openExportMenu: () => setExportMenuOpen(true),
+    openNewMenu: () => setNewMenuOpen(true),
     cycleTheme,
     toggleSidebar: () => setSidebarOpen(prev => !prev),
     setViewMode,
@@ -931,10 +970,13 @@ function AppShell() {
         exportFormat={currentFormat}
         exportMenuOpen={exportMenuOpen}
         canExportCsv={canExportCsv}
+        newMenuOpen={newMenuOpen}
         onSelectTheme={setTheme}
         onViewModeChange={setViewMode}
         onToggleSidebar={() => setSidebarOpen(prev => !prev)}
         onOpenFile={openFile}
+        onNewDocument={(format) => void handleNewDocument(format)}
+        onNewMenuOpenChange={setNewMenuOpen}
         onSave={() => void saveFile()}
         onCloseFile={() => void closeActiveSession()}
         onExport={(fmt) => void handleExport(fmt)}
@@ -1020,7 +1062,16 @@ function AppShell() {
                   that's actually mounted ever owns it) so Text/Code/RTF/ODT
                   get the identical search behavior markdown already has. */}
               <div className="preview-panel" id="viewer-content" ref={canSearchFormat ? contentRef : undefined}>
-                <ViewerRouter file={viewerFile} />
+                {/* NEW-01 — a genuinely 0-byte file of a format Atlas has no
+                    blank template for (main.cjs only substitutes one for
+                    docx/xlsx/ods/pptx/odp — see `substituteBlankTemplateIfEmpty`)
+                    gets a friendly notice instead of reaching that format's
+                    parser as an empty buffer and throwing a low-level error. */}
+                {viewerFile.kind === 'binary' && viewerFile.content.byteLength === 0 ? (
+                  <EmptyFileNotice fileName={fileName ?? viewerFile.path} />
+                ) : (
+                  <ViewerRouter file={viewerFile} />
+                )}
               </div>
             </main>
           ) : null}

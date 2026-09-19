@@ -85,6 +85,7 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
         <section className="modal__section">
           <h3 className="modal__section-title">File</h3>
           <dl className="modal__shortcuts">
+            <dt>{renderKeys('Ctrl+N')}</dt><dd>New document menu</dd>
             <dt>{renderKeys('Ctrl+O')}</dt><dd>Open file</dd>
             <dt>{renderKeys('Ctrl+S')}</dt><dd>Save</dd>
             <dt>{renderKeys('Ctrl+Shift+S')}</dt><dd>Save As</dd>

@@ -15,6 +15,7 @@
     "build": "tsc -b && vite build",
     "postbuild": "node scripts/check-bundle.mjs",
     "generate:extensions": "node scripts/generate-extension-manifest.mjs",
+    "generate:templates": "node scripts/generate-templates.mjs",
     "lint": "eslint src electron tests scripts",
     "test": "vitest run",
     "test:watch": "vitest",
