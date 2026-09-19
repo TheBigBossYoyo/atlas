@@ -42,6 +42,12 @@ function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterV
 
   useEffect(() => {
     const container = containerRef.current
+    // A11Y-2 — remember whatever had focus (the "Present" button that
+    // mounted this view) so it can be restored once presenter mode exits;
+    // without this, closing (Escape, the exit button, or the OS ending
+    // fullscreen) dropped focus to document.body with nothing to pick it
+    // back up, same UX-13 gap ShortcutsModal/UnsavedChangesDialog had.
+    const previouslyFocused = document.activeElement as HTMLElement | null
     // Focus the dialog itself (not only on fullscreen success — that request
     // can be refused), or its Escape handler never sees a key.
     container?.focus()
@@ -53,6 +59,7 @@ function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterV
     return () => {
       document.removeEventListener('fullscreenchange', handleChange)
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
+      previouslyFocused?.focus()
     }
   }, [onExit])
 
