@@ -873,7 +873,9 @@ ipcMain.handle('document:new', async (event, formatId) => {
   if (!isFromMainFrame(event)) return { created: false, error: SENDER_FRAME_ERROR_MESSAGE };
   if (!mainWindow) return { created: false };
 
-  const spec = typeof formatId === 'string' ? NEW_DOCUMENT_FORMATS[formatId] : undefined;
+  // Own keys only: a name like 'constructor' must not resolve to an inherited property.
+  const spec =
+    typeof formatId === 'string' && Object.hasOwn(NEW_DOCUMENT_FORMATS, formatId) ? NEW_DOCUMENT_FORMATS[formatId] : undefined;
   if (!spec) return { created: false, error: 'Unsupported document type.' };
 
   let defaultDir;

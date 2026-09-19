@@ -76,6 +76,15 @@ describe('electron/main.cjs — document:new + empty-file substitution', () => {
       expect(mocks.dialog.showSaveDialog).not.toHaveBeenCalled()
     })
 
+    it('rejects inherited property names as formats', async () => {
+      for (const name of ['constructor', 'toString', '__proto__']) {
+        const result = (await handler('document:new')(ALLOWED_EVENT, name)) as { created: boolean; error?: string }
+        expect(result.created).toBe(false)
+        expect(result.error).toMatch(/unsupported/i)
+      }
+      expect(mocks.dialog.showSaveDialog).not.toHaveBeenCalled()
+    })
+
     it('reports not-created when the save dialog is cancelled', async () => {
       mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: true })
       const result = (await handler('document:new')(ALLOWED_EVENT, 'docx')) as { created: boolean }
