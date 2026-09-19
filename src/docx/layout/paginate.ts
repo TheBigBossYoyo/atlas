@@ -1801,10 +1801,19 @@ async function buildParagraphUnit(
   // `itemizeRuns` looks them up. Passing the full accumulated maps (rather
   // than a per-paragraph slice) is harmless — a paragraph only ever looks
   // up its own reference ids — and avoids building a new Map per paragraph.
+  // D23-PERF — only THIS paragraph's own footnote/endnote references should
+  // block its cache entry. `referencedFootnoteIds` accumulates every id seen
+  // across the whole section (buildSectionFootnoteContent needs that running
+  // list), so testing its length here used to mark every paragraph AFTER the
+  // first footnote reference in a section as cache-ineligible too, even
+  // though only paragraphs that themselves carry a reference actually need
+  // fresh mark numbering.
+  let ownsFootnoteRef = false
   for (const ref of collectNoteReferences(paragraph.children)) {
     if (ref.kind === 'footnote') {
       assignFootnoteMark(noteState, ref.id, input.footnoteNumbering?.numFmt)
       referencedFootnoteIds.push(ref.id)
+      ownsFootnoteRef = true
     } else {
       assignEndnoteMark(noteState, ref.id, input.endnoteNumbering?.numFmt)
     }
@@ -1819,7 +1828,7 @@ async function buildParagraphUnit(
     numbering: document.numbering,
     fontResolver: input.fontResolver,
     theme: input.theme,
-    dependsOnDocumentState: leadingItems.length > 0 || referencedFootnoteIds.length > 0,
+    dependsOnDocumentState: leadingItems.length > 0 || ownsFootnoteRef,
   })
 
   const lines = await cachedParagraphLines(paragraph, cacheKey, () =>
