@@ -930,24 +930,29 @@ for the full reconciliation — headline deviation: spell check uses
 Electron/Chromium's native spellchecker, not the originally-locked
 `nspell` + bundled Hunspell dictionaries.
 
-### Phase 3 — Waves 1 & 2 — DONE; Wave 3-D remainder and X-tasks — PARTIAL
+### Phase 3 — Waves 1 & 2 — DONE; Wave 3 — DONE (2026-09-19 update)
 - **DONE** (wave2 merges, 8 parallel worktrees on 2026-09-14): DOCX model/
   layout/editor fidelity (D1–D10, D12–D22, D26, D28, D30), PDF viewer
   (P1–P12/PDF-01..19), slides (S1–S22/SLD-02..24), spreadsheet/CSV/code/RTF/
   ODT (T1–T5, T7–T9, T11), format detection/routing (P2.2, P2.11, P2.14,
   T6), export/UX (X2, X5, X3 non-DOCX a11y, UX-19/20/21), shell (P2.1, P2.5,
   P2.6, P2.8, X4, SHELL-25, P2.13).
-- **IN PROGRESS** (unmerged `wave3/*` branches, real commits, not on
-  `main`): table row-splitting/footnote-endnote layout/header-footer
-  vAlign/hyphenation/zoom (`wave3/docx-pagination`); embedded-font
-  de-obfuscation (DEFER-4) and field/TOC regeneration (DEFER-5) on
-  `wave3/docx-fields-fonts`; real spreadsheet cell editing + write-back
+- **DONE** — 2026-09-19 re-verification: every `wave3/*` branch below now
+  shows `git rev-list --count main..<branch>` = 0 (fully merged), superseding
+  the IN PROGRESS/PENDING statuses this section previously recorded here.
+  Previously **IN PROGRESS**: table row-splitting/footnote-endnote layout/
+  header-footer vAlign/hyphenation/zoom (`wave3/docx-pagination`);
+  embedded-font de-obfuscation (DEFER-4) and field/TOC regeneration (DEFER-5)
+  on `wave3/docx-fields-fonts`; real spreadsheet cell editing + write-back
   (`wave3/sheets` — a genuine scope expansion past the original plan's
   DAT-06 stopgap, consistent with the owner's later "everything is in
-  scope" decision).
-- **PENDING** (branch exists, zero commits at time of writing):
-  `wave3/docx-drawings`, `wave3/docx-editing`, `wave3/export`,
-  `wave3/shell-polish` (only interrupted `wip:` commits).
+  scope" decision). Previously **PENDING**: `wave3/docx-drawings`,
+  `wave3/docx-editing`, `wave3/export`, `wave3/shell-polish`. Most of this
+  content reached `main` as direct post-wave-4 follow-up commits rather than
+  a literal merge of each named branch — see the Wave 4 log below (e.g.
+  `9fc9ba1`, `a28f3ea`, `1fa6fa3`, `0aea4da`, `0700156`) — which is why `git
+  log` on `main` doesn't show a `wave3/*` merge commit for every entry above
+  even though the branch itself is now fully subsumed.
 
 ### Phase 4 — mixed; see per-task below
 | Task | Status | Note |
@@ -955,9 +960,9 @@ Electron/Chromium's native spellchecker, not the originally-locked
 | P4.1 (strict-mode ratchet) | **DONE** (2026-09-19, `6410eef`) | TypeScript 6 turns `strict` on by default and `src/` compiles clean under it; `strict: true` is now explicit, `tests/e2e` is type-checked too, and `STRICT_MODE_TODO.md` tracks the remaining `electron/*.cjs` work. |
 | P4.2 (coverage thresholds) | **DONE** (this wave) | v8 provider, `reportOnFailure`, `npm run coverage`, measured-floor thresholds in `vitest.config.ts`. |
 | P4.3 (bundle gate + rtf.js) | **DONE** (this wave) | Per-chunk `postbuild` gate wired with a fresh baseline; `rtf.js` investigated and, per its documented findings (`docs/KNOWN_LIMITATIONS.md`), kept rather than replaced. |
-| P4.4 (dependency hygiene) | **PARTIAL** | `wave1/deps-security` covered part of this; the `html2canvas-pro` removal sub-item still explicitly depends on the export rework (`wave3/export`, no commits yet). |
-| P4.5 (Electron major upgrade epic) | **PENDING** | No epic issue exists in the GitHub repo (`gh issue list` returns none) — not started. |
-| P4.6 (E2E expansion) | **PARTIAL** | `tests/e2e/smoke.spec.ts` covers open + console-error assertions for all 13 formats; `tests/e2e/perf.spec.ts` covers the 200ms task-perf budget. The open→edit→save→reopen, export-verification, and full-keyboard-shortcut scenario specs described in P4.6's approach are not present yet. |
+| P4.4 (dependency hygiene) | **PARTIAL** | `wave1/deps-security` covered part of this; `wave3/export` is now merged (2026-09-19 re-verification, see Phase 3 above) but did not include the `html2canvas-pro` removal sub-item — the package is still a `package.json` dependency and is still imported (`src/App.tsx`, `src/utils/export/{docxMedia,pdf,index}.ts`) — so this stays **PARTIAL**. |
+| P4.5 (Electron major upgrade epic) | **DONE** (2026-09-19, `7dc1c30`) | Electron 35 → 44.4.1, electron-builder 26.15, sharp 0.35 — the `npm audit` advisories this task existed to close are resolved. Supersedes the **PENDING** status this row previously recorded (no GitHub epic issue was ever filed; the upgrade landed as a direct commit instead). |
+| P4.6 (E2E expansion) | **DONE** (2026-09-19, `6363d4f` + per-format editor specs) | `tests/e2e/scenarios.spec.ts` (`6363d4f`) adds the open→edit→save→reopen journey and the unsaved-changes guard this row previously flagged as missing; `docx-editor.spec.ts` (`4c39700`), `spreadsheet-editor.spec.ts` (`49924b6`), `pptx-editor.spec.ts` (`39b4622`), `code-editor.spec.ts` (`9a89f36`) and `tabs.spec.ts` (`1fa6fa3`) each landed alongside that format's wave-4 editing work and cover its keyboard/editing scenarios. `smoke.spec.ts`/`perf.spec.ts` (already **DONE** before this update) still cover open/console-error and the 200ms task-perf budget. Supersedes the **PARTIAL** status previously recorded here. |
 | P4.7 (viewer coverage sweep) | **PARTIAL** | Per this wave's `npm run coverage` measurement: several PDF sub-components remain low (`PdfToolbar.tsx` ~29%, `PdfThumbnailRail.tsx` ~4%, `PdfWordDialog.tsx` ~41%); most other viewers are well-covered (DOCX/RTF/ODT/OD{S,P}/Pptx/spreadsheet all 66–95%+ statement coverage). |
 | P4.8 (shared mocks) | **DONE** (this wave) | `createMockElectronAPI()` added; 2 representative call sites migrated by design (not all — see the task's own "a few representative tests" scope); `useRecentFiles.test.ts` added. |
 | P4.9 (process hygiene) | **DONE** (this wave) | This section, `atlas-phase1.md`/`atlas-phase2-docx.md` addenda, README, `CHANGELOG.md`, `docs/ARCHITECTURE.md`, `docs/KNOWN_LIMITATIONS.md`, RUN-12 fix. |
