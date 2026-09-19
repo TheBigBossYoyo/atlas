@@ -21,12 +21,18 @@
  * - `exportMarkdownPdf` replaces the old generic `exportPdf('markdown-content', ...)`
  *   with a printToPDF-based render of the same live `#markdown-content` DOM
  *   `exportHtml` already serializes, using the same embedded theme CSS.
- * - `exportDocxPdf` reuses DocxViewer's own rendering (all pages already
- *   exist in the live DOM — `PageStack`/`PageView` render every page eagerly,
- *   `zoom` is always `1`, and there is no virtualization to work around) and
- *   its own `@media print` CSS (`viewer-docx.css`/`page-view.css`, harvested
- *   verbatim via `?raw` imports so this can never drift from what the app
- *   actually renders).
+ * - `exportDocxPdf` reuses DocxViewer's own rendering (`zoom` is always `1`)
+ *   and its own `@media print` CSS (`viewer-docx.css`/`page-view.css`,
+ *   harvested verbatim via `?raw` imports so this can never drift from what
+ *   the app actually renders). D23-PERF-2 — `PageStack`/`PageView` no longer
+ *   render every page eagerly: only pages near the viewport (plus a small
+ *   buffer, plus whichever page holds the caret) actually mount, the rest
+ *   are lightweight placeholders (see `pageVirtualization.ts`). Before
+ *   reading the live DOM below, `exportDocxPdf` dispatches an
+ *   `atlas:docx-force-full-render` window event, which `DocxViewer.tsx`
+ *   listens for and answers with a SYNCHRONOUS (`flushSync`) full-page
+ *   render, so every page is real by the time `dispatchEvent` returns — and
+ *   releases it again afterwards with `atlas:docx-release-full-render`.
  * - `exportFlowDocumentPdf` is the RTF/ODT case: both already render their
  *   FULL converted document into the live DOM (no virtualization), so the
  *   same "snapshot the live DOM" strategy applies with each viewer's own CSS.
@@ -209,7 +215,18 @@ const DOCX_PRINT_OVERRIDES = `
  * live `.docx-page-stack` (every page already rendered — see module header)
  * and reusing DocxViewer's own print CSS instead of a screenshot.
  */
+/** D23-PERF-2 — see the module header: asks the live `DocxViewer` to mount
+ * every page before/after this export reads the DOM. A no-op (no listener
+ * ever answers) for any other viewer or if DocxViewer isn't mounted at all,
+ * which is fine — `exportDocxPdf` still checks for `.docx-page-stack`/
+ * `.docx-page` below and fails with its existing, already-user-facing error
+ * message rather than silently exporting an empty document either way. */
+function dispatchDocxFullRender(eventName: 'atlas:docx-force-full-render' | 'atlas:docx-release-full-render'): void {
+  window.dispatchEvent(new Event(eventName));
+}
+
 export async function exportDocxPdf(elementId: string, fileName: string): Promise<void> {
+  dispatchDocxFullRender('atlas:docx-force-full-render');
   try {
     const root = document.getElementById(elementId);
     if (!root) {
@@ -238,6 +255,8 @@ export async function exportDocxPdf(elementId: string, fileName: string): Promis
   } catch (err) {
     console.error('[export] exportDocxPdf failed:', err);
     throw toFriendlyError(err, 'PDF export failed');
+  } finally {
+    dispatchDocxFullRender('atlas:docx-release-full-render');
   }
 }
 

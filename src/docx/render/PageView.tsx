@@ -651,7 +651,7 @@ const PageViewComponent: React.FC<PageViewProps> = ({
 
   const headerHeight = page.headerLines.reduce((acc, l) => acc + l.lineHeight, 0);
   const footerHeight = page.footerLines.reduce((acc, l) => acc + l.lineHeight, 0);  return (
-    <div className="docx-page" style={outerStyle}>
+    <div className="docx-page" data-page-index={page.pageIndex} style={outerStyle}>
       <div style={innerStyle}>
         {/* Header */}
         {page.headerLines.length > 0 && (

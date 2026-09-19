@@ -197,13 +197,34 @@ test('opening a 100k-row XLSX keeps every renderer main-thread task under 200ms'
  * ~250-400ms to ~160-200ms (see the D23-PERF commit for the full
  * before/after methodology).
  *
- * The budget below is still deliberately generous — CI hardware is slower
- * than a developer machine, and typing latency here is noisy under any
- * concurrent CPU load — but tightened from the original 2_500ms now that
- * the measured regression is an order of magnitude smaller than the one
- * D23/a28f3ea guarded against.
+ * D23-PERF-2: measuring the same keystroke split into command-apply/
+ * pagination/React-commit/browser-layout-paint (performance.mark/measure
+ * instrumentation, removed before this commit) on this machine, under the
+ * SAME concurrent-agent CPU load that made the numbers above noisier than
+ * a quiet machine, found commit (~40-50ms) and paint (~50-60ms) dominating
+ * — NOT pagination (~15-25ms, already cheap thanks to the D23 line cache).
+ * The cause: `paginate()` returns a brand-new `Page` object for every page
+ * on every call, so even with `PageStack`/`PageView` memoized (D23-PERF),
+ * every one of this test's ~24 pages still fails its memo check and
+ * remounts a full DOM subtree on every keystroke, regardless of whether
+ * that page is even on screen.
+ *
+ * Fix: `PageStack` now virtualizes — only pages within the scroll
+ * container's viewport (plus a buffer, plus whichever page holds the
+ * caret/selection) actually mount `PageView`; the rest render as a
+ * lightweight placeholder that reserves the same box (see
+ * `src/docx/render/pageVirtualization.ts` and `PageStack.tsx`). Measured
+ * back-to-back on this machine, same method, same load: commit dropped to
+ * ~4-10ms and paint to ~10-20ms; wall-clock median across 5 keystrokes went
+ * from ~280-300ms to ~141-155ms.
+ *
+ * The budget below keeps generous margin over that ~155ms median — CI
+ * hardware is slower than a developer machine, and typing latency here is
+ * noisy under any concurrent CPU load (it has flaked at roughly 2x the
+ * local numbers before) — but is tightened from 1_200ms now that
+ * virtualization moved the achieved number that much further below it.
  */
-const TYPING_BUDGET_MS = 1_200
+const TYPING_BUDGET_MS = 600
 
 test('typing in a 35-page DOCX stays responsive', async () => {
   const { Document, Packer, Paragraph, TextRun } = await import('docx')
@@ -231,7 +252,19 @@ test('typing in a 35-page DOCX stays responsive', async () => {
     await page.waitForSelector('[data-paragraph-path]', { timeout: 60_000 })
     await page.waitForFunction(() => document.querySelectorAll('.docx-page').length > 5, null, { timeout: 60_000 })
     await page.waitForTimeout(1_500)
-    expect(await page.locator('.docx-page').count()).toBeGreaterThan(20)
+    // `.docx-page` counts BOTH real pages and virtualized placeholders (see
+    // D23-PERF-2 / PageStack.tsx — a placeholder reserves the exact same box
+    // a real page would, so this total still reflects the whole document).
+    const totalPages = await page.locator('.docx-page').count()
+    expect(totalPages).toBeGreaterThan(20)
+
+    // D23-PERF-2 — the actual point of virtualization: with the window this
+    // test runs at, only a handful of the 20+ pages should be REAL PageViews
+    // at any one time, not all of them. A regression here (e.g. a future
+    // change accidentally disabling virtualization) would silently give back
+    // the exact DOM-mount cost this task set out to cut.
+    const realPages = await page.locator('.docx-page:not([data-virtualized="placeholder"])').count()
+    expect(realPages, `expected fewer than ${totalPages} real pages mounted, got ${realPages}`).toBeLessThan(totalPages)
 
     await page.locator('[data-paragraph-path="1"]').first().click()
     await page.waitForTimeout(200)
