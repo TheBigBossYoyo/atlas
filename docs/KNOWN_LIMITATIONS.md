@@ -41,7 +41,9 @@ footnotes-endnotes; run formatting (bold/italic/underline/strike/sub-super/
 font/color/highlight/spacing/caps); paragraph formatting (alignment,
 spacing, indent, shading, borders, tab stops); ordered/unordered/multi-level
 lists; the paragraph/character/table style cascade including inheritance;
-insert-table, page breaks, section breaks; headers/footers; find & replace;
+insert-table, page breaks, section breaks; headers/footers (per-paragraph
+editing that keeps a paragraph's own images/fields/tabs/formatting intact —
+see the "Not supported" note below); find & replace;
 track-changes accept/reject (single and all) with a `trackChanges` on/off
 setting; comments; undo/redo (command-pattern, bounded history); image
 insert; Save and Save As with an atomic, lock-aware write path.
@@ -62,6 +64,16 @@ rotation and flip (parsed, serialized, and rendered at the right spot with
 correct z-order).
 
 **Not supported:**
+- **Header/footer editing is per whole paragraph, not per run.** The header/
+  footer panel offers one editable field per paragraph that is entirely
+  plain text (runs holding only text/tabs/breaks); a paragraph that also
+  holds an image, a field (PAGE/NUMPAGES/etc), a hyperlink, a footnote/
+  comment reference, or any raw unrecognized XML is shown as a read-only,
+  labelled placeholder ("[Image]", "[Page number]", …) instead — editing it
+  here isn't offered at all, so it's never at risk of being flattened away.
+  A table block is likewise a placeholder. Within an editable paragraph, an
+  edit is spliced into the paragraph's own runs (a prefix/suffix diff, not a
+  full rebuild), so untouched runs keep their exact formatting.
 - **Vertical table cell merge** (`w:vMerge` / row-span) — only horizontal
   merge (`gridSpan`) is supported for structural table editing. *(DEFER-1)*
 - **Paste fidelity** gaps: a nested table inside a pasted cell, vertical

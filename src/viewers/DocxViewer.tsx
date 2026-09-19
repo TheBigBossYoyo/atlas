@@ -82,7 +82,10 @@ import {
   type Range,
   type TrackChangesContext,
   listHeaderFooterParts,
-  type HeaderFooterPart,
+  buildHeaderFooterTextEdit,
+  buildInsertHeaderFooterParagraph,
+  buildRemoveHeaderFooterParagraph,
+  type HeaderFooterKind,
 } from '../docx/editor'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
 import { comparePositions } from '../docx/editor/Selection'
@@ -966,6 +969,58 @@ function DocxEditor({
     [commitState, documentModel],
   )
 
+  // D29 follow-up — a header/footer field commits its edit as ONE undo step
+  // on blur, not per keystroke, so its `onChange` (further below) only
+  // remembers the latest uncommitted value here rather than applying a
+  // command immediately. This is also what fixes the Ctrl+S-while-focused
+  // bug: the field previously only committed on blur, so saving (which reads
+  // `documentModel`) while the field still had focus wrote the pre-edit
+  // text. `flushHeaderFooterEdits` (used by the save path below) commits
+  // whatever is still pending here — normally at most the one field the user
+  // is still typing in — before the document is serialized. Declared this
+  // early (rather than beside the other header/footer handlers, further
+  // down) so `handleSaveInternal`'s dependency array below can reference it
+  // — a `useCallback` dependency array is evaluated immediately, unlike the
+  // callback body, so a later `const` would still be in its temporal dead
+  // zone at that point.
+  const pendingHeaderFooterEditsRef = useRef(
+    new Map<string, { readonly kind: HeaderFooterKind; readonly id: string; readonly blockIndex: number; readonly text: string }>(),
+  )
+
+  // Commits every still-pending header/footer field edit as one command each
+  // (a no-op, returning `documentModel` unchanged, when nothing is pending)
+  // and returns the resulting document SYNCHRONOUSLY — `commitState`'s own
+  // `setDocumentModel` is async, and the save path below needs the
+  // just-committed text in hand immediately, not on the next render.
+  const flushHeaderFooterEdits = useCallback((): DocxDocument => {
+    const pending = pendingHeaderFooterEditsRef.current
+    if (pending.size === 0) {
+      return documentModel
+    }
+
+    const commands: Command[] = []
+    for (const [key, edit] of pending) {
+      const command = buildHeaderFooterTextEdit(documentModel, edit.kind, edit.id, edit.blockIndex, edit.text)
+      if (command !== null) {
+        commands.push(command)
+      }
+      pending.delete(key)
+    }
+    if (commands.length === 0) {
+      return documentModel
+    }
+
+    try {
+      const batch: Command = commands.length === 1 ? commands[0] : { kind: 'composite', commands }
+      const result = applyCommand(documentModel, batch)
+      historyRef.current.push(result.inverse)
+      commitState(result.document, result.range ?? range)
+      return result.document
+    } catch {
+      return documentModel
+    }
+  }, [commitState, documentModel, range])
+
   const syncRangeFromDom = useCallback(() => {
     const root = editorRootRef.current
     if (root === null) {
@@ -1786,10 +1841,15 @@ function DocxEditor({
     async (options?: { readonly forceDialog?: boolean }): Promise<boolean> => {
       setSaveError(null)
 
+      // D29 follow-up — commit any header/footer field the user is still
+      // typing in (Ctrl+S never blurs it) before reading the document to
+      // save; see `flushHeaderFooterEdits`'s own doc comment above.
+      const documentToSave = flushHeaderFooterEdits()
+
       try {
         const nextBytes = await saveDocx({
           ...bundle,
-          document: documentModel,
+          document: documentToSave,
         })
 
         const result = await window.electronAPI?.saveBinaryFile?.({
@@ -1811,14 +1871,15 @@ function DocxEditor({
           return false
         }
 
-        // Record *what was actually written* (this closure's own `documentModel`
-        // snapshot, taken when the save started) as the new saved baseline. We
-        // deliberately do NOT also call `setDirty(false)` here: if the user kept
-        // editing while the `await`s above were in flight, `documentModel` may
-        // already have moved on since this snapshot, and the effect below
-        // recomputes dirty from whatever the *current* render's `documentModel`
-        // is once this state update lands — never from this stale closure.
-        setLastSavedDocument(documentModel)
+        // Record *what was actually written* (`documentToSave`, including any
+        // header/footer edit `flushHeaderFooterEdits` just committed above)
+        // as the new saved baseline. We deliberately do NOT also call
+        // `setDirty(false)` here: if the user kept editing while the
+        // `await`s above were in flight, `documentModel` may already have
+        // moved on since this snapshot, and the effect below recomputes
+        // dirty from whatever the *current* render's `documentModel` is once
+        // this state update lands — never from this stale closure.
+        setLastSavedDocument(documentToSave)
         return true
       } catch (error) {
         // RUN-14 — wrap JSZip/fast-xml-parser/DocxSaveError internals in a
@@ -1827,7 +1888,7 @@ function DocxEditor({
         return false
       }
     },
-    [bundle, documentModel, savePath],
+    [bundle, flushHeaderFooterEdits, savePath],
   )
 
   const handleSave = useCallback((): Promise<boolean> => handleSaveInternal(), [handleSaveInternal])
@@ -1979,16 +2040,50 @@ function DocxEditor({
     setFieldUpdateMessage('Table of contents updated.')
   }, [documentModel, pages])
 
-  // D29 — headers and footers are edited as plain text, one paragraph per
-  // line, through the normal command path so the change is undoable and the
-  // save path writes the part back out.
+  // D29 — headers and footers are edited one plain-text paragraph at a time
+  // (see docx/editor/headerFooter.ts for why: rewriting a whole part used to
+  // flatten away images/fields/tables it held), through the normal command
+  // path so each edit is its own undo step and the save path writes the part
+  // back out.
   const headerFooterParts = useMemo(() => listHeaderFooterParts(documentModel), [documentModel])
 
-  const handleHeaderFooterChange = useCallback(
-    (part: HeaderFooterPart, text: string) => {
-      applyEditorCommand({ kind: 'set-header-footer-text', target: part.kind, id: part.id, text })
+  const handleHeaderFooterFieldChange = useCallback(
+    (kind: HeaderFooterKind, id: string, blockIndex: number, text: string) => {
+      pendingHeaderFooterEditsRef.current.set(`${kind}:${id}:${blockIndex}`, { kind, id, blockIndex, text })
     },
-    [applyEditorCommand],
+    [],
+  )
+
+  const handleHeaderFooterFieldBlur = useCallback(
+    (kind: HeaderFooterKind, id: string, blockIndex: number, text: string) => {
+      pendingHeaderFooterEditsRef.current.delete(`${kind}:${id}:${blockIndex}`)
+      const command = buildHeaderFooterTextEdit(documentModel, kind, id, blockIndex, text)
+      if (command !== null) {
+        applyEditorCommand(command)
+      }
+    },
+    [applyEditorCommand, documentModel],
+  )
+
+  const handleAddHeaderFooterParagraph = useCallback(
+    (kind: HeaderFooterKind, id: string) => {
+      const command = buildInsertHeaderFooterParagraph(documentModel, kind, id)
+      if (command !== null) {
+        applyEditorCommand(command)
+      }
+    },
+    [applyEditorCommand, documentModel],
+  )
+
+  const handleRemoveHeaderFooterParagraph = useCallback(
+    (kind: HeaderFooterKind, id: string, blockIndex: number) => {
+      pendingHeaderFooterEditsRef.current.delete(`${kind}:${id}:${blockIndex}`)
+      const command = buildRemoveHeaderFooterParagraph(documentModel, kind, id, blockIndex)
+      if (command !== null) {
+        applyEditorCommand(command)
+      }
+    },
+    [applyEditorCommand, documentModel],
   )
 
   // D24/DXL-19
@@ -2222,7 +2317,7 @@ function DocxEditor({
       {headerFooterOpen && headerFooterParts.length > 0 ? (
         <div className="docx-viewer__header-footer" role="group" aria-label="Header and footer">
           <div className="docx-viewer__header-footer-title">
-            <span>Header and footer (text only)</span>
+            <span>Header and footer</span>
             <button
               type="button"
               className="docx-viewer__error-dismiss"
@@ -2233,23 +2328,74 @@ function DocxEditor({
             </button>
           </div>
           {headerFooterParts.map((part) => {
-            const label = `${part.kind === 'header' ? 'Header' : 'Footer'}${part.type === 'default' ? '' : ` (${part.type} page)`}`
+            const base = `${part.kind === 'header' ? 'Header' : 'Footer'}${part.type === 'default' ? '' : ` (${part.type} page)`}`
+            // A single plain-text paragraph and nothing else keeps the plain
+            // "Header"/"Footer" label; anything with more than one row (a
+            // second paragraph, or a placeholder alongside the text) numbers
+            // each row by its position so it's clear which line is which.
+            const numbered = part.rows.length > 1
+            // Matches `buildRemoveHeaderFooterParagraph`'s own guard: never
+            // offer to empty a part down to zero blocks.
+            const canRemove = part.rows.length > 1
             return (
-              <label key={`${part.kind}-${part.id}`} className="docx-viewer__header-footer-field">
-                <span>{label}</span>
-                <textarea
-                  defaultValue={part.text}
-                  aria-label={label}
-                  rows={2}
-                  onBlur={(event) => handleHeaderFooterChange(part, event.currentTarget.value)}
-                />
-                {part.hasRichContent && (
-                  <span className="docx-viewer__meta">
-                    This one also holds content beyond plain text (a table, a picture or a field); editing it here keeps
-                    only the text.
-                  </span>
-                )}
-              </label>
+              <div key={`${part.kind}-${part.id}`} className="docx-viewer__header-footer-part">
+                <span className="docx-viewer__header-footer-part-title">{base}</span>
+                {part.rows.map((row, rowIndex) => {
+                  if (row.kind === 'placeholder') {
+                    return (
+                      <div key={`${part.kind}-${part.id}-${row.blockIndex}`} className="docx-viewer__header-footer-placeholder">
+                        {numbered ? `Line ${rowIndex + 1}: ` : ''}
+                        {row.label}
+                        <span className="docx-viewer__meta">
+                          {' '}
+                          Not plain text — left exactly as it is.
+                        </span>
+                      </div>
+                    )
+                  }
+
+                  const label = numbered ? `${base} line ${rowIndex + 1}` : base
+                  return (
+                    <label
+                      key={`${part.kind}-${part.id}-${row.blockIndex}-${row.text}`}
+                      className="docx-viewer__header-footer-field"
+                    >
+                      <span>{label}</span>
+                      <span className="docx-viewer__header-footer-row">
+                        <input
+                          type="text"
+                          defaultValue={row.text}
+                          aria-label={label}
+                          onChange={(event) =>
+                            handleHeaderFooterFieldChange(part.kind, part.id, row.blockIndex, event.currentTarget.value)
+                          }
+                          onBlur={(event) =>
+                            handleHeaderFooterFieldBlur(part.kind, part.id, row.blockIndex, event.currentTarget.value)
+                          }
+                        />
+                        {canRemove && (
+                          <button
+                            type="button"
+                            className="docx-viewer__error-dismiss"
+                            onClick={() => handleRemoveHeaderFooterParagraph(part.kind, part.id, row.blockIndex)}
+                            aria-label={`Remove ${label}`}
+                            title="Remove this line"
+                          >
+                            <X aria-hidden="true" />
+                          </button>
+                        )}
+                      </span>
+                    </label>
+                  )
+                })}
+                <button
+                  type="button"
+                  className="docx-viewer__header-footer-add"
+                  onClick={() => handleAddHeaderFooterParagraph(part.kind, part.id)}
+                >
+                  + Add line
+                </button>
+              </div>
             )
           })}
         </div>

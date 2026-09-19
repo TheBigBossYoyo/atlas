@@ -384,6 +384,21 @@
   color: var(--text-secondary, #57606a);
 }
 
+/* D29 follow-up — one part (a header or footer) can hold several rows: a mix
+ * of editable plain-text paragraphs and read-only placeholders for anything
+ * this editor won't rewrite. */
+.docx-viewer__header-footer-part {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.docx-viewer__header-footer-part-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #57606a);
+}
+
 .docx-viewer__header-footer-field {
   display: flex;
   flex-direction: column;
@@ -392,8 +407,15 @@
   color: var(--text-secondary, #57606a);
 }
 
-.docx-viewer__header-footer-field textarea {
-  resize: vertical;
+.docx-viewer__header-footer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.docx-viewer__header-footer-field input {
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--border-primary, #d0d7de);
   border-radius: 6px;
@@ -401,4 +423,28 @@
   color: var(--text-primary, #1f2328);
   font: inherit;
   font-size: 13px;
+}
+
+.docx-viewer__header-footer-placeholder {
+  padding: 6px 8px;
+  border: 1px dashed var(--border-primary, #d0d7de);
+  border-radius: 6px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-secondary, #57606a);
+}
+
+.docx-viewer__header-footer-add {
+  align-self: flex-start;
+  border: 1px solid var(--border-primary, #d0d7de);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.docx-viewer__header-footer-add:hover {
+  background: var(--bg-secondary, #f6f8fa);
 }

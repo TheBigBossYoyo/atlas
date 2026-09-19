@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import { parseHeader } from '../../parser/headers'
-import type { Header, Paragraph } from '../../model'
+import type { Document, Header, Paragraph } from '../../model'
 import { writeHeaderXml } from '../headerWriter'
+import { setHeaderFooterBlockText } from '../../editor/headerFooter'
 
 function makeParagraph(text: string): Paragraph {
   return {
@@ -84,4 +85,61 @@ describe('writeHeaderXml', () => {
       expect(written).toContain('<w:proofErr w:type="spellEnd"/>')
     },
   )
+
+  // D29 follow-up — the original plain-text header/footer editor rewrote a
+  // whole part from scratch on any edit, so a header holding an image and a
+  // PAGE field lost both the moment its text paragraph was touched. This
+  // exercises the full round trip: parse a header with all three (image,
+  // field, bold text), edit only the text paragraph through the same
+  // `setHeaderFooterBlockText` the panel's commit path uses, and check the
+  // re-serialized XML still has the drawing and the field.
+  it('keeps a drawing and a PAGE field intact when the header text paragraph is edited', () => {
+    const sourceXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+      + ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+      + ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+      + ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+      + ' xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+      + '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/>'
+      + '<wp:docPr id="1" name="Logo"/><a:graphic><a:graphicData>'
+      + '<pic:pic><pic:blipFill><a:blip r:embed="rIdLogo1"/></pic:blipFill></pic:pic>'
+      + '</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
+      + '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Confidential</w:t></w:r></w:p>'
+      + '<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>'
+      + '</w:hdr>'
+
+    const header = parseHeader(sourceXml, 'rId3')
+    expect(header.blocks).toHaveLength(3)
+
+    const stubDocument: Document = {
+      kind: 'document',
+      sections: [{ kind: 'section', props: {}, blocks: [] }],
+      styles: new Map(),
+      numbering: new Map(),
+      comments: new Map(),
+      footnotes: new Map(),
+      endnotes: new Map(),
+      headers: new Map([['rId3', header]]),
+      footers: new Map(),
+    }
+    const edited = setHeaderFooterBlockText(stubDocument, 'header', 'rId3', 1, 'CONFIDENTIAL')
+
+    const written = writeHeaderXml(edited.headers.get('rId3')!)
+
+    // The edited paragraph's new text, still bold — re-parsed rather than
+    // grepped for the literal substring, since the run-level diff may (as it
+    // does here, an edit that only changes case) split it across more than
+    // one `<w:t>`/`<w:r>` when only part of the text actually changed.
+    const roundTripped = parseHeader(written, 'rId3')
+    const editedParagraph = roundTripped.blocks[1] as Paragraph
+    const editedRuns = editedParagraph.children as ReadonlyArray<{ kind: string; props?: { bold?: boolean }; children: ReadonlyArray<{ value: string }> }>
+    expect(editedRuns.map((run) => run.children[0]?.value).join('')).toBe('CONFIDENTIAL')
+    expect(editedRuns.every((run) => run.props?.bold === true)).toBe(true)
+    // The drawing (image) is untouched.
+    expect(written).toContain('rIdLogo1')
+    expect(written).toContain('wp:inline')
+    // The PAGE field is untouched.
+    expect(written).toContain('w:fldSimple')
+    expect(written).toContain('PAGE')
+  })
 })

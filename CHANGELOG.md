@@ -8,6 +8,19 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Fixed
+- DOCX header/footer editing (D29 follow-up): an edit no longer flattens a
+  header/footer paragraph into a single plain-text run — a paragraph holding
+  an image, a PAGE/NUMPAGES field, a hyperlink, or other non-text content is
+  now shown as a read-only placeholder and left completely untouched;
+  editing a plain-text paragraph splices only the changed span into its own
+  runs, so unedited text keeps its exact formatting. Also fixed: pressing
+  Ctrl+S while a header/footer field still had focus saved the stale
+  pre-edit text (the field only committed on blur) — the pending edit is now
+  committed before every save.
+
 ## [3.2.0] — 2026-09-19 (wave 4: owner-reported editor defects)
 
 ### Fixed

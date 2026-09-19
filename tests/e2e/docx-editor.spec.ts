@@ -14,6 +14,15 @@ import { AlignmentType, Document, Packer, Paragraph, TextRun } from 'docx'
 
 const projectRoot = process.cwd()
 
+// D29 follow-up — an edit is now spliced into the paragraph's own runs
+// (keeping whatever text/formatting the edit didn't touch, rather than
+// flattening the whole paragraph into one new run), so a shared suffix like
+// "Draft header" -> "Final header"'s " header" can legitimately end up in
+// its own `<w:t>` after the rewritten run. Strip tags before asserting on
+// text content so these checks don't depend on exactly how many runs the
+// diff split the result across.
+const textOnly = (xml: string): string => xml.replace(/<[^>]+>/g, '')
+
 async function createFixture(): Promise<string> {
   const doc = new Document({
     sections: [
@@ -243,7 +252,54 @@ test('D29: the header and footer can be edited and saved', async () => {
 
     const zip = await (await import('jszip')).default.loadAsync(fs.readFileSync(file))
     const headerPart = Object.keys(zip.files).find((name) => /^word\/header\d+\.xml$/.test(name))!
-    expect(await zip.file(headerPart)!.async('string')).toContain('Final header')
+    expect(textOnly(await zip.file(headerPart)!.async('string'))).toContain('Final header')
+  } finally {
+    kill(app)
+  }
+})
+
+test('D29 follow-up: Ctrl+S while the header field is still focused saves what was typed, not the stale text', async () => {
+  const { Document, Packer, Paragraph, TextRun, Header } = await import('docx')
+  const doc = new Document({
+    sections: [
+      {
+        headers: { default: new Header({ children: [new Paragraph({ children: [new TextRun('Draft header')] })] }) },
+        children: [new Paragraph({ children: [new TextRun('Body text')] })],
+      },
+    ],
+  })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-docx-hf-ctrls-'))
+  const file = path.join(dir, 'with-header.docx')
+  fs.writeFileSync(file, await Packer.toBuffer(doc))
+
+  const { app, page } = await launch(file)
+  try {
+    await page.setViewportSize({ width: 1400, height: 900 })
+    await page.waitForTimeout(300)
+    await page.getByRole('button', { name: 'Header and footer' }).click()
+    const headerField = page.getByRole('textbox', { name: 'Header' })
+    await expect(headerField).toHaveValue('Draft header')
+
+    // `fill` focuses the field and leaves it focused — never blurring it, so
+    // the only way the typed text can reach the saved file is if Ctrl+S
+    // itself commits the still-pending edit (see `flushHeaderFooterEdits` in
+    // DocxViewer.tsx) rather than saving the stale pre-edit `documentModel`.
+    await headerField.fill('Typed without blurring')
+    await expect(headerField).toBeFocused()
+
+    const before = fs.statSync(file).mtimeMs
+    await page.keyboard.press('Control+s')
+    await expect.poll(() => fs.statSync(file).mtimeMs, { timeout: 10_000 }).toBeGreaterThan(before)
+    await page.waitForTimeout(400)
+
+    // The field still shows the typed text (the commit didn't blur/reset it)...
+    await expect(headerField).toHaveValue('Typed without blurring')
+    // ...and it's what actually landed on disk.
+    const zip = await (await import('jszip')).default.loadAsync(fs.readFileSync(file))
+    const headerPart = Object.keys(zip.files).find((name) => /^word\/header\d+\.xml$/.test(name))!
+    const headerText = textOnly(await zip.file(headerPart)!.async('string'))
+    expect(headerText).toContain('Typed without blurring')
+    expect(headerText).not.toContain('Draft header')
   } finally {
     kill(app)
   }
