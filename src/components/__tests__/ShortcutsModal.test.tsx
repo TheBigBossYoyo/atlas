@@ -86,4 +86,15 @@ describe('ShortcutsModal (UX-13)', () => {
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(dialog).toHaveAccessibleName('Keyboard Shortcuts');
   });
+
+  // Regression for a doc/behavior mismatch: `useUniversalShortcuts.ts`
+  // (Ctrl+N -> openNewMenu, Ctrl+Shift+T -> reopenClosedSession per SHELL-17)
+  // both actually work, but this modal — the app's own "authoritative list"
+  // per README.md — omitted the Ctrl+Shift+T row entirely, so there was no
+  // way for a keyboard user to discover it short of reading source.
+  it('documents every shell shortcut useUniversalShortcuts.ts actually implements', () => {
+    render(<ShortcutsModal isOpen onClose={() => {}} />);
+    expect(screen.getByText('New document menu')).toBeInTheDocument();
+    expect(screen.getByText('Reopen last closed document')).toBeInTheDocument();
+  });
 });
