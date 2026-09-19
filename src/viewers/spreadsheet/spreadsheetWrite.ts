@@ -46,6 +46,7 @@
  * xlsx/xlsm/ods/fods writers do not have this limitation.
  */
 import * as XLSX from 'xlsx'
+import JSZip from 'jszip'
 import Papa from 'papaparse'
 
 import type { EditableSheet, SpreadsheetDocument } from './spreadsheetDocument'
@@ -150,12 +151,42 @@ export function writeWorkbookBytes(doc: SpreadsheetDocument, bookType: XLSX.Book
 /** Book types whose package is OOXML, where Excel tables can be grafted back in (see `spreadsheetTables.ts`). */
 const OOXML_BOOK_TYPES: ReadonlySet<XLSX.BookType> = new Set<XLSX.BookType>(['xlsx', 'xlsm'])
 
+/**
+ * SheetJS's `bookType: 'ods'` writer produces a package whose zip entry
+ * order is `META-INF/manifest.xml, meta.xml, mimetype, styles.xml,
+ * content.xml, manifest.rdf` (verified directly against this build's
+ * `xlsx` version) — `mimetype` third, not first. The ODF Package spec
+ * (OASIS ODF 1.2 part 3, §2.2) requires `mimetype` to be the FIRST entry in
+ * the zip and stored uncompressed, or a conforming reader may refuse the
+ * file outright rather than fall back to sniffing content; the same rule
+ * `office/officePackage.ts`'s `writeOfficePackage` already honors for ODP
+ * saves. Every `.ods` Atlas has ever saved (via `writeWorkbookBytesWithTables`,
+ * the only path for `.ods` — `writeWorkbookThroughOriginal` only patches
+ * `.xlsx`/`.xlsm`) shipped with this defect until this fix. Repacks the
+ * archive with `mimetype` moved to the front and stored; every other part
+ * keeps its bytes, just re-deflated.
+ */
+async function fixOdsPackaging(bytes: Uint8Array): Promise<Uint8Array> {
+  const original = await JSZip.loadAsync(bytes)
+  const mimetype = await original.file('mimetype')?.async('uint8array')
+  if (mimetype === undefined) return bytes // defensive: nothing to reorder if SheetJS ever stops emitting one
+
+  const repacked = new JSZip()
+  repacked.file('mimetype', mimetype, { compression: 'STORE' })
+  for (const [path, entry] of Object.entries(original.files)) {
+    if (path === 'mimetype' || entry.dir) continue
+    repacked.file(path, await entry.async('uint8array'))
+  }
+  return repacked.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+}
+
 /** `writeWorkbookBytes` plus the sheets' Excel tables for OOXML targets (USR-17); other formats have no table concept. */
 export async function writeWorkbookBytesWithTables(
   doc: SpreadsheetDocument,
   bookType: XLSX.BookType,
 ): Promise<Uint8Array> {
   const bytes = writeWorkbookBytes(doc, bookType)
+  if (bookType === 'ods') return fixOdsPackaging(bytes)
   return OOXML_BOOK_TYPES.has(bookType) ? graftTables(bytes, doc.sheets) : bytes
 }
 
