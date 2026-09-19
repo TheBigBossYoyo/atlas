@@ -1,5 +1,6 @@
 import { useRef, useEffect } from 'react';
 import { Search, ChevronUp, ChevronDown, X } from 'lucide-react';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 interface SearchOverlayProps {
   isOpen: boolean;
@@ -23,6 +24,7 @@ export function SearchOverlay({
   onClose,
 }: SearchOverlayProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -31,6 +33,12 @@ export function SearchOverlay({
       return () => clearTimeout(timer);
     }
   }, [isOpen]);
+
+  // A11Y-2 — Tab was never contained inside the overlay, so it leaked focus
+  // straight into the document behind it. The input above already handles
+  // its own (animation-delayed) autofocus, so this only adds Tab
+  // containment and restores focus to whatever triggered the search on close.
+  useFocusTrap(barRef, isOpen, { focusOnOpen: false });
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -46,7 +54,7 @@ export function SearchOverlay({
 
   return (
     <div className="search-overlay">
-      <div className="search-overlay__bar">
+      <div className="search-overlay__bar" ref={barRef}>
         <Search size={15} className="search-overlay__icon" />
         <input
           ref={inputRef}

@@ -6,10 +6,24 @@
  * `PdfPasswordDialog.tsx` (a password prompt, not a word-lookup dialog), so
  * this test file targets that.
  */
+import { useState } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { PdfPasswordDialog } from '../PdfPasswordDialog'
+
+// A11Y-2 — isOpen is controlled by PdfViewer (an onPassword callback from
+// pdf.js opens it; Cancel or a successful unlock closes it), so exercising
+// open/close focus behavior needs a harness that owns that state.
+function Harness() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div>
+      <button onClick={() => setOpen(true)}>open password prompt</button>
+      <PdfPasswordDialog isOpen={open} isIncorrect={false} onSubmit={() => setOpen(false)} onCancel={() => setOpen(false)} />
+    </div>
+  )
+}
 
 describe('PdfPasswordDialog', () => {
   it('renders nothing when closed', () => {
@@ -99,5 +113,44 @@ describe('PdfPasswordDialog', () => {
 
     expect(screen.getByLabelText('PDF password')).toHaveValue('')
     expect(screen.getByText('Incorrect password. Try again.')).toBeInTheDocument()
+  })
+
+  it('keeps Tab from the last focusable element wrapping back to the first (focus trap, A11Y-2)', () => {
+    render(<PdfPasswordDialog isOpen isIncorrect={false} onSubmit={vi.fn()} onCancel={vi.fn()} />)
+
+    // Unlock starts disabled (no password typed), so Cancel is the last
+    // *enabled* focusable — the trap must skip over the disabled button.
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' })
+    cancelButton.focus()
+    expect(cancelButton).toHaveFocus()
+
+    fireEvent.keyDown(window, { key: 'Tab' })
+
+    expect(screen.getByLabelText('PDF password')).toHaveFocus()
+  })
+
+  it('keeps Shift+Tab from the first focusable element wrapping back to the last (A11Y-2)', () => {
+    render(<PdfPasswordDialog isOpen isIncorrect={false} onSubmit={vi.fn()} onCancel={vi.fn()} />)
+
+    const input = screen.getByLabelText('PDF password')
+    input.focus()
+    expect(input).toHaveFocus()
+
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+  })
+
+  it('restores focus to the element that opened it once closed (A11Y-2)', () => {
+    render(<Harness />)
+    const trigger = screen.getByRole('button', { name: 'open password prompt' })
+    trigger.focus()
+    fireEvent.click(trigger)
+
+    expect(screen.getByRole('dialog', { name: 'Password required' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(trigger).toHaveFocus()
   })
 })

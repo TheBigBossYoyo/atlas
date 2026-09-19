@@ -17,13 +17,22 @@
   --bg-tertiary: #eaeef2;
   --bg-elevated: #ffffff;
   --text-primary: #1f2328;
-  --text-secondary: #656d76;
+  /* A11Y-2: darkened from #656d76 (was 4.4999:1 against --bg-tertiary, just
+     under WCAG AA's 4.5:1 — the toolbar's Preview/Split/Editor toggle sits on
+     --bg-tertiary) to >=4.5:1 against all four background tokens. */
+  --text-secondary: #656c75;
   /* UX-10: darkened from #8b949e (was 2.89:1 against --bg-secondary, below
-     WCAG AA's 4.5:1) to >=4.5:1 against both --bg-primary and --bg-secondary. */
-  --text-tertiary: #6b7179;
+     WCAG AA's 4.5:1) to >=4.5:1 against both --bg-primary and --bg-secondary.
+     A11Y-2: darkened further from #6b7179 (was 4.22:1 against --bg-tertiary
+     — the toolbar filename badge sits on --bg-tertiary) to >=4.5:1 against
+     all four background tokens. */
+  --text-tertiary: #666c73;
   --border-primary: #d0d7de;
   --border-secondary: #eaeef2;
-  --accent: #0969da;
+  /* A11Y-2: darkened from #0969da (was 4.45:1 against --bg-tertiary — the
+     secondary-button hover state shows accent text on --bg-tertiary) to
+     >=4.5:1 against all four background tokens. */
+  --accent: #0967d7;
   --accent-hover: #0550ae;
   --accent-subtle: rgba(9, 105, 218, 0.08);
   --accent-muted: rgba(9, 105, 218, 0.15);
@@ -67,8 +76,11 @@
   --bg-elevated: #1c2128;
   --text-primary: #e6edf3;
   --text-secondary: #8b949e;
-  /* UX-10: lightened from #6e7681 (was 3.77:1 against --bg-secondary) to >=4.5:1. */
-  --text-tertiary: #7d858e;
+  /* UX-10: lightened from #6e7681 (was 3.77:1 against --bg-secondary) to >=4.5:1.
+     A11Y-2: lightened further from #7d858e (was 4.07:1 against --bg-tertiary
+     and 4.33:1 against --bg-elevated) to >=4.5:1 against all four background
+     tokens. */
+  --text-tertiary: #868e96;
   --border-primary: #30363d;
   --border-secondary: #21262d;
   --accent: #58a6ff;
@@ -82,6 +94,13 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
   --search-highlight: rgba(210, 153, 34, 0.35);
   --search-highlight-active: rgba(227, 179, 65, 0.6);
+  /* A11Y-2: the *current* search match's mark blends to ~4:1 against
+     --text-primary (the inherited light body text) — its higher alpha (0.6,
+     vs the passive match's 0.35) pushes the composite background bright
+     enough that light text falls under WCAG AA's 4.5:1. Overriding the mark's
+     own text to black (which the passive mark, at the lower alpha, does not
+     need) fixes it without dimming the active highlight itself. */
+  --search-highlight-active-text: #000000;
   --blockquote-border: #58a6ff;
   --blockquote-bg: rgba(88, 166, 255, 0.04);
   --table-border: #30363d;
@@ -110,12 +129,21 @@
   --bg-tertiary: #e3d8b3;
   --bg-elevated: #f8f1de;
   --text-primary: #5b4636;
-  --text-secondary: #7a604a;
-  /* UX-10: darkened from #9a8366 (was 2.84:1 against --bg-secondary) to >=4.5:1. */
-  --text-tertiary: #73624c;
+  /* A11Y-2: darkened from #7a604a (was 4.09:1 against --bg-tertiary — the
+     toolbar's Preview/Split/Editor toggle sits on --bg-tertiary) to >=4.5:1
+     against all four background tokens. */
+  --text-secondary: #725945;
+  /* UX-10: darkened from #9a8366 (was 2.84:1 against --bg-secondary) to >=4.5:1.
+     A11Y-2: darkened further from #73624c (was 4.12:1 against --bg-tertiary
+     — the toolbar filename badge sits on --bg-tertiary) to >=4.5:1 against
+     all four background tokens. */
+  --text-tertiary: #6b5b47;
   --border-primary: #d4c9a8;
   --border-secondary: #e3d8b3;
-  --accent: #8b5a2b;
+  /* A11Y-2: darkened from #8b5a2b (was 4.10:1 against --bg-tertiary — the
+     secondary-button hover state shows accent text on --bg-tertiary) to
+     >=4.5:1 against all four background tokens. */
+  --accent: #815428;
   --accent-hover: #6f4521;
   --accent-subtle: rgba(139, 90, 43, 0.08);
   --accent-muted: rgba(139, 90, 43, 0.18);
@@ -155,11 +183,18 @@
   --text-primary: #eceff4;
   --text-secondary: #d8dee9;
   /* UX-10: lightened from #a6adbb (was 4.46:1 against --bg-secondary, just
-     under WCAG AA's 4.5:1) to >=4.5:1 against both background tokens. */
-  --text-tertiary: #a9b0bd;
+     under WCAG AA's 4.5:1) to >=4.5:1 against both background tokens.
+     A11Y-2: lightened further from #a9b0bd (was 3.96:1 against
+     --bg-tertiary — the toolbar filename badge sits on --bg-tertiary) to
+     >=4.5:1 against all three background tokens (nord's --bg-elevated
+     equals --bg-secondary). */
+  --text-tertiary: #b7bdc7;
   --border-primary: #434c5e;
   --border-secondary: #3b4252;
-  --accent: #88c0d0;
+  /* A11Y-2: lightened from #88c0d0 (was 4.31:1 against --bg-tertiary — the
+     secondary-button hover state shows accent text on --bg-tertiary) to
+     >=4.5:1 against all three background tokens. */
+  --accent: #90c5d3;
   --accent-hover: #8fbcbb;
   --accent-subtle: rgba(136, 192, 208, 0.10);
   --accent-muted: rgba(136, 192, 208, 0.20);
@@ -170,6 +205,12 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
   --search-highlight: rgba(235, 203, 139, 0.45);
   --search-highlight-active: rgba(235, 203, 139, 0.75);
+  /* A11Y-2: both the passive match (3.78:1) and the current match (2.07:1)
+     blend to a background too light for --text-primary (nord's own frost
+     white) at either alpha. Unlike dark/dracula, the passive mark needs the
+     same black-text override as the active one. */
+  --search-highlight-text: #000000;
+  --search-highlight-active-text: #000000;
   --blockquote-border: #88c0d0;
   --blockquote-bg: rgba(136, 192, 208, 0.06);
   --table-border: #434c5e;
@@ -177,7 +218,12 @@
   --scrollbar-thumb: #4c566a;
   --scrollbar-track: transparent;
 
-  --hl-keyword: #81a1c1;
+  /* A11Y-2: lightened from #81a1c1 (this doubles as the "danger" UI color —
+     e.g. the discard button and error banners — where it was as low as
+     3.21:1 against --bg-tertiary) to >=4.5:1 against every background token
+     it actually appears on; --hl-tag (also #81a1c1 originally, used only for
+     syntax highlighting on --code-bg) is intentionally left as-is. */
+  --hl-keyword: #a9bfd4;
   --hl-string: #a3be8c;
   --hl-comment: #616e88;
   --hl-function: #88c0d0;
@@ -198,11 +244,17 @@
   --bg-elevated: #343746;
   --text-primary: #f8f8f2;
   --text-secondary: #d8d8cf;
-  /* UX-10: lightened from #6272a4 (was 3.03:1 against --bg-primary) to >=4.5:1. */
-  --text-tertiary: #8592b8;
+  /* UX-10: lightened from #6272a4 (was 3.03:1 against --bg-primary) to >=4.5:1.
+     A11Y-2: lightened further from #8592b8 (was 2.96:1 against
+     --bg-tertiary and 3.82:1 against --bg-elevated) to >=4.5:1 against all
+     four background tokens. */
+  --text-tertiary: #aeb7d0;
   --border-primary: #44475a;
   --border-secondary: #343746;
-  --accent: #bd93f9;
+  /* A11Y-2: lightened from #bd93f9 (was 3.79:1 against --bg-tertiary — the
+     secondary-button hover state shows accent text on --bg-tertiary) to
+     >=4.5:1 against all four background tokens. */
+  --accent: #caa8fa;
   --accent-hover: #d6acff;
   --accent-subtle: rgba(189, 147, 249, 0.10);
   --accent-muted: rgba(189, 147, 249, 0.20);
@@ -213,6 +265,10 @@
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
   --search-highlight: rgba(241, 250, 140, 0.30);
   --search-highlight-active: rgba(241, 250, 140, 0.55);
+  /* A11Y-2: same fix as the dark theme — the current match's higher alpha
+     (0.55 vs 0.30) blends to a background too light for --text-primary
+     (2.71:1); the passive match's lower alpha still passes (5.39:1). */
+  --search-highlight-active-text: #000000;
   --blockquote-border: #bd93f9;
   --blockquote-bg: rgba(189, 147, 249, 0.06);
   --table-border: #44475a;
@@ -220,7 +276,10 @@
   --scrollbar-thumb: #44475a;
   --scrollbar-track: transparent;
 
-  --hl-keyword: #ff79c6;
+  /* A11Y-2: lightened from #ff79c6 (this doubles as the "danger" UI color,
+     where it was 3.84:1 against --bg-tertiary) to >=4.5:1 against every
+     background token it actually appears on. */
+  --hl-keyword: #ff95d2;
   --hl-string: #f1fa8c;
   --hl-comment: #6272a4;
   --hl-function: #50fa7b;
@@ -988,13 +1047,19 @@ input:focus-visible,
 /* Search highlights in content */
 mark.search-highlight {
   background: var(--search-highlight);
-  color: inherit;
+  /* A11Y-2: themes whose highlight tint blends too light for the inherited
+     (light) body text at this alpha define --search-highlight-text to force
+     dark text instead; everyone else keeps the original `inherit`. */
+  color: var(--search-highlight-text, inherit);
   border-radius: 2px;
   padding: 0 1px;
 }
 
 mark.search-highlight--active {
   background: var(--search-highlight-active);
+  /* A11Y-2: the active match's higher alpha needs its own fallback chain —
+     some themes only need the override here, not on the passive mark above. */
+  color: var(--search-highlight-active-text, var(--search-highlight-text, inherit));
   box-shadow: 0 0 0 2px var(--search-highlight-active);
 }
 
@@ -1106,7 +1171,11 @@ mark.search-highlight--active {
 
 .welcome__btn--primary {
   background: var(--accent);
-  color: #ffffff;
+  /* A11Y-2: was a hardcoded #ffffff — fine against light/sepia's darker
+     --accent, but only 2.0-2.5:1 against dark/nord/dracula's much lighter
+     --accent. --bg-primary already flips dark/light per theme and is the
+     pattern --draft-recovery__btn--restore uses successfully below. */
+  color: var(--bg-primary);
 }
 
 .welcome__btn--primary:hover {
@@ -1932,7 +2001,9 @@ mark.search-highlight--active {
 
 .confirm-dialog__btn--primary {
   background: var(--accent);
-  color: #ffffff;
+  /* A11Y-2: see .welcome__btn--primary — hardcoded white failed AA against
+     dark/nord/dracula's lighter --accent. */
+  color: var(--bg-primary);
 }
 
 .confirm-dialog__btn--primary:hover:not(:disabled) {
@@ -2057,7 +2128,9 @@ mark.search-highlight--active {
   padding: 8px 18px;
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: #ffffff;
+  /* A11Y-2: see .welcome__btn--primary — hardcoded white failed AA against
+     dark/nord/dracula's lighter --accent. */
+  color: var(--bg-primary);
   font-size: 13px;
   font-weight: 500;
 }

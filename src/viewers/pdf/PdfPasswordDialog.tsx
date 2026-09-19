@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { KeyRound } from 'lucide-react'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 
 export type PdfPasswordDialogProps = {
   readonly isOpen: boolean
@@ -20,6 +21,7 @@ export type PdfPasswordDialogProps = {
 export function PdfPasswordDialog({ isOpen, isIncorrect, onSubmit, onCancel }: PdfPasswordDialogProps) {
   const [password, setPassword] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const dialogRef = useRef<HTMLFormElement | null>(null)
 
   useEffect(() => {
     if (isOpen) {
@@ -28,6 +30,12 @@ export function PdfPasswordDialog({ isOpen, isIncorrect, onSubmit, onCancel }: P
     }
     return undefined
   }, [isOpen])
+
+  // A11Y-2 — Tab was never contained inside the dialog, so it leaked focus
+  // straight into the PDF page behind it. The input above already handles
+  // its own (animation-delayed) autofocus, so this only adds Tab
+  // containment and restores focus to whatever triggered the prompt on close.
+  useFocusTrap(dialogRef, isOpen, { focusOnOpen: false })
 
   if (!isOpen) return null
 
@@ -40,7 +48,7 @@ export function PdfPasswordDialog({ isOpen, isIncorrect, onSubmit, onCancel }: P
 
   return (
     <div className="pdf-viewer__password-overlay" role="dialog" aria-modal="true" aria-label="Password required">
-      <form className="pdf-viewer__password-dialog" onSubmit={handleSubmit}>
+      <form ref={dialogRef} className="pdf-viewer__password-dialog" onSubmit={handleSubmit}>
         <KeyRound size={24} className="pdf-viewer__password-icon" aria-hidden="true" />
         <p className="pdf-viewer__password-title">This PDF is password protected</p>
         <input
