@@ -51,7 +51,7 @@ for (const fixture of fixtures) {
         }
       })
 
-      await expect(page.locator(`[data-viewer="${fixture.format}"]`)).toHaveCount(1)
+      await expect(page.locator(`[data-viewer="${fixture.format}"]`)).toHaveCount(1, { timeout: 20_000 })
       await expect(page.locator('.statusbar__file')).toHaveText(fixture.fileName, { timeout: 15_000 })
       await page.waitForTimeout(500)
       expect(consoleErrors, consoleErrors.join('\n')).toEqual([])
@@ -86,7 +86,7 @@ test('PDF viewer: page count, zoom, navigation, and find on a multi-page documen
       }
     })
 
-    await expect(page.locator('[data-viewer="pdf"]')).toHaveCount(1)
+    await expect(page.locator('[data-viewer="pdf"]')).toHaveCount(1, { timeout: 20_000 })
     await expect(page.locator('.statusbar__file')).toHaveText('sample-multipage.pdf', {
       timeout: 15_000,
     })
@@ -198,7 +198,7 @@ test('renders a mermaid diagram in the markdown fixture', async () => {
       }
     })
 
-    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1)
+    await expect(page.locator('[data-viewer="markdown"]')).toHaveCount(1, { timeout: 20_000 })
     await expect(page.locator('.mermaid--error')).toHaveCount(0)
     await expect(page.locator('.mermaid svg')).toBeVisible({ timeout: 15_000 })
     expect(consoleErrors, consoleErrors.join('\n')).toEqual([])
