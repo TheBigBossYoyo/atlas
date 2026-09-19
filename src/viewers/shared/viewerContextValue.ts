@@ -56,6 +56,14 @@ export type ViewerContextValue = {
    */
   registerSaveAs: (saveAs: (() => Promise<boolean>) | null) => void
   saveAs: () => Promise<boolean>
+  /**
+   * A viewer whose save landed somewhere other than the path it was opened
+   * from (Save As) reports it here, so the shell can move the document's tab,
+   * title and later saves to the new file. Without it the tab keeps pointing
+   * at the old path: reactivating it re-reads the ORIGINAL file (losing what
+   * is on screen) and the next Ctrl+S writes to neither file.
+   */
+  reportSavedPath: (path: string) => void
   /** Phase-3 placeholder — no viewer registers this yet. */
   getExportableContent: () => ExportableContent | null
   /** Whether the active viewer has registered an in-viewer find implementation. */

@@ -524,6 +524,22 @@ function AppShell() {
     [adoptFile],
   );
 
+  // A non-markdown viewer (DOCX, spreadsheet, slides) that saved to a new
+  // path reports it here: its tab, the title bar and every later save follow
+  // the document to the file it was actually written to. Without this the tab
+  // kept pointing at the file it was opened from, so coming back to it re-read
+  // that original file over the user's work and the next Ctrl+S wrote to
+  // neither file.
+  const handleViewerSavedPath = useCallback(
+    (savedPath: string): void => {
+      if (!file || savedPath === file.path) return;
+      const moved: LoadedFile = { ...file, path: savedPath };
+      setSessions((current) => renameSession(current, file.path, moved));
+      void showSessionFile(moved);
+    },
+    [file, showSessionFile],
+  );
+
   // SHELL-17 — switching documents. Unsaved changes in
   // the one being left behind go through the same Save/Discard/Cancel prompt
   // as opening or closing a file (only the showing document can be dirty,
@@ -1084,7 +1100,7 @@ function AppShell() {
         />
       ) : null}
 
-      <ViewerProvider filePath={filePath || null}>
+      <ViewerProvider filePath={filePath || null} onSavedPath={handleViewerSavedPath}>
         <ViewerSessionBridge
           onDirtyChange={setViewerDirty}
           saveRef={viewerSaveRef}

@@ -38,7 +38,12 @@ import {
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
 import { writeWorkbookThroughOriginal } from './xlsxPassthrough'
 import { useUndoableState } from './useUndoableState'
-import { useRegisterViewerSave, useRegisterViewerSaveAs, useSetViewerDirty } from '../shared/useViewerContext'
+import {
+  useRegisterViewerSave,
+  useRegisterViewerSaveAs,
+  useReportSavedPath,
+  useSetViewerDirty,
+} from '../shared/useViewerContext'
 import { useViewerShortcuts } from '../../hooks/useShortcutManager'
 
 export type SpreadsheetSaveTarget =
@@ -169,6 +174,7 @@ export function useSpreadsheetEditor(
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
   const registerSaveAs = useRegisterViewerSaveAs()
+  const reportSavedPath = useReportSavedPath()
 
   useEffect(() => {
     setDirty(history.present !== lastSavedDocument)
@@ -251,7 +257,11 @@ export function useSpreadsheetEditor(
           return false
         }
 
-        if (result.path) setSavePath(result.path)
+        if (result.path) {
+          setSavePath(result.path)
+          // Save As: move this document's tab to the file it was written to.
+          if (result.path !== savePath) reportSavedPath(result.path)
+        }
         // See DocxViewer's identical comment: deliberately does NOT also
         // call setDirty(false) here — the dirty-tracking effect above
         // recomputes from whatever the *current* history.present is once
@@ -264,7 +274,7 @@ export function useSpreadsheetEditor(
         return false
       }
     },
-    [filePath, history.present, savePath, originalBuffer],
+    [filePath, history.present, savePath, originalBuffer, reportSavedPath],
   )
 
   const handleSave = useCallback(() => handleSaveWith(target, false), [handleSaveWith, target])

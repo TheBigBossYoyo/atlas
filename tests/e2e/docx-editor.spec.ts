@@ -339,3 +339,60 @@ test('Ctrl+Shift+S (Save As) actually opens the native Save dialog for a DOCX, n
     kill(app)
   }
 })
+
+test('after Save As, the tab follows the document to its new file', async () => {
+  // Found by driving the real app: Save As wrote the new file but left the
+  // tab pointing at the file the document was opened from, so leaving the tab
+  // and coming back re-read the ORIGINAL file over the user's work, and the
+  // next Ctrl+S wrote to neither file.
+  const source = await createFixture()
+  const target = path.join(path.dirname(source), 'saved-as.docx')
+  const other = path.join(path.dirname(source), 'other.md')
+  fs.writeFileSync(other, '# Other document\n')
+
+  const app = await electron.launch({
+    args: ['.', source],
+    cwd: projectRoot,
+    env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
+  })
+  try {
+    const page = await app.firstWindow()
+    await page.waitForSelector('[data-paragraph-path]', { timeout: 20_000 })
+    await page.waitForTimeout(800)
+
+    await app.evaluate(async ({ dialog }, filePath) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+    }, target)
+
+    await page.locator('.docx-page__column').first().click({ position: { x: 5, y: 5 } })
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type('Saved as a new file.')
+    await page.keyboard.press('Control+Shift+S')
+
+    await expect.poll(() => fs.existsSync(target), { timeout: 15_000 }).toBe(true)
+    // The tab, and the title bar, now name the file the document was written to.
+    await expect(page.getByRole('tab', { name: 'saved-as.docx' })).toBeVisible({ timeout: 15_000 })
+
+    // Leave and come back: the document must still be the saved one.
+    await app.evaluate(async ({ dialog }, filePath) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [filePath] })) as typeof dialog.showOpenDialog
+    }, other)
+    await page.getByRole('button', { name: 'Open', exact: true }).click()
+    await expect(page.getByRole('tab', { name: 'other.md' })).toHaveAttribute('aria-selected', 'true', { timeout: 20_000 })
+    await page.getByRole('tab', { name: 'saved-as.docx' }).click()
+    await expect(page.locator('[data-paragraph-path]').first()).toBeVisible({ timeout: 20_000 })
+    await expect(page.locator('.docx-page-stack')).toContainText('Saved as a new file.', { timeout: 20_000 })
+
+    // And a plain save now writes to the new file, not the old one.
+    const sourceBefore = fs.readFileSync(source)
+    await page.locator('.docx-page__column').first().click({ position: { x: 5, y: 5 } })
+    await page.keyboard.press('Control+End')
+    await page.keyboard.type(' Edited again.')
+    const targetBefore = fs.readFileSync(target)
+    await page.keyboard.press('Control+s')
+    await expect.poll(() => fs.readFileSync(target).equals(targetBefore), { timeout: 15_000 }).toBe(false)
+    expect(fs.readFileSync(source).equals(sourceBefore)).toBe(true)
+  } finally {
+    kill(app)
+  }
+})

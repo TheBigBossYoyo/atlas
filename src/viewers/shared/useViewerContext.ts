@@ -61,6 +61,11 @@ export function useViewerSaveAs(): () => Promise<boolean> {
   return useViewerCtx().saveAs
 }
 
+/** Reports the path a Save As landed on, so the shell moves this document's tab there. */
+export function useReportSavedPath(): (path: string) => void {
+  return useViewerCtx().reportSavedPath
+}
+
 /** Phase-3 placeholder — always resolves `null` until a viewer registers real export content. */
 export function useGetExportableContent(): () => ExportableContent | null {
   return useViewerCtx().getExportableContent

@@ -11,6 +11,7 @@ import {
   useRegisterViewerFind,
   useRegisterViewerSave,
   useRegisterViewerSaveAs,
+  useReportSavedPath,
   useSetNavItems,
   useSetViewerDirty,
   useSetViewerStats,
@@ -410,5 +411,27 @@ describe('ViewerContext', () => {
     rerender()
 
     expect(result.current.canFind).toBe(false)
+  })
+
+  it('reports a Save As path up to the shell, so the tab can follow the document', () => {
+    const onSavedPath = vi.fn()
+    const { result } = renderHook(() => useReportSavedPath(), {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <ViewerProvider filePath="/old.docx" onSavedPath={onSavedPath}>
+          {children}
+        </ViewerProvider>
+      ),
+    })
+
+    act(() => result.current('/new.docx'))
+
+    expect(onSavedPath).toHaveBeenCalledWith('/new.docx')
+  })
+
+  it('stays callable (and harmless) when the shell registers no handler', () => {
+    const wrapper = makeWrapper('/old.docx')
+    const { result } = renderHook(() => useReportSavedPath(), { wrapper })
+
+    expect(() => act(() => result.current('/new.docx'))).not.toThrow()
   })
 })

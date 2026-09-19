@@ -11,7 +11,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type { SlideData } from '../../shared/SlideDeck.types'
-import { useRegisterViewerSave, useRegisterViewerSaveAs, useSetViewerDirty } from '../../shared/useViewerContext'
+import {
+  useRegisterViewerSave,
+  useRegisterViewerSaveAs,
+  useReportSavedPath,
+  useSetViewerDirty,
+} from '../../shared/useViewerContext'
 import { useViewerShortcuts } from '../../../hooks/useShortcutManager'
 import { useUndoableState } from '../../spreadsheet/useUndoableState'
 import { loadOfficePackage, writeOfficePackage, type OfficePackage } from '../../../office/officePackage'
@@ -126,6 +131,7 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
   const registerSaveAs = useRegisterViewerSaveAs()
+  const reportSavedPath = useReportSavedPath()
   useEffect(() => {
     setDirty(savedPkg !== null && history.present.pkg !== savedPkg)
   }, [history.present.pkg, savedPkg, setDirty])
@@ -147,7 +153,11 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
           setSaveError(result?.error ?? 'Save was cancelled or unavailable.')
           return false
         }
-        if (result.path) setSavePath(result.path)
+        if (result.path) {
+          setSavePath(result.path)
+          // Save As: move this document's tab to the file it was written to.
+          if (result.path !== savePath) reportSavedPath(result.path)
+        }
         setSavedPkg(pkg)
         return true
       } catch (err: unknown) {
@@ -155,7 +165,7 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
         return false
       }
     },
-    [saveFilter.extensions, saveFilter.name, savePath],
+    [saveFilter.extensions, saveFilter.name, savePath, reportSavedPath],
   )
 
   const save = useCallback(() => write(false), [write])

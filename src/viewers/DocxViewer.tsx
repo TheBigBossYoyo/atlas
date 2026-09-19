@@ -109,7 +109,14 @@ import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import { TableEditMenuItems } from '../docx/editor/toolbar/TableEditMenuItems'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
 import './__styles__/viewer-docx.css'
-import { useRegisterViewerSave, useRegisterViewerSaveAs, useSetNavItems, useSetViewerDirty, useSetViewerStats } from './shared/useViewerContext'
+import {
+  useRegisterViewerSave,
+  useRegisterViewerSaveAs,
+  useReportSavedPath,
+  useSetNavItems,
+  useSetViewerDirty,
+  useSetViewerStats,
+} from './shared/useViewerContext'
 import { useViewerShortcuts } from '../hooks/useShortcutManager'
 
 type HeadingNavSeed = {
@@ -885,6 +892,7 @@ function DocxEditor({
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
   const registerSaveAs = useRegisterViewerSaveAs()
+  const reportSavedPath = useReportSavedPath()
 
   const matches = useMemo(() => {
     if (findQuery.length === 0) {
@@ -1972,6 +1980,9 @@ function DocxEditor({
 
         if (result?.saved && result.path) {
           setSavePath(result.path)
+          // Save As: tell the shell where this document now lives, or its tab
+          // keeps pointing at the file it was opened from.
+          if (result.path !== savePath) reportSavedPath(result.path)
         }
 
         if (!result?.saved) {
@@ -1996,7 +2007,7 @@ function DocxEditor({
         return false
       }
     },
-    [bundle, flushHeaderFooterEdits, savePath],
+    [bundle, flushHeaderFooterEdits, savePath, reportSavedPath],
   )
 
   const handleSave = useCallback((): Promise<boolean> => handleSaveInternal(), [handleSaveInternal])

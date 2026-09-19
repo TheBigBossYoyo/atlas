@@ -22,7 +22,7 @@
  * `react-hooks/set-state-in-effect` (no cascading-render effect).
  */
 
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { NavItem, ViewerStats } from '../../formats/types'
 import { ViewerContext, type ExportableContent, type ViewerContextValue } from './viewerContextValue'
@@ -44,9 +44,12 @@ const INITIAL_STATE_EXCEPT_PATH = {
 
 export function ViewerProvider({
   filePath,
+  onSavedPath,
   children,
 }: {
   filePath: string | null
+  /** Called when the active viewer saved to a different path than it was opened from. */
+  onSavedPath?: (path: string) => void
   children: React.ReactNode
 }): React.ReactElement {
   const [state, setState] = useState<InternalState>({
@@ -115,6 +118,17 @@ export function ViewerProvider({
     return saveAsRef.current()
   }, [])
 
+  // Kept in a ref so `reportSavedPath` stays stable for the viewers that
+  // capture it, and written from an effect (never during render).
+  const savedPathRef = useRef(onSavedPath)
+  useEffect(() => {
+    savedPathRef.current = onSavedPath
+  }, [onSavedPath])
+
+  const reportSavedPath = useCallback((path: string) => {
+    savedPathRef.current?.(path)
+  }, [])
+
   // P1.1 placeholder — no viewer registers export content yet; real
   // implementation deferred to the Phase 3 per-format export work.
   const getExportableContent = useCallback((): ExportableContent | null => null, [])
@@ -140,6 +154,7 @@ export function ViewerProvider({
       save,
       registerSaveAs,
       saveAs,
+      reportSavedPath,
       getExportableContent,
       canFind: state.canFind,
       registerFind,
@@ -157,6 +172,7 @@ export function ViewerProvider({
       save,
       registerSaveAs,
       saveAs,
+      reportSavedPath,
       getExportableContent,
       registerFind,
       openFind,
