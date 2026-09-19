@@ -8,6 +8,46 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [3.2.0] — 2026-09-19 (wave 4: owner-reported editor defects)
+
+### Fixed
+- DOCX editing: typing, selection, caret placement, bold/italic/underline and
+  alignment toggles, Find (Ctrl+F), Ctrl+Y/Ctrl+A, highlight, and a searchable
+  font picker fed by the installed Windows fonts (USR-01…USR-14).
+- Spreadsheets: cell editing was completely dead in 3.1.0 (missing `#portal`
+  element); Enter now commits reliably; Excel tables are read and kept; an
+  .xlsx/.xlsm is saved through the original file so styles, number formats,
+  charts and filters survive (USR-17).
+- Slides: text no longer clipped (body insets/anchor); rotated shapes select
+  and resize correctly (USR-15, USR-16).
+- Typing in a long DOCX is about 6× faster; right-to-left paragraphs (D23).
+- Review fixes: switching tabs after a save no longer shows (and then
+  re-saves) the pre-save text; markdown Save As no longer sends later saves to
+  the old file; undo followed at once by Save in the slide editors saves the
+  undone deck; Run approval is tied to the file's content.
+- Hardening: .pptx/.odp zip-bomb budget, escaped layout attributes,
+  XML-illegal control characters dropped on save, .ppt slide-count cap.
+
+### Added
+- A PowerPoint-like editor for .pptx **and .odp**: edit text in place,
+  move/resize/insert/delete shapes, add/duplicate/delete/reorder slides,
+  speaker notes, presenter view, Save/Save As (USR-16).
+- A CodeMirror code editor and an explicit, confirmed, sandboxed Run for
+  JavaScript/TypeScript/Python files (USR-18, USR-19).
+- Several documents open at once, in tabs (Ctrl+Tab, Ctrl+W, Ctrl+Shift+T,
+  middle-click, drag to reorder) (SHELL-17).
+- Header and footer editing in DOCX (plain text) (D29).
+- Read-only viewers for legacy Word 97-2003 (.doc) and PowerPoint 97-2003
+  (.ppt) files (text only).
+- End-to-end scenarios driving the real app for every editor, tabs and the
+  open→edit→save→reopen journey (P4.6).
+
+### Changed
+- Electron 35 → 44.4.1, electron-builder 26.15.3, sharp 0.35.4; `npm audit`
+  reports 0 vulnerabilities (P4.5).
+- `strict` is explicit in every tsconfig and the e2e specs are type-checked
+  (P4.1).
+
 ## [3.1.0] — 2026-09-15 (wave 3, docs-quality slice)
 
 ### Added

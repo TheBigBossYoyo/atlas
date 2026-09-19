@@ -952,7 +952,7 @@ Electron/Chromium's native spellchecker, not the originally-locked
 ### Phase 4 — mixed; see per-task below
 | Task | Status | Note |
 |---|---|---|
-| P4.1 (strict-mode ratchet) | **PENDING** | `tsconfig.app.json` has no `strict`/`strictNullChecks` flag of any kind and no `STRICT_MODE_TODO.md` exists on disk — not started. |
+| P4.1 (strict-mode ratchet) | **DONE** (2026-09-19, `6410eef`) | TypeScript 6 turns `strict` on by default and `src/` compiles clean under it; `strict: true` is now explicit, `tests/e2e` is type-checked too, and `STRICT_MODE_TODO.md` tracks the remaining `electron/*.cjs` work. |
 | P4.2 (coverage thresholds) | **DONE** (this wave) | v8 provider, `reportOnFailure`, `npm run coverage`, measured-floor thresholds in `vitest.config.ts`. |
 | P4.3 (bundle gate + rtf.js) | **DONE** (this wave) | Per-chunk `postbuild` gate wired with a fresh baseline; `rtf.js` investigated and, per its documented findings (`docs/KNOWN_LIMITATIONS.md`), kept rather than replaced. |
 | P4.4 (dependency hygiene) | **PARTIAL** | `wave1/deps-security` covered part of this; the `html2canvas-pro` removal sub-item still explicitly depends on the export rework (`wave3/export`, no commits yet). |
@@ -995,6 +995,8 @@ Executed sequentially in one session (the owner asked for no parallel execution 
 | `wave4/sheets-editing-fix` | `49924b6` | USR-17 (spreadsheet editing, Excel tables) |
 | `wave4/slides-editor` | `34f2b52`, `39b4622` | USR-15, USR-16 (slide text rendering, PowerPoint editing) |
 | `wave4/code-editor` | `9a89f36` | USR-18, USR-19 (code editor, sandboxed Run) |
+
+Follow-ups merged straight into `main` afterwards (2026-09-17 → 2026-09-19): review fixes `165a2fa`; rotated shapes `23c8248`; .xlsx saved through the original package `9fc9ba1`; long-DOCX typing perf + RTL (D23/DEFER-2) `a28f3ea`; multi-document tabs (SHELL-17) `1fa6fa3`; scenario e2e (P4.6) `6363d4f`; ODP editing `0aea4da`; legacy .doc/.ppt read-only viewers `9bc99e5`; header/footer editing (D29) `0700156`; Electron 44 upgrade (P4.5) `7dc1c30`; per-launch e2e profiles `f71515e`; post-wave-4 review fixes `5035d01` (tab/Save As/undo data loss) and `a731ad8` (package hardening); strict types (P4.1) `6410eef`. Released as **3.2.0**.
 
 Per-item status, evidence and what is still open: see section 14c of `atlas-phase3-findings-register.md`.
 

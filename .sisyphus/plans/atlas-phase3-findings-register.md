@@ -448,9 +448,31 @@ Fixed in wave 4 (branch `wave4/code-editor`, stacked on `wave4/docx-editor-ux` �
 | USR-16 | Fixed | `39b4622` | XML-passthrough PPTX editing (`viewers/slides/pptx/editing/`): edit text in place, move/resize/delete shapes, insert text boxes, add/duplicate/delete/reorder slides, speaker notes, presenter view, Save/Save As — `tests/e2e/pptx-editor.spec.ts` |
 | USR-18, USR-19 | Fixed | `9a89f36` | CodeMirror 6 editor (find/replace, go to line, folding, multi-cursor, wrap, save) and an explicit Run gated by a native confirmation tied to the file's content (size+mtime, re-confirmed whenever it changes), running the file on disk in a shell-less child process with a 60 s limit, output cap and Stop |
 
+Wave-4 follow-ups (2026-09-17 → 2026-09-19, all on `main`):
+
+| ID | Status | Where | Evidence |
+|---|---|---|---|
+| Review fixes | Fixed | `165a2fa` | Run approval tied to file size+mtime (a CRITICAL bypass when it was path-only), serialized slide undo/redo, presenter-view focus |
+| USR-16 (rotated shapes) | Fixed | `23c8248` | Hit testing, selection box and resize handles in the shape's rotated space (`viewers/shared/slideGeometry.ts`) |
+| USR-17 (styles on save) | Fixed | `9fc9ba1` | .xlsx/.xlsm saved THROUGH the original package (`viewers/spreadsheet/xlsxPassthrough.ts`), see below |
+| D23 / DEFER-2 | Fixed | `a28f3ea` | Typing in a long DOCX ~6× faster (per-paragraph line cache `docx/layout/lineCache.ts`, time-sliced pagination on MessageChannel); RTL `w:bidi` paragraphs |
+| SHELL-17 | Fixed | `1fa6fa3` | Multi-document tabs (`session/documentSessions.ts`, `components/TabBar.tsx`): Ctrl+Tab, Ctrl+W, Ctrl+Shift+T, middle-click, drag reorder, Save/Discard/Cancel on a dirty switch — `tests/e2e/tabs.spec.ts` |
+| P4.6 | Done | `6363d4f` | Open→edit→save→reopen journeys and the unsaved-changes guard — `tests/e2e/scenarios.spec.ts` |
+| USR-16 (ODP) | Fixed | `0aea4da` | ODP decks editable through the same core as PPTX (`viewers/slides/odp/editing/`) — covered in `tests/e2e/pptx-editor.spec.ts` |
+| Legacy .doc/.ppt | New, read-only | `9bc99e5` | Text viewers for binary Office files via SheetJS `XLSX.CFB` (`src/legacy/`) |
+| D29 | Fixed | `0700156` | Header/footer editing panel (plain text, undoable `set-header-footer-text` command) |
+| P4.5 | Done | `7dc1c30` | Electron 35 → 44.4.1, electron-builder 26.15.3, sharp 0.35.4; `npm audit` 0 vulnerabilities; full e2e suite (52/52), packaged app and CI re-verified; Run of `.ts` works on Electron 44's Node 24 |
+| CI e2e flake | Fixed | `f71515e` | Every e2e launch gets its own Electron profile — a previous instance still tearing down held the shared singleton lock (`Lock file can not be created! Error code: 32`, CI run 35279201473) |
+| Review (2026-09-19) | Fixed | `5035d01` | CRITICAL: a tab showed its as-opened bytes after a save, and the next save overwrote the saved work — tabs now re-read the file from disk when shown (`tests/e2e/tabs.spec.ts`, fails without the fix). HIGH: markdown Save As kept writing later Ctrl+S to the old path. Slide undo followed at once by Save could write the undone edit (history now synchronous) |
+| Review (2026-09-19) | Fixed | `a731ad8` | .pptx/.odp read through the size-budgeted unzip (zip bomb); layout placeholder attributes escaped; XML-illegal control characters dropped from user text; .ppt slide-record cap |
+| P4.1 | Done | `6410eef` | TypeScript 6 enables `strict` by default and `src/` was already clean; `strict: true` made explicit, `tests/e2e` now type-checked (`tsconfig.e2e.json`); `electron/*.cjs` (94 `checkJs` errors) tracked in `STRICT_MODE_TODO.md` |
+
 Still open after wave 4:
 
-- **ODP editing** — `.odp` decks stay read-only; the editing layer is PPTX-only (the ODF writer is a separate piece of work).
+- ~~**ODP editing**~~ — fixed in `0aea4da`.
+- **Legacy .doc/.ppt** are text-only and read-only; header/footer editing is plain text only.
+- **Long DOCX typing** is still ~0.5 s per keystroke on a 36-page document (page virtualization not done).
+- Review leftovers (MEDIUM/LOW, not fixed): header/footer text is committed on blur, so Ctrl+S pressed while the header field still has focus saves the previous text; a markdown save still in flight when the user switches tabs can clear the new tab's dirty flag and the single global crash-recovery draft; the D23 line cache skips every paragraph after the first footnote reference in a section (slower, not wrong); other JSZip readers (spreadsheet panes/tables, slide PDF export) still have no size budget.
 - ~~**Spreadsheet styling on save**~~ — fixed after the wave-4 review: an .xlsx/.xlsm is now saved THROUGH the file it was opened from (`viewers/spreadsheet/xlsxPassthrough.ts`), so untouched cells keep their exact XML (type, style, number format, cached formula value) and styles/charts/filters/pivots pass through; the stale calc chain is dropped and the workbook is marked "recalculate on load". The fresh-workbook writer remains the fallback for CSV, format changes, and sheet add/delete, and references outside the model (conditional formatting, data validation, defined names) are not re-anchored when rows/columns move.
 - ~~**Rotated shapes**~~ — fixed: hit testing, the selection box and handle resizing all work in the shape's own rotated space (`viewers/shared/slideGeometry.ts`).
 - **No Office verification** — the grafted OOXML was validated by structure and round-trip through SheetJS/the parsers; nobody opened the output in Microsoft Office, which is the only real proof of "no repair prompt".
