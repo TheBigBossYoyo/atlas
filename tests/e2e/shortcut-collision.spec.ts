@@ -163,12 +163,31 @@ test('PDF: Ctrl+F opens the PDF find bar (not the shared search overlay); Ctrl+B
     // (focused-input -> active-viewer -> shell-global). After the find bar
     // closes, focus can still sit on one of the PDF viewer's own controls on
     // a slow runner, which swallowed this Ctrl+B in CI run 35469314616.
-    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    await page.evaluate(() => {
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      // Record the keydown as the window sees it, so a failure here says
+      // whether the key never arrived or the shell ignored it (this assertion
+      // failed twice on CI and never locally).
+      const win = window as unknown as { __ctrlB?: string[] }
+      win.__ctrlB = []
+      window.addEventListener(
+        'keydown',
+        (event) => {
+          if (event.key === 'b') win.__ctrlB!.push(`ctrl=${event.ctrlKey} target=${(event.target as Element)?.className || (event.target as Node)?.nodeName}`)
+        },
+        true,
+      )
+    })
 
     const sidebar = page.locator('.sidebar')
     const wasOpen = (await sidebar.count()) === 1
     await page.keyboard.press('Control+b')
-    await expect(sidebar).toHaveCount(wasOpen ? 0 : 1, { timeout: 10_000 })
+    const seen = await page.evaluate(() => (window as unknown as { __ctrlB?: string[] }).__ctrlB ?? [])
+    expect(seen, 'the Ctrl+B keydown never reached the window').not.toEqual([])
+    await expect(sidebar, `Ctrl+B reached the window (${seen.join('; ')}) but the sidebar did not toggle`).toHaveCount(
+      wasOpen ? 0 : 1,
+      { timeout: 10_000 },
+    )
   } finally {
     await app.close()
   }
