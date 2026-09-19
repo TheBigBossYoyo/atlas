@@ -68,6 +68,22 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   footnote reference in its section was wrongly treated as depending on
   document-wide state and permanently skipped the per-paragraph line cache;
   now only a paragraph that itself carries a footnote/endnote reference does.
+- A rapid second launch (double-clicking a file, or "Open with → Atlas"
+  again) while the first window still hadn't finished starting up could
+  silently drop the requested file — not just in the already-fixed case
+  where the window object didn't exist yet, but also in the narrower gap
+  between the window being created and its renderer finishing mount
+  (ELEC-07). The second-instance and macOS `open-file` handlers now queue
+  the request until the renderer has proven it's actually listening, instead
+  of guessing with a fixed delay.
+- Packaged `.exe`: fixed a release-packaging config bug where
+  `signAndEditExecutable: false` (meant only to skip code signing, since
+  there's no certificate yet) was also silently disabling icon and
+  version-metadata embedding — the exe would have shipped with no custom
+  icon, FileDescription, CompanyName, or version info. The exe now carries
+  correct ProductName/CompanyName/LegalCopyright/FileVersion metadata and
+  the Atlas icon even unsigned; see `docs/RELEASE.md` for what real code
+  signing would still require (ELEC-09/ELEC-10).
 
 ## [3.2.0] — 2026-09-19 (wave 4: owner-reported editor defects)
 

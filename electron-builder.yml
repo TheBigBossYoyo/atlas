@@ -17,7 +17,17 @@ win:
       arch:
         - x64
   icon: build/icon.ico
-  signAndEditExecutable: false
+  # P5.1/ELEC-10 — `signAndEditExecutable: false` was disabling BOTH code
+  # signing AND resedit-based resource editing (icon, FileDescription,
+  # ProductName, CompanyName, LegalCopyright, FileVersion/ProductVersion),
+  # confirmed against app-builder-lib's winPackager.js: `signApp()` returns
+  # early with no resource edit at all when that flag is false. We have no
+  # code-signing certificate (see docs/RELEASE.md), but the exe should still
+  # carry correct icon/version metadata — `signExecutable: false` skips only
+  # the signing step and leaves resource editing enabled, which is exactly
+  # what electron-builder's own deprecation-style log message for this
+  # option recommends.
+  signExecutable: false
   fileAssociations:
     # BEGIN GENERATED FILE ASSOCIATIONS — scripts/generate-extension-manifest.mjs (source: src/formats/extensionManifest.ts). Do not edit by hand; edit the manifest and run `npm run generate:extensions`.
     - ext: md
