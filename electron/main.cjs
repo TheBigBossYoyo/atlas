@@ -18,6 +18,17 @@ const { CLOSE_PROMPT_BUTTONS, decideOnClose, decideAfterPromptChoice } = require
 const { clampBoundsToDisplays, loadWindowState, saveWindowState } = require('./lib/windowState.cjs');
 const { resolveIsDev } = require('./lib/devDetect.cjs');
 
+// E2E runs: every launch gets its own profile. Otherwise an instance that is
+// still being torn down (taskkill /T is not instantaneous) keeps the shared
+// profile's singleton lock file open and the next test's launch fails with
+// "Lock file can not be created! Error code: 32" — and tests would also write
+// into the user's real recent-files/window-state store.
+if (process.env.PLAYWRIGHT === '1' && !app.isPackaged) {
+  const e2eRoot = path.join(os.tmpdir(), 'atlas-e2e-profiles');
+  fs.mkdirSync(e2eRoot, { recursive: true });
+  app.setPath('userData', fs.mkdtempSync(path.join(e2eRoot, 'profile-')));
+}
+
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
 
