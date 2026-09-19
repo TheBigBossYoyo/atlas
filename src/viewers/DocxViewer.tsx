@@ -791,6 +791,15 @@ function DocxEditor({
   const [fieldUpdateMessage, setFieldUpdateMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
   const [headerFooterOpen, setHeaderFooterOpen] = useState(false)
+  // UX — the header/footer panel had no keyboard affordances at all: no
+  // Escape-to-close, no focus moved into it on open, no focus restored to
+  // the toolbar toggle on close (every other dialog/panel in the shell
+  // does all three — see ShortcutsModal/UnsavedChangesDialog). Mirrors
+  // FindReplace's own local (not the shared shortcut-dispatcher) Escape
+  // handling just above, since this is likewise a plain inline panel, not
+  // a modal.
+  const headerFooterPanelRef = useRef<HTMLDivElement>(null)
+  const headerFooterToggleRef = useRef<HTMLButtonElement>(null)
   const [range, setRange] = useState<Range | null>(null)
   // DXE-14 — right-click table-editing context menu; `null` when closed.
   // Screen coordinates only (not which table/cell), since by the time a
@@ -2180,6 +2189,19 @@ function DocxEditor({
   // back out.
   const headerFooterParts = useMemo(() => listHeaderFooterParts(documentModel), [documentModel])
 
+  // UX — move focus into the panel (its close button) when it opens, and
+  // back to the toolbar toggle that opened it once it closes, matching the
+  // focus-management every other shell dialog/panel already has.
+  useEffect(() => {
+    if (!headerFooterOpen) return
+    const panel = headerFooterPanelRef.current
+    const toggle = headerFooterToggleRef.current
+    panel?.querySelector<HTMLElement>('button, input')?.focus()
+    return () => {
+      toggle?.focus()
+    }
+  }, [headerFooterOpen])
+
   const handleHeaderFooterFieldChange = useCallback(
     (kind: HeaderFooterKind, id: string, blockIndex: number, text: string) => {
       pendingHeaderFooterEditsRef.current.set(`${kind}:${id}:${blockIndex}`, { kind, id, blockIndex, text })
@@ -2416,6 +2438,7 @@ function DocxEditor({
               </button>
               {headerFooterParts.length > 0 && (
                 <button
+                  ref={headerFooterToggleRef}
                   className="docx-toolbar__action"
                   type="button"
                   onClick={() => setHeaderFooterOpen((open) => !open)}
@@ -2452,7 +2475,18 @@ function DocxEditor({
         currentMatchIndex={currentMatchIndex}
       />
       {headerFooterOpen && headerFooterParts.length > 0 ? (
-        <div className="docx-viewer__header-footer" role="group" aria-label="Header and footer">
+        <div
+          ref={headerFooterPanelRef}
+          className="docx-viewer__header-footer"
+          role="group"
+          aria-label="Header and footer"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.stopPropagation()
+              setHeaderFooterOpen(false)
+            }
+          }}
+        >
           <div className="docx-viewer__header-footer-title">
             <span>Header and footer</span>
             <button
