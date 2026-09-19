@@ -3,6 +3,7 @@ import { fireEvent, render } from '@testing-library/react';
 
 import { PageView } from '../PageView';
 import { PageStack } from '../PageStack';
+import * as pageMeta from '../pageMeta';
 import { paginate } from '../../layout/paginate';
 import type { Document, NumberingDef, Section, ParaProps, Table } from '../../model';
 import { twip } from '../../model';
@@ -404,6 +405,41 @@ describe('PageStack', () => {
     const { container } = render(<PageStack pages={pages} zoom={1} document={doc} />);
     const renderedPages = container.querySelectorAll('.docx-page');
     expect(renderedPages.length).toBe(pages.length);
+  });
+
+  it('D23-PERF — a re-render with unchanged pages/document props skips redoing the whole-document run/bookmark walk', async () => {
+    // Regression test for the DocxViewer.tsx double-render this task fixed:
+    // `documentModel` used to be passed straight through as `PageStack`'s
+    // `document` prop, so it changed on every keystroke even before
+    // pagination had produced new `pages` — forcing every `PageView` to
+    // redo `collectRunMetaByParagraph`/`collectBookmarkNamesByParagraph`
+    // (each an O(documentSize) walk) on a render that had nothing new to
+    // show. `PageStack`/`PageView` are now `memo`-wrapped and the two walks
+    // live once in `PageStack`, so a re-render with referentially unchanged
+    // `pages`/`document`/`zoom`/`theme`/`relationships` must bail out
+    // entirely — these spies would otherwise fire again on the rerender.
+    const runMetaSpy = vi.spyOn(pageMeta, 'collectRunMetaByParagraph');
+    const bookmarkSpy = vi.spyOn(pageMeta, 'collectBookmarkNamesByParagraph');
+
+    const doc = createDocument([
+      createSection([createParagraph(200)], { pageHeightPt: 100 }) // Forces multiple pages
+    ]);
+    const pages = await paginate({
+      document: doc,
+      fontResolver: mockFontResolver,
+    });
+    expect(pages.length).toBeGreaterThan(1);
+
+    const { rerender } = render(<PageStack pages={pages} zoom={1} document={doc} />);
+    expect(runMetaSpy).toHaveBeenCalledTimes(1);
+    expect(bookmarkSpy).toHaveBeenCalledTimes(1);
+
+    rerender(<PageStack pages={pages} zoom={1} document={doc} />);
+    expect(runMetaSpy).toHaveBeenCalledTimes(1);
+    expect(bookmarkSpy).toHaveBeenCalledTimes(1);
+
+    runMetaSpy.mockRestore();
+    bookmarkSpy.mockRestore();
   });
 });
 

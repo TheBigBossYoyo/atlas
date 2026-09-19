@@ -177,13 +177,33 @@ test('opening a 100k-row XLSX keeps every renderer main-thread task under 200ms'
  * yielding, a single character on a ~35-page document took about three
  * seconds (most of it asleep, waiting on requestAnimationFrame, which
  * Chromium throttles to ~1 Hz whenever the window is not focused — exactly
- * the situation a Playwright-driven window is in).
+ * the situation a Playwright-driven window is in). Wave 4 (a28f3ea) brought
+ * that down to ~500ms.
  *
- * The budget is deliberately generous: CI hardware is slower than a
- * developer machine, and the regression this guards against was an order of
- * magnitude bigger.
+ * D23-PERF: the ~500ms left over was mostly wasted React work, not layout —
+ * `documentModel` (which changes every keystroke) was passed straight
+ * through to `PageStack`'s `document` prop, so every one of this test's ~24
+ * pages re-rendered its whole-document run/bookmark-metadata walk TWICE per
+ * keystroke: once the instant the command applied (still showing the OLD
+ * `pages`), and again once pagination actually produced new `pages`. Pinning
+ * `PageStack`'s `document` prop to the exact document a completed `pages`
+ * array was laid out against (`pagesDocument` in DocxViewer.tsx), hoisting
+ * the per-document metadata walk out of `PageView` into `PageStack` (once
+ * per document instead of once per PAGE), and memoizing both components cut
+ * this to one render pass per keystroke — confirmed by an instrumented
+ * build showing 96 `PageView` renders/keystroke (4 × 24 pages) before this
+ * fix and 24 (1 × 24, the unavoidable minimum once `pages` itself changes)
+ * after. Measured wall-clock median on a dev machine dropped from
+ * ~250-400ms to ~160-200ms (see the D23-PERF commit for the full
+ * before/after methodology).
+ *
+ * The budget below is still deliberately generous — CI hardware is slower
+ * than a developer machine, and typing latency here is noisy under any
+ * concurrent CPU load — but tightened from the original 2_500ms now that
+ * the measured regression is an order of magnitude smaller than the one
+ * D23/a28f3ea guarded against.
  */
-const TYPING_BUDGET_MS = 2_500
+const TYPING_BUDGET_MS = 1_200
 
 test('typing in a 35-page DOCX stays responsive', async () => {
   const { Document, Packer, Paragraph, TextRun } = await import('docx')

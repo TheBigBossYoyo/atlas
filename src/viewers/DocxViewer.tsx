@@ -784,6 +784,23 @@ function DocxEditor({
   // source of truth `handleToolbarCommand`/`toolbarToCommand` resolve against.
   const [tableContextMenuAt, setTableContextMenuAt] = useState<{ x: number; y: number } | null>(null)
   const [pages, setPages] = useState<ReadonlyArray<Page> | null>(null)
+  // D23-PERF — the exact `documentModel` a completed `pages` array was laid
+  // out against, updated in the SAME setState batch as `pages` (see the
+  // pagination effect below). `PageStack` reads this instead of the live
+  // `documentModel` directly: `documentModel` changes on every keystroke, and
+  // since it flows into every `PageView`'s per-page `document`-derived memos
+  // (run/hyperlink metadata, bookmark names — each walking the WHOLE
+  // document), passing it straight through made every keystroke force a full
+  // re-render of every page TWICE — once the instant `documentModel` changed
+  // (still showing the OLD, not-yet-repaginated `pages`), and again once
+  // pagination actually finished and `pages` itself updated. Keeping
+  // `document`/`pages` pinned to the same pagination pass also fixes a latent
+  // correctness gap: `pages`' `paragraphPath`s are block indices into
+  // whichever document produced them, which can be stale (pointing at the
+  // wrong paragraph) against a newer `documentModel` for the brief window
+  // between an edit and its repagination — e.g. an insert/delete shifting
+  // later block indices.
+  const [pagesDocument, setPagesDocument] = useState(bundle.document)
   const [paginationProgress, setPaginationProgress] = useState<PaginationProgress | null>(null)
   const [paginationError, setPaginationError] = useState<string | null>(null)
   const [savePath, setSavePath] = useState(file.path)
@@ -926,15 +943,29 @@ function DocxEditor({
     [commitState, documentModel, range],
   )
 
+  // D23-PERF — `applyEditorCommand` gets a new identity every keystroke (it
+  // closes over `documentModel`/`range`), so a callback built directly on top
+  // of it would too — and that callback is `PageStack`'s `onResizeTableColumn`
+  // prop, which would defeat `PageStack`/`PageView`'s memoization (see
+  // `pagesDocument`'s doc comment above for the matching `document` prop
+  // fix) on every single keystroke even though a column-resize drag is rare.
+  // Routing the call through a ref keeps `handleResizeTableColumn` itself
+  // referentially stable across renders while still always invoking the
+  // latest `applyEditorCommand`.
+  const applyEditorCommandRef = useRef(applyEditorCommand)
+  useEffect(() => {
+    applyEditorCommandRef.current = applyEditorCommand
+  }, [applyEditorCommand])
+
   // DXE-14 — column resize by dragging a table's column border
   // (PageView.tsx's TableColumnResizeHandle, threaded here through
   // PageStack). A drag fires this exactly once, on release, with the final
   // width — never a stream of intermediate commands per pixel moved.
   const handleResizeTableColumn = useCallback(
     (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => {
-      applyEditorCommand({ kind: 'resize-table-column', tablePath, columnIndex, widthTwips })
+      applyEditorCommandRef.current({ kind: 'resize-table-column', tablePath, columnIndex, widthTwips })
     },
-    [applyEditorCommand],
+    [],
   )
 
   // DXE-02/DXE-17 — a whole command batch (paste, Replace All) is wrapped in
@@ -2168,7 +2199,11 @@ function DocxEditor({
         })
 
         if (!cancelled) {
+          // D23-PERF — batched together so PageStack only ever sees a
+          // `document`/`pages` pair produced by the SAME pagination pass;
+          // see `pagesDocument`'s own doc comment.
           setPages(nextPages)
+          setPagesDocument(documentModel)
           setPaginationProgress(null)
         }
       } catch (error) {
@@ -2433,7 +2468,7 @@ function DocxEditor({
               <PageStack
                 pages={pages}
                 zoom={zoom}
-                document={documentModel}
+                document={pagesDocument}
                 theme={bundle.theme}
                 relationships={bundle.relationships}
                 onResizeTableColumn={handleResizeTableColumn}

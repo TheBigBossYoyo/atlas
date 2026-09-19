@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import type { Document } from '../model/document';
 import type { Page } from '../layout/pageTypes';
 import type { Relationship } from '../parser/relationships';
 import type { Theme } from '../parser/theme';
+import { collectBookmarkNamesByParagraph, collectRunMetaByParagraph } from './pageMeta';
 import { PageView } from './PageView';
 import './__styles__/page-view.css';
 
@@ -18,7 +19,9 @@ export type PageStackProps = {
   onResizeTableColumn?: (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => void;
 };
 
-export const PageStack: React.FC<PageStackProps> = ({
+const EMPTY_RELATIONSHIPS: ReadonlyArray<Relationship> = [];
+
+const PageStackComponent: React.FC<PageStackProps> = ({
   pages,
   zoom,
   document,
@@ -26,6 +29,18 @@ export const PageStack: React.FC<PageStackProps> = ({
   relationships,
   onResizeTableColumn,
 }) => {
+  const resolvedRelationships = relationships ?? EMPTY_RELATIONSHIPS;
+  // D23-PERF — computed ONCE per document/relationships pair here, instead of
+  // once per PAGE inside `PageView` (each walking the whole document): with
+  // N pages that was an O(N × documentSize) cost paid on every render this
+  // stack's `document` prop changed, i.e. every keystroke. See `PageView`'s
+  // `runMetaByParagraph`/`bookmarkNamesByParagraph` prop doc comment.
+  const runMetaByParagraph = useMemo(
+    () => collectRunMetaByParagraph(document, resolvedRelationships),
+    [document, resolvedRelationships],
+  );
+  const bookmarkNamesByParagraph = useMemo(() => collectBookmarkNamesByParagraph(document), [document]);
+
   return (
     <div className="docx-page-stack">
       {pages.map((page, idx) => (
@@ -37,8 +52,17 @@ export const PageStack: React.FC<PageStackProps> = ({
           theme={theme}
           relationships={relationships}
           onResizeTableColumn={onResizeTableColumn}
+          runMetaByParagraph={runMetaByParagraph}
+          bookmarkNamesByParagraph={bookmarkNamesByParagraph}
         />
       ))}
     </div>
   );
 };
+
+// D23-PERF — see `PageView`'s own `memo` doc comment: this stops a parent
+// re-render (e.g. `DocxViewer` re-rendering for a reason unrelated to
+// pagination, like toolbar/selection state) from re-running this component
+// — and, transitively, every `PageView` and its O(documentSize) memoized
+// maps above — when none of `PageStack`'s own props actually changed.
+export const PageStack = memo(PageStackComponent);

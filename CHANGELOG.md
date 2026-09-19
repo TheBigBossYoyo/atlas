@@ -53,6 +53,21 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 - A 0-byte `.md` file opened the Welcome screen instead of an (empty)
   markdown editor bound to that path — `hasContent` no longer keys off
   markdown content *length* when a real file is loaded.
+- DOCX: typing in a long document is another ~1.5-2x faster on top of wave
+  4's fix (D23-PERF). The remaining cost was almost entirely wasted React
+  rendering, not layout: `PageStack`'s `document` prop tracked the live,
+  every-keystroke-changing document model instead of the document a
+  completed page layout was actually produced from, so every page re-ran its
+  whole-document run/hyperlink/bookmark metadata walk TWICE per keystroke —
+  once before repagination caught up, once after. `PageStack`/`PageView` are
+  now memoized, that metadata is computed once per document (in `PageStack`)
+  instead of once per page, and `PageStack` only ever sees a `document`/
+  `pages` pair from the same pagination pass — measured (instrumented build)
+  at 96 `PageView` renders per keystroke before, 24 after, on a 24-page
+  document. Also fixed a paginate.ts cache bug: a paragraph after ANY
+  footnote reference in its section was wrongly treated as depending on
+  document-wide state and permanently skipped the per-paragraph line cache;
+  now only a paragraph that itself carries a footnote/endnote reference does.
 
 ## [3.2.0] — 2026-09-19 (wave 4: owner-reported editor defects)
 

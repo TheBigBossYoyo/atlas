@@ -1155,6 +1155,52 @@ describe('paginate — footnotes (D11 milestones 2-3, 5)', () => {
 
     expect(findFootnoteAreaLines(pages, 0)[0]?.leftPt).toBeGreaterThan(0)
   })
+
+  it('D23-PERF — a footnote reference does not poison the line cache for unrelated paragraphs after it', async () => {
+    // Regression test: `buildParagraphUnit` used to test the WHOLE section's
+    // accumulated `referencedFootnoteIds.length > 0` rather than whether
+    // THIS paragraph itself carries a footnote reference, so once ANY
+    // paragraph in a section referenced a footnote, every later paragraph in
+    // that section was marked `dependsOnDocumentState` and permanently
+    // skipped the per-paragraph line cache (D23) — even though nothing about
+    // its own layout actually depends on the footnote.
+    const document = createDocument(
+      [
+        createSection(
+          [
+            createFootnoteRefParagraph('See note', 'fn1'),
+            createTextParagraph('Plain paragraph, unaffected by the footnote above'),
+          ],
+          { pageHeightPt: 400 },
+        ),
+      ],
+      undefined,
+      undefined,
+      { footnotes: new Map([['fn1', createFootnote('fn1', 'Footnote body text')]]) },
+    )
+    const fontResolver = createFontResolver()
+
+    const firstPages = await paginate({ document, fontResolver })
+    const secondPages = await paginate({ document, fontResolver })
+
+    const linesForBlock = (pages: ReadonlyArray<Page>, blockIndex: number): ReadonlyArray<LineBox> =>
+      pages.flatMap((page) =>
+        page.columns.flatMap((column) =>
+          column.lines.filter((line) => line.paragraphPath[0] === blockIndex).map((lineRef) => lineRef.line),
+        ),
+      )
+
+    const firstPlainLines = linesForBlock(firstPages, 1)
+    const secondPlainLines = linesForBlock(secondPages, 1)
+
+    expect(firstPlainLines.length).toBeGreaterThan(0)
+    expect(secondPlainLines).toHaveLength(firstPlainLines.length)
+    // Same `LineBox` object references across both passes proves the second
+    // pass hit `cachedParagraphLines`'s cache instead of recomputing.
+    firstPlainLines.forEach((line, index) => {
+      expect(secondPlainLines[index]).toBe(line)
+    })
+  })
 })
 
 describe('paginate — table row splitting across page breaks (D24b/DXL-15)', () => {
