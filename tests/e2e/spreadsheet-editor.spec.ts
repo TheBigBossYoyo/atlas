@@ -136,6 +136,41 @@ test('USR-17: typing edits cells inside a table and in the blank area, and Save 
   }
 })
 
+test('USR-17: adding a sheet and inserting a row saves through the original package', async () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-sheet-structural-')), 'budget.xlsx')
+  fs.writeFileSync(file, Buffer.from(await buildStyledWorkbook()))
+  const originalStyles = await (await JSZip.loadAsync(fs.readFileSync(file))).file('xl/styles.xml')!.async('string')
+
+  const { app, page } = await launch(file)
+  try {
+    await page.getByRole('button', { name: 'Add sheet' }).click()
+    await expect(page.getByRole('button', { name: 'Delete sheet Sheet2' })).toBeVisible()
+
+    // Select A2 (row index 1, the top of the CF range C2:C3) and insert a row above it.
+    await goToCell(page, 0, 1)
+    await page.getByRole('button', { name: 'Insert row above' }).click()
+
+    const before = fs.statSync(file).mtimeMs
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect.poll(() => fs.statSync(file).mtimeMs, { timeout: 10_000 }).toBeGreaterThan(before)
+    await page.waitForTimeout(400)
+
+    const bytes = fs.readFileSync(file)
+    const wb = XLSX.read(bytes)
+    expect(wb.SheetNames).toEqual(['Budget', 'Sheet2'])
+
+    const zip = await JSZip.loadAsync(bytes)
+    expect(await zip.file('[Content_Types].xml')!.async('string')).toContain('/xl/worksheets/sheet2.xml')
+    const sheet1 = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    // The inserted row landed exactly at the top of the CF range, so it shifted whole.
+    expect(sheet1).toContain('<conditionalFormatting sqref="C3:C4">')
+    // Untouched styling passed through unchanged, on both sheets.
+    expect(await zip.file('xl/styles.xml')!.async('string')).toBe(originalStyles)
+  } finally {
+    kill(app)
+  }
+})
+
 test('USR-17: saving a styled workbook keeps its formatting and untouched cells', async () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-sheet-styled-')), 'budget.xlsx')
   fs.writeFileSync(file, Buffer.from(await buildStyledWorkbook()))

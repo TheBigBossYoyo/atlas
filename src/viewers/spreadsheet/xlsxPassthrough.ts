@@ -7,8 +7,8 @@
  * every cell style, number format, conditional format, chart, image, filter
  * and pivot in a real workbook was lost on save.
  *
- * This module instead keeps the ORIGINAL package and rewrites only each
- * worksheet's `<sheetData>`:
+ * This module instead keeps the ORIGINAL package and rewrites only what
+ * changed:
  *
  *  - a cell the user never touched is copied element-for-element (its type,
  *    style, cached formula value and even rich text stay byte-identical);
@@ -17,6 +17,19 @@
  *  - rows and columns carry their original attributes (height, custom format,
  *    hidden) through inserts and deletes via the model's `rowSources`/
  *    `colSources`, so styling follows the row it belonged to;
+ *  - conditional formatting, data validation, hyperlinks and the sheet-level
+ *    autoFilter are re-anchored through the same inserts/deletes
+ *    (`spreadsheetRangeShift.ts`), the way Excel itself keeps them aligned;
+ *  - a sheet added, deleted, renamed or reordered in Atlas is reflected in
+ *    `workbook.xml`, its relationships and `[Content_Types].xml`, instead of
+ *    falling back to a from-scratch workbook for the WHOLE file just because
+ *    one sheet's structure changed;
+ *  - defined names are kept pointing at the right cells: a name scoped to a
+ *    deleted sheet is dropped and every later sheet's `localSheetId` is
+ *    renumbered; a name's own range is re-anchored the same way a
+ *    conditional format's is; a rename updates the `Sheet!` prefix in a
+ *    single-area name (see `rewriteDefinedNameFormula`'s own header for the
+ *    exact — deliberately narrow — pattern this covers);
  *  - `calcChain.xml` is dropped and the workbook is marked "recalculate on
  *    load", since cached formula values are only as good as this app's own
  *    formula engine;
@@ -24,11 +37,13 @@
  *
  * Everything else in the package is passed through untouched.
  *
- * Deliberate limits: structural sheet changes (adding or deleting a sheet)
- * and any non-OOXML target fall back to the fresh-workbook writer, and
- * references that live outside the model — conditional formatting, data
- * validation, defined names — are not re-anchored when rows or columns are
- * inserted or deleted.
+ * Deliberate limits (see the findings register for the full list): a
+ * non-OOXML target still falls back to the fresh-workbook writer; a cell
+ * FORMULA referencing a renamed/reordered/deleted sheet (anywhere other than
+ * inside a defined name) is not rewritten, nor is a multi-area or
+ * function-wrapped defined name, or a whole-row/whole-column range (e.g. a
+ * Print_Titles `$1:$1`); a deleted sheet's own table/drawing parts are
+ * orphaned in the zip (unreferenced, but still present) rather than swept.
  */
 import JSZip from 'jszip'
 
@@ -40,9 +55,10 @@ import {
   serializeXmlPart,
   xmlSafeText,
 } from '../../office/ooxmlDom'
-import { readSheetParts } from './spreadsheetPanes'
 import { cellKey, type EditableSheet, type SpreadsheetDocument } from './spreadsheetDocument'
 import { encodeCol, rewriteTableXml, tableHeaderNames } from './spreadsheetTables'
+import { remapSqref, type IndexSources } from './spreadsheetRangeShift'
+import { loadWorkbookZip } from './spreadsheetZipBudget'
 
 /** Worksheet children that must come AFTER `<mergeCells>` (CT_Worksheet order). */
 const AFTER_MERGE_CELLS: ReadonlySet<string> = new Set([
@@ -70,6 +86,15 @@ const AFTER_MERGE_CELLS: ReadonlySet<string> = new Set([
   'tableParts',
   'extLst',
 ])
+
+const SPREADSHEETML_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+const RELATIONSHIPS_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const PACKAGE_RELS_NS = 'http://schemas.openxmlformats.org/package/2006/relationships'
+const WORKSHEET_REL_TYPE = `${RELATIONSHIPS_NS}/worksheet`
+const WORKSHEET_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'
+const WORKBOOK_RELS_PATH = 'xl/_rels/workbook.xml.rels'
+const CONTENT_TYPES_PATH = '[Content_Types].xml'
+const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
 
 function encodeCell(row: number, col: number): string {
   return `${encodeCol(col)}${row + 1}`
@@ -110,6 +135,18 @@ function readOriginalSheet(xml: string): OriginalSheet | null {
     }
   }
   return { doc, root, sheetData, rows, cells }
+}
+
+/** A brand-new, otherwise-empty worksheet part for a sheet added in Atlas (no original to read from). */
+function blankOriginalSheet(): OriginalSheet {
+  const xml =
+    `${XML_DECLARATION}<worksheet xmlns="${SPREADSHEETML_NS}" xmlns:r="${RELATIONSHIPS_NS}">` +
+    '<dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData/></worksheet>'
+  // Every row's `sourceRow`/`sourceCol` is `null` for a sheet with no
+  // `rowSources`/`colSources` at all (see `rebuildSheetData`), so every cell
+  // is built fresh from the model — this template only needs to be a valid,
+  // empty worksheet for that output to attach to.
+  return readOriginalSheet(xml)!
 }
 
 /** Builds the `<c>` element for a cell that was edited (or is new). */
@@ -264,85 +301,512 @@ function updateColumns(doc: XMLDocument, root: Element, sheet: EditableSheet): v
   else root.replaceChild(fresh, cols)
 }
 
-function markRecalculateOnLoad(workbookXml: string): string {
-  const doc = parseXmlPart(workbookXml)
-  const root = doc.documentElement
+/**
+ * Re-anchors every `sqref`-bearing conditional format / data validation, and
+ * every `ref`-bearing hyperlink / sheet-level autoFilter, through this
+ * sheet's row/column inserts and deletes (USR-17 finding). An element whose
+ * entire area was deleted is dropped outright rather than left pointing at
+ * cells that no longer exist.
+ */
+function updateShiftedRanges(root: Element, sheet: EditableSheet): void {
+  const rowSources: IndexSources = sheet.rowSources
+  const colSources: IndexSources = sheet.colSources
+  if (!rowSources && !colSources) return // no structural changes recorded for this sheet — nothing to re-anchor
+
+  for (const cf of descendantElements(root, 'conditionalFormatting')) {
+    const sqref = cf.getAttribute('sqref')
+    const next = sqref ? remapSqref(sqref, rowSources, colSources) : null
+    if (next) cf.setAttribute('sqref', next)
+    else cf.parentNode?.removeChild(cf)
+  }
+
+  const dataValidations = firstChildElement(root, 'dataValidations')
+  if (dataValidations) {
+    let survivors = 0
+    for (const validation of childElements(dataValidations, 'dataValidation')) {
+      const sqref = validation.getAttribute('sqref')
+      const next = sqref ? remapSqref(sqref, rowSources, colSources) : null
+      if (next) {
+        validation.setAttribute('sqref', next)
+        survivors += 1
+      } else {
+        dataValidations.removeChild(validation)
+      }
+    }
+    if (survivors === 0) dataValidations.parentNode?.removeChild(dataValidations)
+    else dataValidations.setAttribute('count', String(survivors))
+  }
+
+  const hyperlinks = firstChildElement(root, 'hyperlinks')
+  if (hyperlinks) {
+    let survivors = 0
+    for (const link of childElements(hyperlinks, 'hyperlink')) {
+      const ref = link.getAttribute('ref')
+      const next = ref ? remapSqref(ref, rowSources, colSources) : null
+      // A dropped hyperlink whose Target was an external relationship leaves
+      // that relationship unused in the worksheet's own .rels part — Excel
+      // tolerates an unreferenced relationship, so this is left as-is rather
+      // than also scrubbing xl/worksheets/_rels/sheetN.xml.rels.
+      if (next) {
+        link.setAttribute('ref', next)
+        survivors += 1
+      } else {
+        hyperlinks.removeChild(link)
+      }
+    }
+    if (survivors === 0) hyperlinks.parentNode?.removeChild(hyperlinks)
+  }
+
+  // The sheet-level autoFilter (not one owned by an Excel table — those are
+  // re-anchored by `rewriteTableXml` from the live, model-tracked table
+  // range instead).
+  const autoFilter = firstChildElement(root, 'autoFilter')
+  if (autoFilter) {
+    const ref = autoFilter.getAttribute('ref')
+    const next = ref ? remapSqref(ref, rowSources, colSources) : null
+    if (next) autoFilter.setAttribute('ref', next)
+    else autoFilter.parentNode?.removeChild(autoFilter)
+  }
+}
+
+function markRecalculateOnLoad(doc: XMLDocument, root: Element): void {
   let calcPr = firstChildElement(root, 'calcPr')
   if (!calcPr) {
     calcPr = doc.createElementNS(root.namespaceURI, 'calcPr')
     root.insertBefore(calcPr, firstChildElement(root, 'extLst'))
   }
   calcPr.setAttribute('fullCalcOnLoad', '1')
-  return serializeXmlPart(doc)
 }
 
-function renameSheets(workbookXml: string, names: ReadonlyArray<string>): string {
-  const doc = parseXmlPart(workbookXml)
-  const sheets = descendantElements(doc, 'sheet').filter((sheet) => sheet.parentElement?.localName === 'sheets')
-  let changed = false
-  sheets.forEach((sheet, index) => {
-    const name = names[index]
-    if (name !== undefined && sheet.getAttribute('name') !== name) {
-      sheet.setAttribute('name', name)
-      changed = true
-    }
-  })
-  return changed ? serializeXmlPart(doc) : workbookXml
-}
-
-/** Drops the (now stale) calculation chain; Excel rebuilds it on the next recalculation. */
-function removeCalcChain(zip: JSZip, contentTypes: string | undefined): string | undefined {
-  if (!zip.file('xl/calcChain.xml')) return contentTypes
+/** Drops the (now stale) calculation chain from the zip; returns whether it existed, so the caller can also scrub its `[Content_Types].xml` override. Excel rebuilds the chain on the next recalculation. */
+function removeCalcChain(zip: JSZip): boolean {
+  if (!zip.file('xl/calcChain.xml')) return false
   zip.remove('xl/calcChain.xml')
-  if (contentTypes === undefined) return undefined
+  return true
+}
 
-  const doc = parseXmlPart(contentTypes)
-  for (const override of descendantElements(doc, 'Override')) {
-    if (override.getAttribute('PartName') === '/xl/calcChain.xml') override.parentNode?.removeChild(override)
+// ---------------------------------------------------------------------------
+// Relationship / workbook-structure helpers
+// ---------------------------------------------------------------------------
+
+/** Resolves a `xl/_rels/workbook.xml.rels` `Target` (relative to `xl/`) to its full zip-entry path. */
+function resolveWorkbookRelTarget(target: string): string {
+  if (target.startsWith('/')) return target.slice(1)
+  return `xl/${target}`
+}
+
+/** Inverse of `resolveWorkbookRelTarget`, for writing a fresh `Target`. */
+function relativeToXl(path: string): string {
+  return path.startsWith('xl/') ? path.slice(3) : `/${path}`
+}
+
+type OriginalSheetEntry = {
+  readonly element: Element
+  readonly name: string
+  readonly rId: string
+  readonly path: string | undefined
+  readonly originalIndex: number
+}
+
+function readOriginalSheetEntries(workbookRoot: Element, relsDoc: XMLDocument | null): OriginalSheetEntry[] {
+  const sheetsContainer = firstChildElement(workbookRoot, 'sheets')
+  if (!sheetsContainer) return []
+
+  const relTargets = new Map<string, string>()
+  if (relsDoc) {
+    for (const rel of descendantElements(relsDoc, 'Relationship')) {
+      const id = rel.getAttribute('Id')
+      const target = rel.getAttribute('Target')
+      if (id && target) relTargets.set(id, resolveWorkbookRelTarget(target))
+    }
   }
-  return serializeXmlPart(doc)
+
+  return childElements(sheetsContainer, 'sheet').map((element, originalIndex) => {
+    const rId = element.getAttribute('r:id') ?? element.getAttributeNS(RELATIONSHIPS_NS, 'id') ?? ''
+    return { element, name: element.getAttribute('name') ?? '', rId, path: relTargets.get(rId), originalIndex }
+  })
+}
+
+function nextNumericSuffix(ids: Iterable<string>, prefix: string): number {
+  let max = 0
+  for (const id of ids) {
+    const match = new RegExp(`^${prefix}(\\d+)$`).exec(id)
+    if (match) max = Math.max(max, Number(match[1]))
+  }
+  return max + 1
+}
+
+function nextWorksheetPartPath(zip: JSZip): string {
+  const existing = new Set(Object.keys(zip.files))
+  let n = 1
+  while (existing.has(`xl/worksheets/sheet${n}.xml`)) n += 1
+  return `xl/worksheets/sheet${n}.xml`
+}
+
+/** Adds an `<Override>` for a new part. Order among `<Override>` siblings is not significant to the OOXML schema. */
+function addContentTypeOverride(doc: XMLDocument, partPath: string, contentType: string): void {
+  const override = doc.createElementNS(doc.documentElement.namespaceURI, 'Override')
+  override.setAttribute('PartName', `/${partPath}`)
+  override.setAttribute('ContentType', contentType)
+  doc.documentElement.appendChild(override)
+}
+
+function removeContentTypeOverrideForPart(doc: XMLDocument, partPath: string): void {
+  for (const override of descendantElements(doc, 'Override')) {
+    if (override.getAttribute('PartName') === `/${partPath}`) override.parentNode?.removeChild(override)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Defined names
+// ---------------------------------------------------------------------------
+
+type SheetChange = {
+  /** `undefined` when the sheet still exists but kept its name. */
+  readonly newName: string | undefined
+  readonly deleted: boolean
+  readonly rowSources: IndexSources
+  readonly colSources: IndexSources
+}
+
+function decodeDollarCell(ref: string): { readonly r: number; readonly c: number; readonly colAbs: boolean; readonly rowAbs: boolean } | null {
+  const match = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)$/.exec(ref.trim())
+  if (!match) return null
+  let c = 0
+  for (const character of match[2].toUpperCase()) c = c * 26 + (character.charCodeAt(0) - 64)
+  return { r: Number(match[4]) - 1, c: c - 1, colAbs: match[1] === '$', rowAbs: match[3] === '$' }
+}
+
+function encodeDollarCell(row: number, col: number, colAbs: boolean, rowAbs: boolean): string {
+  return `${colAbs ? '$' : ''}${encodeCol(col)}${rowAbs ? '$' : ''}${row + 1}`
+}
+
+const SINGLE_AREA_NAME = /^(?:'((?:[^']|'')*)'|([A-Za-z_][\w.]*))!(\$?[A-Za-z]{1,3}\$?\d+)(?::(\$?[A-Za-z]{1,3}\$?\d+))?$/
+
+/**
+ * Rewrites one `<definedName>`'s formula text when — and only when — it is a
+ * single-area reference into exactly one sheet (`Sheet1!$A$1:$B$2`, quoted
+ * or not): the sheet name is swapped for its new one (rename) and the range
+ * is re-anchored through that sheet's row/column inserts and deletes, the
+ * same way a conditional format's `sqref` is. Anything else — a multi-area
+ * reference, a name wrapping a function, a whole-row/whole-column range like
+ * `$1:$1` (no column letter/row digit pair to parse), or a name that does
+ * not reference a changed sheet at all — is returned unchanged. Returns
+ * `null` when the referenced sheet was deleted, or the range was fully
+ * consumed by a delete: the caller drops the whole `<definedName>` then.
+ */
+function rewriteDefinedNameFormula(text: string, changesByOriginalName: ReadonlyMap<string, SheetChange>): string | null {
+  const match = SINGLE_AREA_NAME.exec(text.trim())
+  if (!match) return text
+
+  const sheetName = (match[1] ?? match[2]).replace(/''/g, "'")
+  const change = changesByOriginalName.get(sheetName)
+  if (!change) return text
+  if (change.deleted) return null
+
+  const start = decodeDollarCell(match[3])
+  const end = match[4] ? decodeDollarCell(match[4]) : start
+  if (!start || !end) return text
+
+  const range = {
+    r0: Math.min(start.r, end.r),
+    c0: Math.min(start.c, end.c),
+    r1: Math.max(start.r, end.r),
+    c1: Math.max(start.c, end.c),
+  }
+  const remapped = remapSqref(`${encodeCol(range.c0)}${range.r0 + 1}:${encodeCol(range.c1)}${range.r1 + 1}`, change.rowSources, change.colSources)
+  if (!remapped) return null
+
+  const [remappedStart, remappedEnd] = remapped.split(':')
+  const remappedStartCell = decodeDollarCell(remappedStart)!
+  const newName = change.newName ?? sheetName
+  const needsQuote = !/^[A-Za-z_][\w.]*$/.test(newName)
+  const prefix = needsQuote ? `'${newName.replace(/'/g, "''")}'` : newName
+  const startOut = encodeDollarCell(remappedStartCell.r, remappedStartCell.c, start.colAbs, start.rowAbs)
+  if (!match[4]) return `${prefix}!${startOut}`
+  const remappedEndCell = decodeDollarCell(remappedEnd ?? remappedStart)!
+  const endOut = encodeDollarCell(remappedEndCell.r, remappedEndCell.c, end.colAbs, end.rowAbs)
+  return `${prefix}!${startOut}:${endOut}`
 }
 
 /**
- * Rewrites the original workbook with the document's current values.
- * Returns `null` when the original is not an OOXML workbook this can patch,
- * or when sheets were added/removed, so the caller falls back to
- * `writeWorkbookBytes`.
+ * Applies every defined-name edit implied by the sheet structure change:
+ * `localSheetId` renumbering (or removal, for a name scoped to a deleted
+ * sheet) and, where the formula matches `rewriteDefinedNameFormula`'s narrow
+ * pattern, a rename/re-anchor of the formula text itself.
+ */
+function updateDefinedNames(
+  workbookRoot: Element,
+  changesByOriginalName: ReadonlyMap<string, SheetChange>,
+  originalIndexToNewIndex: ReadonlyMap<number, number>,
+): void {
+  const definedNames = firstChildElement(workbookRoot, 'definedNames')
+  if (!definedNames) return
+
+  for (const nameEl of childElements(definedNames, 'definedName')) {
+    const localSheetId = nameEl.getAttribute('localSheetId')
+    if (localSheetId !== null) {
+      const newIndex = originalIndexToNewIndex.get(Number(localSheetId))
+      if (newIndex === undefined) {
+        nameEl.parentNode?.removeChild(nameEl)
+        continue
+      }
+      nameEl.setAttribute('localSheetId', String(newIndex))
+    }
+
+    const rewritten = rewriteDefinedNameFormula(nameEl.textContent ?? '', changesByOriginalName)
+    if (rewritten === null) {
+      nameEl.parentNode?.removeChild(nameEl)
+      continue
+    }
+    if (rewritten !== nameEl.textContent) nameEl.textContent = rewritten
+  }
+
+  if (definedNames.children.length === 0) definedNames.parentNode?.removeChild(definedNames)
+}
+
+// ---------------------------------------------------------------------------
+// docProps/app.xml (best-effort; see module header)
+// ---------------------------------------------------------------------------
+
+/**
+ * Updates `docProps/app.xml`'s worksheet-title list when it is present and
+ * looks like a plain, single-sheet-type workbook — its `<TitlesOfParts>`
+ * vector holds exactly as many entries as the ORIGINAL workbook had sheets.
+ * A workbook whose titles vector mixes in named ranges or other part kinds
+ * (a different count) is left untouched rather than guessed at.
+ */
+async function updateAppPropsTitles(
+  zip: JSZip,
+  originalSheetCount: number,
+  newSheetNames: ReadonlyArray<string>,
+): Promise<void> {
+  const path = 'docProps/app.xml'
+  const xml = await zip.file(path)?.async('string')
+  if (!xml) return
+
+  let doc: XMLDocument
+  try {
+    doc = parseXmlPart(xml)
+  } catch {
+    return
+  }
+  const root = doc.documentElement
+  const titlesVector = firstChildElement(firstChildElement(root, 'TitlesOfParts') ?? root, 'vector')
+  if (!titlesVector || titlesVector.parentElement?.localName !== 'TitlesOfParts') return
+  const titleEls = childElements(titlesVector, 'lpstr')
+  if (titleEls.length !== originalSheetCount) return // mixed content or unexpected shape — leave it alone
+
+  // Build with the SAME prefix `<vt:vector>` itself uses (conventionally
+  // "vt", but read from the source rather than assumed) — creating the
+  // element with a bare, unprefixed qualified name would serialize it
+  // against whatever default namespace is in scope at that point in the
+  // document (`Properties`' own, not `vt`), which is a different element
+  // entirely even though `Element.localName` alone can't tell them apart.
+  const qualifiedName = titlesVector.prefix ? `${titlesVector.prefix}:lpstr` : 'lpstr'
+  while (titlesVector.firstChild) titlesVector.removeChild(titlesVector.firstChild)
+  for (const name of newSheetNames) {
+    const lpstr = doc.createElementNS(titlesVector.namespaceURI, qualifiedName)
+    lpstr.textContent = name
+    titlesVector.appendChild(lpstr)
+  }
+  titlesVector.setAttribute('size', String(newSheetNames.length))
+
+  // `HeadingPairs` carries the Worksheets COUNT as the `vt:i4` right after
+  // the `<vt:lpstr>Worksheets</vt:lpstr>` variant marker.
+  const headingVector = firstChildElement(firstChildElement(root, 'HeadingPairs') ?? root, 'vector')
+  if (headingVector?.parentElement?.localName === 'HeadingPairs') {
+    const variants = childElements(headingVector, 'variant')
+    for (let i = 0; i < variants.length; i++) {
+      const marker = firstChildElement(variants[i], 'lpstr')
+      if (marker?.textContent === 'Worksheets') {
+        const countEl = firstChildElement(variants[i + 1], 'i4')
+        if (countEl) countEl.textContent = String(newSheetNames.length)
+        break
+      }
+    }
+  }
+
+  zip.file(path, serializeXmlPart(doc))
+}
+
+// ---------------------------------------------------------------------------
+// Save
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewrites the original workbook with the document's current values,
+ * structure and re-anchored ranges. Returns `null` when the original is not
+ * an OOXML workbook this can patch at all (non-zip, no readable
+ * `workbook.xml`/relationships, or a `sourcePath` the original package no
+ * longer has), so the caller falls back to `writeWorkbookBytes`.
  */
 export async function writeWorkbookThroughOriginal(
   original: ArrayBuffer,
   document: SpreadsheetDocument,
 ): Promise<Uint8Array | null> {
-  const sourcePaths = document.sheets.map((sheet) => sheet.sourcePath)
-  if (sourcePaths.some((path) => path === undefined)) return null
+  // A document with NO sourcePath-tracked sheet at all isn't confirmably one
+  // this buffer was loaded from (a CSV-origin document, or one built by
+  // `spreadsheetWrite.ts` itself) — bail to the fresh-workbook writer rather
+  // than guess. A document with SOME tracked and some untracked sheets (the
+  // common case once a sheet has been added) is exactly what the rest of
+  // this function exists to patch.
+  if (document.sheets.length === 0 || document.sheets.every((sheet) => sheet.sourcePath === undefined)) return null
 
   let zip: JSZip
   try {
-    zip = await JSZip.loadAsync(original)
+    zip = await loadWorkbookZip(original)
   } catch {
     return null
   }
 
   const workbookXml = await zip.file('xl/workbook.xml')?.async('string')
   if (!workbookXml) return null
-  const relsXml = (await zip.file('xl/_rels/workbook.xml.rels')?.async('string')) ?? null
-  const parts = readSheetParts(workbookXml, relsXml)
-  // A sheet added or deleted here changes the workbook's structure; that still
-  // goes through the fresh-workbook writer.
-  if (parts.length !== document.sheets.length) return null
-  if (sourcePaths.some((path, index) => path !== parts[index].path)) return null
+  let workbookDoc: XMLDocument
+  try {
+    workbookDoc = parseXmlPart(workbookXml)
+  } catch {
+    return null
+  }
+  const workbookRoot = workbookDoc.documentElement
+  const sheetsContainer = firstChildElement(workbookRoot, 'sheets')
+  if (!sheetsContainer) return null
 
-  for (const [sheetIndex, sheet] of document.sheets.entries()) {
-    const partPath = sourcePaths[sheetIndex]!
-    const sheetXml = await zip.file(partPath)?.async('string')
-    if (!sheetXml) return null
-    const parsed = readOriginalSheet(sheetXml)
-    if (!parsed) return null
+  const relsXml = (await zip.file(WORKBOOK_RELS_PATH)?.async('string')) ?? null
+  let relsDoc: XMLDocument | null = null
+  if (relsXml) {
+    try {
+      relsDoc = parseXmlPart(relsXml)
+    } catch {
+      relsDoc = null
+    }
+  }
+  if (!relsDoc) return null // no relationships to resolve worksheet parts through — can't safely restructure
+
+  const originalSheets = readOriginalSheetEntries(workbookRoot, relsDoc)
+  const pathToOriginal = new Map(originalSheets.filter((s) => s.path).map((s) => [s.path!, s]))
+
+  // Every sourcePath the document claims must actually exist in this
+  // original package (a mismatch means the buffer isn't the file this
+  // document was loaded from — bail rather than silently mis-restructure).
+  for (const sheet of document.sheets) {
+    if (sheet.sourcePath !== undefined && !pathToOriginal.has(sheet.sourcePath)) return null
+  }
+
+  const originalIndexToNewIndex = new Map<number, number>()
+  document.sheets.forEach((sheet, newIndex) => {
+    if (sheet.sourcePath !== undefined) {
+      originalIndexToNewIndex.set(pathToOriginal.get(sheet.sourcePath)!.originalIndex, newIndex)
+    }
+  })
+
+  const changesByOriginalName = new Map<string, SheetChange>()
+  for (const original of originalSheets) {
+    const newIndex = originalIndexToNewIndex.get(original.originalIndex)
+    if (newIndex === undefined) {
+      changesByOriginalName.set(original.name, { newName: undefined, deleted: true, rowSources: undefined, colSources: undefined })
+      continue
+    }
+    const newSheet = document.sheets[newIndex]
+    changesByOriginalName.set(original.name, {
+      newName: newSheet.name !== original.name ? newSheet.name : undefined,
+      deleted: false,
+      rowSources: newSheet.rowSources,
+      colSources: newSheet.colSources,
+    })
+  }
+
+  // ---- relationships / content-types / new-sheet bookkeeping ----
+  const relsRoot = relsDoc.documentElement
+  let nextRIdNumber = nextNumericSuffix(descendantElements(relsDoc, 'Relationship').map((r) => r.getAttribute('Id') ?? ''), 'rId')
+  let nextSheetIdNumber = nextNumericSuffix(originalSheets.map((s) => s.element.getAttribute('sheetId') ?? ''), '')
+
+  const contentTypesXml = await zip.file(CONTENT_TYPES_PATH)?.async('string')
+  let contentTypesDoc: XMLDocument | null = null
+  if (contentTypesXml !== undefined) {
+    try {
+      contentTypesDoc = parseXmlPart(contentTypesXml)
+    } catch {
+      contentTypesDoc = null
+    }
+  }
+
+  // Rebuild `<sheets>` in the document's own order — this is what expresses
+  // an add/delete/reorder, all in one pass.
+  const freshSheets = workbookDoc.createElementNS(workbookRoot.namespaceURI, 'sheets')
+  const perSheetOriginal = new Map<number, OriginalSheet>() // newIndex -> parsed worksheet
+  const perSheetPartPath = new Map<number, string>() // newIndex -> part path to write back
+
+  for (const [newIndex, sheet] of document.sheets.entries()) {
+    if (sheet.sourcePath !== undefined) {
+      const originalEntry = pathToOriginal.get(sheet.sourcePath)!
+      const clonedSheetEl = originalEntry.element.cloneNode(false) as Element
+      clonedSheetEl.setAttribute('name', sheet.name)
+      freshSheets.appendChild(clonedSheetEl)
+
+      const sheetXml = await zip.file(originalEntry.path!)?.async('string')
+      if (!sheetXml) return null
+      let parsed: OriginalSheet | null
+      try {
+        parsed = readOriginalSheet(sheetXml)
+      } catch {
+        return null
+      }
+      if (!parsed) return null
+      perSheetOriginal.set(newIndex, parsed)
+      perSheetPartPath.set(newIndex, originalEntry.path!)
+      continue
+    }
+
+    // A sheet added in Atlas: allocate a fresh part/relationship/sheetId.
+    const partPath = nextWorksheetPartPath(zip)
+    const rId = `rId${nextRIdNumber++}`
+    const sheetId = nextSheetIdNumber++
+
+    const sheetEl = workbookDoc.createElementNS(workbookRoot.namespaceURI, 'sheet')
+    sheetEl.setAttribute('name', sheet.name)
+    sheetEl.setAttribute('sheetId', String(sheetId))
+    sheetEl.setAttributeNS(RELATIONSHIPS_NS, 'r:id', rId)
+    freshSheets.appendChild(sheetEl)
+
+    const relationshipEl = relsDoc.createElementNS(PACKAGE_RELS_NS, 'Relationship')
+    relationshipEl.setAttribute('Id', rId)
+    relationshipEl.setAttribute('Type', WORKSHEET_REL_TYPE)
+    relationshipEl.setAttribute('Target', relativeToXl(partPath))
+    relsRoot.appendChild(relationshipEl)
+
+    if (contentTypesDoc) addContentTypeOverride(contentTypesDoc, partPath, WORKSHEET_CONTENT_TYPE)
+
+    perSheetOriginal.set(newIndex, blankOriginalSheet())
+    perSheetPartPath.set(newIndex, partPath)
+  }
+  workbookRoot.replaceChild(freshSheets, sheetsContainer)
+
+  // Sheets present in the original but not in the new document: remove
+  // their part, their worksheet-level rels (if any), the workbook
+  // relationship, and their content-type override.
+  for (const original of originalSheets) {
+    if (originalIndexToNewIndex.has(original.originalIndex) || !original.path) continue
+    zip.remove(original.path)
+    const slash = original.path.lastIndexOf('/')
+    const sheetRelsPath = `${original.path.slice(0, slash)}/_rels/${original.path.slice(slash + 1)}.rels`
+    if (zip.file(sheetRelsPath)) zip.remove(sheetRelsPath)
+    for (const rel of descendantElements(relsDoc, 'Relationship')) {
+      if (rel.getAttribute('Id') === original.rId) rel.parentNode?.removeChild(rel)
+    }
+    if (contentTypesDoc) removeContentTypeOverrideForPart(contentTypesDoc, original.path)
+  }
+
+  // ---- per-sheet content: cells, dimension, merges, columns, ranges, tables ----
+  for (const [newIndex, sheet] of document.sheets.entries()) {
+    const parsed = perSheetOriginal.get(newIndex)!
+    const partPath = perSheetPartPath.get(newIndex)!
 
     rebuildSheetData(sheet, parsed)
     updateDimension(parsed.root, sheet)
     updateMergeCells(parsed.doc, parsed.root, sheet)
     updateColumns(parsed.doc, parsed.root, sheet)
+    updateShiftedRanges(parsed.root, sheet)
     zip.file(partPath, serializeXmlPart(parsed.doc))
 
     for (const [tableIndex, table] of (sheet.tables ?? []).entries()) {
@@ -351,11 +815,18 @@ export async function writeWorkbookThroughOriginal(
     }
   }
 
-  const contentTypes = removeCalcChain(zip, await zip.file('[Content_Types].xml')?.async('string'))
-  if (contentTypes !== undefined) zip.file('[Content_Types].xml', contentTypes)
-  zip.file(
-    'xl/workbook.xml',
-    markRecalculateOnLoad(renameSheets(workbookXml, document.sheets.map((sheet) => sheet.name))),
+  updateDefinedNames(workbookRoot, changesByOriginalName, originalIndexToNewIndex)
+  markRecalculateOnLoad(workbookDoc, workbookRoot)
+  if (removeCalcChain(zip) && contentTypesDoc) removeContentTypeOverrideForPart(contentTypesDoc, 'xl/calcChain.xml')
+
+  if (contentTypesDoc) zip.file(CONTENT_TYPES_PATH, serializeXmlPart(contentTypesDoc))
+  zip.file(WORKBOOK_RELS_PATH, serializeXmlPart(relsDoc))
+  zip.file('xl/workbook.xml', serializeXmlPart(workbookDoc))
+
+  await updateAppPropsTitles(
+    zip,
+    originalSheets.length,
+    document.sheets.map((s) => s.name),
   )
 
   return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })

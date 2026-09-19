@@ -21,9 +21,8 @@
  * formula engine; filter/sort state is dropped on save (column indexes may
  * have moved) while the table itself, its style and its totals row survive.
  */
-import JSZip from 'jszip'
-
 import { readSheetParts } from './spreadsheetPanes'
+import { loadWorkbookZip } from './spreadsheetZipBudget'
 
 export type SheetTable = {
   /** `displayName` — what formulas and Excel's UI refer to. */
@@ -122,7 +121,8 @@ export function parseTableXml(xml: string): SheetTable | null {
 /** Worksheet part paths in workbook order (USR-17 save-through-original); `[]` for a non-OOXML file. */
 export async function readSheetPartPaths(buffer: ArrayBuffer): Promise<string[]> {
   try {
-    const zip = await JSZip.loadAsync(buffer)
+    // USR-17: same declared-size zip-bomb budget as `spreadsheetPanes.ts` — see `spreadsheetZipBudget.ts`.
+    const zip = await loadWorkbookZip(buffer)
     const workbookXml = await zip.file('xl/workbook.xml')?.async('string')
     if (!workbookXml) return []
     const relsXml = (await zip.file('xl/_rels/workbook.xml.rels')?.async('string')) ?? null
@@ -135,7 +135,8 @@ export async function readSheetPartPaths(buffer: ArrayBuffer): Promise<string[]>
 /** Sheet name -> tables, read from an OOXML workbook buffer. Resolves `{}` (never rejects) for any other format. */
 export async function readSheetTables(buffer: ArrayBuffer): Promise<Readonly<Record<string, ReadonlyArray<SheetTable>>>> {
   try {
-    const zip = await JSZip.loadAsync(buffer)
+    // USR-17: same declared-size zip-bomb budget as `spreadsheetPanes.ts` — see `spreadsheetZipBudget.ts`.
+    const zip = await loadWorkbookZip(buffer)
     const workbookXml = await zip.file('xl/workbook.xml')?.async('string')
     if (!workbookXml) return {}
     const relsXml = (await zip.file('xl/_rels/workbook.xml.rels')?.async('string')) ?? null
@@ -298,7 +299,11 @@ function insertBeforeClosing(xml: string, closingTag: string, fragment: string, 
 export async function graftTables(bytes: Uint8Array, sheets: ReadonlyArray<TableSheetInput>): Promise<Uint8Array> {
   if (!sheets.some((s) => (s.tables?.length ?? 0) > 0)) return bytes
 
-  const zip = await JSZip.loadAsync(bytes)
+  // USR-17: `bytes` is Atlas's own just-written SheetJS output, not user
+  // input, but routing it through the same declared-size guard as the two
+  // readers above costs nothing for a normal file and keeps one consistent
+  // check across every `JSZip.loadAsync` in this module.
+  const zip = await loadWorkbookZip(bytes)
   const workbookXml = await zip.file('xl/workbook.xml')?.async('string')
   if (!workbookXml) return bytes
   const parts = readSheetParts(workbookXml, (await zip.file('xl/_rels/workbook.xml.rels')?.async('string')) ?? null)
