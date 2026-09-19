@@ -159,10 +159,16 @@ test('PDF: Ctrl+F opens the PDF find bar (not the shared search overlay); Ctrl+B
     // PDF's own shortcut set (zoom/print/page-nav/find) never reserves
     // Ctrl+B — confirms the new viewer-tier find registration didn't
     // accidentally start swallowing OTHER shell shortcuts too.
+    // Shell shortcuts deliberately stand back while a text input has focus
+    // (focused-input -> active-viewer -> shell-global). After the find bar
+    // closes, focus can still sit on one of the PDF viewer's own controls on
+    // a slow runner, which swallowed this Ctrl+B in CI run 35469314616.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+
     const sidebar = page.locator('.sidebar')
     const wasOpen = (await sidebar.count()) === 1
     await page.keyboard.press('Control+b')
-    await expect(sidebar).toHaveCount(wasOpen ? 0 : 1)
+    await expect(sidebar).toHaveCount(wasOpen ? 0 : 1, { timeout: 10_000 })
   } finally {
     await app.close()
   }
