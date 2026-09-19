@@ -99,6 +99,11 @@ function createRecentFilesStore(storeDir) {
 
       while (entries.size > MAX_ENTRIES) {
         const oldest = entries.values().next().value;
+        // `entries.size > MAX_ENTRIES` (>= 1) guarantees the iterator yields
+        // a value here, but `Set#values().next()` is typed to allow
+        // `undefined` (the "done" case) — guard it explicitly rather than
+        // asserting past the type checker.
+        if (oldest === undefined) break;
         entries.delete(oldest);
       }
 

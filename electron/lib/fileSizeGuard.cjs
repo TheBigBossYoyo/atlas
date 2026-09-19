@@ -6,6 +6,7 @@ const fs = require('fs');
 const DEFAULT_MAX_BYTES = 200 * 1024 * 1024; // 200 MiB
 
 class FileTooLargeError extends Error {
+  /** @param {string} message */
   constructor(message) {
     super(message);
     this.name = 'FileTooLargeError';

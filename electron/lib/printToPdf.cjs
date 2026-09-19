@@ -40,6 +40,7 @@ const MAX_HTML_BYTES = 40 * 1024 * 1024; // 40 MiB of markup — generous for ev
 const LOAD_TIMEOUT_MS = 30_000;
 
 class PrintToPdfError extends Error {
+  /** @param {string} message */
   constructor(message) {
     super(message);
     this.name = 'PrintToPdfError';
@@ -69,8 +70,7 @@ async function cleanupTempFile(tempPath) {
 }
 
 /**
- * @param {BrowserWindow} win
- * @param {string} fileUrl
+ * @param {import('electron').BrowserWindow} win
  * @returns {Promise<void>}
  */
 function waitForLoad(win) {
@@ -84,6 +84,11 @@ function waitForLoad(win) {
       cleanup();
       resolve();
     };
+    /**
+     * @param {Electron.Event} _event
+     * @param {number} errorCode
+     * @param {string} errorDescription
+     */
     const onFail = (_event, errorCode, errorDescription) => {
       cleanup();
       reject(new PrintToPdfError(`Failed to render the export document (${errorDescription || errorCode}).`));

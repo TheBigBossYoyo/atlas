@@ -69,6 +69,27 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   document-wide state and permanently skipped the per-paragraph line cache;
   now only a paragraph that itself carries a footnote/endnote reference does.
 
+### Changed
+- Strict-mode ratchet (P4.1): `electron/` (`main.cjs`, `preload.cjs`,
+  `lib/*.cjs`) is now type-checked — a new `tsconfig.electron.json`
+  (CommonJS, `allowJs` + `checkJs`, `strict`, Node types) is referenced from
+  the root `tsconfig.json`, so plain `npx tsc -b` (what CI already runs) now
+  covers it alongside `src/`, `vite.config.ts` and `tests/e2e`. Fixed all ~95
+  errors this uncovered across `electron/preload.cjs`, `electron/main.cjs`
+  and `electron/lib/{codeRunner,systemFonts,printToPdf,csp,fileSizeGuard,
+  recentFilesStore,atomicWrite}.cjs` with real JSDoc parameter/return types
+  and genuine null/undefined narrowing — no `@ts-ignore`/`@ts-nocheck`/`any`
+  loosening. Two real gaps this turned up and fixed: `main.cjs`'s
+  `set-theme` IPC handler indexed the overlay-color table with the
+  renderer-supplied theme value without validating it was one of the known
+  keys (now checked with a type-guard before indexing, matching how every
+  other untrusted-IPC-input handler in this file already validates); and the
+  window's `ready-to-show` handler called `mainWindow.show()` with no
+  null/destroyed guard, unlike its sibling handlers (`did-fail-load`, the
+  5s fallback timer) which already defend against the window having closed
+  in the interim. `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` remain
+  unchecked — see `STRICT_MODE_TODO.md`.
+
 ## [3.2.0] — 2026-09-19 (wave 4: owner-reported editor defects)
 
 ### Fixed

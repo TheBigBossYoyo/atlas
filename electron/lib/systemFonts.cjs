@@ -22,7 +22,11 @@ const STYLE_WORDS = new Set([
   'black', 'condensed', 'semicondensed', 'extracondensed', 'narrow', 'expanded', 'extended', 'variable',
 ]);
 
-/** "Arial Bold Italic (TrueType)" -> ["Arial"]; "A & B (TrueType)" -> ["A", "B"]. */
+/**
+ * "Arial Bold Italic (TrueType)" -> ["Arial"]; "A & B (TrueType)" -> ["A", "B"].
+ * @param {string} name
+ * @returns {string[]}
+ */
 function familiesFromRegistryName(name) {
   const withoutTech = name.replace(/\s*\((TrueType|OpenType|All res|VGA res|[^)]*res[^)]*)\)\s*$/i, '').trim();
   return withoutTech
@@ -38,6 +42,10 @@ function familiesFromRegistryName(name) {
     .filter((family) => family.length > 1 && !/^\d/.test(family) && !/,/.test(family));
 }
 
+/**
+ * @param {string} stdout
+ * @returns {string[]}
+ */
 function parseRegQueryOutput(stdout) {
   const families = [];
   for (const line of stdout.split(/\r?\n/)) {
@@ -49,6 +57,10 @@ function parseRegQueryOutput(stdout) {
   return families;
 }
 
+/**
+ * @param {string} key
+ * @returns {Promise<string[]>}
+ */
 function queryKey(key) {
   return new Promise((resolve) => {
     execFile('reg', ['query', key], { windowsHide: true, timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
@@ -57,8 +69,10 @@ function queryKey(key) {
   });
 }
 
+/** @type {Promise<string[]> | null} */
 let cached = null;
 
+/** @returns {Promise<string[]>} */
 function listSystemFontFamilies() {
   if (process.platform !== 'win32') {
     return Promise.resolve([]);

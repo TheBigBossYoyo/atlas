@@ -136,6 +136,7 @@ function rethrowAsFriendlyError(err, targetPath) {
   // actionable. Disambiguate by checking the target's actual type: a real
   // lock never has a directory sitting at `targetPath`.
   if (targetPath && isExistingDirectory(targetPath)) {
+    /** @type {NodeJS.ErrnoException} */
     const dirErr = new Error('target path is a directory');
     dirErr.code = 'EISDIR';
     throw dirErr;

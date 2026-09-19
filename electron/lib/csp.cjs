@@ -32,6 +32,7 @@ function buildContentSecurityPolicy(isDev) {
     ? ["'self'", 'ws://localhost:5173', 'http://localhost:5173']
     : ["'self'"];
 
+  /** @type {Array<[string, string[]]>} */
   const directives = [
     ['default-src', ["'self'"]],
     ['script-src', scriptSrc],

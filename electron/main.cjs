@@ -67,6 +67,14 @@ const OVERLAY_COLORS = {
 /** @type {{ color: string; symbolColor: string }} */
 let currentOverlayColors = OVERLAY_COLORS.light;
 
+/**
+ * @param {unknown} theme
+ * @returns {theme is keyof typeof OVERLAY_COLORS}
+ */
+function isKnownOverlayTheme(theme) {
+  return typeof theme === 'string' && Object.prototype.hasOwnProperty.call(OVERLAY_COLORS, theme);
+}
+
 // ---- Dev/prod detection (RUN-12) ---- //
 //
 // Decision logic lives in `./lib/devDetect.cjs` (unit-tested there — see
@@ -185,6 +193,10 @@ function logMainEvent(level, message, error) {
 // double-clicking them silently failed).
 const KNOWN_EXTENSIONS = new Set(MANIFEST_EXTENSIONS);
 
+/**
+ * @param {unknown} argv
+ * @returns {string | null}
+ */
 function extractFilePath(argv) {
   // In production, argv[0] is the exe, argv[1] might be the file
   // In dev, argv varies — look for known file extensions
@@ -208,6 +220,8 @@ function extractFilePath(argv) {
  * failure (matching the previous behavior of every caller); propagates
  * `FileTooLargeError` so the interactive open flows can surface a friendly
  * message instead of a silent no-op.
+ * @param {string} filePath
+ * @returns {{ content: string; name: string; path: string } | null}
  */
 function readMarkdownFile(filePath) {
   try {
@@ -246,6 +260,10 @@ function substituteBlankTemplateIfEmpty(filePath, buf) {
   return templateBytesForExtension(filePath) ?? buf;
 }
 
+/**
+ * @param {BrowserWindow | null} win
+ * @param {string | null} filePath
+ */
 function sendFileToWindow(win, filePath) {
   if (!win || win.isDestroyed()) return;
   if (typeof filePath !== 'string' || filePath.length === 0) return;
@@ -305,6 +323,7 @@ function registerRecentPath(event, filePath) {
 
 // ---- Content-Security-Policy (P1.2 / ELEC-04) ---- //
 
+/** @param {BrowserWindow} win */
 function applyContentSecurityPolicy(win) {
   win.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     if (details.resourceType !== 'mainFrame') {
@@ -335,6 +354,7 @@ function isAllowedExternalScheme(urlString) {
   }
 }
 
+/** @param {BrowserWindow} win */
 function applyNavigationGuards(win) {
   win.webContents.on('will-navigate', (event, url) => {
     // A same-URL "navigation" is a reload (Ctrl+R, Vite HMR's full-reload
@@ -419,6 +439,7 @@ function showRecoveryDialog(win) {
   }
 }
 
+/** @param {BrowserWindow} win */
 function applyCrashHandlers(win) {
   win.webContents.on('render-process-gone', (_event, details) => {
     logMainEvent('ERROR', `renderer process gone (${details.reason})`, details);
@@ -669,6 +690,13 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     clearTimeout(showTimeout);
+    // `mainWindow` is a mutable module-level binding, so TS can't carry the
+    // non-null narrowing from `createWindow`'s synchronous body into this
+    // async callback — and in principle the window could have been closed
+    // (`closed` sets it back to `null`) in the gap before this event fires.
+    // Same defensive check the sibling `did-fail-load`/fallback-show
+    // handlers above already use.
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.show();
     // Send pending file after window is ready
     if (pendingFilePath) {
@@ -712,13 +740,20 @@ ipcMain.handle('dialog:openFileBinary', async (event) => {
   }
 
   const win = mainWindow;
-  const result = await dialog.showOpenDialog(win || undefined, {
+  /** @type {Electron.OpenDialogOptions} */
+  const openDialogOptions = {
     properties: ['openFile'],
     filters: [
       { name: 'Supported Files', extensions: MANIFEST_EXTENSIONS },
       { name: 'All Files', extensions: ['*'] },
     ],
-  });
+  };
+  // `showOpenDialog` has distinct overloads for "with owner window" and
+  // "without" — passing `win || undefined` doesn't cleanly match either, so
+  // branch explicitly instead of forcing one overload with a cast.
+  const result = win
+    ? await dialog.showOpenDialog(win, openDialogOptions)
+    : await dialog.showOpenDialog(openDialogOptions);
 
   if (result.canceled || result.filePaths.length === 0) {
     return { canceled: true, path: '', buffer: new ArrayBuffer(0) };
@@ -1072,7 +1107,11 @@ ipcMain.handle('shell:reveal-in-folder', (event, filePath) => {
 /** @type {Map<string, string>} approved path -> file fingerprint at approval time */
 const approvedRunPaths = new Map();
 
-/** `size:mtime` of the file, or null when it cannot be read. */
+/**
+ * `size:mtime` of the file, or null when it cannot be read.
+ * @param {string} filePath
+ * @returns {string | null}
+ */
 function runFingerprint(filePath) {
   try {
     const stats = fs.statSync(filePath);
@@ -1082,8 +1121,10 @@ function runFingerprint(filePath) {
     return null;
   }
 }
+/** @type {import('./lib/codeRunner.cjs').CodeRunner | null} */
 let codeRunner = null;
 
+/** @returns {import('./lib/codeRunner.cjs').CodeRunner} */
 function getCodeRunner() {
   if (!codeRunner) {
     codeRunner = createCodeRunner({
@@ -1145,7 +1186,10 @@ app.on('will-quit', () => {
   if (codeRunner) codeRunner.dispose();
 });
 
-ipcMain.on('set-theme', (_event, theme) => {  currentOverlayColors = OVERLAY_COLORS[theme] || OVERLAY_COLORS.light;
+ipcMain.on('set-theme', (_event, theme) => {
+  // `theme` arrives from the renderer over IPC — validate it against the
+  // known keys instead of trusting/indexing an arbitrary value.
+  currentOverlayColors = isKnownOverlayTheme(theme) ? OVERLAY_COLORS[theme] : OVERLAY_COLORS.light;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.setTitleBarOverlay({
       color: currentOverlayColors.color,
