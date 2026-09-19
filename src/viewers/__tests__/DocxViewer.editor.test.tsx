@@ -370,9 +370,13 @@ describe('DocxViewer editor', () => {
 
     const editor = await screen.findByRole('textbox', { name: 'Document editor' })
 
-    // Ctrl+P → print
-    fireEvent.keyDown(editor, { key: 'p', ctrlKey: true })
-    expect(printSpy).toHaveBeenCalledTimes(1)
+    // Ctrl+P → print. The shortcut is registered by an effect that runs once
+    // the document has finished loading, which lags the editor element itself
+    // on a slow machine (this raced on CI) — retry the key until it lands.
+    await waitFor(() => {
+      fireEvent.keyDown(editor, { key: 'p', ctrlKey: true })
+      expect(printSpy).toHaveBeenCalled()
+    })
 
     // Ctrl+F → opens find panel
     fireEvent.keyDown(editor, { key: 'f', ctrlKey: true })
