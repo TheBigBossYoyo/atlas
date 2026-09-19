@@ -39,6 +39,21 @@ export function PdfFindBar({
     return undefined
   }, [isOpen])
 
+  // Escape closes the bar wherever the focus is: the input only takes focus
+  // 50ms after the bar opens, and a click on a page moves it away again, so
+  // keying Escape off the input alone left the bar stuck open (which then
+  // swallowed the next shell shortcut).
+  useEffect(() => {
+    if (!isOpen) return undefined
+    const onDocumentKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      onClose()
+    }
+    document.addEventListener('keydown', onDocumentKeyDown)
+    return () => document.removeEventListener('keydown', onDocumentKeyDown)
+  }, [isOpen, onClose])
+
   if (!isOpen) return null
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
