@@ -2,9 +2,19 @@
  * ExportMenu — accessible labeling (UX-09), format-specific items (UX-12),
  * and the dropdown's ARIA pattern (UX-14).
  */
+import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ExportMenu } from '../ExportMenu';
+
+// `open` is externally controlled by every other test below (a static prop
+// plus a mock `onOpenChange`), which can't observe the trigger regaining
+// focus once the menu actually closes — that needs a real state flip. This
+// small stateful harness is only for the focus-restore test.
+function StatefulExportMenu() {
+  const [open, setOpen] = useState(true);
+  return <ExportMenu onExport={() => {}} format="markdown" open={open} onOpenChange={setOpen} />;
+}
 
 describe('ExportMenu', () => {
   it('the icon-only trigger button has an aria-label (UX-09)', () => {
@@ -78,5 +88,20 @@ describe('ExportMenu', () => {
   it('disables the trigger when disabled is true', () => {
     render(<ExportMenu onExport={() => {}} format="markdown" open={false} onOpenChange={() => {}} disabled />);
     expect(screen.getByRole('button', { name: 'Export' })).toBeDisabled();
+  });
+
+  // UX — picking an item closes the menu by unmounting the `<ul>`; a
+  // focused item inside it is then removed from the DOM, and without
+  // `useRestoreFocusOnClose` focus fell back to nothing (document.body)
+  // instead of returning to the icon button that opened the menu.
+  it('restores focus to the trigger button after choosing an export format', () => {
+    render(<StatefulExportMenu />);
+    const trigger = screen.getByRole('button', { name: 'Export' });
+
+    const docxOption = screen.getByRole('button', { name: 'DOCX' });
+    docxOption.focus();
+    fireEvent.click(docxOption);
+
+    expect(trigger).toHaveFocus();
   });
 });

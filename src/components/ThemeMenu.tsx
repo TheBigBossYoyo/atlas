@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Palette, Check } from 'lucide-react';
 import type { Theme, ThemeMeta } from '../types';
 import { useShellShortcut } from '../hooks/useShortcutManager';
+import { useRestoreFocusOnClose } from '../hooks/useRestoreFocusOnClose';
 
 interface ThemeMenuProps {
   current: Theme;
@@ -12,6 +13,8 @@ interface ThemeMenuProps {
 export function ThemeMenu({ current, themes, onSelect }: ThemeMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useRestoreFocusOnClose(open, triggerRef);
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -44,6 +47,7 @@ export function ThemeMenu({ current, themes, onSelect }: ThemeMenuProps) {
   return (
     <div className="dropdown" ref={ref}>
       <button
+        ref={triggerRef}
         className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
         title="Theme"
         aria-label="Theme"

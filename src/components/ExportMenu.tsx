@@ -3,6 +3,7 @@ import { Download, FileCode, FileText, FileType, FileDown, FileSpreadsheet } fro
 import type { FormatId } from '../formats/types';
 import type { ExportFormat } from '../types';
 import { useShellShortcut } from '../hooks/useShortcutManager';
+import { useRestoreFocusOnClose } from '../hooks/useRestoreFocusOnClose';
 
 interface ExportMenuProps {
   onExport: (format: ExportFormat) => void;
@@ -24,6 +25,8 @@ interface ExportMenuItem {
 
 export function ExportMenu({ onExport, format, open, onOpenChange, disabled, canExportCsv }: ExportMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useRestoreFocusOnClose(open, triggerRef);
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -121,6 +124,7 @@ export function ExportMenu({ onExport, format, open, onOpenChange, disabled, can
   return (
     <div className="dropdown" ref={ref}>
       <button
+        ref={triggerRef}
         className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
         title="Export"
         aria-label="Export"
