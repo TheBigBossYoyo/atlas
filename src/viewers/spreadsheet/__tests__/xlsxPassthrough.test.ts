@@ -9,17 +9,20 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { attachSheetSources, attachTables, parseWorkbookBuffer } from '../../shared/spreadsheetGrid'
 import {
+  addSheet,
   createDocument,
+  deleteColumnAt,
   deleteRowAt,
+  deleteSheet,
+  insertColumnAt,
   insertRowAt,
   renameSheet,
   setCellValue,
-  addSheet,
   type SpreadsheetDocument,
 } from '../spreadsheetDocument'
 import { readSheetPartPaths, readSheetTables } from '../spreadsheetTables'
 import { writeWorkbookThroughOriginal } from '../xlsxPassthrough'
-import { buildStyledWorkbook, STYLES_XML } from './styledWorkbook'
+import { buildMultiSheetWorkbook, buildStyledWorkbook, STYLES_XML } from './styledWorkbook'
 
 async function load(buffer: ArrayBuffer): Promise<SpreadsheetDocument> {
   const [tables, partPaths] = await Promise.all([readSheetTables(buffer), readSheetPartPaths(buffer)])
@@ -92,10 +95,9 @@ describe('writeWorkbookThroughOriginal', () => {
     expect(workbook).toContain('name="Plan"')
   })
 
-  it('declines (so the caller falls back) for a non-OOXML buffer or a structural sheet change', async () => {
+  it('declines (so the caller falls back) for a non-OOXML buffer or an untracked document', async () => {
     const doc = await load(original)
     expect(await writeWorkbookThroughOriginal(new TextEncoder().encode('a,b').buffer as ArrayBuffer, doc)).toBeNull()
-    expect(await writeWorkbookThroughOriginal(original, addSheet(doc))).toBeNull()
 
     const plain = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(plain, XLSX.utils.aoa_to_sheet([['a']]), 'S')
@@ -112,5 +114,147 @@ describe('writeWorkbookThroughOriginal', () => {
     expect(reopened.sheets[0].rows[2][0]).toBe('Blue ink')
     expect(reopened.sheets[0].rows[1][0]).toBe('Paper')
     expect(reopened.sheets[0].formulas[2][2]).toBe('C2*2')
+  })
+})
+
+describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
+  let multi: ArrayBuffer
+  beforeEach(async () => {
+    multi = await buildMultiSheetWorkbook()
+  })
+
+  async function savedWorkbookXml(bytes: Uint8Array): Promise<string> {
+    const zip = await JSZip.loadAsync(bytes)
+    return zip.file('xl/workbook.xml')!.async('string')
+  }
+
+  it('adds a new worksheet part, sheet entry and content-type override', async () => {
+    const doc = addSheet(await load(multi), 'Extra')
+    const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+    expect(bytes).not.toBeNull()
+
+    const zip = await JSZip.loadAsync(bytes)
+    const workbook = await zip.file('xl/workbook.xml')!.async('string')
+    expect(workbook).toContain('name="Extra"')
+    // A brand-new part path distinct from the two originals.
+    expect(zip.file('xl/worksheets/sheet3.xml')).not.toBeNull()
+    expect(await zip.file('[Content_Types].xml')!.async('string')).toContain('/xl/worksheets/sheet3.xml')
+
+    // Re-opens with SheetJS...
+    const wb = XLSX.read(bytes)
+    expect(wb.SheetNames).toEqual(['Budget', 'Notes', 'Extra'])
+    // ...and with Atlas's own reader.
+    const reopened = await load(bytes.buffer as ArrayBuffer)
+    expect(reopened.sheets.map((s) => s.name)).toEqual(['Budget', 'Notes', 'Extra'])
+  })
+
+  it('deletes a sheet: its part, rels, content-type override and scoped defined names are gone; later localSheetIds are renumbered', async () => {
+    const doc = deleteSheet(await load(multi), 0) // delete "Budget" — "Notes" becomes index 0
+    const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+    expect(bytes).not.toBeNull()
+
+    const zip = await JSZip.loadAsync(bytes)
+    expect(zip.file('xl/worksheets/sheet1.xml')).toBeNull()
+    expect(zip.file('xl/worksheets/sheet2.xml')).not.toBeNull()
+    expect(await zip.file('[Content_Types].xml')!.async('string')).not.toContain('sheet1.xml')
+
+    const workbook = await zip.file('xl/workbook.xml')!.async('string')
+    // "BudgetHeader" (localSheetId=0, scoped to the deleted sheet) is gone.
+    expect(workbook).not.toContain('BudgetHeader')
+    // "Costs" referenced Budget!... and Budget no longer exists — dropped too.
+    expect(workbook).not.toContain('name="Costs"')
+    // "NotesRef" was localSheetId=1; Notes is now the only (index-0) sheet.
+    expect(workbook).toContain('<definedName name="NotesRef" localSheetId="0">Notes!$A$1</definedName>')
+
+    const reopened = await load(bytes.buffer as ArrayBuffer)
+    expect(reopened.sheets.map((s) => s.name)).toEqual(['Notes'])
+  })
+
+  it('reorders sheets to match the document order', async () => {
+    let doc = await load(multi)
+    const [budget, notes] = doc.sheets
+    doc = { sheets: [notes, budget] }
+    const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+    const workbook = await savedWorkbookXml(bytes)
+    const order = Array.from(workbook.matchAll(/<sheet name="([^"]+)"/g)).map((m) => m[1])
+    expect(order).toEqual(['Notes', 'Budget'])
+
+    const reopened = await load(bytes.buffer as ArrayBuffer)
+    expect(reopened.sheets.map((s) => s.name)).toEqual(['Notes', 'Budget'])
+  })
+
+  it('updates docProps/app.xml worksheet titles when adding a sheet, and leaves it alone when absent', async () => {
+    // A real Excel-produced docProps/app.xml shape (namespaced vt:vector/vt:variant children).
+    const appXml =
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">` +
+      `<Application>Microsoft Excel</Application>` +
+      `<HeadingPairs><vt:vector size="2" baseType="variant"><vt:variant><vt:lpstr>Worksheets</vt:lpstr></vt:variant><vt:variant><vt:i4>2</vt:i4></vt:variant></vt:vector></HeadingPairs>` +
+      `<TitlesOfParts><vt:vector size="2" baseType="lpstr"><vt:lpstr>Budget</vt:lpstr><vt:lpstr>Notes</vt:lpstr></vt:vector></TitlesOfParts>` +
+      `</Properties>`
+    const zip = await JSZip.loadAsync(multi)
+    zip.file('docProps/app.xml', appXml)
+    const withAppXml = await zip.generateAsync({ type: 'arraybuffer' })
+
+    const doc = addSheet(await load(withAppXml), 'Extra')
+    const bytes = (await writeWorkbookThroughOriginal(withAppXml, doc))!
+    const saved = await JSZip.loadAsync(bytes)
+    const savedApp = await saved.file('docProps/app.xml')!.async('string')
+    expect(savedApp).toContain('<vt:lpstr>Budget</vt:lpstr><vt:lpstr>Notes</vt:lpstr><vt:lpstr>Extra</vt:lpstr>')
+    expect(savedApp).toContain('size="3"')
+    expect(savedApp).toContain('<vt:i4>3</vt:i4>')
+  })
+
+  it('renaming a sheet updates a single-area defined name that points at it', async () => {
+    const doc = renameSheet(await load(multi), 0, 'Plan')
+    const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+    const workbook = await savedWorkbookXml(bytes)
+    expect(workbook).toContain('<definedName name="Costs">Plan!$C$2:$C$3</definedName>')
+    expect(workbook).toContain('<definedName name="BudgetHeader" localSheetId="0">Plan!$A$1:$C$1</definedName>')
+  })
+
+  it('re-anchors conditional formatting, data validation, a hyperlink and the autoFilter through a row insert', async () => {
+    let doc = await load(multi)
+    doc = insertRowAt(doc, 0, 1) // insert a blank row between the header and "Paper"
+    const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+    const zip = await JSZip.loadAsync(bytes)
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+
+    // C2:C3/B2:B3 sat entirely AT/AFTER the insertion point, so they shift
+    // down whole (matching `insertRowAt`'s own merge-cell semantics); the
+    // sheet-level autoFilter (A1:C3) STRADDLES the insertion point, so it
+    // instead grows by one row to include it.
+    expect(sheet).toContain('<conditionalFormatting sqref="C3:C4">')
+    expect(sheet).toContain('sqref="B3:B4"')
+    expect(sheet).toContain('<hyperlink ref="A3"')
+    expect(sheet).toContain('<autoFilter ref="A1:C4"/>')
+  })
+
+  it('re-anchors through a row delete, and drops a range fully consumed by the delete', async () => {
+    let doc = await load(multi)
+    doc = deleteRowAt(doc, 0, 1) // delete the "Paper" row — the CF/DV range (rows 2:3) shrinks to row 2 only
+    const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+    const zip = await JSZip.loadAsync(bytes)
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+
+    // The single surviving row collapses the range to one cell — Atlas
+    // writes a bare `C2`, not the equivalent-but-redundant `C2:C2`.
+    expect(sheet).toContain('<conditionalFormatting sqref="C2">')
+    expect(sheet).toContain('<autoFilter ref="A1:C2"/>')
+  })
+
+  it('re-anchors through a column insert/delete', async () => {
+    let doc = await load(multi)
+    doc = insertColumnAt(doc, 0, 0) // insert a column before A — everything shifts right by one
+    let bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+    let zip = await JSZip.loadAsync(bytes)
+    let sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    expect(sheet).toContain('<autoFilter ref="B1:D3"/>')
+    expect(sheet).toContain('sqref="D2:D3"') // conditional formatting (was C2:C3)
+
+    doc = deleteColumnAt(doc, 0, 0) // delete it straight back — ranges return to their original columns
+    bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+    zip = await JSZip.loadAsync(bytes)
+    sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    expect(sheet).toContain('<autoFilter ref="A1:C3"/>')
   })
 })

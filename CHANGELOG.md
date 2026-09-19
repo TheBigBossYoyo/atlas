@@ -8,6 +8,23 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Fixed
+- Spreadsheets: saving an .xlsx/.xlsm through the original package (USR-17)
+  now also covers adding, deleting, renaming and reordering sheets (workbook
+  relationships, content types and, where the formula is a single-area
+  reference, defined names are kept in step; a deleted sheet's own
+  `localSheetId`-scoped defined names are dropped and later ones renumbered)
+  instead of losing all styling to the fresh-workbook fallback; conditional
+  formatting, data validation, hyperlinks and the sheet-level autoFilter are
+  now re-anchored through row/column inserts and deletes the way Excel itself
+  keeps them aligned, instead of silently pointing at the wrong cells.
+- Security: the spreadsheet passthrough's zip reads (`xlsxPassthrough.ts`,
+  `spreadsheetPanes.ts`, `spreadsheetTables.ts`) now reject a workbook whose
+  declared uncompressed size is implausibly large before decompressing
+  anything, closing the same zip-bomb gap already fixed for DOCX/PPTX.
+
 ## [3.2.0] — 2026-09-19 (wave 4: owner-reported editor defects)
 
 ### Fixed

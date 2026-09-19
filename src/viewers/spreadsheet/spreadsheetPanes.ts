@@ -42,9 +42,8 @@
  * safe there because that branch only ever runs under
  * `XLSX_WORKER_BYTE_THRESHOLD`.
  */
-import JSZip from 'jszip'
-
 import type { FrozenPanes } from '../shared/spreadsheetGrid'
+import { loadWorkbookZip } from './spreadsheetZipBudget'
 
 const RELATIONSHIPS_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
@@ -118,7 +117,10 @@ function readFrozenPaneFromSheetXml(sheetXml: string): FrozenPanes | null {
  */
 export async function readFrozenPanes(buffer: ArrayBuffer): Promise<Readonly<Record<string, FrozenPanes>>> {
   try {
-    const zip = await JSZip.loadAsync(buffer)
+    // USR-17: declared-uncompressed-size budget before anything is inflated
+    // (see `spreadsheetZipBudget.ts`'s header) — a crafted zip bomb throws,
+    // caught by this same catch-all below just like any other malformed file.
+    const zip = await loadWorkbookZip(buffer)
     const workbookEntry = zip.file('xl/workbook.xml')
     if (!workbookEntry) return {}
 
