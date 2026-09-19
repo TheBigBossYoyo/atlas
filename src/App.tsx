@@ -270,6 +270,19 @@ function AppShell() {
   const fileIdentityKey = file ? `${file.path}#${loadGeneration}` : null;
   const [lastSyncedFileKey, setLastSyncedFileKey] = useState<string | null>(null);
 
+  // Review fix — `saveFile`/`saveFileAs` close over the tab that was active
+  // when the save *started*; `window.electronAPI.saveFile(...)` can take a
+  // while, and the user is free to switch tabs (Discard through the unsaved-
+  // changes guard) before it resolves. The continuation needs to know, at
+  // resolution time, whether the tab it saved is still the one showing — a
+  // ref (not the `fileIdentityKey` closed over at call time) so it always
+  // reads the *latest* identity rather than the one from whichever render
+  // kicked off the save.
+  const fileIdentityKeyRef = useRef<string | null>(fileIdentityKey);
+  useEffect(() => {
+    fileIdentityKeyRef.current = fileIdentityKey;
+  }, [fileIdentityKey]);
+
   if (fileIdentityKey !== lastSyncedFileKey) {
     setLastSyncedFileKey(fileIdentityKey);
     setLocalMarkdown(markdown);
@@ -329,6 +342,21 @@ function AppShell() {
     [adoptFile, file, localMarkdown],
   );
 
+  // Review fix — the inactive-tab counterpart of `followSavedPath`. A save
+  // that finishes after the user switched away must still update *that
+  // document's* tab (so reactivating it later shows the right path), but
+  // must never touch the tab that's showing now: no `adoptFile` (which would
+  // yank the view back to the just-saved document) and no dirty/draft state
+  // belonging to whatever the user switched to.
+  const applySavedPathToInactiveTab = useCallback(
+    (savedFile: LoadedFile, savedPath: string | undefined, savedContent: string): void => {
+      if (!savedPath || savedFile.kind !== 'text' || savedPath === savedFile.path) return;
+      const renamed: LoadedFile = { ...savedFile, path: savedPath, content: savedContent };
+      setSessions((current) => renameSession(current, savedFile.path, renamed));
+    },
+    [],
+  );
+
   const saveFile = useCallback(async (): Promise<boolean> => {
     if (!isMarkdownDocument) {
       // P1.1/SHELL-10/DXE-07/RUN-03 — route the global Save/Ctrl+S to
@@ -337,6 +365,12 @@ function AppShell() {
       return viewerSaveRef.current();
     }
     if (!window.electronAPI) return false;
+    // Snapshot which document and content this save is actually for — the
+    // await below can outlive the tab that started it (review fix, see
+    // `fileIdentityKeyRef`).
+    const savingFile = file;
+    const savingIdentityKey = fileIdentityKey;
+    const savingContent = localMarkdown;
     // No `existingPath` means `save-file` shows a native Save dialog — a
     // `{ saved: false }` result with no `error` there is an ordinary user
     // Cancel, not a failure worth surfacing. With an `existingPath`, no
@@ -345,53 +379,68 @@ function AppShell() {
     // supply a more specific reason).
     const hadExistingPath = Boolean(filePath);
     const result = await window.electronAPI.saveFile({
-      content: localMarkdown,
+      content: savingContent,
       suggestedName: fileName ?? 'document.md',
       existingPath: filePath || undefined,
     });
+    const stillShowing = fileIdentityKeyRef.current === savingIdentityKey;
     if (result.saved) {
-      setIsDirty(false);
-      setSaveError(null);
-      clearDraft();
-      followSavedPath(result.path);
+      if (stillShowing) {
+        setIsDirty(false);
+        setSaveError(null);
+        clearDraft();
+        followSavedPath(result.path);
+      } else if (savingFile) {
+        applySavedPathToInactiveTab(savingFile, result.path, savingContent);
+      }
       return true;
     }
-    if (result.error) {
-      // X5 — main.cjs now classifies every save failure class (permission
-      // denied, disk full, missing/renamed parent folder, locked file, ...)
-      // into a friendly `error` string (previously only a file lock did),
-      // surfaced here via the same FileStatusBanner every other save/load
-      // error already uses (a second, redundant toast for the identical
-      // event would leave two `role="alert"` regions on screen for one
-      // failure — worse accessibility, not better).
-      setSaveError(result.error);
-    } else if (hadExistingPath) {
-      setSaveError('Failed to save the file. Please try again.');
+    if (stillShowing) {
+      if (result.error) {
+        // X5 — main.cjs now classifies every save failure class (permission
+        // denied, disk full, missing/renamed parent folder, locked file, ...)
+        // into a friendly `error` string (previously only a file lock did),
+        // surfaced here via the same FileStatusBanner every other save/load
+        // error already uses (a second, redundant toast for the identical
+        // event would leave two `role="alert"` regions on screen for one
+        // failure — worse accessibility, not better).
+        setSaveError(result.error);
+      } else if (hadExistingPath) {
+        setSaveError('Failed to save the file. Please try again.');
+      }
     }
     return false;
-  }, [fileName, filePath, followSavedPath, isMarkdownDocument, localMarkdown]);
+  }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, filePath, followSavedPath, isMarkdownDocument, localMarkdown]);
 
   const saveFileAs = useCallback(async (): Promise<boolean> => {
     if (!isMarkdownDocument) return false;
     if (!window.electronAPI) return false;
+    const savingFile = file;
+    const savingIdentityKey = fileIdentityKey;
+    const savingContent = localMarkdown;
     const result = await window.electronAPI.saveFile({
-      content: localMarkdown,
+      content: savingContent,
       suggestedName: fileName ?? 'document.md',
     });
+    const stillShowing = fileIdentityKeyRef.current === savingIdentityKey;
     if (result.saved) {
-      setIsDirty(false);
-      setSaveError(null);
-      clearDraft();
-      followSavedPath(result.path);
+      if (stillShowing) {
+        setIsDirty(false);
+        setSaveError(null);
+        clearDraft();
+        followSavedPath(result.path);
+      } else if (savingFile) {
+        applySavedPathToInactiveTab(savingFile, result.path, savingContent);
+      }
       return true;
     }
     // A dialog-based save with no specific `error` is an ordinary user
     // Cancel — only a specifically-reported reason is worth surfacing here.
-    if (result.error) {
+    if (stillShowing && result.error) {
       setSaveError(result.error);
     }
     return false;
-  }, [fileName, followSavedPath, isMarkdownDocument, localMarkdown]);
+  }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, followSavedPath, isMarkdownDocument, localMarkdown]);
 
   // Counts nested dragenter/dragleave pairs so the overlay only hides once
   // the drag has actually left the window, not merely a child element
