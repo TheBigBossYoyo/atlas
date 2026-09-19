@@ -16,6 +16,7 @@ const { FileTooLargeError, assertFileSizeAllowed } = require('./lib/fileSizeGuar
 const { EXTENSIONS: MANIFEST_EXTENSIONS } = require('./lib/extensionManifest.generated.cjs');
 const { CLOSE_PROMPT_BUTTONS, decideOnClose, decideAfterPromptChoice } = require('./lib/closeGuard.cjs');
 const { clampBoundsToDisplays, loadWindowState, saveWindowState } = require('./lib/windowState.cjs');
+const { decideFileOpenAction } = require('./lib/fileOpenRouting.cjs');
 const { resolveIsDev } = require('./lib/devDetect.cjs');
 const { NEW_DOCUMENT_FORMATS, templateBytesForExtension, readTemplateBytes } = require('./lib/newDocumentTemplates.cjs');
 
@@ -42,6 +43,14 @@ let mainWindow = null;
 
 /** @type {string | null} */
 let pendingFilePath = null;
+
+// P5.2/ELEC-07 — true once the *current* window's renderer has proven it is
+// listening for `file-opened-path` (see fileOpenRouting.cjs's header for why
+// the `get-initial-file` invoke is the right signal). Reset on every new
+// window so a fresh, not-yet-mounted renderer isn't mistaken for the
+// previous window's already-ready one.
+/** @type {boolean} */
+let rendererReady = false;
 
 // ---- Close confirmation (P2.5 / SHELL-02, ELEC-06) ---- //
 //
@@ -571,6 +580,7 @@ function schedulePersistWindowState() {
 // ---- Window creation ---- //
 
 function createWindow() {
+  rendererReady = false;
   const initialState = resolveInitialWindowState();
 
   mainWindow = new BrowserWindow({
@@ -698,6 +708,11 @@ function createWindow() {
 // ---- IPC Handlers ---- //
 
 ipcMain.handle('get-initial-file', () => {
+  // P5.2/ELEC-07 — by construction the renderer registers its
+  // `file-opened-path` listener synchronously before ever invoking this (see
+  // useFileHandler.ts's boot-subscriptions effect), so this invoke's arrival
+  // is a precise "the listener now exists" signal for decideFileOpenAction.
+  rendererReady = true;
   if (pendingFilePath) {
     const filePath = pendingFilePath;
     pendingFilePath = null;
@@ -1172,17 +1187,21 @@ app.on('second-instance', (_event, argv) => {
   const filePath = extractFilePath(argv);
   if (filePath) {
     trustPath(filePath);
+    // P5.2/ELEC-07 — a rapid second launch can arrive either before
+    // `mainWindow` exists at all, or after it exists but before its renderer
+    // has mounted the listener that would receive `sendFileToWindow`'s
+    // event; both cases must queue into `pendingFilePath` instead of
+    // dropping the request (see fileOpenRouting.cjs for the full rationale).
+    const action = decideFileOpenAction({ hasWindow: mainWindow != null, rendererReady });
+    if (action === 'send') {
+      sendFileToWindow(mainWindow, filePath);
+      return;
+    }
+    pendingFilePath = filePath;
   }
-  if (filePath && mainWindow) {
-    sendFileToWindow(mainWindow, filePath);
-  } else if (mainWindow) {
+  if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
-  } else if (filePath) {
-    // Window not created yet (a rapid second launch during startup) — queue
-    // it so it opens once ready-to-show fires instead of being dropped
-    // (ELEC-07).
-    pendingFilePath = filePath;
   }
 });
 
@@ -1220,7 +1239,10 @@ app.on('open-file', (event, filePath) => {
     // `whenReady` flush above will persist `pendingFilePath` once it's safe.
     pathAllowlist.add(filePath);
   }
-  if (mainWindow) {
+  // P5.2/ELEC-07 — same window-exists-but-renderer-not-mounted-yet race as
+  // the second-instance handler above; see fileOpenRouting.cjs.
+  const action = decideFileOpenAction({ hasWindow: mainWindow != null, rendererReady });
+  if (action === 'send') {
     sendFileToWindow(mainWindow, filePath);
   } else {
     pendingFilePath = filePath;

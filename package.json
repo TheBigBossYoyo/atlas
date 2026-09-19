@@ -4,7 +4,9 @@
   "version": "3.2.0",
   "type": "module",
   "main": "electron/main.cjs",
-  "author": "Atlas",
+  "author": {
+    "name": "Atlas"
+  },
   "description": "Universal document viewer for Windows",
   "engines": {
     "node": ">=24.14.0"
