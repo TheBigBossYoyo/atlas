@@ -9,6 +9,8 @@ interface UseUniversalShortcutsOptions {
   saveFileAs: () => void | Promise<unknown>;
   exportPrimary: () => void | Promise<unknown>;
   openExportMenu: () => void;
+  /** NEW-01 — Ctrl+N opens the toolbar's "New document" menu, mirroring Ctrl+E/openExportMenu. */
+  openNewMenu: () => void;
   cycleTheme: () => void;
   toggleSidebar: () => void;
   setViewMode: (mode: ViewMode) => void;
@@ -33,6 +35,7 @@ export function useUniversalShortcuts({
   saveFileAs,
   exportPrimary,
   openExportMenu,
+  openNewMenu,
   cycleTheme,
   toggleSidebar,
   setViewMode,
@@ -69,6 +72,10 @@ export function useUniversalShortcuts({
         case 'o':
           event.preventDefault();
           void openFile();
+          return true;
+        case 'n':
+          event.preventDefault();
+          openNewMenu();
           return true;
         case 'w':
           event.preventDefault();
@@ -118,6 +125,7 @@ export function useUniversalShortcuts({
       exportPrimary,
       isMarkdown,
       openExportMenu,
+      openNewMenu,
       openFile,
       saveFile,
       saveFileAs,

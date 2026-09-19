@@ -17,6 +17,7 @@ const { EXTENSIONS: MANIFEST_EXTENSIONS } = require('./lib/extensionManifest.gen
 const { CLOSE_PROMPT_BUTTONS, decideOnClose, decideAfterPromptChoice } = require('./lib/closeGuard.cjs');
 const { clampBoundsToDisplays, loadWindowState, saveWindowState } = require('./lib/windowState.cjs');
 const { resolveIsDev } = require('./lib/devDetect.cjs');
+const { NEW_DOCUMENT_FORMATS, templateBytesForExtension, readTemplateBytes } = require('./lib/newDocumentTemplates.cjs');
 
 // E2E runs: every launch gets its own profile. Otherwise an instance that is
 // still being torn down (taskkill /T is not instantaneous) keeps the shared
@@ -221,6 +222,28 @@ function readMarkdownFile(filePath) {
     }
     return null;
   }
+}
+
+// NEW-01 — a file made outside Atlas (e.g. Windows Explorer's "New > Word
+// Document" on a PC without Office installed) is a genuine 0-byte file on
+// disk; Atlas's own parsers for the zip-based binary formats (docx/xlsx/
+// ods/pptx/odp) throw on empty input instead of showing a blank document.
+// Every binary-class read (`dialog:openFileBinary`, `file:readBinaryByPath`)
+// funnels through this: a 0-byte read of one of those formats is
+// transparently replaced with that format's blank template bytes, so the
+// viewer sees a normal, fully-editable blank document — still bound to the
+// file's own (still-empty-on-disk) path, so a normal Save writes a real
+// document there. Every other format (pdf/rtf/odt/doc/ppt/unknown) is left
+// genuinely empty; the renderer shows a friendly "this file is empty"
+// message instead of a parser crash (see App.tsx).
+/**
+ * @param {string} filePath
+ * @param {Buffer} buf
+ * @returns {Buffer}
+ */
+function substituteBlankTemplateIfEmpty(filePath, buf) {
+  if (buf.byteLength !== 0) return buf;
+  return templateBytesForExtension(filePath) ?? buf;
 }
 
 function sendFileToWindow(win, filePath) {
@@ -711,7 +734,7 @@ ipcMain.handle('dialog:openFileBinary', async (event) => {
   }
 
   trustPath(filePath);
-  const buf = await fs.promises.readFile(filePath);
+  const buf = substituteBlankTemplateIfEmpty(filePath, await fs.promises.readFile(filePath));
   const buffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   return { canceled: false, path: filePath, buffer };
 });
@@ -727,7 +750,7 @@ ipcMain.handle('file:readBinaryByPath', async (event, filePath) => {
     throw new Error('Invalid path');
   }
   assertFileSizeAllowed(filePath);
-  const buf = await fs.promises.readFile(filePath);
+  const buf = substituteBlankTemplateIfEmpty(filePath, await fs.promises.readFile(filePath));
   const buffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   return { path: filePath, buffer };
 });
@@ -835,6 +858,50 @@ ipcMain.handle('save-binary-file', async (event, req) => {
     return {
       saved: false,
       error: err instanceof FileLockedError ? err.message : classifyWriteError(err),
+    };
+  }
+});
+
+// NEW-01 — creates a brand-new document from the toolbar's "New" action /
+// Ctrl+N. `formatId` is validated against the fixed `NEW_DOCUMENT_FORMATS`
+// table (never a renderer-supplied path or template bytes); the renderer
+// only ever picks a name from that same fixed list (see NewDocumentMenu.tsx)
+// and the save destination always comes back from a native `showSaveDialog`
+// this handler itself drives, matching every other write path's security
+// model (ELEC-02/03) — the renderer never chooses a filesystem path.
+ipcMain.handle('document:new', async (event, formatId) => {
+  if (!isFromMainFrame(event)) return { created: false, error: SENDER_FRAME_ERROR_MESSAGE };
+  if (!mainWindow) return { created: false };
+
+  const spec = typeof formatId === 'string' ? NEW_DOCUMENT_FORMATS[formatId] : undefined;
+  if (!spec) return { created: false, error: 'Unsupported document type.' };
+
+  let defaultDir;
+  try {
+    defaultDir = app.getPath('documents');
+  } catch {
+    defaultDir = os.homedir();
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: path.join(defaultDir, spec.defaultName),
+    filters: [
+      { name: spec.filterName, extensions: [spec.extension] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePath) return { created: false };
+
+  try {
+    const bytes = spec.templateFile ? readTemplateBytes(spec.templateFile) : '';
+    atomicWriteFile(result.filePath, bytes);
+    trustPath(result.filePath);
+    return { created: true, path: result.filePath };
+  } catch (err) {
+    logMainEvent('ERROR', 'document:new failed', err);
+    return {
+      created: false,
+      error: err instanceof FileLockedError ? err.message : (classifyWriteError(err) ?? 'Could not create the new document.'),
     };
   }
 });

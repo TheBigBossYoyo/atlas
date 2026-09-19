@@ -15,7 +15,9 @@ import {
 } from 'lucide-react';
 import type { FormatId } from '../formats/types';
 import type { Theme, ThemeMeta, ViewMode, ExportFormat } from '../types';
+import type { NewDocumentFormat } from '../electron';
 import { ExportMenu } from './ExportMenu';
+import { NewDocumentMenu } from './NewDocumentMenu';
 import { ThemeMenu } from './ThemeMenu';
 
 interface ToolbarProps {
@@ -37,10 +39,14 @@ interface ToolbarProps {
   exportMenuOpen: boolean;
   /** UX-12 — whether a real CSV export is available for the current document. */
   canExportCsv: boolean;
+  /** NEW-01 — whether Atlas is running inside Electron; "New" needs `window.electronAPI.newDocument`, unavailable in a plain browser tab. */
+  newMenuOpen: boolean;
   onSelectTheme: (t: Theme) => void;
   onViewModeChange: (mode: ViewMode) => void;
   onToggleSidebar: () => void;
   onOpenFile: () => void;
+  onNewDocument: (format: NewDocumentFormat) => void;
+  onNewMenuOpenChange: (open: boolean) => void;
   onSave: () => void;
   onCloseFile: () => void;
   onExport: (format: ExportFormat) => void;
@@ -75,10 +81,13 @@ export function Toolbar({
   exportFormat,
   exportMenuOpen,
   canExportCsv,
+  newMenuOpen,
   onSelectTheme,
   onViewModeChange,
   onToggleSidebar,
   onOpenFile,
+  onNewDocument,
+  onNewMenuOpenChange,
   onSave,
   onCloseFile,
   onExport,
@@ -100,6 +109,11 @@ export function Toolbar({
         >
           {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
         </button>
+
+        {/* Rendered unconditionally, like Open — `onNewDocument` itself
+            surfaces a friendly error in plain-browser-tab mode (no
+            `window.electronAPI`), the same way `openFile` already does. */}
+        <NewDocumentMenu onCreate={onNewDocument} open={newMenuOpen} onOpenChange={onNewMenuOpenChange} />
 
         <button className="toolbar__btn toolbar__nodrag" onClick={onOpenFile} title="Open file (Ctrl+O)">
           <FileText size={16} />

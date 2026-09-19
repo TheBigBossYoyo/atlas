@@ -206,6 +206,25 @@ Atlas is single-document: opening a new file replaces the current one
 side-by-side multi-document view. This is a deliberate, larger
 architectural feature left for a future roadmap item, not a bug.
 
+## Creating new documents (NEW-01)
+
+The toolbar's **New** menu / Ctrl+N creates a brand-new document for
+Markdown, DOCX, XLSX, ODS, PPTX, or ODP — a native Save dialog picks the
+destination, main writes a blank template there, and it opens in a new tab.
+Plain text/code (`.txt`, `.log`, and every `CodeViewer`-routed extension)
+and CSV/TSV are deliberately not offered here even though code files are
+individually editable/saveable — there's no single natural "blank template"
+extension to default to for them the way there is for the other formats.
+
+Opening a genuinely 0-byte file (e.g. one made outside Atlas, like Windows
+Explorer's "New > Word Document" on a PC without Office installed) of one of
+those same six formats now opens that format's blank template instead of
+failing to parse, still bound to the file's own (empty-on-disk) path — a
+normal Save fills it in for real. A 0-byte file of any other format
+(PDF/RTF/ODT/legacy `.doc`/`.ppt`/unrecognized) shows a plain "this file is
+empty" message instead of a parser error, but still can't be edited in
+place (see "Editing scope, overall" above for why).
+
 ## Export
 
 Export targets and fidelity vary by format — see the README's Export table

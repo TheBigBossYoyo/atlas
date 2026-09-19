@@ -41,6 +41,14 @@ interface RegisterPathResult {
   readonly ok: boolean;
 }
 
+/** NEW-01 — the fixed set of document types the toolbar's "New" action can create; kept in sync with `electron/lib/newDocumentTemplates.cjs`'s `NEW_DOCUMENT_FORMATS`. */
+export type NewDocumentFormat = 'markdown' | 'docx' | 'xlsx' | 'ods' | 'pptx' | 'odp';
+
+/** Result of `document:new` — a native Save dialog was shown and either a blank document was written at the chosen path, or the user cancelled. */
+type NewDocumentResult =
+  | { readonly created: true; readonly path: string }
+  | { readonly created: false; readonly error?: string };
+
 /** Result of `export:printToPdf` — X1's real per-format PDF export. */
 type PrintToPdfResult =
   | { readonly ok: true; readonly bytes: Uint8Array }
@@ -74,6 +82,8 @@ interface ElectronAPI {
   /** The renderer reports whether that save succeeded so main knows whether to actually close the window. */
   reportSaveBeforeCloseResult?: (result: { saved: boolean }) => void;
   openFileBinary: () => Promise<{ canceled: boolean; path: string; buffer: ArrayBuffer }>;
+  /** NEW-01 — the toolbar's "New" action / Ctrl+N: shows a native Save dialog, writes a blank template there, and reports the resulting path. */
+  newDocument: (formatId: NewDocumentFormat) => Promise<NewDocumentResult>;
   readBinaryByPath: (path: string) => Promise<{ path: string; buffer: ArrayBuffer }>;
   onFileOpenedPath: (callback: (path: string) => void) => () => void;
   /** Resolves a dropped `File` to its absolute path (Electron 32+ removed `File.path`). */
