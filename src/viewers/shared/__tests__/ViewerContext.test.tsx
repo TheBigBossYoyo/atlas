@@ -10,11 +10,13 @@ import {
   useOpenViewerFind,
   useRegisterViewerFind,
   useRegisterViewerSave,
+  useRegisterViewerSaveAs,
   useSetNavItems,
   useSetViewerDirty,
   useSetViewerStats,
   useViewerIsDirty,
   useViewerSave,
+  useViewerSaveAs,
   useViewerStats,
 } from '../useViewerContext'
 
@@ -234,6 +236,88 @@ describe('ViewerContext', () => {
       await expect(result.current()).resolves.toBe(false)
     })
     expect(registeredSave).toHaveBeenCalledTimes(1)
+  })
+
+  // ---------------------------------------------------------------------------
+  // "Save As" side of the P1.1 document-session contract — added after
+  // discovering (real-app testing) that the global Ctrl+Shift+S shortcut
+  // silently did nothing for every non-markdown document: App.tsx's
+  // saveFileAs() had no equivalent of save()'s viewerSaveRef fallback, so
+  // there was nothing for a viewer to register into and nothing for the
+  // shortcut to call. Mirrors the `save`/`registerSave` tests above.
+  // ---------------------------------------------------------------------------
+
+  it('saveAs() resolves false when no viewer has registered a saveAs implementation', async () => {
+    const wrapper = makeWrapper('/a.docx')
+    const { result } = renderHook(() => useViewerSaveAs(), { wrapper })
+
+    await expect(result.current()).resolves.toBe(false)
+  })
+
+  it('saveAs() calls whatever the active viewer registered via registerSaveAs', async () => {
+    const wrapper = makeWrapper('/a.docx')
+    const { result } = renderHook(
+      () => ({ saveAs: useViewerSaveAs(), registerSaveAs: useRegisterViewerSaveAs() }),
+      { wrapper },
+    )
+
+    const viewerSaveAs = vi.fn().mockResolvedValue(true)
+
+    act(() => {
+      result.current.registerSaveAs(viewerSaveAs)
+    })
+
+    await expect(result.current.saveAs()).resolves.toBe(true)
+    expect(viewerSaveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('registerSaveAs(null) unregisters — saveAs() falls back to resolving false', async () => {
+    const wrapper = makeWrapper('/a.docx')
+    const { result } = renderHook(
+      () => ({ saveAs: useViewerSaveAs(), registerSaveAs: useRegisterViewerSaveAs() }),
+      { wrapper },
+    )
+
+    const viewerSaveAs = vi.fn().mockResolvedValue(true)
+
+    act(() => {
+      result.current.registerSaveAs(viewerSaveAs)
+    })
+    act(() => {
+      result.current.registerSaveAs(null)
+    })
+
+    await expect(result.current.saveAs()).resolves.toBe(false)
+    expect(viewerSaveAs).not.toHaveBeenCalled()
+  })
+
+  it('save() and saveAs() are independent registrations', async () => {
+    const wrapper = makeWrapper('/a.docx')
+    const { result } = renderHook(
+      () => ({
+        save: useViewerSave(),
+        registerSave: useRegisterViewerSave(),
+        saveAs: useViewerSaveAs(),
+        registerSaveAs: useRegisterViewerSaveAs(),
+      }),
+      { wrapper },
+    )
+
+    const viewerSave = vi.fn().mockResolvedValue(true)
+    const viewerSaveAs = vi.fn().mockResolvedValue(true)
+
+    act(() => {
+      result.current.registerSave(viewerSave)
+      result.current.registerSaveAs(viewerSaveAs)
+    })
+
+    await result.current.saveAs()
+    expect(viewerSaveAs).toHaveBeenCalledTimes(1)
+    expect(viewerSave).not.toHaveBeenCalled()
+
+    await result.current.save()
+    expect(viewerSave).toHaveBeenCalledTimes(1)
+    expect(viewerSaveAs).toHaveBeenCalledTimes(1)
   })
 
   // ---------------------------------------------------------------------------

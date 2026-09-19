@@ -109,7 +109,7 @@ import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import { TableEditMenuItems } from '../docx/editor/toolbar/TableEditMenuItems'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
 import './__styles__/viewer-docx.css'
-import { useRegisterViewerSave, useSetNavItems, useSetViewerDirty, useSetViewerStats } from './shared/useViewerContext'
+import { useRegisterViewerSave, useRegisterViewerSaveAs, useSetNavItems, useSetViewerDirty, useSetViewerStats } from './shared/useViewerContext'
 import { useViewerShortcuts } from '../hooks/useShortcutManager'
 
 type HeadingNavSeed = {
@@ -875,6 +875,7 @@ function DocxEditor({
   const [lastSavedDocument, setLastSavedDocument] = useState(bundle.document)
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
+  const registerSaveAs = useRegisterViewerSaveAs()
 
   const matches = useMemo(() => {
     if (findQuery.length === 0) {
@@ -2017,6 +2018,14 @@ function DocxEditor({
     return () => registerSave(null)
   }, [registerSave, handleSave])
 
+  // Same registration, for the global Ctrl+Shift+S / App.tsx `saveFileAs()`
+  // — previously unregistered, so that shortcut silently did nothing for a
+  // DOCX document even though the toolbar's own "Save As" button worked.
+  useEffect(() => {
+    registerSaveAs(handleSaveAs)
+    return () => registerSaveAs(null)
+  }, [registerSaveAs, handleSaveAs])
+
   // P2.1/SHELL-08/SHELL-09/UX-03/RUN-02 — claim every combo this viewer's own
   // `handleKeyDownEvent`/commands.ts already recognize at the *active-viewer*
   // precedence tier, so shell-global shortcuts (sidebar toggle, Export menu,
@@ -2045,10 +2054,16 @@ function DocxEditor({
       }
       const key = event.key.toLowerCase()
       const isReservedCombo =
-        key === 'f' || key === 'h' || key === 's' || key === 'p' || key === 'k' ||
+        key === 'f' || key === 'h' || key === 'p' || key === 'k' ||
         key === 'l' || key === 'e' || key === 'r' || key === 'j' ||
         key === '1' || key === '2' || key === '5' ||
-        key === 'z' || key === 'y' || key === 'a' || key === 'b' || key === 'i' || key === 'u'
+        key === 'z' || key === 'y' || key === 'a' || key === 'b' || key === 'i' || key === 'u' ||
+        // Ctrl+S is only ever handled here unshifted (see handleKeyDownEvent
+        // above) — Ctrl+Shift+S must fall through to the shell tier's global
+        // Save As (App.tsx's saveFileAs(), routed via registerSaveAs above),
+        // not get silently eaten here as though this viewer already handled
+        // it (it doesn't: it has no Ctrl+Shift+S branch of its own).
+        (key === 's' && !event.shiftKey)
       if (!isReservedCombo) return false
       event.preventDefault()
       return true

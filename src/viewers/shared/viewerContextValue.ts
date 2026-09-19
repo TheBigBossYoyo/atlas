@@ -47,6 +47,15 @@ export type ViewerContextValue = {
    */
   registerSave: (save: (() => Promise<boolean>) | null) => void
   save: () => Promise<boolean>
+  /**
+   * Same contract as `registerSave`/`save`, for "Save As" (forces the
+   * native Save dialog instead of writing to the existing path). Lets the
+   * global Ctrl+Shift+S / App.tsx `saveFileAs()` reach whichever non-markdown
+   * viewer is active, the same way plain Ctrl+S already reaches it via
+   * `save()` — previously only markdown documents had a working Ctrl+Shift+S.
+   */
+  registerSaveAs: (saveAs: (() => Promise<boolean>) | null) => void
+  saveAs: () => Promise<boolean>
   /** Phase-3 placeholder — no viewer registers this yet. */
   getExportableContent: () => ExportableContent | null
   /** Whether the active viewer has registered an in-viewer find implementation. */
