@@ -269,12 +269,24 @@ export type RejectAllRevisionsCommand = {
   readonly kind: 'reject-all-revisions'
 }
 
-/** D29 — replaces one header/footer part's text (one paragraph per line). */
-export interface SetHeaderFooterTextCommand {
-  readonly kind: 'set-header-footer-text'
+/**
+ * D29 — replaces `count` consecutive blocks of ONE header/footer part's own
+ * block list, starting at `at`, with `blocks`: the same "capture the
+ * original, invert by replaying it" shape `ReplaceBlocksCommand` uses for the
+ * document body, scoped to a header/footer part instead of a section. Used
+ * for all three header/footer edits the panel offers — a single paragraph's
+ * text (`count: 1`, one rebuilt paragraph), appending a paragraph (`count:
+ * 0`), and removing one (`count: 1`, `blocks: []`) — so each is exactly
+ * invertible and undoable as one step, matching every other structural edit
+ * in this file.
+ */
+export interface ReplaceHeaderFooterBlocksCommand {
+  readonly kind: 'replace-header-footer-blocks'
   readonly target: 'header' | 'footer'
   readonly id: string
-  readonly text: string
+  readonly at: number
+  readonly count: number
+  readonly blocks: ReadonlyArray<Block>
 }
 
 export type Command =
@@ -305,7 +317,7 @@ export type Command =
   | ResizeTableColumnCommand
   | ReplaceTableCommand
   | ApplyTablePropsCommand
-  | SetHeaderFooterTextCommand
+  | ReplaceHeaderFooterBlocksCommand
 
 export function acceptRevision(id: string): AcceptRevisionCommand {
   return {

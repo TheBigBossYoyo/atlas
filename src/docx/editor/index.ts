@@ -50,4 +50,14 @@ export { buildRichPasteCommands, bundleContextFor } from './pasteRich'
 export type { RichPasteBundleContext, RichPasteBundlePatch, RichPasteResult } from './pasteRich'
 
 // D29 — header/footer editing.
-export { listHeaderFooterParts, setHeaderFooterText, blocksToText, type HeaderFooterPart, type HeaderFooterKind } from './headerFooter'
+export {
+  listHeaderFooterParts,
+  buildHeaderFooterTextEdit,
+  buildInsertHeaderFooterParagraph,
+  buildRemoveHeaderFooterParagraph,
+  setHeaderFooterBlockText,
+  replaceHeaderFooterBlocks,
+  type HeaderFooterPart,
+  type HeaderFooterRow,
+  type HeaderFooterKind,
+} from './headerFooter'

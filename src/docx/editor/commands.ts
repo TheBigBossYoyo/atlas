@@ -20,7 +20,7 @@ import type {
   Twip,
 } from '../model'
 import { twip } from '../model'
-import { blocksToText, setHeaderFooterText } from './headerFooter'
+import { replaceHeaderFooterBlocks } from './headerFooter'
 
 import type {
   ApplyParaFormatCommand,
@@ -115,8 +115,8 @@ export function applyCommand(
   range?: Range
 } {
   switch (cmd.kind) {
-    case 'set-header-footer-text':
-      return applySetHeaderFooterText(doc, cmd)
+    case 'replace-header-footer-blocks':
+      return applyReplaceHeaderFooterBlocks(doc, cmd)
     case 'insert-text':
       return applyInsertText(doc, cmd, trackChanges)
     case 'delete-range':
@@ -215,17 +215,29 @@ function applyComposite(
   }
 }
 
-/** D29 — swaps one header/footer part's text; the inverse restores what was there. */
-function applySetHeaderFooterText(
+/** D29 — splices `count` blocks of one header/footer part's own block list at
+ * `at` with `blocks`; the inverse captures exactly what was removed, the same
+ * "capture the original" approach `applyReplaceBlocks` uses for the body. */
+function applyReplaceHeaderFooterBlocks(
   doc: Document,
-  cmd: Extract<Command, { kind: 'set-header-footer-text' }>,
+  cmd: Extract<Command, { kind: 'replace-header-footer-blocks' }>,
 ): { document: Document; inverse: Command } {
-  const before = blocksToText(
-    (cmd.target === 'header' ? doc.headers.get(cmd.id) : doc.footers.get(cmd.id))?.blocks ?? [],
-  )
+  const source = cmd.target === 'header' ? doc.headers.get(cmd.id) : doc.footers.get(cmd.id)
+  if (!source) {
+    return { document: doc, inverse: cmd }
+  }
+
+  const removed = source.blocks.slice(cmd.at, cmd.at + cmd.count)
   return {
-    document: setHeaderFooterText(doc, cmd.target, cmd.id, cmd.text),
-    inverse: { kind: 'set-header-footer-text', target: cmd.target, id: cmd.id, text: before },
+    document: replaceHeaderFooterBlocks(doc, cmd.target, cmd.id, cmd.at, cmd.count, cmd.blocks),
+    inverse: {
+      kind: 'replace-header-footer-blocks',
+      target: cmd.target,
+      id: cmd.id,
+      at: cmd.at,
+      count: cmd.blocks.length,
+      blocks: removed,
+    },
   }
 }
 
