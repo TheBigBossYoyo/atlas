@@ -1,3 +1,13 @@
+# ELEC-22: kept as the legacy `com.mdreader.app` id (from before the product
+# was renamed to Atlas) deliberately, not by oversight. electron-builder's
+# NSIS installer keys upgrade-in-place detection and the Windows registry
+# uninstall entry off `appId` — changing it would make every existing install
+# look like a brand-new, unrelated product to both the installer and Windows,
+# breaking the upgrade path and leaving a stale entry behind. If Atlas ever
+# needs a fresh id (e.g. to publish under a new vendor/store identity), that
+# is a deliberate migration: ship one release that both uninstalls the old
+# `com.mdreader.app` install and installs under the new id, not a silent
+# rename here.
 appId: com.mdreader.app
 productName: Atlas
 copyright: Copyright (c) 2026 Atlas

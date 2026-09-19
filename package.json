@@ -16,6 +16,8 @@
     "postbuild": "node scripts/check-bundle.mjs",
     "generate:extensions": "node scripts/generate-extension-manifest.mjs",
     "generate:templates": "node scripts/generate-templates.mjs",
+    "icon": "node scripts/build-icon.mjs",
+    "preelectron:build": "npm run icon",
     "lint": "eslint src electron tests scripts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -24,6 +26,13 @@
     "electron:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "npm run build && electron-builder --win",
     "electron:preview": "npm run build && electron ."
+  },
+  "overrides": {
+    "@glideapps/glide-data-grid": {
+      "react": "$react",
+      "react-dom": "$react-dom",
+      "marked": "$marked"
+    }
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",

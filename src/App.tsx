@@ -74,8 +74,6 @@ import { useToast } from './hooks/useToast';
 
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
-const ENABLE_VIEWER_ROUTER = true;
-
 // P2.1/X4/DAT-15/RUN-08 — non-markdown formats whose viewer renders into the
 // DOM as real text (not a canvas or a virtualized grid), so the existing
 // TreeWalker-based `useSearch` can walk it. PDF/spreadsheets/slide decks are
@@ -1104,7 +1102,7 @@ function AppShell() {
                 )}
               </main>
             </>
-          ) : viewerFile && ENABLE_VIEWER_ROUTER ? (
+          ) : viewerFile ? (
             <main className="content content--viewer">
               {/* P2.1/X4 — the same `contentRef` the markdown preview uses for
                   its TreeWalker search is attached here too (only the branch
@@ -1141,9 +1139,6 @@ function AppShell() {
       />
 
       <DropZone isVisible={isDragging} />
-
-      {/* Suppress unused-var warnings for filePath while keeping it part of the contract */}
-      {filePath && <span style={{ display: 'none' }} aria-hidden="true">{filePath}</span>}
     </div>
   );
 }

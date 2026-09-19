@@ -69,6 +69,14 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   document-wide state and permanently skipped the per-paragraph line cache;
   now only a paragraph that itself carries a footnote/endnote reference does.
 
+- Markdown HTML/PDF export (UX-20): the exported document's `h4`/`h5`/`h6`
+  heading sizes, task-list checkbox styling, and `<details>`/`<summary>`
+  styling had drifted from the live preview (e.g. `h4` exported at `1em`
+  instead of the live preview's `1.05em`); the export CSS now matches, and a
+  new crossref test (`markdownExportCss.crossref.test.ts`, mirroring the
+  existing theme-color crossref test) fails if the two ever drift apart
+  again.
+
 ## [3.2.0] — 2026-09-19 (wave 4: owner-reported editor defects)
 
 ### Fixed

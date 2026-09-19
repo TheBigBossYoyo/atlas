@@ -6,6 +6,17 @@
  * (keyed by `[data-theme="..."]`, matching the live app's own theme
  * attribute) so the exported document/PDF renders in whichever theme was
  * active when the export was triggered.
+ *
+ * UX-20: `STRUCTURAL_CSS` below is a curated, hand-typed subset of
+ * `index.css`'s `.markdown-body` block (search `---- 8. Markdown Body ----`)
+ * — necessarily a subset, since the exported document is a standalone file
+ * that can't reference the app's own stylesheet or its non-color custom
+ * properties (fonts, radii, spacing tokens). It had already silently drifted
+ * from the live preview once (see `exportThemeTokens.ts`'s color-token
+ * history); `markdownExportCss.crossref.test.ts` now diffs this file's
+ * heading `font-size` values against `index.css`'s real ones on every test
+ * run so a future edit to one and not the other fails loudly instead of
+ * quietly drifting again.
  */
 import { EXPORT_THEME_ORDER, EXPORT_THEME_TOKENS } from './exportThemeTokens';
 
@@ -58,9 +69,9 @@ body {
 .markdown-body h1 { font-size: 2em;    border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
 .markdown-body h2 { font-size: 1.5em;  border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
 .markdown-body h3 { font-size: 1.25em; }
-.markdown-body h4 { font-size: 1em;    }
-.markdown-body h5 { font-size: 0.875em;}
-.markdown-body h6 { font-size: 0.85em; opacity: 0.7; }
+.markdown-body h4 { font-size: 1.05em; }
+.markdown-body h5 { font-size: 0.95em; }
+.markdown-body h6 { font-size: 0.9em;  opacity: 0.7; }
 
 .markdown-body p { margin-bottom: 1em; }
 .markdown-body a { color: var(--accent); text-decoration: none; }
@@ -100,6 +111,7 @@ body {
 .markdown-body ul, .markdown-body ol { padding-left: 2em; margin-bottom: 1em; }
 .markdown-body li { margin-bottom: 0.25em; }
 .markdown-body li > ul, .markdown-body li > ol { margin-bottom: 0; }
+.markdown-body li input[type="checkbox"] { margin-right: 0.5em; accent-color: var(--accent); }
 
 /* ── Tables ───────────────────────────────────────────────────────────── */
 .markdown-body table {
@@ -121,6 +133,17 @@ body {
 
 /* ── Mermaid ──────────────────────────────────────────────────────────── */
 .markdown-body .mermaid svg { max-width: 100%; height: auto; }
+
+/* ── Details/summary ──────────────────────────────────────────────────── */
+.markdown-body details {
+  margin-bottom: 1em;
+  padding: 0.75em 1em;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.markdown-body details summary { cursor: pointer; font-weight: 500; color: var(--accent); }
+.markdown-body details[open] summary { margin-bottom: 0.5em; }
 
 /* ── Footer ───────────────────────────────────────────────────────────── */
 .export-footer {
