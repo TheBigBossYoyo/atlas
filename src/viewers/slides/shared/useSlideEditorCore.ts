@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type { SlideData } from '../../shared/SlideDeck.types'
-import { useRegisterViewerSave, useSetViewerDirty } from '../../shared/useViewerContext'
+import { useRegisterViewerSave, useRegisterViewerSaveAs, useSetViewerDirty } from '../../shared/useViewerContext'
 import { useViewerShortcuts } from '../../../hooks/useShortcutManager'
 import { useUndoableState } from '../../spreadsheet/useUndoableState'
 import { loadOfficePackage, writeOfficePackage, type OfficePackage } from '../../../office/officePackage'
@@ -125,6 +125,7 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
 
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
+  const registerSaveAs = useRegisterViewerSaveAs()
   useEffect(() => {
     setDirty(savedPkg !== null && history.present.pkg !== savedPkg)
   }, [history.present.pkg, savedPkg, setDirty])
@@ -164,6 +165,15 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
     registerSave(save)
     return () => registerSave(null)
   }, [registerSave, save])
+
+  // Same registration, for the global Ctrl+Shift+S / App.tsx `saveFileAs()`
+  // — previously unregistered, so that shortcut silently did nothing for a
+  // slide deck (pptx/odp) even though the toolbar's own "Save As" button
+  // worked.
+  useEffect(() => {
+    registerSaveAs(saveAs)
+    return () => registerSaveAs(null)
+  }, [registerSaveAs, saveAs])
 
   useViewerShortcuts(
     useCallback(

@@ -63,6 +63,9 @@ export function ViewerProvider({
   // any new save() call could reach it.
   const saveRef = useRef<(() => Promise<boolean>) | null>(null)
 
+  // Mirrors `saveRef` above, for the "Save As" side of the contract.
+  const saveAsRef = useRef<(() => Promise<boolean>) | null>(null)
+
   // Same reasoning as `saveRef` above: the active viewer's find-overlay
   // opener is an implementation detail swapped in/out via `registerFind`,
   // not something that itself needs to trigger a re-render. `canFind`
@@ -101,6 +104,17 @@ export function ViewerProvider({
     return saveRef.current()
   }, [])
 
+  const registerSaveAs = useCallback((saveAs: (() => Promise<boolean>) | null) => {
+    saveAsRef.current = saveAs
+  }, [])
+
+  const saveAs = useCallback(async (): Promise<boolean> => {
+    if (saveAsRef.current === null) {
+      return false
+    }
+    return saveAsRef.current()
+  }, [])
+
   // P1.1 placeholder — no viewer registers export content yet; real
   // implementation deferred to the Phase 3 per-format export work.
   const getExportableContent = useCallback((): ExportableContent | null => null, [])
@@ -124,6 +138,8 @@ export function ViewerProvider({
       setDirty,
       registerSave,
       save,
+      registerSaveAs,
+      saveAs,
       getExportableContent,
       canFind: state.canFind,
       registerFind,
@@ -139,6 +155,8 @@ export function ViewerProvider({
       setDirty,
       registerSave,
       save,
+      registerSaveAs,
+      saveAs,
       getExportableContent,
       registerFind,
       openFind,

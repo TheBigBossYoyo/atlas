@@ -38,7 +38,7 @@ import {
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
 import { writeWorkbookThroughOriginal } from './xlsxPassthrough'
 import { useUndoableState } from './useUndoableState'
-import { useRegisterViewerSave, useSetViewerDirty } from '../shared/useViewerContext'
+import { useRegisterViewerSave, useRegisterViewerSaveAs, useSetViewerDirty } from '../shared/useViewerContext'
 import { useViewerShortcuts } from '../../hooks/useShortcutManager'
 
 export type SpreadsheetSaveTarget =
@@ -168,6 +168,7 @@ export function useSpreadsheetEditor(
 
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
+  const registerSaveAs = useRegisterViewerSaveAs()
 
   useEffect(() => {
     setDirty(history.present !== lastSavedDocument)
@@ -276,6 +277,17 @@ export function useSpreadsheetEditor(
     registerSave(handleSave)
     return () => registerSave(null)
   }, [registerSave, handleSave])
+
+  // Same registration, for the global Ctrl+Shift+S / App.tsx `saveFileAs()`
+  // — previously unregistered, so that shortcut silently did nothing for a
+  // spreadsheet even though the toolbar's own "Save As…" button worked.
+  // `handleSaveAs`'s optional override argument is never passed here, so it
+  // always saves to the format the toolbar's own "Save As" button defaults
+  // to (`target`/`defaultSaveTarget`), same as clicking that button plainly.
+  useEffect(() => {
+    registerSaveAs(handleSaveAs)
+    return () => registerSaveAs(null)
+  }, [registerSaveAs, handleSaveAs])
 
   // Ctrl+Z/Ctrl+Y (and Ctrl+Shift+Z as the common redo alternative) at the
   // active-viewer shortcut precedence tier (see DocxViewer's identical use

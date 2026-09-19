@@ -51,6 +51,16 @@ export function useViewerSave(): () => Promise<boolean> {
   return useViewerCtx().save
 }
 
+/** The active viewer calls this to plug its own "Save As" implementation into the shared contract. */
+export function useRegisterViewerSaveAs(): (saveAs: (() => Promise<boolean>) | null) => void {
+  return useViewerCtx().registerSaveAs
+}
+
+/** Invokes whichever "Save As" implementation the active viewer has registered (or resolves `false` if none has). */
+export function useViewerSaveAs(): () => Promise<boolean> {
+  return useViewerCtx().saveAs
+}
+
 /** Phase-3 placeholder — always resolves `null` until a viewer registers real export content. */
 export function useGetExportableContent(): () => ExportableContent | null {
   return useViewerCtx().getExportableContent

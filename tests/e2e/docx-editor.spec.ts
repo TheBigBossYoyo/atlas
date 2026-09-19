@@ -304,3 +304,38 @@ test('D29 follow-up: Ctrl+S while the header field is still focused saves what w
     kill(app)
   }
 })
+
+test('Ctrl+Shift+S (Save As) actually opens the native Save dialog for a DOCX, not a silent no-op', async () => {
+  // Found by driving the real app: the Shortcuts modal documents Ctrl+Shift+S
+  // as a global "Save As", and App.tsx's saveFileAs() already routes plain
+  // Ctrl+S to whichever non-markdown viewer is active — but nothing wired an
+  // equivalent path for Save As, so it silently did nothing for a DOCX. Worse,
+  // DocxViewer's own `useViewerShortcuts` combo-claiming filter treated any
+  // Ctrl+S (shifted or not) as "reserved" and swallowed the keystroke before
+  // it could even reach the shell dispatcher, independent of the missing
+  // routing. Both are fixed: the viewer only claims the unshifted combo now,
+  // and `saveFileAs()` falls back to a new `registerSaveAs`/`saveAs()`
+  // capability every save-capable viewer (DOCX, spreadsheet, slides)
+  // registers, mirroring `registerSave`/`save()`.
+  const { app, page } = await launch(await createFixture())
+  try {
+    let saveDialogCalls = 0
+    await app.evaluate(({ dialog }) => {
+      const original = dialog.showSaveDialog.bind(dialog)
+      dialog.showSaveDialog = (async (...args: Parameters<typeof dialog.showSaveDialog>) => {
+        ;(globalThis as { __saveAsCalls?: number }).__saveAsCalls =
+          ((globalThis as { __saveAsCalls?: number }).__saveAsCalls ?? 0) + 1
+        return original(...args)
+      }) as typeof dialog.showSaveDialog
+    })
+
+    await page.locator('.docx-page__column').first().click({ position: { x: 5, y: 5 } })
+    await page.keyboard.press('Control+Shift+S')
+    await page.waitForTimeout(500)
+
+    saveDialogCalls = await app.evaluate(() => (globalThis as { __saveAsCalls?: number }).__saveAsCalls ?? 0)
+    expect(saveDialogCalls).toBe(1)
+  } finally {
+    kill(app)
+  }
+})

@@ -66,6 +66,7 @@ import {
   useSetViewerStats,
   useViewerIsDirty,
   useViewerSave,
+  useViewerSaveAs,
   useGetExportableContent,
 } from './viewers/shared/useViewerContext';
 import type { ExportableContent } from './viewers/shared/viewerContextValue';
@@ -107,6 +108,7 @@ function MarkdownChromeBridge({ navItems, words, headings }: MarkdownChromeBridg
 interface ViewerSessionBridgeProps {
   onDirtyChange: (dirty: boolean) => void;
   saveRef: React.MutableRefObject<() => Promise<boolean>>;
+  saveAsRef: React.MutableRefObject<() => Promise<boolean>>;
   exportContentRef: React.MutableRefObject<() => ExportableContent | null>;
   /** Re-derive the exportable-content format whenever the active file
    * changes — see the effect below for why this can't just key off
@@ -127,12 +129,14 @@ interface ViewerSessionBridgeProps {
 function ViewerSessionBridge({
   onDirtyChange,
   saveRef,
+  saveAsRef,
   exportContentRef,
   filePath,
   onExportableFormatChange,
 }: ViewerSessionBridgeProps) {
   const dirty = useViewerIsDirty();
   const save = useViewerSave();
+  const saveAs = useViewerSaveAs();
   const getExportableContent = useGetExportableContent();
 
   useEffect(() => {
@@ -142,6 +146,10 @@ function ViewerSessionBridge({
   useEffect(() => {
     saveRef.current = save;
   }, [save, saveRef]);
+
+  useEffect(() => {
+    saveAsRef.current = saveAs;
+  }, [saveAs, saveAsRef]);
 
   useEffect(() => {
     exportContentRef.current = getExportableContent;
@@ -181,6 +189,11 @@ function AppShell() {
   const dirtyGuardStateRef = useRef({ isMarkdownDocument: false, isDirty: false, viewerDirty: false });
   const pendingConfirmResolveRef = useRef<((proceed: boolean) => void) | null>(null);
   const viewerSaveRef = useRef<() => Promise<boolean>>(async () => false);
+  // Mirrors `viewerSaveRef`, for the "Save As" side of the document-session
+  // contract — lets the global Ctrl+Shift+S / `saveFileAs()` reach whichever
+  // non-markdown viewer is active, the same way `viewerSaveRef` already lets
+  // plain Ctrl+S reach it.
+  const viewerSaveAsRef = useRef<() => Promise<boolean>>(async () => false);
   // UX-12 — the active viewer's registered `getExportableContent` (a
   // Phase-3 placeholder today; see viewerContextValue.ts), lifted the same
   // way `viewerSaveRef` lifts `save`. `exportableContentFormat` mirrors just
@@ -413,7 +426,14 @@ function AppShell() {
   }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, filePath, followSavedPath, isMarkdownDocument, localMarkdown]);
 
   const saveFileAs = useCallback(async (): Promise<boolean> => {
-    if (!isMarkdownDocument) return false;
+    if (!isMarkdownDocument) {
+      // P1.1/SHELL-10/DXE-07/RUN-03's fix for Ctrl+S ("route the global
+      // Save to whichever viewer is actually active" — see `saveFile`
+      // above) never got a Save-As counterpart, so the documented global
+      // Ctrl+Shift+S silently did nothing for every non-markdown format.
+      // Mirrors `saveFile`'s own non-markdown branch.
+      return viewerSaveAsRef.current();
+    }
     if (!window.electronAPI) return false;
     const savingFile = file;
     const savingIdentityKey = fileIdentityKey;
@@ -441,6 +461,9 @@ function AppShell() {
     }
     return false;
   }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, followSavedPath, isMarkdownDocument, localMarkdown]);
+  // (viewerSaveAsRef is a stable ref identity, so it's intentionally left
+  // out of the dependency array above, matching viewerSaveRef's usage in
+  // saveFile.)
 
   // Counts nested dragenter/dragleave pairs so the overlay only hides once
   // the drag has actually left the window, not merely a child element
@@ -1065,6 +1088,7 @@ function AppShell() {
         <ViewerSessionBridge
           onDirtyChange={setViewerDirty}
           saveRef={viewerSaveRef}
+          saveAsRef={viewerSaveAsRef}
           exportContentRef={exportContentRef}
           filePath={filePath || null}
           onExportableFormatChange={setExportableContentFormat}
