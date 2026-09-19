@@ -9,7 +9,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildPptxFixtureZip } from '../../../viewers/slides/pptx/__tests__/pptxFixture';
 import { parsePptxSlides } from '../../../viewers/slides/pptx/parser';
 import type { CancelSignal, ZipArchive } from '../../../viewers/slides/shared/xmlUtils';
+import { DocxParseError } from '../../../docx/parser/unzip';
+import { loadOfficePackage } from '../../../office/officePackage';
 import { exportSlidesPdf } from '../slidesPdf';
+
+// Review fix — exportSlidesPdf now reads the archive through
+// `loadOfficePackage` (the same size-budgeted `unzipDocx` the live
+// viewer/editor use) instead of a bare `JSZip.loadAsync`. Wrapping the real
+// implementation (rather than replacing it outright) keeps every other test
+// in this file exercising the genuine read path; only the dedicated test
+// below swaps in a rejection to prove the guard's failure propagates.
+vi.mock('../../../office/officePackage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../office/officePackage')>();
+  return { ...actual, loadOfficePackage: vi.fn(actual.loadOfficePackage) };
+});
 
 async function buildPptxBuffer(): Promise<ArrayBuffer> {
   const zip = buildPptxFixtureZip();
@@ -78,5 +91,20 @@ describe('exportSlidesPdf', () => {
     const buffer = await emptyZip.generateAsync({ type: 'arraybuffer' });
 
     await expect(exportSlidesPdf(buffer, 'empty.pptx', 'pptx')).rejects.toThrow('PDF export failed');
+  });
+
+  it('reads the archive through the size-budgeted office-package reader, and surfaces its zip-bomb guard as a friendly error', async () => {
+    const buffer = await buildPptxBuffer();
+    vi.mocked(loadOfficePackage).mockRejectedValueOnce(
+      new DocxParseError(
+        'Archive\'s combined uncompressed size is 999,999,999 bytes, over the 500 MiB total limit; ' +
+          'refusing to extract (possible zip bomb).',
+      ),
+    );
+
+    await expect(exportSlidesPdf(buffer, 'deck.pptx', 'pptx')).rejects.toThrow(/possible zip bomb/);
+    expect(loadOfficePackage).toHaveBeenCalledWith(buffer);
+    // The parser never even runs once the size guard rejects the archive.
+    expect(printToPdfMock).not.toHaveBeenCalled();
   });
 });
