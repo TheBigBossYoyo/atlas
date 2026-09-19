@@ -64,7 +64,10 @@
 .code-viewer__button--primary {
   border-color: var(--accent);
   background: var(--accent);
-  color: #fff;
+  /* A11Y-2: was a hardcoded #fff — only 2.0-2.5:1 against dark/nord/dracula's
+     lighter --accent. --bg-primary flips dark/light per theme and already
+     passes AA against --accent (and --accent-hover) in every theme. */
+  color: var(--bg-primary);
 }
 
 .code-viewer__button--primary:hover:not(:disabled) {
