@@ -162,6 +162,13 @@ function trustPath(filePath) {
 const NOT_ALLOWLISTED_MESSAGE =
   'This file cannot be opened because it was not selected through Atlas. Try File > Open instead.';
 const SENDER_FRAME_ERROR_MESSAGE = 'This request could not be verified and was blocked.';
+// UX — shown when a previously-opened/allowlisted path no longer exists on
+// disk (deleted, renamed, or moved out from under Atlas, e.g. a stale
+// "Recent" entry or the file being removed by another program while open).
+// Replaces the bare `Error('Invalid path')` this used to throw, which read
+// like Atlas itself had done something wrong rather than telling the user
+// what happened and that it isn't recoverable from here.
+const FILE_NOT_FOUND_MESSAGE = 'This file could not be found — it may have been moved, renamed, or deleted.';
 
 /**
  * @param {Electron.IpcMainInvokeEvent} event
@@ -797,7 +804,7 @@ ipcMain.handle('file:readBinaryByPath', async (event, filePath) => {
     throw new Error(NOT_ALLOWLISTED_MESSAGE);
   }
   if (!fs.existsSync(filePath)) {
-    throw new Error('Invalid path');
+    throw new Error(FILE_NOT_FOUND_MESSAGE);
   }
   assertFileSizeAllowed(filePath);
   const buf = substituteBlankTemplateIfEmpty(filePath, await fs.promises.readFile(filePath));
