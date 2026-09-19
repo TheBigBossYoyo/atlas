@@ -61,14 +61,14 @@ test('USR-19: runs the file only after confirmation, and streams its output', as
   try {
     // Decline first: nothing runs.
     await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = (() => Promise.resolve({ response: 1 })) as typeof dialog.showMessageBox
+      dialog.showMessageBox = (() => Promise.resolve({ response: 1, checkboxChecked: false })) as typeof dialog.showMessageBox
     })
     await page.getByRole('button', { name: 'Run' }).click()
     await expect(page.getByRole('region', { name: 'Program output' })).toHaveCount(0)
 
     // Accept: the program runs and its output is shown.
     await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = (() => Promise.resolve({ response: 0 })) as typeof dialog.showMessageBox
+      dialog.showMessageBox = (() => Promise.resolve({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox
     })
     await page.getByRole('button', { name: 'Run' }).click()
     const output = page.getByRole('region', { name: 'Program output' })
@@ -85,7 +85,7 @@ test('USR-19: a long-running program can be stopped', async () => {
   const { app, page } = await launch(file)
   try {
     await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = (() => Promise.resolve({ response: 0 })) as typeof dialog.showMessageBox
+      dialog.showMessageBox = (() => Promise.resolve({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox
     })
     await page.getByRole('button', { name: 'Run' }).click()
     const output = page.getByRole('region', { name: 'Program output' })

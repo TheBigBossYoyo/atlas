@@ -19,7 +19,6 @@ import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
-// @ts-expect-error -- pdfjs-dist ships no types for the legacy Node entry point.
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 const projectRoot = process.cwd()
@@ -34,8 +33,8 @@ test.beforeAll(() => {
 
 async function countPdfPages(filePath: string): Promise<number> {
   const buffer = await fs.readFile(filePath)
-  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer), disableWorker: true }).promise
-  return doc.numPages as number
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
+  return doc.numPages
 }
 
 /** Waits for a nonzero-size file to appear at `filePath` — `atomicWriteFile`
@@ -147,13 +146,13 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
       expect(pageCount).toBeGreaterThanOrEqual(2)
 
       const buffer = await fs.readFile(outPath)
-      const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer), disableWorker: true }).promise
+      const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
       const texts = await Promise.all(
         Array.from({ length: doc.numPages }, (_, i) =>
           doc
             .getPage(i + 1)
-            .then((p: { getTextContent: () => Promise<{ items: Array<{ str?: string }> }> }) => p.getTextContent())
-            .then((content: { items: Array<{ str?: string }> }) => content.items.map(item => item.str ?? '').join(' ')),
+            .then(p => p.getTextContent())
+            .then(content => content.items.map(item => ('str' in item ? item.str : '')).join(' ')),
         ),
       )
       const allText = texts.join('\n')
