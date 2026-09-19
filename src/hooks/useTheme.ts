@@ -71,7 +71,7 @@ export function useTheme() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem(THEME_KEY, theme);
-    window.electronAPI?.setTheme?.(theme as never);
+    window.electronAPI?.setTheme?.(theme);
   }, [theme]);
 
   // SHELL-25 — the initial system preference was previously only read once,

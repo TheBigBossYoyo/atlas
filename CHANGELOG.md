@@ -106,6 +106,14 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   in the interim. `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` remain
   unchecked — see `STRICT_MODE_TODO.md`.
 
+- Markdown HTML/PDF export (UX-20): the exported document's `h4`/`h5`/`h6`
+  heading sizes, task-list checkbox styling, and `<details>`/`<summary>`
+  styling had drifted from the live preview (e.g. `h4` exported at `1em`
+  instead of the live preview's `1.05em`); the export CSS now matches, and a
+  new crossref test (`markdownExportCss.crossref.test.ts`, mirroring the
+  existing theme-color crossref test) fails if the two ever drift apart
+  again.
+
 ## [3.2.0] — 2026-09-19 (wave 4: owner-reported editor defects)
 
 ### Fixed
