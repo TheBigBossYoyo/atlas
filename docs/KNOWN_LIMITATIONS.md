@@ -19,10 +19,11 @@ a `DEFER-N` entry there.
 
 ## Editing scope, overall
 
-**Markdown**, **DOCX**, and **spreadsheets/CSV/TSV** support editing + save.
-Every other format — PDF, PPTX, ODP, plain text, code, RTF, ODT — is
-**view-only**: you can open, read, search, and (per-format, see below)
-export or print, but not edit the source file in place.
+**Markdown**, **DOCX**, **spreadsheets/CSV/TSV**, **PPTX/ODP** (wave 4,
+USR-16) and **source code** (CodeMirror, wave 4, USR-18) support editing +
+save. PDF, plain text (`.txt`/`.log`), RTF, ODT and the legacy `.doc`/`.ppt`
+viewers are **view-only**: you can open, read, search, and (per-format, see
+below) export or print, but not edit the source file in place.
 
 Spreadsheet/CSV editing (wave3/sheets): cell edit, formulas (a small
 in-house evaluator — no full spreadsheet formula engine — with unsupported
@@ -141,19 +142,21 @@ original legacy file in place); frozen-pane metadata specifically is not
 read for these two formats (different, binary settings schema). `.fods`
 (flat ODS) opens in the ODS viewer/editor the same way.
 
-`.doc`, `.ppt`, and `.xlt` (template) are still detected by CFB (OLE
-Compound File Binary) magic bytes and given a specific, friendly message
-pointing at the modern equivalent (`.docx`/`.pptx`/`.xlsx`) — Atlas does
-**not** parse these. Full OLE-CFB parsing for the remaining pre-2007 Office
-formats is out of scope for this plan (declining real-world frequency; a
-separate, large undertaking).
+`.doc` and `.ppt` open in read-only **text** viewers (wave 4, `src/legacy/`):
+the document's text / each slide's text is extracted from the OLE compound
+file, without layout, images or formatting, and cannot be edited or saved.
+`.xlt` (template) is still only detected by its CFB magic bytes and given a
+friendly message pointing at `.xlsx`.
 
 ## PPTX / ODP (slides)
 
-View-only: layout and master/slide inheritance, run formatting, bullets,
+Rendering: layout and master/slide inheritance, run formatting, bullets,
 tables, grouped shapes, speaker notes, keyboard navigation between slides,
-and a thumbnail rail. No editing of any kind (text, shapes, layout, or
-reordering slides).
+and a thumbnail rail. Editing (wave 4, USR-16, PPTX and ODP): text in place,
+move/resize (including rotated shapes), insert/delete text boxes,
+add/duplicate/delete/reorder slides, speaker notes, presenter view,
+Save/Save As through the original package. Not editable: tables, charts,
+images (can be moved, not replaced), animations and transitions.
 
 ## PDF
 
@@ -182,9 +185,10 @@ Atlas either (see the improvement plan's DEFER-6).
 
 ## Text / Code
 
-View-only, virtualized for large files (renders visible rows only). Code
-gets syntax highlighting for 30+ languages via Shiki. In-document find
-(`Ctrl+F`) works in both. No editing.
+Source code opens in a CodeMirror 6 editor (find/replace, go to line,
+folding, multi-cursor, save) with an explicit, confirmed Run for
+JavaScript/TypeScript/Python (wave 4, USR-18/USR-19). Plain text (`.txt`,
+`.log`) stays view-only, virtualized for large files, with in-document find.
 
 ## RTF / ODT
 
@@ -201,10 +205,10 @@ below for why that library is large and why Atlas keeps it anyway.
 
 ## Multi-document support
 
-Atlas is single-document: opening a new file replaces the current one
-(after an unsaved-changes prompt if needed). There are no tabs and no
-side-by-side multi-document view. This is a deliberate, larger
-architectural feature left for a future roadmap item, not a bug.
+Several documents can be open at once in tabs (wave 4, SHELL-17). Only the
+showing tab is mounted; switching away from unsaved changes asks
+Save/Discard/Cancel, and a tab re-reads its file from disk when shown again.
+There is no side-by-side (split) view of two documents.
 
 ## Creating new documents (NEW-01)
 

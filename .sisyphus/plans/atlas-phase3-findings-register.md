@@ -467,11 +467,22 @@ Wave-4 follow-ups (2026-09-17 → 2026-09-19, all on `main`):
 | Review (2026-09-19) | Fixed | `a731ad8` | .pptx/.odp read through the size-budgeted unzip (zip bomb); layout placeholder attributes escaped; XML-illegal control characters dropped from user text; .ppt slide-record cap |
 | P4.1 | Done | `6410eef` | TypeScript 6 enables `strict` by default and `src/` was already clean; `strict: true` made explicit, `tests/e2e` now type-checked (`tsconfig.e2e.json`); `electron/*.cjs` (94 `checkJs` errors) tracked in `STRICT_MODE_TODO.md` |
 
+Wave 5 (2026-09-19, after 3.2.0; parallel agents in worktrees, merged and fully re-verified: 2776 unit tests, 57/57 e2e):
+
+| ID | Status | Where | Evidence |
+|---|---|---|---|
+| NEW-01 (owner report) | Fixed | `e62a5a3`, `1bb566e` | "New" menu + Ctrl+N creates .docx/.xlsx/.ods/.pptx/.odp/.md from committed blank templates (`electron/templates/`, `scripts/generate-templates.mjs`) through a main-owned `document:new` IPC (fixed format list, native Save dialog, allowlisted). A 0-byte file of those formats (Explorer "New > Word document" without Office — the owner's `Philosophie\19-09.docx`) now opens as a blank document bound to its path; other empty formats show "This file is empty" — `tests/e2e/new-document.spec.ts` |
+| Review leftover | Fixed | `fab7d33` | A markdown save still in flight after a tab switch no longer clears the new tab's dirty flag / crash-recovery draft |
+| Review leftover | Fixed | `26bf775`, `a1bd5d9` | Slide PDF export and the spreadsheet zip readers now have a decompression budget |
+| USR-17 follow-up | Fixed | `a1bd5d9` | Sheet add/delete/rename/reorder saved through the original package (styles kept); conditional formatting, data validation, hyperlinks, autoFilter and single-area defined names re-anchored on row/column insert/delete. Not updated: cell formulas referencing a renamed/deleted sheet, multi-area defined names, whole-row/column ranges |
+| D29 follow-up | Fixed | `79649ee` | Header/footer editing per paragraph: images, fields, tables and untouched run formatting are preserved; Ctrl+S while the header field has focus now saves the new text. A paragraph mixing text with a field/image is shown read-only |
+| D23-PERF | Improved | `c0d969e` | Every page no longer re-renders twice per keystroke (96 → 24 page renders); typing on the 35-page perf fixture ~160-180 ms (was ~240-390 ms); footnote line-cache over-invalidation fixed. Page virtualization / incremental re-pagination still not done |
+
 Still open after wave 4:
 
 - ~~**ODP editing**~~ — fixed in `0aea4da`.
 - **Legacy .doc/.ppt** are text-only and read-only; header/footer editing is plain text only.
-- **Long DOCX typing** is still ~0.5 s per keystroke on a 36-page document (page virtualization not done).
+- **Long DOCX typing** is ~160-180 ms per keystroke on the 35-page perf fixture after wave 5 (page virtualization / incremental pagination not done).
 - Review leftovers (MEDIUM/LOW, not fixed): header/footer text is committed on blur, so Ctrl+S pressed while the header field still has focus saves the previous text; a markdown save still in flight when the user switches tabs can clear the new tab's dirty flag and the single global crash-recovery draft; the D23 line cache skips every paragraph after the first footnote reference in a section (slower, not wrong); other JSZip readers (spreadsheet panes/tables, slide PDF export) still have no size budget.
 - ~~**Spreadsheet styling on save**~~ — fixed after the wave-4 review: an .xlsx/.xlsm is now saved THROUGH the file it was opened from (`viewers/spreadsheet/xlsxPassthrough.ts`), so untouched cells keep their exact XML (type, style, number format, cached formula value) and styles/charts/filters/pivots pass through; the stale calc chain is dropped and the workbook is marked "recalculate on load". The fresh-workbook writer remains the fallback for CSV, format changes, and sheet add/delete, and references outside the model (conditional formatting, data validation, defined names) are not re-anchored when rows/columns move.
 - ~~**Rotated shapes**~~ — fixed: hit testing, the selection box and handle resizing all work in the shape's own rotated space (`viewers/shared/slideGeometry.ts`).
