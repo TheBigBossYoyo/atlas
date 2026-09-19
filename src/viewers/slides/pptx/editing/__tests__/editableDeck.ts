@@ -32,7 +32,11 @@ export async function buildEditableDeck(): Promise<ArrayBuffer> {
   const zip = new JSZip()
   zip.file(
     '[Content_Types].xml',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+    // `Default Extension="png"` matters, not just for realism: OPC requires
+    // every part to resolve to SOME content type (§10.1.2.2.1) — omitting
+    // it left `ppt/media/image1.png` below with none at all, a genuine
+    // spec violation `scripts/validate-office-file.mjs` catches.
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/>` +
       `<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>` +
       `<Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>` +
       `<Override PartName="/ppt/slides/slide2.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>` +

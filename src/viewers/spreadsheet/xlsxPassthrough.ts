@@ -378,10 +378,24 @@ function markRecalculateOnLoad(doc: XMLDocument, root: Element): void {
   calcPr.setAttribute('fullCalcOnLoad', '1')
 }
 
-/** Drops the (now stale) calculation chain from the zip; returns whether it existed, so the caller can also scrub its `[Content_Types].xml` override. Excel rebuilds the chain on the next recalculation. */
-function removeCalcChain(zip: JSZip): boolean {
+/**
+ * Drops the (now stale) calculation chain from the zip AND the
+ * `xl/_rels/workbook.xml.rels` relationship that points at it — leaving
+ * that relationship behind (the original bug here) is a dangling `r:id`
+ * target: the part it named no longer exists in the package, which is
+ * exactly the "relationship target missing" defect that makes Excel show
+ * an "unreadable content" repair prompt. Returns whether a calc chain
+ * existed at all, so the caller can also scrub its `[Content_Types].xml`
+ * override. Excel rebuilds the chain on the next recalculation.
+ */
+function removeCalcChain(zip: JSZip, relsDoc: XMLDocument): boolean {
   if (!zip.file('xl/calcChain.xml')) return false
   zip.remove('xl/calcChain.xml')
+  for (const rel of descendantElements(relsDoc, 'Relationship')) {
+    if (resolveWorkbookRelTarget(rel.getAttribute('Target') ?? '') === 'xl/calcChain.xml') {
+      rel.parentNode?.removeChild(rel)
+    }
+  }
   return true
 }
 
@@ -817,7 +831,7 @@ export async function writeWorkbookThroughOriginal(
 
   updateDefinedNames(workbookRoot, changesByOriginalName, originalIndexToNewIndex)
   markRecalculateOnLoad(workbookDoc, workbookRoot)
-  if (removeCalcChain(zip) && contentTypesDoc) removeContentTypeOverrideForPart(contentTypesDoc, 'xl/calcChain.xml')
+  if (removeCalcChain(zip, relsDoc) && contentTypesDoc) removeContentTypeOverrideForPart(contentTypesDoc, 'xl/calcChain.xml')
 
   if (contentTypesDoc) zip.file(CONTENT_TYPES_PATH, serializeXmlPart(contentTypesDoc))
   zip.file(WORKBOOK_RELS_PATH, serializeXmlPart(relsDoc))

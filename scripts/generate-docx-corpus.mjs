@@ -593,6 +593,16 @@ function fixtureSectionBreaks() {
 const SDT_MARKER = 'This paragraph lives inside a content control.'
 const ALT_CONTENT_MARKER = 'ATLAS_ALTCONTENT_PLACEHOLDER'
 
+// `xmlns:a` (DrawingML main) is declared right here on `<a:graphic>`, NOT
+// assumed to already be in scope from the document root — `docx` (the npm
+// package the rest of this generator uses) never declares it at the root
+// either, only locally on each `<a:graphic>`/`<a:graphicFrameLocks>` it
+// emits (see `image-inline.docx`'s own `word/document.xml`). This block is
+// hand-authored XML surgery, not `docx`-generated, so it does not get that
+// declaration for free — omitting it left this fixture with an undeclared
+// namespace prefix (caught by `scripts/validate-office-file.mjs`), which is
+// exactly the "not namespace-well-formed" defect a real Word install
+// refuses/repairs a file over.
 const ALT_CONTENT_RUN_XML = `
 <w:r>
   <mc:AlternateContent>
@@ -603,7 +613,7 @@ const ALT_CONTENT_RUN_XML = `
           <wp:effectExtent l="0" t="0" r="0" b="0"/>
           <wp:docPr id="1" name="Atlas Rectangle"/>
           <wp:cNvGraphicFramePr/>
-          <a:graphic>
+          <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
             <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
               <wps:wsp>
                 <wps:cNvSpPr/>

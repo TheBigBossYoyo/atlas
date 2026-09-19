@@ -163,6 +163,29 @@ function buildBlankWorkbookBytes(bookType) {
   return XLSX.write(wb, { type: 'buffer', bookType })
 }
 
+/**
+ * SheetJS's `bookType: 'ods'` writer does not put `mimetype` first and
+ * stored (verified directly: it emits `META-INF/manifest.xml, meta.xml,
+ * mimetype, styles.xml, content.xml, manifest.rdf`), which the ODF Package
+ * spec (OASIS ODF 1.2 part 3, §2.2) requires. Mirrors the fix in
+ * `src/viewers/spreadsheet/spreadsheetWrite.ts`'s `fixOdsPackaging` (see
+ * its header for the full explanation) so the committed template matches
+ * what a real save now produces.
+ */
+async function fixOdsPackaging(bytes) {
+  const original = await JSZip.loadAsync(bytes)
+  const mimetype = await original.file('mimetype')?.async('uint8array')
+  if (mimetype === undefined) return bytes
+
+  const repacked = new JSZip()
+  repacked.file('mimetype', mimetype, { compression: 'STORE' })
+  for (const [path, entry] of Object.entries(original.files)) {
+    if (path === 'mimetype' || entry.dir) continue
+    repacked.file(path, await entry.async('uint8array'))
+  }
+  return repacked.generateAsync({ type: 'uint8array', compression: 'DEFLATE' })
+}
+
 // ---------------------------------------------------------------------------
 // PPTX — one 16:9 slide with an empty title placeholder. Modeled on
 // `src/viewers/slides/pptx/__tests__/pptxFixture.ts`'s minimal package shape,
@@ -392,7 +415,7 @@ async function main() {
 
   await writeFile(path.join(outDir, 'blank.docx'), docxBytes)
   await writeFile(path.join(outDir, 'blank.xlsx'), buildBlankWorkbookBytes('xlsx'))
-  await writeFile(path.join(outDir, 'blank.ods'), buildBlankWorkbookBytes('ods'))
+  await writeFile(path.join(outDir, 'blank.ods'), await fixOdsPackaging(buildBlankWorkbookBytes('ods')))
   await writeFile(path.join(outDir, 'blank.pptx'), pptxBytes)
   await writeFile(path.join(outDir, 'blank.odp'), odpBytes)
 
