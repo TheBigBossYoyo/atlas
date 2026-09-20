@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 
 import { attachFrozenPanes, parseWorkbookBuffer, sheetToGrid } from '../spreadsheetGrid'
+import { t } from '../../../i18n'
 
 describe('sheetToGrid', () => {
   it('renders a formatted date via cell.w instead of a raw serial number (DAT-04)', () => {
@@ -165,6 +166,51 @@ describe('parseWorkbookBuffer', () => {
     const sheets = parseWorkbookBuffer(buffer)
 
     expect(sheets).toHaveLength(1)
+    expect(sheets[0].grid.rows).toEqual([
+      ['Name', 'Score'],
+      ['Alice', '10'],
+    ])
+  })
+})
+
+describe('parseWorkbookBuffer — zip-bomb guard (SHEET-1)', () => {
+  /** Locates the first central directory file header's signature (`PK\x01\x02`) in a real xlsx buffer. */
+  function findCentralDirectoryHeaderOffset(bytes: Uint8Array): number {
+    for (let i = 0; i < bytes.length - 4; i++) {
+      if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x01 && bytes[i + 3] === 0x02) {
+        return i
+      }
+    }
+    throw new Error('central directory header not found in test fixture')
+  }
+
+  /** A real, valid xlsx buffer with ONE part's central-directory-declared uncompressed size lied about — small real bytes, huge declared size, the exact zip-bomb shape — without touching the real (small, valid-deflate) compressed data at all. */
+  function realWorkbookWithLyingDeclaredSize(declaredSize: number): ArrayBuffer {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Name', 'Score'], ['Alice', 10]]), 'Sheet1')
+    const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+
+    const bytes = new Uint8Array(buffer.slice(0))
+    const headerOffset = findCentralDirectoryHeaderOffset(bytes)
+    new DataView(bytes.buffer).setUint32(headerOffset + 24, declaredSize, true)
+    return bytes.buffer
+  }
+
+  it('refuses a real workbook whose zip central directory declares an implausible uncompressed size, before XLSX.read ever runs', () => {
+    // Comfortably over spreadsheetZipBudget.ts's 200MiB-per-entry default,
+    // yet the file's actual bytes (the small worksheet built above) never
+    // get anywhere near that — this is checked off the declared size alone.
+    const crafted = realWorkbookWithLyingDeclaredSize(300 * 1024 * 1024)
+    expect(() => parseWorkbookBuffer(crafted)).toThrow(t('errors.library.tooLarge'))
+  })
+
+  it('still parses a real workbook whose declared sizes are all honest (normal fixture unaffected)', () => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Name', 'Score'], ['Alice', 10]]), 'Sheet1')
+    const buffer = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+
+    const sheets = parseWorkbookBuffer(buffer)
+
     expect(sheets[0].grid.rows).toEqual([
       ['Name', 'Score'],
       ['Alice', '10'],

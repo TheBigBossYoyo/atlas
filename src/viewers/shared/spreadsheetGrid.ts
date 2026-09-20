@@ -41,6 +41,8 @@
 import * as XLSX from 'xlsx'
 import { formatCellText } from './xlsxCellFormat'
 import type { SheetTable } from '../spreadsheet/spreadsheetTables'
+import { checkWorkbookZipBudgetSync, SpreadsheetZipBombError } from '../spreadsheet/spreadsheetZipBudget'
+import { t } from '../../i18n'
 
 export type MergeRange = {
   readonly r0: number
@@ -218,8 +220,37 @@ function isSheetHidden(workbook: XLSX.WorkBook, index: number): boolean {
 /**
  * Parses an xlsx/ods/xls workbook buffer into one `ParsedSheet` per sheet,
  * in file order. Safe to call from a Worker (T2) or the main thread.
+ *
+ * SHEET-1 (security review follow-up): before handing `buffer` to
+ * `XLSX.read` — which unzips and inflates the entire archive with no size
+ * check of its own — this runs `checkWorkbookZipBudgetSync`, which refuses a
+ * workbook whose zip central directory already declares an implausible
+ * uncompressed size, before a single byte is inflated (see that function's
+ * header on why it's a separate, synchronous sibling of `loadWorkbookZip`
+ * rather than that same async check reused here). `parseWorkbookBuffer` is
+ * the ONE path the viewer (`useSpreadsheetWorkbook.ts`), the parsing Worker
+ * (`spreadsheetWorker.worker.ts`) and PDF/CSV export
+ * (`utils/export/spreadsheetPdf.ts`) all go through — guarding it here, once,
+ * is what makes every one of those inherit the guard, including the ordering
+ * trap where this function used to run BEFORE the budget-guarded passthrough
+ * helpers in the viewer/Worker code paths.
  */
 export function parseWorkbookBuffer(buffer: ArrayBuffer): ParsedSheet[] {
+  try {
+    checkWorkbookZipBudgetSync(buffer)
+  } catch (err) {
+    if (err instanceof SpreadsheetZipBombError) {
+      // A translated, plain-language message — `checkWorkbookZipBudgetSync`'s
+      // own message is precise but developer-facing (byte counts, "zip
+      // bomb"); `errors.library.tooLarge` is the existing catalogue entry
+      // already used elsewhere in the app for "this file is too big to
+      // safely process" (see `friendlyLibraryError.ts`), so this reuses it
+      // rather than adding a new key.
+      throw new Error(t('errors.library.tooLarge'))
+    }
+    throw err
+  }
+
   // Wrapped in a Uint8Array rather than handed the raw ArrayBuffer directly:
   // XLSX.read's own `instanceof ArrayBuffer` auto-wrapping has been observed
   // to misdetect a real-file-read buffer as plain text in some hosts (Vitest's
