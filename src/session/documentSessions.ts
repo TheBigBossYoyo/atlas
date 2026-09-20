@@ -170,13 +170,77 @@ export function moveSession(state: DocumentSessionsState, fromIndex: number, toI
   return { ...state, sessions }
 }
 
-/** After Save As: the document keeps its place in the tab strip under its new path. */
+/**
+ * After Save As: the document keeps its place in the tab strip under its new
+ * path.
+ *
+ * SESS-1 — a Save As can land on a path that is *already* open as a
+ * different session (save untitled/renamed document A onto the path of
+ * already-open document B). `id` is every other function's notion of
+ * identity (`sessions.find`, `activateSession`, `closeSessionById`), so
+ * silently producing two sessions that share an id would corrupt that
+ * invariant outright — `find` would return whichever collides with it first,
+ * `closeSessionById` could close the wrong tab, etc. This never showed up in
+ * `openSession`, which already de-dupes by construction (opening a path
+ * either creates or re-activates the one session for it); `renameSession`
+ * had no equivalent check.
+ *
+ * Chosen semantics, deliberately conservative:
+ *
+ * 1. Ordinarily, the session being renamed (A) just had its bytes physically
+ *    written to that path on disk — it is now the authoritative content for
+ *    that path. The colliding session (B) is therefore dropped from the tab
+ *    strip: keeping it would show B's in-memory copy as if it still reflected
+ *    that path, which is no longer true, and nothing is actually lost — a
+ *    fresh open of that path would show exactly A's bytes anyway (every
+ *    reactivation already re-reads from disk via `reloadSessionFile`). A
+ *    still ends up at the id/path it was renamed to, keeping A's original
+ *    tab position; only B's tab disappears.
+ *
+ * 2. The one exception: if B is the session currently on screen
+ *    (`state.activeId`) and A is a *different*, background session, we do
+ *    NOT drop B or hand its identity to A. This module has no way to also
+ *    swap what's rendered — `App.tsx`'s `file`/`filePath` state lives outside
+ *    it, and its callers for a save that finished after the user switched
+ *    away (`applySavedPathToInactiveTab`, `handleViewerSavedPath`'s
+ *    background branch) deliberately do NOT call `adoptFile`/`showSessionFile`
+ *    in that case, specifically so a stale async save can never yank the
+ *    view out from under whatever the user is now looking at (which may
+ *    itself be dirty). Silently repointing `activeId` at A here, with
+ *    nothing to render it, would desync the highlighted tab from the actual
+ *    content on screen — worse than the alternative. So instead A (the
+ *    background rename) is the one dropped: its bytes are already safely on
+ *    disk under that path, the user isn't looking at its tab, so nothing
+ *    visible is lost — only its now-redundant tab goes away, since B already
+ *    represents that path as far as the screen is concerned.
+ */
 export function renameSession(state: DocumentSessionsState, id: string, file: LoadedFile): DocumentSessionsState {
-  const index = state.sessions.findIndex((session) => session.id === id)
-  if (index < 0) return state
+  const target = state.sessions.find((session) => session.id === id)
+  if (!target) return state
   const renamed = toSession(file)
+
+  const collision = state.sessions.find((session) => session.id === renamed.id && session.id !== id)
+
+  if (collision && collision.id === state.activeId && state.activeId !== id) {
+    // Case 2 above: the colliding tab is the one on screen right now — leave
+    // it (and `activeId`) untouched, drop the just-renamed background
+    // session instead.
+    return {
+      sessions: state.sessions.filter((session) => session.id !== id),
+      activeId: state.activeId,
+      recentlyClosed: state.recentlyClosed,
+    }
+  }
+
+  // Case 1 (the common case: no collision at all, or a collision with some
+  // other background tab) — drop the collision (if any) and rename `id` in
+  // place.
+  const sessions = state.sessions
+    .filter((session) => session.id !== renamed.id || session.id === id)
+    .map((session) => (session.id === id ? renamed : session))
+
   return {
-    sessions: state.sessions.map((session, position) => (position === index ? renamed : session)),
+    sessions,
     activeId: state.activeId === id ? renamed.id : state.activeId,
     recentlyClosed: state.recentlyClosed,
   }

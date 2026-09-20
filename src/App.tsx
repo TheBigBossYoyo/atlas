@@ -507,6 +507,21 @@ function AppShell() {
   }, []);
 
   const handleUnsavedDialogDiscard = useCallback(() => {
+    // DRAFT-1 — this is the Discard behind every unsaved-changes prompt
+    // `confirmDiscardChanges` can produce (Ctrl+W / closing the active tab,
+    // switching tabs, File > Open) — it only ever shows when the ACTIVE
+    // document is dirty (see `confirmDiscardChanges`'s own `currentlyDirty`
+    // check), so at the moment this fires, any autosave draft in storage is
+    // for exactly the content being thrown away here. `saveFile`/`saveFileAs`
+    // already clear it on a successful save (and the crash-recovery banner's
+    // own Discard clears it too); this was the missing case — leaving it
+    // behind let a later, unrelated crash "recover" content the user just
+    // told Atlas to discard. Only markdown documents ever have a draft
+    // (`useAutosave` is gated on `isMarkdownDocument`), so discarding a dirty
+    // non-markdown viewer correctly leaves any draft alone here.
+    if (dirtyGuardStateRef.current.isMarkdownDocument) {
+      clearDraft();
+    }
     pendingConfirmResolveRef.current?.(true);
     pendingConfirmResolveRef.current = null;
     setUnsavedDialogOpen(false);
