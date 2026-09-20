@@ -1,8 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type {
+  Comment,
+  Document as DocxDocument,
+  Endnote,
+  Footer,
+  Footnote,
+  Header,
+  NumberingDef,
+  Paragraph,
+  Section,
+  Style,
+  Table,
+} from '../../model'
+import { twip } from '../../model'
 import {
   domPointToPosition,
   findPositionAtClientPoint,
+  positionFromClientPoint,
   positionToDomRange,
 } from '../Cursor'
 
@@ -185,5 +200,180 @@ describe('Cursor helpers', () => {
     })
 
     expect(findPositionAtClientPoint(5, 6, document, root)).toBeNull()
+  })
+})
+
+// ─── DOCX-17 — table-cell hit-testing ──────────────────────────────────────
+//
+// Table cell lines render with no `data-paragraph-path` of their own (see
+// `Cursor.ts`'s "Table-cell paragraph-path resolution" section) — every
+// helper above resolves fine without a document model because none of their
+// fixtures are inside a table. These fixtures mimic the REAL rendered DOM's
+// table markup (`PageView.tsx`'s `renderPageTable`/`renderPageTableRow`:
+// `.docx-page__table-wrapper[data-block-path]`, `tr[data-source-row]`,
+// `td[data-col]`) instead of relying on `data-paragraph-path` at all, and
+// pass a document model in, so they only pass if the DOM-plus-model
+// fallback resolves correctly — the same path a click into a real table
+// cell takes.
+
+function createCellParagraph(text: string): Paragraph {
+  return Object.freeze({
+    kind: 'paragraph',
+    children: Object.freeze([
+      Object.freeze({ kind: 'run', children: Object.freeze([Object.freeze({ kind: 'text', value: text })]) }),
+    ]),
+  }) satisfies Paragraph
+}
+
+/** A 1-row, 2-cell table, each cell holding one paragraph of `cellText`. */
+function createOneRowTable(cellTexts: ReadonlyArray<string>): Table {
+  return {
+    kind: 'table',
+    tblGrid: Object.freeze(cellTexts.map(() => twip(1440))),
+    rows: Object.freeze([
+      Object.freeze({
+        kind: 'table-row',
+        cells: Object.freeze(cellTexts.map((text) => Object.freeze({ kind: 'table-cell', blocks: Object.freeze([createCellParagraph(text)]) }))),
+      }),
+    ]),
+  } satisfies Table
+}
+
+function createDocumentWithTableAtBlock0(table: Table): DocxDocument {
+  const section = Object.freeze({ kind: 'section', props: {}, blocks: Object.freeze([table]) }) satisfies Section
+
+  return Object.freeze({
+    kind: 'document',
+    sections: Object.freeze([section]),
+    styles: new Map<string, Style>(),
+    numbering: new Map<string, NumberingDef>(),
+    comments: new Map<string, Comment>(),
+    footnotes: new Map<string, Footnote>(),
+    endnotes: new Map<string, Endnote>(),
+    headers: new Map<string, Header>(),
+    footers: new Map<string, Footer>(),
+  }) satisfies DocxDocument
+}
+
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+  return {
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
+    x: left,
+    y: top,
+    toJSON: () => ({}),
+  }
+}
+
+/**
+ * A single-row, 2-cell `<table>` rendered exactly as `PageView.tsx` renders
+ * one — `data-block-path` on the wrapper, `data-source-row`/`data-col` on
+ * the row/cells, one `.docx-page__line` per cell with no
+ * `data-paragraph-path` of its own — with `getBoundingClientRect` stubbed on
+ * each line/run so `positionFromClientPoint`'s geometry-based hit-testing
+ * has real rects to compare against (jsdom's own layout always reports
+ * zero-size rects).
+ */
+function mountTableDom(cellTexts: ReadonlyArray<string>) {
+  document.body.innerHTML = `
+    <div id="root">
+      <div class="docx-page__table-wrapper" data-block-path="0">
+        <table class="docx-page__table">
+          <tbody>
+            <tr data-source-row="0">
+              ${cellTexts
+                .map(
+                  (text, cellIdx) => `
+                <td data-col="${cellIdx}">
+                  <div class="docx-page__table-cell-content">
+                    <div class="docx-page__line">
+                      <span data-run-index="0" data-char-start="0" data-char-end="${text.length}">${text}</span>
+                    </div>
+                  </div>
+                </td>`,
+                )
+                .join('')}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `
+
+  const root = document.getElementById('root') as HTMLElement
+  const lines = Array.from(root.querySelectorAll<HTMLElement>('.docx-page__line'))
+  const spans = Array.from(root.querySelectorAll<HTMLElement>('[data-run-index]'))
+
+  // Cell N's line/span sits at x = [N * 100, N * 100 + 40), y = [0, 20) —
+  // spaced well apart so a click's x coordinate unambiguously picks one cell.
+  lines.forEach((line, index) => {
+    line.getBoundingClientRect = () => rect(index * 100, 0, 40, 20)
+  })
+  spans.forEach((span, index) => {
+    span.getBoundingClientRect = () => rect(index * 100, 0, 40, 20)
+  })
+
+  return { root, lines, spans }
+}
+
+describe('DOCX-17 — table-cell hit-testing', () => {
+  it('positionFromClientPoint resolves a click inside a table cell to that cell paragraph', () => {
+    const document = createDocumentWithTableAtBlock0(createOneRowTable(['r0c0', 'r0c1']))
+    const { root } = mountTableDom(['r0c0', 'r0c1'])
+
+    // Click at the right edge of cell 1's span (x=140, its rect is
+    // [100,140)): past the last character, landing at the END of "r0c1".
+    const position = positionFromClientPoint(140, 10, root, document)
+
+    expect(position).toEqual({
+      paragraphPath: [0, 0, 1, 0], // table block 0, row 0, cell 1, paragraph 0
+      runIndex: 0,
+      charOffset: 'r0c1'.length,
+    })
+  })
+
+  it('positionFromClientPoint resolves a click at the start of a cell to charOffset 0', () => {
+    const document = createDocumentWithTableAtBlock0(createOneRowTable(['r0c0', 'r0c1']))
+    const { root } = mountTableDom(['r0c0', 'r0c1'])
+
+    // Click at cell 0's left edge (x=0) — before any character.
+    const position = positionFromClientPoint(0, 10, root, document)
+
+    expect(position).toEqual({
+      paragraphPath: [0, 0, 0, 0], // table block 0, row 0, cell 0, paragraph 0
+      runIndex: 0,
+      charOffset: 0,
+    })
+  })
+
+  it('positionFromClientPoint without a document model cannot resolve a table cell (pre-fix behavior)', () => {
+    // No `docModel` passed — this is exactly what every caller did before
+    // DOCX-17 threaded one through, and table lines carry no
+    // `data-paragraph-path` of their own for the old DOM-only path to fall
+    // back on. Asserting the OLD failure mode here pins down that the new
+    // behavior above is really coming from the `docModel` fallback, not
+    // from some unrelated change to hit-testing in general.
+    const { root } = mountTableDom(['r0c0', 'r0c1'])
+
+    expect(positionFromClientPoint(140, 10, root)).toBeNull()
+  })
+
+  it('positionToDomRange resolves a table-cell Position back to that cell’s line', () => {
+    const document = createDocumentWithTableAtBlock0(createOneRowTable(['r0c0', 'r0c1']))
+    const { root, spans } = mountTableDom(['r0c0', 'r0c1'])
+
+    const point = positionToDomRange(
+      { paragraphPath: [0, 0, 1, 0], runIndex: 0, charOffset: 2 },
+      root,
+      document,
+    )
+
+    expect(point).not.toBeNull()
+    expect(point?.node).toBe(spans[1].firstChild)
+    expect(point?.offset).toBe(2)
   })
 })

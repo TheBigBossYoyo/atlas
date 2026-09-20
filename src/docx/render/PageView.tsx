@@ -1,5 +1,5 @@
 import React, { memo, useMemo, useState } from 'react';
-import type { Document } from '../model/document';
+import type { Document, Table, TableRow } from '../model/document';
 import type { Page, PageTableRef, PageTableRowRef } from '../layout/pageTypes';
 import type { LineBox } from '../layout/types';
 import { computePageFloats } from '../layout/floats';
@@ -98,6 +98,137 @@ type RenderLineFn = (
   paragraphLineIndex?: number,
 ) => React.ReactNode;
 
+// ─── Table-cell paragraph-path resolution (DOCX-17) ───────────────────────────
+//
+// A table cell's laid-out content (`LaidOutCell.contentLines`) is a flat
+// `LineBox[]` with no paragraph identity attached — `layoutTable.ts`'s
+// `layoutCellLines` concatenates every cell paragraph's lines into one array
+// with no boundary markers. That used to mean `renderPageTableRow` had
+// nothing to pass `renderLine` as this line's `paragraphPath`, so every
+// table cell line rendered with none at all — leaving every caret/selection
+// helper in `Cursor.ts` (which all key off `data-paragraph-path`) unable to
+// resolve ANY position inside a table (see `Cursor.ts`'s own "Table-cell
+// paragraph-path resolution" section, which independently worked around
+// this from the DOM side before this fix existed).
+//
+// This resolves the table CELL's path (not yet a specific paragraph inside
+// it) from data already on hand in the render loop below — `tableRef`'s own
+// `blockPath`, the row's `sourceRowIndex`, and the cell's laid-out index
+// within its row — converted to the RAW indices the document model and
+// every other paragraphPath consumer (`commands.ts`, `Input.ts`, `Cursor.ts`)
+// actually address, by replaying the same "only `'table-row'`/`'table-cell'`
+// children count" filtering `layoutTable.ts` used when it built those
+// laid-out indices in the first place.
+//
+// Known gap, same as `Cursor.ts`'s: a cell paragraph's own line count isn't
+// tracked either, so a multi-paragraph cell where a paragraph wraps onto
+// more than one line can't be attributed line-by-line here — see
+// `cellParagraphPathForLine` below, which clamps to the last paragraph in
+// that case. A single paragraph per cell (by far the common case) is always
+// resolved correctly regardless of wrapping.
+
+function resolveTableAtBlockPath(document: Document, tablePath: ReadonlyArray<number>): Table | null {
+  if (tablePath.length === 0) {
+    return null;
+  }
+  let sectionIndex = 0;
+  let blockPath = tablePath;
+  if (tablePath.length > 1 && document.sections[tablePath[0]] !== undefined) {
+    sectionIndex = tablePath[0];
+    blockPath = tablePath.slice(1);
+  }
+  const section = document.sections[sectionIndex];
+  if (section === undefined || blockPath.length !== 1) {
+    return null;
+  }
+  const block = section.blocks[blockPath[0]];
+  return block !== undefined && block.kind === 'table' ? block : null;
+}
+
+/** The raw `table.rows` index of the `laidOutIndex`-th actual table row
+ * (mirrors `Cursor.ts`'s identically-named helper — see this section's
+ * module comment for why the two can't share code). */
+function tableRowIndexAtLaidOutIndex(table: Table, laidOutIndex: number): number | null {
+  let count = 0;
+  for (let index = 0; index < table.rows.length; index += 1) {
+    if (table.rows[index].kind !== 'table-row') {
+      continue;
+    }
+    if (count === laidOutIndex) {
+      return index;
+    }
+    count += 1;
+  }
+  return null;
+}
+
+/** The raw `row.cells` index of the `laidOutIndex`-th actual table cell —
+ * i.e. the inverse of how `layoutTable.ts`'s `layoutRow` built
+ * `LaidOutRow.cells` (skipping non-`'table-cell'` children, preserving
+ * order), so this render loop's own `cellIdx` maps straight back to it. */
+function tableCellIndexAtLaidOutIndex(row: TableRow, laidOutIndex: number): number | null {
+  let count = 0;
+  for (let index = 0; index < row.cells.length; index += 1) {
+    if (row.cells[index].kind !== 'table-cell') {
+      continue;
+    }
+    if (count === laidOutIndex) {
+      return index;
+    }
+    count += 1;
+  }
+  return null;
+}
+
+/**
+ * The model path AND paragraph count of the table cell at the render loop's
+ * own `(rowRef, cellIdx)` position — `null` when it can't be resolved (a
+ * shape the model and the laid-out table disagree on, which shouldn't
+ * happen in practice).
+ */
+function resolveTableCell(
+  document: Document,
+  tableRef: PageTableRef,
+  rowRef: PageTableRowRef,
+  cellIdx: number,
+): Readonly<{ path: ReadonlyArray<number>; paragraphCount: number }> | null {
+  const table = resolveTableAtBlockPath(document, tableRef.blockPath);
+  if (table === null) {
+    return null;
+  }
+  const rowIndex = tableRowIndexAtLaidOutIndex(table, rowRef.sourceRowIndex);
+  const row = rowIndex === null ? undefined : table.rows[rowIndex];
+  if (rowIndex === null || row === undefined || row.kind !== 'table-row') {
+    return null;
+  }
+  const cellIndex = tableCellIndexAtLaidOutIndex(row, cellIdx);
+  const cell = cellIndex === null ? undefined : row.cells[cellIndex];
+  if (cellIndex === null || cell === undefined || cell.kind !== 'table-cell') {
+    return null;
+  }
+  const paragraphCount = cell.blocks.filter((block) => block.kind === 'paragraph').length;
+  return { path: [...tableRef.blockPath, rowIndex, cellIndex], paragraphCount };
+}
+
+/**
+ * The model paragraph path for the `lineIdx`-th of a cell's `contentLines`,
+ * given that cell's own resolved path (`null` propagates — see
+ * `resolveTableCellPath`) and how many paragraphs the model says that cell
+ * has. See this section's module comment for the multi-paragraph-cell
+ * caveat this clamp accepts.
+ */
+function cellParagraphPathForLine(
+  cellPath: ReadonlyArray<number> | null,
+  paragraphCount: number,
+  lineIdx: number,
+): ReadonlyArray<number> | undefined {
+  if (cellPath === null || paragraphCount === 0) {
+    return undefined;
+  }
+  const paragraphIndex = Math.min(lineIdx, paragraphCount - 1);
+  return [...cellPath, paragraphIndex];
+}
+
 /**
  * Renders a single `PageTableRef` slice as a real `<table>`. Borders are
  * collapsed; column widths come from the source `LaidOutTable` so cells
@@ -117,6 +248,7 @@ function renderPageTable(
   tableRef: PageTableRef,
   key: string,
   renderLine: RenderLineFn,
+  document: Document,
   scale: number,
   onResizeTableColumn?: (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => void,
 ): React.ReactNode {
@@ -161,7 +293,7 @@ function renderPageTable(
         </colgroup>
         <tbody>
           {tableRef.rows.map((rowRef, rowIdx) =>
-            renderPageTableRow(rowRef, rowIdx, tableRef, renderLine),
+            renderPageTableRow(rowRef, rowIdx, tableRef, renderLine, document),
           )}
         </tbody>
       </table>
@@ -267,6 +399,7 @@ function renderPageTableRow(
   rowIdx: number,
   tableRef: PageTableRef,
   renderLine: RenderLineFn,
+  document: Document,
 ): React.ReactNode {
   const rowStyle: React.CSSProperties = {
     height: `${rowRef.row.heightPt}px`,
@@ -303,6 +436,12 @@ function renderPageTableRow(
         const colSpanAttr = cell.gridSpan > 1 ? cell.gridSpan : undefined;
         const rowSpanAttr = cell.rowSpan > 1 ? cell.rowSpan : undefined;
 
+        // DOCX-17 — resolved once per cell (not per line): the model path
+        // this cell's paragraph(s) live at, and how many paragraphs the
+        // model says it has. See this file's "Table-cell paragraph-path
+        // resolution" section above.
+        const resolvedCell = resolveTableCell(document, tableRef, rowRef, cellIdx);
+
         return (
           <td
             key={`cell-${cellIdx}`}
@@ -321,11 +460,21 @@ function renderPageTableRow(
               {(() => {
                 let cumulativeTop = 0;
                 return cell.contentLines.map((line, lineIdx) => {
+                  const paragraphPath =
+                    resolvedCell === null
+                      ? undefined
+                      : cellParagraphPathForLine(resolvedCell.path, resolvedCell.paragraphCount, lineIdx);
+                  // See `cellParagraphPathForLine`'s caveat: only reliably
+                  // "the first line of its paragraph" when every paragraph
+                  // in this cell is exactly one line (the common case).
+                  const paragraphLineIndex = resolvedCell !== null && resolvedCell.paragraphCount === 1 ? lineIdx : 0;
                   const node = renderLine(
                     line,
                     cumulativeTop,
                     0,
                     `cell-line-${rowIdx}-${cellIdx}-${lineIdx}`,
+                    paragraphPath,
+                    paragraphLineIndex,
                   );
                   cumulativeTop += line.lineHeight;
                   return node;
@@ -719,7 +868,7 @@ const PageViewComponent: React.FC<PageViewProps> = ({
             paints exactly where the paginator placed it. */}
         {page.columns.flatMap((col, colIdx) =>
           col.tables.map((tableRef, tableIdx) =>
-            renderPageTable(tableRef, `table-${colIdx}-${tableIdx}`, renderLine, scale, onResizeTableColumn),
+            renderPageTable(tableRef, `table-${colIdx}-${tableIdx}`, renderLine, document, scale, onResizeTableColumn),
           ),
         )}
 
