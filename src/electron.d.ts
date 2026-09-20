@@ -85,6 +85,14 @@ interface ElectronAPI {
   onRequestSaveBeforeClose?: (callback: () => void) => () => void;
   /** The renderer reports whether that save succeeded so main knows whether to actually close the window. */
   reportSaveBeforeCloseResult?: (result: { saved: boolean }) => void;
+  /**
+   * QUIT-DRAFT-1 — main asks the renderer to clear its autosave draft (the
+   * user chose "Discard" in the native close-confirmation prompt) before it
+   * destroys the window. Optional for the same reason as the pair above.
+   */
+  onRequestDiscardBeforeClose?: (callback: () => void) => () => void;
+  /** The renderer reports that it has cleared its draft so main can proceed with destroying the window (main also bounds this with its own timeout — see main.cjs). */
+  reportDiscardBeforeCloseResult?: () => void;
   openFileBinary: () => Promise<{ canceled: boolean; path: string; buffer: ArrayBuffer }>;
   /** NEW-01 — the toolbar's "New" action / Ctrl+N: shows a native Save dialog, writes a blank template there, and reports the resulting path. */
   newDocument: (formatId: NewDocumentFormat) => Promise<NewDocumentResult>;
