@@ -8,9 +8,62 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
-## [Unreleased]
+## [3.4.0] — 2026-09-20 (waves 7-9: data-loss fixes, French UI, document fidelity)
 
 ### Added
+- **The interface can be French** (English by default; a language menu sits
+  next to the theme menu, with a "System" option). 509 strings, Office's own
+  French terminology and French typography.
+- A **spec-level package validator** (`scripts/validate-office-file.mjs`) that
+  checks what Atlas writes against the OPC/OOXML and ODF rules — content
+  types, relationships, element order, ODF's stored-first `mimetype` — and
+  runs in CI. It found two real "Office offers to repair this file" causes,
+  both fixed.
+- A **lossy-save detector** for DOCX (`src/docx/fidelity/`): it diffs a
+  re-save against the original document rather than trusting a hand-written
+  list, so anything the engine does not model is reported instead of being
+  dropped in silence.
+
+### Fixed
+- **Save As no longer loses work.** Ctrl+Shift+S did nothing at all outside
+  markdown, and Save As left the document's tab pointing at the file it was
+  opened from: coming back to that tab re-read the OLD file over the user's
+  work, and the next Ctrl+S wrote to neither file.
+- **Every saved DOCX image lost its picture properties** (position, geometry,
+  fill), on every save. Right-to-left paragraphs and sections, page borders,
+  multi-level list definitions and complex-script bold/italic were dropped
+  too. All preserved now.
+- **Legacy .doc/.ppt files failed to open** as soon as their text passed
+  ~4 KB — that is, every real document. The test fixtures were all smaller.
+- **Spreadsheet formulas** that reference a renamed, moved or deleted sheet
+  are rewritten (`#REF!` on delete, as Excel does), and multi-area, function-
+  wrapped and whole-row/column defined names are re-anchored through
+  structural edits.
+- A running **Run** program kept going after its tab was switched away, with
+  no way to stop it; a **read-only file** was reported as "open in another
+  program"; a dropped **folder** produced a raw technical error; a multi-file
+  **drag and drop** opened only the first file.
+- The **PDF find bar** ignored Escape unless its input had focus, then
+  swallowed the next keyboard shortcut.
+- **A very large Markdown document no longer freezes the app**: past 750 KB
+  the preview waits to be asked for (the editor opens normally), because
+  Markdown parsing costs grow superlinearly — a 5 MB file took over two
+  minutes.
+- **Accessibility**: WCAG AA contrast failures fixed in all five themes,
+  keyboard focus trapped and restored in every dialog, overlay and menu, and
+  the unsaved-changes dialog could previously be tabbed straight past.
+
+### Changed
+- **Start-up is ~33% faster** (766 ms → 514 ms to the welcome screen): the
+  export tools and the Markdown renderer no longer load before the first
+  paint, cutting the entry bundle by 89%.
+- `npx tsc -b` now type-checks everything — `src`, the Electron main process,
+  the end-to-end tests and the build scripts (the strict-mode ratchet, P4.1,
+  is closed).
+- Documentation (README, architecture, known limitations, release guide)
+  re-checked against the code it describes.
+
+### Added (detail)
 - DOCX header/footer editing (D29 follow-up 2): a paragraph that MIXES plain
   text with a drawing, a field (PAGE/NUMPAGES/DATE/etc), a hyperlink, a
   footnote/comment reference, or an existing tracked change — the extremely
