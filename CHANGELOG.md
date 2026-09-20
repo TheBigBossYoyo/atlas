@@ -8,6 +8,32 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [3.5.0] — 2026-09-20 (wave 10: fidelity warnings, responsive Markdown, memory)
+
+### Added
+- **Large Markdown documents render without freezing the app**: parsing now
+  runs off the main thread, so the window stays responsive while a big
+  document is being prepared, and documents up to 2 MB preview automatically
+  (the earlier limit was 750 KB). Rendering output is proven identical to
+  before by a parity test over every Markdown characterization fixture.
+
+### Fixed
+- **Sheet names with accents** (`Résumé`) were invisible to the formula
+  rewriter, so renaming or deleting such a sheet left every formula pointing
+  at the old name instead of being updated — a silent wrong-number bug.
+- **Closing a tab no longer keeps the document in memory**: up to five closed
+  documents' contents stayed reachable for nothing. Reopening a closed tab
+  (Ctrl+Shift+T) now re-reads the file, and a file deleted in the meantime
+  says so instead of reopening as an empty document.
+
+### Verification
+- New end-to-end scenarios: password-protected PDFs (with a genuinely
+  encrypted fixture built for the purpose), a 36-page image-heavy DOCX under
+  fast scrolling and editing, spreadsheet formulas through a rename + delete +
+  row insert in one save, closing a tab mid-load, and several dirty tabs at
+  once. A full hunt through the French UI, the New-document flow and those
+  races found no further defects.
+
 ## [Unreleased]
 
 ### Added
