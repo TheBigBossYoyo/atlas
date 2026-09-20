@@ -58,11 +58,40 @@ describe('closing', () => {
     expect(activeSession(state)?.id).toBe('/b.md')
   })
 
-  it('reopens the last closed document with the bytes it had', () => {
+  it('reopens the last closed document by path (showSessionFile re-reads it from disk)', () => {
     const closed = closeSession(openAll('/a.md', '/b.md'), '/b.md')
     const reopened = reopenLastClosed(closed)
     expect(activeSession(reopened)?.id).toBe('/b.md')
     expect(reopenLastClosed(reopened)).toBe(reopened) // nothing left to reopen
+  })
+
+  // MEM-01 — `recentlyClosed` used to keep every closed document's full
+  // bytes alive (a real ArrayBuffer for a binary file) purely so
+  // `reopenLastClosed` had *something* to hand back — but the shell always
+  // re-reads the file from disk before showing it again (`showSessionFile` /
+  // `reloadSessionFile`), so those bytes were never actually used on the
+  // happy path. For a 100k-row .xlsx this was confirmed (via a heap
+  // snapshot) to be the largest single object kept alive after closing its
+  // tab. A closed session must keep its identity (path/name/format) but not
+  // its content.
+  it('sheds a closed document\'s bytes — only its identity survives into recentlyClosed', () => {
+    const bigText = closeSession(openAll('/a.md', '/big.md'), '/big.md')
+    const closedText = bigText.recentlyClosed[0]
+    expect(closedText.id).toBe('/big.md')
+    expect(closedText.file.kind).toBe('text')
+    expect(closedText.file.kind === 'text' && closedText.file.content).toBe('')
+
+    const binaryFile: LoadedFile = { kind: 'binary', content: new ArrayBuffer(1_000_000), path: '/big.xlsx', format: 'xlsx' }
+    const withBinary = closeSession(openSession(openAll('/a.md'), binaryFile), '/big.xlsx')
+    const closedBinary = withBinary.recentlyClosed[0]
+    expect(closedBinary.id).toBe('/big.xlsx')
+    expect(closedBinary.file.kind).toBe('binary')
+    expect(closedBinary.file.kind === 'binary' && closedBinary.file.content.byteLength).toBe(0)
+
+    // Reopening still restores the right document by identity — the actual
+    // bytes come back from `showSessionFile`'s disk re-read, not from here.
+    const reopened = reopenLastClosed(withBinary)
+    expect(activeSession(reopened)?.id).toBe('/big.xlsx')
   })
 
   it('remembers only the last few closed documents', () => {
