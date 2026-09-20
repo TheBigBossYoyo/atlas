@@ -637,7 +637,7 @@ function collectDocxMetrics(document: DocxDocument): {
   return { words, navSeeds }
 }
 
-function getSelectionFromDom(root: HTMLElement): Range | null {
+function getSelectionFromDom(root: HTMLElement, docModel?: DocxDocument): Range | null {
   const domSelection = root.ownerDocument.getSelection()
   if (domSelection === null || domSelection.rangeCount === 0) {
     return null
@@ -653,8 +653,8 @@ function getSelectionFromDom(root: HTMLElement): Range | null {
     return null
   }
 
-  const anchor = domPointToPosition(anchorNode, domSelection.anchorOffset, root.ownerDocument)
-  const focus = domPointToPosition(focusNode, domSelection.focusOffset, root.ownerDocument)
+  const anchor = domPointToPosition(anchorNode, domSelection.anchorOffset, root.ownerDocument, docModel)
+  const focus = domPointToPosition(focusNode, domSelection.focusOffset, root.ownerDocument, docModel)
 
   return anchor && focus ? { anchor, focus } : null
 }
@@ -669,7 +669,7 @@ type HighlightConstructor = new (...ranges: globalThis.Range[]) => unknown
  * without stealing focus), using the CSS Custom Highlight API. `null` clears
  * it. A no-op where the API is unavailable (e.g. jsdom).
  */
-function paintSelectionHighlight(root: HTMLElement | null, range: Range | null): void {
+function paintSelectionHighlight(root: HTMLElement | null, range: Range | null, docModel?: DocxDocument): void {
   const registry = (globalThis.CSS as unknown as { highlights?: HighlightRegistry } | undefined)?.highlights
   const HighlightCtor = (globalThis as unknown as { Highlight?: HighlightConstructor }).Highlight
   if (registry === undefined || HighlightCtor === undefined) {
@@ -679,8 +679,8 @@ function paintSelectionHighlight(root: HTMLElement | null, range: Range | null):
     registry.delete(SELECTION_HIGHLIGHT_NAME)
     return
   }
-  const anchor = positionToDomRange(range.anchor, root)
-  const focus = positionToDomRange(range.focus, root)
+  const anchor = positionToDomRange(range.anchor, root, docModel)
+  const focus = positionToDomRange(range.focus, root, docModel)
   if (anchor === null || focus === null) {
     registry.delete(SELECTION_HIGHLIGHT_NAME)
     return
@@ -695,13 +695,13 @@ function paintSelectionHighlight(root: HTMLElement | null, range: Range | null):
   registry.set(SELECTION_HIGHLIGHT_NAME, new HighlightCtor(domRange))
 }
 
-function syncSelectionToDom(root: HTMLElement, range: Range | null): void {
+function syncSelectionToDom(root: HTMLElement, range: Range | null, docModel?: DocxDocument): void {
   if (range === null) {
     return
   }
 
-  const anchor = positionToDomRange(range.anchor, root)
-  const focus = positionToDomRange(range.focus, root)
+  const anchor = positionToDomRange(range.anchor, root, docModel)
+  const focus = positionToDomRange(range.focus, root, docModel)
   if (anchor === null || focus === null) {
     return
   }
@@ -878,6 +878,19 @@ function DocxEditor({
   const warnedAboutFidelityRef = useRef(false)
   const [fidelityWarningMessage, setFidelityWarningMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
+  // DOCX-17 — mirrors `documentModel` for the handful of callbacks below
+  // (`syncRangeFromDom`, the drag-select `mousemove` listener) that are
+  // deliberately kept identity-stable across renders (an empty `useCallback`/
+  // `useEffect` dependency array — a `mousemove` listener in particular gets
+  // re-subscribed to `window` on every dependency change otherwise) but still
+  // need this turn's document model to resolve a table cell's paragraph path
+  // (`Cursor.ts`'s DOM<->Position mapping needs it for table content, which
+  // renders with no `data-paragraph-path` of its own — see Cursor.ts's
+  // "Table-cell paragraph-path resolution" section).
+  const documentModelRef = useRef(documentModel)
+  useEffect(() => {
+    documentModelRef.current = documentModel
+  }, [documentModel])
   const [headerFooterOpen, setHeaderFooterOpen] = useState(false)
   // UX — the header/footer panel had no keyboard affordances at all: no
   // Escape-to-close, no focus moved into it on open, no focus restored to
@@ -1228,7 +1241,7 @@ function DocxEditor({
       return
     }
 
-    const nextRange = getSelectionFromDom(root)
+    const nextRange = getSelectionFromDom(root, documentModelRef.current)
     setRange(current => (rangeEquals(current, nextRange) ? current : nextRange))
   }, [])
 
@@ -1256,7 +1269,7 @@ function DocxEditor({
       root.focus({ preventScroll: true })
 
       if (event.detail >= 3) {
-        const paragraph = paragraphRangeFromClientPoint(event.clientX, event.clientY, root)
+        const paragraph = paragraphRangeFromClientPoint(event.clientX, event.clientY, root, documentModel)
         dragAnchorRef.current = null
         if (paragraph !== null) {
           setRange(paragraph)
@@ -1265,7 +1278,7 @@ function DocxEditor({
       }
 
       if (event.detail === 2) {
-        const word = wordRangeFromClientPoint(event.clientX, event.clientY, root)
+        const word = wordRangeFromClientPoint(event.clientX, event.clientY, root, documentModel)
         dragAnchorRef.current = null
         if (word !== null) {
           setRange(word)
@@ -1273,7 +1286,7 @@ function DocxEditor({
         return
       }
 
-      const position = positionFromClientPoint(event.clientX, event.clientY, root)
+      const position = positionFromClientPoint(event.clientX, event.clientY, root, documentModel)
       if (position === null) {
         return
       }
@@ -1281,7 +1294,7 @@ function DocxEditor({
       dragAnchorRef.current = anchor
       setRange({ anchor, focus: position })
     },
-    [range],
+    [documentModel, range],
   )
 
   useEffect(() => {
@@ -1291,7 +1304,7 @@ function DocxEditor({
       if (root === null || anchor === null || (event.buttons & 1) === 0) {
         return
       }
-      const focus = positionFromClientPoint(event.clientX, event.clientY, root)
+      const focus = positionFromClientPoint(event.clientX, event.clientY, root, documentModelRef.current)
       if (focus !== null) {
         setRange((current) => {
           const next = { anchor, focus }
@@ -1328,7 +1341,7 @@ function DocxEditor({
         return
       }
 
-      const domRange = getSelectionFromDom(root)
+      const domRange = getSelectionFromDom(root, documentModel)
       const enclosing = domRange === null ? null : findEnclosingTable(documentModel, domRange.focus.paragraphPath)
       if (enclosing === null) {
         return
@@ -2552,15 +2565,15 @@ function DocxEditor({
       !root.contains(activeElement) &&
       activeElement.matches('input, textarea, select, [contenteditable="true"]')
     if (fieldHasFocus) {
-      paintSelectionHighlight(root, range)
+      paintSelectionHighlight(root, range, documentModelRef.current)
     } else {
       paintSelectionHighlight(root, null)
-      syncSelectionToDom(root, range)
+      syncSelectionToDom(root, range, documentModelRef.current)
     }
 
     if (revealSelectionRef.current && range !== null) {
       revealSelectionRef.current = false
-      const point = positionToDomRange(range.focus, root)
+      const point = positionToDomRange(range.focus, root, documentModelRef.current)
       const node = point?.node ?? null
       const element = node === null ? null : node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
       if (element !== null && typeof element.scrollIntoView === 'function') {
