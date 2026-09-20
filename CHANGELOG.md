@@ -8,6 +8,26 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Added
+- **DOCX Save now tells you when it couldn't preserve everything** —
+  the lossy-save detector added in 3.4.0 was reporting into a void; it's
+  now wired into the Save flow (`DocxViewer.tsx`). A dismissible,
+  non-blocking notice appears after a save that dropped something, once
+  per document, in plain language ("content controls", "a text box's
+  fallback drawing" — never an XML element name).
+
+### Fixed
+- **An unedited content control (`w:sdt`) or a shape/text box's legacy
+  fallback (`mc:AlternateContent`) now survives a save byte-for-byte** —
+  including a content control's id/alias/tag/binding/lock/placeholder/
+  appearance, and a shape's rejected `mc:Fallback` branch, none of which
+  Atlas models — instead of always being stripped to its bare content.
+  Editing content inside one, or one sitting inside a table cell/header/
+  footer, still falls back to the previous (reported) behavior. See
+  `WrapperPassthrough` in `src/docx/model/document.ts`.
+
 ## [3.4.0] — 2026-09-20 (waves 7-9: data-loss fixes, French UI, document fidelity)
 
 ### Added

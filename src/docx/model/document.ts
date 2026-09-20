@@ -717,4 +717,47 @@ export interface Document {
    * baseline token list on save for the same reason as `rootNamespaces`.
    */
   readonly mcIgnorable?: string
+  /**
+   * `w:sdt`/`mc:AlternateContent` wrappers captured verbatim while parsing
+   * the main body (round-trip fidelity audit, DXS round 2 follow-up) — see
+   * `WrapperPassthrough`'s doc comment. `undefined`/empty for a document
+   * with none, or one built in memory rather than parsed from a source
+   * file.
+   */
+  readonly wrappers?: ReadonlyArray<WrapperPassthrough>
+}
+
+/**
+ * A `w:sdt` (content control) or `mc:AlternateContent` (shape/text-box
+ * legacy-fallback wrapper) element Atlas's model has no dedicated field
+ * for, captured byte-verbatim at parse time (round-trip fidelity audit,
+ * DXS round 2 follow-up to D8/DXP-08). `content` holds the exact Block,
+ * ParagraphChild, or RunChild object(s) the wrapper's real content
+ * expanded to (`expandWrapperNodes`) — the very objects placed inline
+ * wherever the wrapper used to sit, so the rest of the parser, renderer,
+ * and editor need no awareness of this field at all.
+ *
+ * `documentWriter.ts` re-emits `raw` verbatim in place of those objects,
+ * but only when every one of them is still present, unchanged (by
+ * reference) and in the same order at save time: Atlas's edit pipeline
+ * never mutates a Block/ParagraphChild/RunChild in place — every edit
+ * rebuilds the paragraph/run/table it touches as a new object — so any
+ * edit anywhere inside the wrapped content produces at least one new
+ * object and naturally fails that identity check. No editor code anywhere
+ * needs to know a wrapper was ever there; this is the exact same "keep
+ * what you cannot model verbatim until it's actually edited" pattern
+ * `Field.raw` already uses (D19/DXS-20), generalized from field-shaped
+ * content to arbitrary wrapped content.
+ *
+ * Falling out of the identity check just means falling back to the
+ * pre-existing behavior: the wrapper itself, and anything OOXML puts on
+ * it that Atlas doesn't model (a content control's id/alias/tag/binding/
+ * lock/placeholder/appearance, or an `mc:AlternateContent`'s rejected
+ * branch), is dropped, keeping only the plain content — exactly what
+ * `detectLossySaveWarnings` already surfaces to the user.
+ */
+export interface WrapperPassthrough {
+  readonly wrapper: 'w:sdt' | 'mc:AlternateContent'
+  readonly raw: string
+  readonly content: ReadonlyArray<Block> | ReadonlyArray<ParagraphChild> | ReadonlyArray<RunChild>
 }

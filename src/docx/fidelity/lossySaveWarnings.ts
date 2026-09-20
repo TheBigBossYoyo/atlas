@@ -212,10 +212,93 @@ function headerFooterPartPaths(bundle: DocxBundle): ReadonlyArray<string> {
   return paths
 }
 
-/** Renders warnings as short, user-facing lines, one per (part, tag), grouped by part. */
+/** Renders warnings as short, developer-facing lines, one per (part, tag), grouped by part. Not for end-user display — see `categorizeLossySaveWarnings` for that. */
 export function describeLossySaveWarnings(warnings: ReadonlyArray<LossySaveWarning>): ReadonlyArray<string> {
   return warnings.map(
     (warning) =>
       `${warning.part}: ${warning.tag} (${warning.occurrences} occurrence${warning.occurrences === 1 ? '' : 's'}) is not supported and will be removed`,
   )
+}
+
+// ---------------------------------------------------------------------------
+// End-user-facing categorization (Save flow — see `DocxViewer.tsx`)
+//
+// A non-technical user has no use for "w:sdt" or "mc:AlternateContent" —
+// they know their document has a dropdown/date-picker field, or a shape/
+// text box, not an XML element. This groups a warning's raw tag into the
+// coarse category the Save flow has plain-language copy for, so the UI
+// layer never has to name an element itself.
+// ---------------------------------------------------------------------------
+
+export type LossySaveWarningCategory = 'content-control' | 'shape-fallback' | 'other'
+
+/**
+ * Every element name a `w:sdt` (content control) wrapper or its properties
+ * can introduce — i.e. exactly what disappears when `documentWriter.ts`'s
+ * wrapper-region passthrough (see `WrapperPassthrough`'s doc comment on
+ * `../model/document.ts`) doesn't fire for it: an edit touched the
+ * control's own content, or it sits somewhere the parser doesn't capture a
+ * region for at all (a table cell, header, or footer).
+ */
+const CONTENT_CONTROL_TAGS: ReadonlySet<string> = new Set([
+  'w:sdt',
+  'w:sdtPr',
+  'w:sdtEndPr',
+  'w:sdtContent',
+  'w:id',
+  'w:alias',
+  'w:tag',
+  'w:lock',
+  'w:placeholder',
+  'w:showingPlcHdr',
+  'w:dataBinding',
+  'w:text',
+  'w:comboBox',
+  'w:dropDownList',
+  'w:date',
+  'w:docPartObj',
+  'w:docPartList',
+  'w:citation',
+  'w:group',
+  'w:picture',
+  'w:checkbox',
+  'w15:color',
+  'w15:appearance',
+])
+
+/** Every element name an `mc:AlternateContent` wrapper (a shape/text box's modern-vs-legacy-VML pair) can introduce, for the same reason as `CONTENT_CONTROL_TAGS`. */
+const SHAPE_FALLBACK_TAGS: ReadonlySet<string> = new Set([
+  'mc:AlternateContent',
+  'mc:Choice',
+  'mc:Fallback',
+  'w:pict',
+  'v:shape',
+  'v:shapetype',
+  'v:rect',
+  'v:roundrect',
+  'v:oval',
+  'v:line',
+  'v:textbox',
+  'v:imagedata',
+])
+
+function categorizeLossySaveWarningTag(tag: string): LossySaveWarningCategory {
+  if (CONTENT_CONTROL_TAGS.has(tag)) {
+    return 'content-control'
+  }
+  if (SHAPE_FALLBACK_TAGS.has(tag)) {
+    return 'shape-fallback'
+  }
+  return 'other'
+}
+
+/**
+ * Groups `warnings` into the coarse, user-facing categories the Save flow
+ * shows plain-language copy for, instead of naming XML elements. An empty
+ * result means nothing worth telling the user was lost.
+ */
+export function categorizeLossySaveWarnings(
+  warnings: ReadonlyArray<LossySaveWarning>,
+): ReadonlySet<LossySaveWarningCategory> {
+  return new Set(warnings.map((warning) => categorizeLossySaveWarningTag(warning.tag)))
 }

@@ -511,6 +511,16 @@ export const messages = {
   'docx.viewer.fieldsUpdated': { one: '{count} champ mis à jour.', other: '{count} champs mis à jour.' },
   'docx.viewer.noTocFound': 'Aucune table des matières trouvée à mettre à jour.',
   'docx.viewer.tocUpdated': 'Table des matières mise à jour.',
+  // Audit de fidélité à l’enregistrement (round 2, DXS) — texte en langage
+  // clair, non technique, pour les constats de `detectLossySaveWarnings`
+  // (voir `docx/fidelity/lossySaveWarnings.ts` et
+  // `buildFidelitySaveWarningMessage` dans DocxViewer.tsx). Nomme
+  // volontairement la fonctionnalité que l’utilisateur reconnaît, jamais
+  // l’élément XML sous-jacent.
+  'docx.viewer.fidelityWarningIntro': 'Ce document a été enregistré, mais Atlas n’a pas pu tout préserver :',
+  'docx.viewer.fidelityWarningContentControls': 'Ses contrôles de contenu (comme des listes déroulantes ou des champs de date) ont conservé leur texte, mais pas les contrôles eux-mêmes.',
+  'docx.viewer.fidelityWarningShapeFallback': 'Le dessin de secours d’une forme ou d’une zone de texte n’a pas été préservé.',
+  'docx.viewer.fidelityWarningOther': 'Certains autres éléments de mise en forme ou de contenu n’ont pas été entièrement préservés.',
 
   // src/docx/editor/friendlyDocxError.ts
   'docx.error.notOpenedDetail': 'Ce fichier n’a pas été ouvert : {detail}',

@@ -17,7 +17,14 @@ import { ListTree, PanelTop, Printer, RefreshCw, Save, SaveAll, X, ZoomIn, ZoomO
 
 import type { NavItem, ViewerProps } from '../formats/types'
 import { useTranslate, type TranslateFn } from '../i18n'
-import { loadDocx, saveDocx, type DocxBundle } from '../docx'
+import {
+  categorizeLossySaveWarnings,
+  detectLossySaveWarnings,
+  loadDocx,
+  saveDocx,
+  type DocxBundle,
+  type LossySaveWarningCategory,
+} from '../docx'
 import { paginate, PaginationCancelledError } from '../docx/layout'
 import type { Page, PaginationProgress } from '../docx/layout'
 import type { FontResolver } from '../docx/layout/types'
@@ -783,6 +790,36 @@ function translateHeaderFooterLabel(label: string, t: TranslateFn): string {
   return TAG_TRANSLATIONS.reduce((current, [tag, translated]) => current.split(tag).join(translated), linked)
 }
 
+/**
+ * Round-trip fidelity audit, DXS round 2 follow-up — plain-language,
+ * non-technical copy for what `detectLossySaveWarnings` found (see
+ * `categorizeLossySaveWarnings` in `docx/fidelity/lossySaveWarnings.ts`).
+ * Built here rather than in that module because it has (and should keep)
+ * no dependency on the i18n layer. Names the feature the user actually
+ * recognizes ("content controls", "a text box's fallback drawing"), never
+ * the underlying XML element — see `handleSaveInternal`'s doc comment for
+ * when/how often this is shown. `null` when there's nothing to say.
+ */
+function buildFidelitySaveWarningMessage(
+  categories: ReadonlySet<LossySaveWarningCategory>,
+  t: TranslateFn,
+): string | null {
+  const sentences: string[] = []
+  if (categories.has('content-control')) {
+    sentences.push(t('docx.viewer.fidelityWarningContentControls'))
+  }
+  if (categories.has('shape-fallback')) {
+    sentences.push(t('docx.viewer.fidelityWarningShapeFallback'))
+  }
+  if (categories.has('other')) {
+    sentences.push(t('docx.viewer.fidelityWarningOther'))
+  }
+  if (sentences.length === 0) {
+    return null
+  }
+  return `${t('docx.viewer.fidelityWarningIntro')} ${sentences.join(' ')}`
+}
+
 function DocxEditor({
   bundle,
   file,
@@ -826,6 +863,19 @@ function DocxEditor({
   // has its own established pattern (see `saveError`) for a dismissible
   // inline status message instead.
   const [fieldUpdateMessage, setFieldUpdateMessage] = useState<string | null>(null)
+  // Round-trip fidelity audit, DXS round 2 follow-up — the same dismissible
+  // inline-status pattern as `fieldUpdateMessage`, for
+  // `detectLossySaveWarnings`' findings after a save. `warnedAboutFidelityRef`
+  // (not state: it must never itself trigger a re-render) makes this a
+  // once-per-document notice rather than one on every save — see
+  // `handleSaveInternal`'s doc comment for why. Both reset naturally on a
+  // genuinely new document: `DocxEditor` remounts fresh whenever
+  // `DocxViewerBase` swaps in a different `bundle` (see its own render,
+  // `bundle !== null ? <DocxEditor .../> : null`), which is also why this
+  // doesn't need to reset when `savePath` changes via "Save As" — that's
+  // still the same in-memory document, not a newly opened one.
+  const warnedAboutFidelityRef = useRef(false)
+  const [fidelityWarningMessage, setFidelityWarningMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
   const [headerFooterOpen, setHeaderFooterOpen] = useState(false)
   // UX — the header/footer panel had no keyboard affordances at all: no
@@ -2060,6 +2110,33 @@ function DocxEditor({
         // dirty from whatever the *current* render's `documentModel` is once
         // this state update lands — never from this stale closure.
         setLastSavedDocument(documentToSave)
+
+        // Round-trip fidelity audit, DXS round 2 follow-up — tell the user,
+        // once per document, when a save couldn't fully preserve something
+        // (see `buildFidelitySaveWarningMessage`'s doc comment for the
+        // wording rules). Fire-and-forget: the file is already written by
+        // this point (`result.saved` above), so this is purely an
+        // informational follow-up, never something the save itself should
+        // wait on or that should block/undo an already-successful write.
+        // Guarded by `warnedAboutFidelityRef` (see its own doc comment) so
+        // this only ever surfaces once for a given document, not on every
+        // save that happens to still be affected.
+        if (!warnedAboutFidelityRef.current) {
+          void detectLossySaveWarnings(bundle, nextBytes)
+            .then((warnings) => {
+              const message = buildFidelitySaveWarningMessage(categorizeLossySaveWarnings(warnings), t)
+              if (message !== null) {
+                warnedAboutFidelityRef.current = true
+                setFidelityWarningMessage(message)
+              }
+            })
+            .catch(() => {
+              // Best-effort notice only — a failure detecting/describing it
+              // must never surface as a save error; the save already
+              // succeeded.
+            })
+        }
+
         return true
       } catch (error) {
         // RUN-14 — wrap JSZip/fast-xml-parser/DocxSaveError internals in a
@@ -2896,6 +2973,19 @@ function DocxEditor({
             type="button"
             className="docx-viewer__error-dismiss"
             onClick={() => setFieldUpdateMessage(null)}
+            aria-label={t('docx.viewer.dismissMessage')}
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+      {fidelityWarningMessage !== null ? (
+        <div className="docx-viewer__field-status" role="status">
+          <span>{fidelityWarningMessage}</span>
+          <button
+            type="button"
+            className="docx-viewer__error-dismiss"
+            onClick={() => setFidelityWarningMessage(null)}
             aria-label={t('docx.viewer.dismissMessage')}
           >
             <X size={14} aria-hidden="true" />

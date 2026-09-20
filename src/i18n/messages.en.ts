@@ -507,6 +507,15 @@ export const messages = {
   'docx.viewer.fieldsUpdated': { one: 'Updated {count} field.', other: 'Updated {count} fields.' },
   'docx.viewer.noTocFound': 'No table of contents found to update.',
   'docx.viewer.tocUpdated': 'Table of contents updated.',
+  // Round-trip fidelity audit, DXS round 2 follow-up — plain-language,
+  // non-technical copy for `detectLossySaveWarnings`' findings (see
+  // `docx/fidelity/lossySaveWarnings.ts` and `buildFidelitySaveWarningMessage`
+  // in DocxViewer.tsx). Deliberately names the feature the user recognizes,
+  // never the underlying XML element.
+  'docx.viewer.fidelityWarningIntro': "This document was saved, but Atlas couldn't fully preserve everything in it:",
+  'docx.viewer.fidelityWarningContentControls': 'Its content controls (such as dropdowns or date fields) kept their text, but not the controls themselves.',
+  'docx.viewer.fidelityWarningShapeFallback': "A shape or text box's fallback drawing was not preserved.",
+  'docx.viewer.fidelityWarningOther': 'Some other formatting or content was not fully preserved.',
 
   // src/docx/editor/friendlyDocxError.ts
   'docx.error.notOpenedDetail': 'This file was not opened: {detail}',
