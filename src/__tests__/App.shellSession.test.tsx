@@ -502,6 +502,35 @@ describe('App — main-process close confirmation round-trip (P2.5/SHELL-02/ELEC
       expect(window.electronAPI!.reportSaveBeforeCloseResult).toHaveBeenCalledWith({ saved: true });
     });
   });
+
+  it('subscribes onRequestSaveBeforeClose exactly once, even as the document changes underneath it (root-cause regression — CI flake investigation)', async () => {
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (edited)' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (edited again)' },
+    });
+
+    await waitFor(() => {
+      expect(window.electronAPI!.notifyDirtyState).toHaveBeenCalledWith(true);
+    });
+
+    // A real Electron IPC listener that's torn down and re-registered on
+    // every keystroke and every step of opening a file isn't just wasted
+    // churn — it's what produced this suite's own flake (a race between
+    // `waitFor` observing a committed DOM change and the passive effect
+    // that re-subscribes with the fresh `saveFile` actually having run; see
+    // `saveFileRef`'s comment in App.tsx). The close-confirmation callback
+    // must be registered exactly once, for the app shell's whole lifetime,
+    // no matter how much the document underneath it changes.
+    expect(window.electronAPI!.onRequestSaveBeforeClose).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('App — markdown save-failure surfacing (a wave1 follow-up: saveFile errors used to be silent)', () => {

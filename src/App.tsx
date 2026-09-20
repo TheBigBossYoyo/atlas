@@ -453,6 +453,28 @@ function AppShell() {
     return false;
   }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, filePath, followSavedPath, isMarkdownDocument, localMarkdown, t]);
 
+  // Root-cause fix (CI flake investigation) — `saveFile` gets a new identity
+  // on every keystroke (it closes over `localMarkdown`) and on every step of
+  // opening a file (`file`/`fileIdentityKey`/`isMarkdownDocument` all change
+  // as a load lands). The main-process close-confirmation effect below used
+  // to depend on `saveFile` directly, so it tore down and re-registered the
+  // real Electron IPC listener that often — once per keystroke while typing,
+  // and repeatedly while a file was mid-open. That's wasted IPC churn on its
+  // own, and in tests it produced a genuine window where `waitFor` could
+  // observe the DOM already reflecting a freshly-opened file (the synchronous
+  // part of the commit) before React had actually gotten around to running
+  // the *effect* that re-subscribes with the fresh `saveFile` (a passive
+  // effect, scheduled independently of the DOM mutation once outside of
+  // `act`) — so a "close now" request landing in that gap ran the previous,
+  // stale `saveFile` closure instead. A ref sidesteps this entirely: the
+  // listener is registered once and always reads the *latest* `saveFile` at
+  // call time, so there is no re-subscription and therefore no window for a
+  // stale closure to run.
+  const saveFileRef = useRef(saveFile);
+  useEffect(() => {
+    saveFileRef.current = saveFile;
+  }, [saveFile]);
+
   const saveFileAs = useCallback(async (): Promise<boolean> => {
     if (!isMarkdownDocument) {
       // P1.1/SHELL-10/DXE-07/RUN-03's fix for Ctrl+S ("route the global
@@ -1080,14 +1102,18 @@ function AppShell() {
 
   // Main asks the renderer to save (the user chose "Save" in that native
   // prompt) and waits for the result before deciding whether to actually
-  // close the window.
+  // close the window. Subscribed once (mount-only deps) and reads
+  // `saveFileRef.current()` rather than closing over `saveFile` directly —
+  // see `saveFileRef`'s own comment for why re-subscribing on every
+  // `saveFile` change (every keystroke) is both wasteful IPC churn and, in
+  // tests, a real source of stale-closure flakiness.
   useEffect(() => {
     return window.electronAPI?.onRequestSaveBeforeClose?.(() => {
-      void saveFile().then((saved) => {
+      void saveFileRef.current().then((saved) => {
         window.electronAPI?.reportSaveBeforeCloseResult?.({ saved });
       });
     });
-  }, [saveFile]);
+  }, []);
 
   // Warn before unloading with unsaved changes (browser-tab-mode fallback —
   // the packaged Electron app is guarded by the main-process `close` handler
