@@ -1011,6 +1011,9 @@ function buildTableCellWithState(cell: TableCell, state: SerializeState): Ordere
   return createElement('w:tc', children)
 }
 
+// Child order follows ECMA-376 `CT_TblPrBase` (§17.4.60), restricted to the
+// members `TableProps` models. An element-order review found `jc` and `shd`
+// emitted last instead of in-sequence, and `tblCellMar`/`tblLayout` swapped.
 function buildTablePropertiesNode(tableProps: TableProps | undefined): OrderedXmlNode | undefined {
   if (tableProps === undefined) {
     return undefined
@@ -1020,17 +1023,19 @@ function buildTablePropertiesNode(tableProps: TableProps | undefined): OrderedXm
 
   pushIfDefined(children, buildValueElement('w:tblStyle', tableProps.tblStyle))
   pushIfDefined(children, buildWidthElement('w:tblW', tableProps.tblW))
+  pushIfDefined(children, buildValueElement('w:jc', tableProps.jc))
   pushIfDefined(children, buildWidthElement('w:tblInd', tableProps.tblInd))
   pushIfDefined(children, buildBorderSetElement('w:tblBorders', tableProps.tblBorders))
-  pushIfDefined(children, buildInsetSetElement('w:tblCellMar', tableProps.tblCellMar))
-  pushIfDefined(children, buildTypeElement('w:tblLayout', tableProps.tblLayout))
-  pushIfDefined(children, buildTableLookElement(tableProps.tblLook))
-  pushIfDefined(children, buildValueElement('w:jc', tableProps.jc))
   pushIfDefined(children, buildShadingElement('w:shd', tableProps.shd))
+  pushIfDefined(children, buildTypeElement('w:tblLayout', tableProps.tblLayout))
+  pushIfDefined(children, buildInsetSetElement('w:tblCellMar', tableProps.tblCellMar))
+  pushIfDefined(children, buildTableLookElement(tableProps.tblLook))
 
   return children.length > 0 ? createElement('w:tblPr', children) : undefined
 }
 
+// Child order follows ECMA-376 `CT_TrPrBase` (§17.4.83): `cantSplit`
+// precedes `trHeight` — an element-order review found them swapped.
 function buildTableRowPropertiesNode(rowProps: TableRowProps | undefined): OrderedXmlNode | undefined {
   if (rowProps === undefined) {
     return undefined
@@ -1038,14 +1043,17 @@ function buildTableRowPropertiesNode(rowProps: TableRowProps | undefined): Order
 
   const children: OrderedXmlNode[] = []
 
-  pushIfDefined(children, buildTableRowHeightElement(rowProps.trHeight))
   pushIfDefined(children, buildToggleElement('w:cantSplit', rowProps.cantSplit))
+  pushIfDefined(children, buildTableRowHeightElement(rowProps.trHeight))
   pushIfDefined(children, buildToggleElement('w:tblHeader', rowProps.tblHeader))
   pushIfDefined(children, buildValueElement('w:jc', rowProps.jc))
 
   return children.length > 0 ? createElement('w:trPr', children) : undefined
 }
 
+// Child order follows ECMA-376 `CT_TcPrBase` (§17.4.70): `noWrap` precedes
+// `tcMar`/`vAlign` — an element-order review found `noWrap` emitted last
+// instead of right after `shd`.
 function buildTableCellPropertiesNode(cellProps: TableCellProps | undefined): OrderedXmlNode | undefined {
   if (cellProps === undefined) {
     return undefined
@@ -1058,9 +1066,9 @@ function buildTableCellPropertiesNode(cellProps: TableCellProps | undefined): Or
   pushIfDefined(children, buildTableCellMergeElement(cellProps.vMerge))
   pushIfDefined(children, buildBorderSetElement('w:tcBorders', cellProps.tcBorders))
   pushIfDefined(children, buildShadingElement('w:shd', cellProps.shd))
+  pushIfDefined(children, buildToggleElement('w:noWrap', cellProps.noWrap))
   pushIfDefined(children, buildInsetSetElement('w:tcMar', cellProps.tcMar))
   pushIfDefined(children, buildValueElement('w:vAlign', cellProps.vAlign))
-  pushIfDefined(children, buildToggleElement('w:noWrap', cellProps.noWrap))
   pushIfDefined(children, buildToggleElement('w:hideMark', cellProps.hideMark))
 
   return children.length > 0 ? createElement('w:tcPr', children) : undefined
@@ -1108,6 +1116,12 @@ function buildTableRowHeightElement(height: TableRowHeight | undefined): Ordered
   return createElement('w:trHeight', [], attributes)
 }
 
+// Child order follows ECMA-376 `CT_RPr`/`EG_RPrBase` (§17.3.2.28), restricted
+// to the members `RunProps` models. An element-order review found this
+// emitting something close to insertion order rather than schema order —
+// e.g. `rFonts` last instead of second, `u`/`vertAlign` far too early, `caps`/
+// `smallCaps`/`vanish`/`webHidden` far too late, and `lang` before `rtl`
+// instead of after.
 function buildRunPropertiesNode(runProps: RunProps | undefined): OrderedXmlNode | undefined {
   if (runProps === undefined) {
     return undefined
@@ -1116,33 +1130,43 @@ function buildRunPropertiesNode(runProps: RunProps | undefined): OrderedXmlNode 
   const children: OrderedXmlNode[] = []
 
   pushIfDefined(children, buildValueElement('w:rStyle', runProps.rStyle))
+  pushIfDefined(children, buildFontSetElement(runProps.rFonts))
   pushIfDefined(children, buildToggleElement('w:b', runProps.bold))
   pushIfDefined(children, buildToggleElement('w:bCs', runProps.boldCs))
   pushIfDefined(children, buildToggleElement('w:i', runProps.italic))
   pushIfDefined(children, buildToggleElement('w:iCs', runProps.italicCs))
-  pushIfDefined(children, buildUnderlineElement(runProps.underline))
+  pushIfDefined(children, buildToggleElement('w:caps', runProps.caps))
+  pushIfDefined(children, buildToggleElement('w:smallCaps', runProps.smallCaps))
   pushIfDefined(children, buildToggleElement('w:strike', runProps.strike))
   pushIfDefined(children, buildToggleElement('w:dstrike', runProps.dstrike))
-  pushIfDefined(children, buildValueElement('w:vertAlign', runProps.vertAlign))
+  pushIfDefined(children, buildToggleElement('w:vanish', runProps.vanish))
+  pushIfDefined(children, buildToggleElement('w:webHidden', runProps.webHidden))
   pushIfDefined(children, buildValueElement('w:color', runProps.color))
-  pushIfDefined(children, buildValueElement('w:highlight', runProps.highlight))
-  pushIfDefined(children, buildShadingElement('w:shd', runProps.shd))
-  pushIfDefined(children, buildValueElement('w:sz', runProps.sz))
-  pushIfDefined(children, buildValueElement('w:szCs', runProps.szCs))
-  pushIfDefined(children, buildFontSetElement(runProps.rFonts))
   pushIfDefined(children, buildValueElement('w:spacing', runProps.spacing))
   pushIfDefined(children, buildValueElement('w:kern', runProps.kern))
   pushIfDefined(children, buildValueElement('w:position', runProps.position))
-  pushIfDefined(children, buildLanguageSetElement(runProps.lang))
-  pushIfDefined(children, buildToggleElement('w:caps', runProps.caps))
-  pushIfDefined(children, buildToggleElement('w:smallCaps', runProps.smallCaps))
-  pushIfDefined(children, buildToggleElement('w:vanish', runProps.vanish))
-  pushIfDefined(children, buildToggleElement('w:webHidden', runProps.webHidden))
+  pushIfDefined(children, buildValueElement('w:sz', runProps.sz))
+  pushIfDefined(children, buildValueElement('w:szCs', runProps.szCs))
+  pushIfDefined(children, buildValueElement('w:highlight', runProps.highlight))
+  pushIfDefined(children, buildUnderlineElement(runProps.underline))
+  pushIfDefined(children, buildShadingElement('w:shd', runProps.shd))
+  pushIfDefined(children, buildValueElement('w:vertAlign', runProps.vertAlign))
   pushIfDefined(children, buildToggleElement('w:rtl', runProps.rtl))
+  pushIfDefined(children, buildLanguageSetElement(runProps.lang))
 
   return children.length > 0 ? createElement('w:rPr', children) : undefined
 }
 
+// Child order follows ECMA-376 `CT_PPrBase`/`CT_PPr` (§17.3.1.26), restricted
+// to the members `ParaProps` models, with `sectPr` last (the `CT_PPr`
+// extension's own trailing member, after `rPr`/`sectPr`/`pPrChange` — Atlas
+// doesn't model a paragraph-mark `rPr` or `pPrChange` here). An element-order
+// review found `numPr`/`spacing`/`ind`/`jc` emitted right after `pStyle`
+// instead of deep in the sequence, `keepNext`/`keepLines`/`pageBreakBefore`/
+// `framePr`/`widowControl` pushed to the middle instead of right after
+// `pStyle`, and `w:bidi` placed last (immediately before `sectPr`) although
+// `spacing`/`ind`/`jc`/`textAlignment`/`outlineLvl`/`divId` all follow it in
+// the real sequence.
 function buildParagraphPropertiesNode(paraProps: ParaProps | undefined): OrderedXmlNode | undefined {
   if (paraProps === undefined) {
     return undefined
@@ -1151,31 +1175,30 @@ function buildParagraphPropertiesNode(paraProps: ParaProps | undefined): Ordered
   const children: OrderedXmlNode[] = []
 
   pushIfDefined(children, buildValueElement('w:pStyle', paraProps.pStyle))
-  pushIfDefined(children, buildNumPrElement(paraProps.numPr))
-  pushIfDefined(children, buildSpacingElement(paraProps.spacing))
-  pushIfDefined(children, buildIndentElement(paraProps.ind))
-  pushIfDefined(children, buildValueElement('w:jc', paraProps.jc))
   pushIfDefined(children, buildToggleElement('w:keepNext', paraProps.keepNext))
   pushIfDefined(children, buildToggleElement('w:keepLines', paraProps.keepLines))
   pushIfDefined(children, buildToggleElement('w:pageBreakBefore', paraProps.pageBreakBefore))
+  pushIfDefined(children, buildFramePropsElement(paraProps.framePr))
   pushIfDefined(children, buildToggleElement('w:widowControl', paraProps.widowControl))
+  pushIfDefined(children, buildNumPrElement(paraProps.numPr))
   pushIfDefined(children, buildToggleElement('w:suppressLineNumbers', paraProps.suppressLineNumbers))
-  pushIfDefined(children, buildToggleElement('w:suppressAutoHyphens', paraProps.suppressAutoHyphens))
-  pushIfDefined(children, buildToggleElement('w:contextualSpacing', paraProps.contextualSpacing))
-  pushIfDefined(children, buildToggleElement('w:mirrorIndents', paraProps.mirrorIndents))
-  pushIfDefined(children, buildValueElement('w:outlineLvl', paraProps.outlineLvl))
-  pushIfDefined(children, buildValueElement('w:textAlignment', paraProps.textAlignment))
-  pushIfDefined(children, buildTabsElement(paraProps.tabs))
   pushIfDefined(children, buildBorderSetElement('w:pBdr', paraProps.pBdr))
   pushIfDefined(children, buildShadingElement('w:shd', paraProps.shd))
-  pushIfDefined(children, buildFramePropsElement(paraProps.framePr))
-  pushIfDefined(children, buildValueElement('w:divId', paraProps.divId))
+  pushIfDefined(children, buildTabsElement(paraProps.tabs))
+  pushIfDefined(children, buildToggleElement('w:suppressAutoHyphens', paraProps.suppressAutoHyphens))
   // Round-trip fidelity audit (DXS round 2): `w:bidi` was parsed onto
   // `ParaProps.bidi` (see parser/document.ts) but never written back here —
   // every right-to-left paragraph silently reverted to left-to-right on
-  // save. `w:bidi` immediately precedes `w:sectPr` in `CT_PPrBase`'s child
-  // sequence, which the position below matches.
+  // save.
   pushIfDefined(children, buildToggleElement('w:bidi', paraProps.bidi))
+  pushIfDefined(children, buildSpacingElement(paraProps.spacing))
+  pushIfDefined(children, buildIndentElement(paraProps.ind))
+  pushIfDefined(children, buildToggleElement('w:contextualSpacing', paraProps.contextualSpacing))
+  pushIfDefined(children, buildToggleElement('w:mirrorIndents', paraProps.mirrorIndents))
+  pushIfDefined(children, buildValueElement('w:jc', paraProps.jc))
+  pushIfDefined(children, buildValueElement('w:textAlignment', paraProps.textAlignment))
+  pushIfDefined(children, buildValueElement('w:outlineLvl', paraProps.outlineLvl))
+  pushIfDefined(children, buildValueElement('w:divId', paraProps.divId))
 
   if (paraProps.sectPr !== undefined) {
     children.push(buildSectionPropertiesNode(paraProps.sectPr))
@@ -1184,19 +1207,20 @@ function buildParagraphPropertiesNode(paraProps: ParaProps | undefined): Ordered
   return children.length > 0 ? createElement('w:pPr', children) : undefined
 }
 
+// Child order follows ECMA-376 Part 1 §17.6.17's `EG_SectPrContents` group
+// (shared by `CT_SectPrBase`/`CT_SectPr`), restricted to the members Atlas
+// models: headerReference*, footerReference*, [footnotePr], [endnotePr],
+// type, pgSz, pgMar, [paperSrc], pgBorders, lnNumType, pgNumType, cols,
+// formProt, vAlign, noEndnote, titlePg, textDirection, bidi, rtlGutter,
+// docGrid, [printerSettings], [sectPrChange] — bracketed members aren't
+// modeled by `SectionProps` and are omitted rather than reordered. A
+// structural-fidelity review (element-order pass) found the header/footer
+// references emitted *last* instead of first, and `titlePg`/`pgNumType`/
+// `cols` out of their relative sequence — the classic cause of Word's
+// "found unreadable content" repair prompt, since `w:sectPr`'s content
+// model is `xsd:sequence`, not a bag.
 function buildSectionPropertiesNode(sectionProps: SectionProps): OrderedXmlNode {
   const children: OrderedXmlNode[] = []
-
-  pushIfDefined(children, buildPageSizeElement(sectionProps.pgSz))
-  pushIfDefined(children, buildPageMarginsElement(sectionProps.pgMar))
-  // Round-trip fidelity audit (DXS round 2): `w:pgBorders` was previously
-  // unmodeled entirely (not parsed, not passed through) — silently dropped
-  // on every save. See `SectionProps.pgBorders`'s doc comment.
-  pushIfDefined(children, buildPageBordersElement(sectionProps))
-  pushIfDefined(children, buildSectionColumnsElement(sectionProps.cols))
-  pushIfDefined(children, buildPageNumberTypeElement(sectionProps.pgNumType))
-  pushIfDefined(children, buildToggleElement('w:titlePg', sectionProps.titlePg))
-  pushIfDefined(children, buildValueElement('w:type', sectionProps.type))
 
   for (const headerReference of sectionProps.headerReference ?? []) {
     children.push(buildHeaderReferenceNode(headerReference))
@@ -1206,12 +1230,22 @@ function buildSectionPropertiesNode(sectionProps: SectionProps): OrderedXmlNode 
     children.push(buildFooterReferenceNode(footerReference))
   }
 
+  pushIfDefined(children, buildValueElement('w:type', sectionProps.type))
+  pushIfDefined(children, buildPageSizeElement(sectionProps.pgSz))
+  pushIfDefined(children, buildPageMarginsElement(sectionProps.pgMar))
+  // Round-trip fidelity audit (DXS round 2): `w:pgBorders` was previously
+  // unmodeled entirely (not parsed, not passed through) — silently dropped
+  // on every save. See `SectionProps.pgBorders`'s doc comment.
+  pushIfDefined(children, buildPageBordersElement(sectionProps))
   pushIfDefined(children, buildLineNumberTypeElement(sectionProps.lnNumType))
-  pushIfDefined(children, buildValueElement('w:vAlign', sectionProps.vAlign))
+  pushIfDefined(children, buildPageNumberTypeElement(sectionProps.pgNumType))
+  pushIfDefined(children, buildSectionColumnsElement(sectionProps.cols))
   // The rest of `CT_SectPrBase` found unmodeled during the round-trip
   // fidelity audit (DXS round 2) — see `SectionProps`'s doc comments.
   pushIfDefined(children, buildToggleElement('w:formProt', sectionProps.formProt))
+  pushIfDefined(children, buildValueElement('w:vAlign', sectionProps.vAlign))
   pushIfDefined(children, buildToggleElement('w:noEndnote', sectionProps.noEndnote))
+  pushIfDefined(children, buildToggleElement('w:titlePg', sectionProps.titlePg))
   pushIfDefined(children, buildValueElement('w:textDirection', sectionProps.textDirection))
   // `w:bidi` on `w:sectPr` itself (section reads right-to-left) — distinct
   // from a paragraph's own `w:bidi` (see buildParagraphPropertiesNode).

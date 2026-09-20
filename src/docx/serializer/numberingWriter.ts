@@ -57,18 +57,21 @@ function buildNumXml(num: NumInstance): XmlNode {
   }
 }
 
+// Child order follows ECMA-376 `CT_Lvl` (§17.9.6), restricted to the members
+// `LvlDef` models. An element-order review found `lvlRestart`/`numFmt`
+// swapped and `pStyle`/`isLgl`/`suff`/`lvlText` all out of sequence.
 function buildLevelXml(level: LvlDef): XmlNode {
   return {
     '@_w:ilvl': String(level.level),
     ...withAttribute('@_w:tentative', buildOnOffAttribute(level.tentative)),
     ...buildValElement('w:start', level.start),
-    ...buildValElement('w:lvlRestart', level.restart),
     ...buildValElement('w:numFmt', level.format),
-    ...buildValElement('w:lvlText', level.text?.value),
-    ...buildValElement('w:suff', level.suffix),
-    ...withElement('w:isLgl', buildOnOffElement(level.legal)),
-    ...buildValElement('w:lvlJc', level.justification),
+    ...buildValElement('w:lvlRestart', level.restart),
     ...buildValElement('w:pStyle', level.pStyle),
+    ...withElement('w:isLgl', buildOnOffElement(level.legal)),
+    ...buildValElement('w:suff', level.suffix),
+    ...buildValElement('w:lvlText', level.text?.value),
+    ...buildValElement('w:lvlJc', level.justification),
     ...withElement('w:pPr', buildParagraphPropertiesXml(level.paragraph)),
     ...withElement('w:rPr', buildRunPropertiesXml(level.run)),
   }

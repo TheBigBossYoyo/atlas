@@ -63,7 +63,8 @@ describe('writeStylesXml', () => {
     expect(xml).toContain('<w:basedOn w:val="BaseParagraph"/>')
     expect(xml).toContain('<w:next w:val="BodyText"/>')
     expect(xml).toContain('<w:link w:val="Heading1Char"/>')
-    expect(xml).toContain('<w:pPr><w:spacing w:before="480" w:after="120"/><w:keepNext/></w:pPr>')
+    // w:keepNext precedes w:spacing per CT_PPrBase's schema order.
+    expect(xml).toContain('<w:pPr><w:keepNext/><w:spacing w:before="480" w:after="120"/></w:pPr>')
     expect(xml).toContain('<w:rPr><w:b/><w:color w:val="AA0000"/></w:rPr>')
   })
 
@@ -87,7 +88,8 @@ describe('writeStylesXml', () => {
 
     expect(xml).toContain('<w:style w:type="character" w:styleId="Heading1Char">')
     expect(xml).toContain('<w:link w:val="Heading1"/>')
-    expect(xml).toContain('<w:rPr><w:u w:val="single" w:color="00AA00"/><w:sz w:val="28"/></w:rPr>')
+    // w:sz precedes w:u per CT_RPr's schema order.
+    expect(xml).toContain('<w:rPr><w:sz w:val="28"/><w:u w:val="single" w:color="00AA00"/></w:rPr>')
   })
 
   it('writes table styles with table properties', () => {
@@ -113,7 +115,10 @@ describe('writeStylesXml', () => {
     )
 
     expect(xml).toContain('<w:style w:type="table" w:styleId="AtlasTable">')
-    expect(xml).toContain('<w:tblPr><w:tblW w:type="dxa" w:w="7200"/><w:tblInd w:type="dxa" w:w="360"/><w:tblLayout w:val="fixed"/><w:tblLook w:val="04A0" w:firstRow="1" w:noVBand="1"/><w:jc w:val="center"/><w:shd w:fill="EFEFEF"/></w:tblPr>')
+    // Order follows CT_TblPrBase: tblW, jc, tblInd, shd, tblLayout, tblLook.
+    expect(xml).toContain(
+      '<w:tblPr><w:tblW w:type="dxa" w:w="7200"/><w:jc w:val="center"/><w:tblInd w:type="dxa" w:w="360"/><w:shd w:fill="EFEFEF"/><w:tblLayout w:val="fixed"/><w:tblLook w:val="04A0" w:firstRow="1" w:noVBand="1"/></w:tblPr>',
+    )
   })
 
   it('writes numbering styles from the numbering shortcut model', () => {
