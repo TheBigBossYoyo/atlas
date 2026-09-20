@@ -34,6 +34,33 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   once. A full hunt through the French UI, the New-document flow and those
   races found no further defects.
 
+## [3.6.0] — 2026-09-20 (wave 11: schema conformance, accessibility, memory)
+
+### Fixed
+- **Word could have refused documents Atlas saved.** Several parts were
+  written with their elements in the wrong order — section properties
+  (headers/footers were emitted last instead of first), paragraph and run
+  properties, table and cell properties, numbering levels, and the styles
+  part's own copies of all of those. Word's schema is order-sensitive, and a
+  wrong order is the classic cause of "Word found unreadable content". The
+  package validator now checks these sequences on every build, and the
+  shipped blank templates were regenerated.
+- **Spreadsheets**: a shared formula's range now follows row and column
+  inserts; a formula broken by a deleted sheet stores the error as its value
+  (so it stays visible when reopened) instead of a stale number that looked
+  like a real answer; images belonging only to a deleted sheet are swept,
+  while shared ones are kept.
+- **A closed spreadsheet tab leaves ~24 MB behind** — measured, root-caused
+  to the grid library, and documented in `docs/KNOWN_LIMITATIONS.md` rather
+  than guessed at.
+
+### Added
+- **Keyboard and screen-reader support**: the tab strip follows the standard
+  arrow-key pattern, the spreadsheet grid announces the selected cell, the
+  PDF find bar announces its match count, thumbnail rails have proper
+  semantics, and smooth scrolling now respects the system "reduce motion"
+  setting. A keyboard-only end-to-end journey (no mouse at all) guards it.
+
 ## [Unreleased]
 
 ### Added
