@@ -144,13 +144,23 @@ const isDev = resolveIsDev({
   distIndexExists: () => fs.existsSync(DIST_INDEX_PATH),
 });
 
-// ---- Path allowlist (P1.2 / ELEC-02, ELEC-03, ELEC-25) ---- //
+// ---- Path allowlist (P1.2 / ELEC-02, ELEC-03, ELEC-25, SEC-1) ---- //
 //
-// The only paths any read/write IPC handler will act on are ones the main
-// process itself vouches for: open-dialog results, argv/second-instance/
-// open-file paths, drag-drop paths resolved via webUtils (registered
-// through `path:register-dropped`), save-as dialog results, and recent
-// files re-validated through `recent:request-open`.
+// Two trust tiers — see pathAllowlist.cjs's header for the full design
+// rationale. Short version: `path:register-dropped` cannot verify a path
+// actually came from a real OS drag-drop (that would need
+// `webUtils.getPathForFile`, resolved renderer-side in
+// src/utils/dragDropPath.ts — main only ever sees the string the renderer
+// hands it), so under this app's threat model (hostile script running in
+// the main frame) a dropped path is READ-tier only: it can be opened, but
+// `save-file`/`save-binary-file` must never silently overwrite it as an
+// `existingPath` — that requires WRITE tier, granted only by `trustPath()`
+// below, itself called only from flows the main process produced or
+// independently re-validated (open/save dialog results, argv/
+// second-instance/open-file OS paths, recent-files entries re-checked
+// against the persisted store). A drag-dropped file DOES become
+// write-eligible the moment the user Save-As's it through a real dialog —
+// that dialog result flows through `trustPath()` like any other.
 const pathAllowlist = createPathAllowlist();
 
 // ---- Recent-files ground truth (security-review fix) ---- //
@@ -190,14 +200,16 @@ function getRecentFilesStore() {
 }
 
 /**
- * Adds `filePath` to both the session allowlist and the persisted
+ * Grants `filePath` full trust: readable AND write-eligible in the session
+ * allowlist (`pathAllowlist.trust`, SEC-1), plus recorded in the persisted
  * trusted-history store. Use this (instead of `pathAllowlist.add` directly)
  * at every call site where the path came from a source the main process
- * itself vouches for.
+ * itself vouches for — never for `path:register-dropped`, whose provenance
+ * cannot be verified (see the allowlist's header comment above).
  * @param {unknown} filePath
  */
 function trustPath(filePath) {
-  pathAllowlist.add(filePath);
+  pathAllowlist.trust(filePath);
   getRecentFilesStore().record(filePath);
 }
 
@@ -354,9 +366,15 @@ function sendFileToWindow(win, filePath) {
 }
 
 /**
- * Registers a drag-dropped `filePath` into the SESSION allowlist only, after
- * re-validating it still exists on disk (P1.2/P1.4). This does not add to
- * the persisted `recentFilesStore` — see that module's header for why.
+ * Registers a drag-dropped `filePath` into the SESSION allowlist's READ tier
+ * only (SEC-1), after re-validating it still exists on disk (P1.2/P1.4).
+ * Deliberately uses `pathAllowlist.add`, not `trustPath`/`.trust` — this
+ * channel cannot verify the path actually came from a real OS drag-drop (no
+ * `webUtils.getPathForFile` check happens on the main-process side; see the
+ * allowlist's header), so it must never become write-eligible. It also does
+ * not add to the persisted `recentFilesStore` — see that module's header for
+ * why. A real Save-As on the dropped file still upgrades it to WRITE tier,
+ * because the save dialog's result goes through `trustPath`.
  * @param {Electron.IpcMainInvokeEvent} event
  * @param {unknown} filePath
  */
@@ -878,6 +896,13 @@ ipcMain.handle('open-file-dialog', async (event) => {
   return readMarkdownFile(result.filePaths[0]);
 });
 
+// SEC-1: this is a pure read (it never writes) — it's the generic
+// "open this already-allowlisted path" funnel useFileHandler.ts's
+// `loadFromPath` calls for drag-drop, Recent-click, and OS "Open with"
+// alike, so it belongs in the READ tier (`pathAllowlist.has`), not the
+// WRITE tier. Gating it on `isWriteEligible` instead would break opening a
+// merely-dropped file, which the acceptance criteria require to keep
+// working.
 ipcMain.handle('open-file-by-path', (event, filePath) => {
   if (!isFromMainFrame(event)) {
     throw new Error(SENDER_FRAME_ERROR_MESSAGE);
@@ -899,11 +924,12 @@ ipcMain.handle('save-file', async (event, req) => {
   if (!mainWindow) return { saved: false };
   if (!req || typeof req.content !== 'string') return { saved: false };
 
-  // Only silently overwrite a path this window is already vouched for
-  // (ELEC-03) — anything else falls back to the save dialog instead of
-  // failing outright.
+  // Only silently overwrite a path this window is already WRITE-trusted for
+  // (ELEC-03/SEC-1) — a path that is merely readable (e.g. drag-dropped,
+  // never opened/saved through a dialog) falls back to the save dialog
+  // instead of a silent overwrite.
   let targetPath =
-    typeof req.existingPath === 'string' && pathAllowlist.has(req.existingPath)
+    typeof req.existingPath === 'string' && pathAllowlist.isWriteEligible(req.existingPath)
       ? req.existingPath
       : undefined;
 
@@ -938,8 +964,11 @@ ipcMain.handle('save-binary-file', async (event, req) => {
   if (!mainWindow) return { saved: false };
   if (!(req && req.content instanceof Uint8Array)) return { saved: false };
 
+  // See save-file's handler above — only WRITE-trusted paths (SEC-1) are
+  // silently overwritten; a merely-readable (e.g. drag-dropped) path falls
+  // back to the save dialog.
   let targetPath =
-    typeof req.existingPath === 'string' && pathAllowlist.has(req.existingPath)
+    typeof req.existingPath === 'string' && pathAllowlist.isWriteEligible(req.existingPath)
       ? req.existingPath
       : undefined;
 
@@ -1283,10 +1312,12 @@ ipcMain.handle('app:get-locale', () => app.getLocale());
 // here — the persisted recentFilesStore write is deferred to `whenReady`
 // below (once `app.getPath` is safe to call) rather than risking pinning
 // the store's lazily-created singleton to a tmpdir fallback for the rest of
-// the session.
+// the session. argv is still a main-process-vouched source (SEC-1), so this
+// grants full trust (`.trust`, not `.add`) immediately — only the persisted
+// history write is what's deferred.
 pendingFilePath = extractFilePath(process.argv);
 if (pendingFilePath) {
-  pathAllowlist.add(pendingFilePath);
+  pathAllowlist.trust(pendingFilePath);
 }
 
 app.on('second-instance', (_event, argv) => {
@@ -1341,9 +1372,10 @@ app.on('open-file', (event, filePath) => {
   } else {
     // Mirrors the argv case above: `app.getPath('userData')` isn't
     // guaranteed to work before 'ready' (this event can fire pre-ready on
-    // macOS cold start), so only the session allowlist is updated now; the
+    // macOS cold start), so only the session allowlist is updated now (full
+    // trust — this is still an OS-vouched source, see SEC-1 note above); the
     // `whenReady` flush above will persist `pendingFilePath` once it's safe.
-    pathAllowlist.add(filePath);
+    pathAllowlist.trust(filePath);
   }
   // P5.2/ELEC-07 — same window-exists-but-renderer-not-mounted-yet race as
   // the second-instance handler above; see fileOpenRouting.cjs.
