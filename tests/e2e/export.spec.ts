@@ -77,6 +77,25 @@ async function exportToPdf(page: Page): Promise<void> {
 
 test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / RUN-07 / SHELL-13)', () => {
   test('a 2-page DOCX (explicit page break) exports as a real 2-page PDF', async () => {
+    // CI flake investigation — this test's own steps already budget more
+    // time than the global `timeout: 60_000` (playwright.config.ts) can
+    // ever honor: `waitForViewer` alone allows up to 30 s (DOCX in
+    // particular — font preloading + full-document pagination before the
+    // first page mounts), then `waitForFile` allows up to another 60 s for
+    // Chromium's print pipeline on a loaded CI runner, on top of the
+    // Electron launch and the export click themselves. Those two budgets
+    // were each raised independently (see their own comments) without ever
+    // touching the *outer* per-test timeout that both of them share — so in
+    // the one CI run that actually needed close to the advertised 30 s for
+    // the viewer, `waitForFile` never got anywhere near its own advertised
+    // 60 s before the outer timeout cut the whole test off first (observed:
+    // run 35523638613, "Test timeout of 60000ms exceeded" inside
+    // `waitForFile`, with no export error logged — the write simply never
+    // got the time its own budget promised). Locally this whole test
+    // completes in ~7 s; 120 s gives the documented per-step budgets room to
+    // actually apply, without turning a genuine failure into a silent pass.
+    test.setTimeout(120_000)
+
     const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'atlas-export-e2e-'))
     const outPath = path.join(outDir, 'out.pdf')
 
@@ -101,6 +120,9 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
   })
 
   test('a 2-slide PPTX exports as a 2-page PDF, one page per slide', async () => {
+    // Same nested-budget fix as the DOCX test above — see its comment.
+    test.setTimeout(120_000)
+
     const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'atlas-export-e2e-'))
     const outPath = path.join(outDir, 'out.pdf')
 
@@ -125,6 +147,9 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
   })
 
   test('a 2-sheet XLSX workbook exports with content from both sheets present', async () => {
+    // Same nested-budget fix as the DOCX test above — see its comment.
+    test.setTimeout(120_000)
+
     const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'atlas-export-e2e-'))
     const outPath = path.join(outDir, 'out.pdf')
 
