@@ -44,6 +44,8 @@ const MAX_COMMENT_LENGTH = 0xffff
  * function did, which made this reader falsely mark every part of a
  * Unix-zipped `.docx` (mode `100644` = `0x81a4`) as a directory and treat
  * the archive as effectively empty.
+ * @param {number} externalAttrs
+ * @returns {boolean}
  */
 function isDirectoryFromExternalAttrs(externalAttrs) {
   const unixMode = (externalAttrs >>> 16) & 0xffff
@@ -51,6 +53,10 @@ function isDirectoryFromExternalAttrs(externalAttrs) {
   return (externalAttrs & 0x10) !== 0
 }
 
+/**
+ * @param {Buffer} buffer
+ * @returns {number}
+ */
 function findEndOfCentralDirectory(buffer) {
   const maxScan = Math.min(buffer.length, EOCD_MIN_SIZE + MAX_COMMENT_LENGTH)
   for (let offset = buffer.length - EOCD_MIN_SIZE; offset >= buffer.length - maxScan; offset--) {

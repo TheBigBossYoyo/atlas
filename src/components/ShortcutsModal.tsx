@@ -92,6 +92,7 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
             <dt>{renderKeys('Ctrl+S')}</dt><dd>{t('shortcuts.save')}</dd>
             <dt>{renderKeys('Ctrl+Shift+S')}</dt><dd>{t('shortcuts.saveAs')}</dd>
             <dt>{renderKeys('Ctrl+W')}</dt><dd>{t('shortcuts.closeFile')}</dd>
+            <dt>{renderKeys('Ctrl+Tab')} / {renderKeys('Ctrl+Shift+Tab')}</dt><dd>{t('shortcuts.nextPrevTab')}</dd>
             <dt>{renderKeys('Ctrl+Shift+T')}</dt><dd>{t('shortcuts.reopenClosed')}</dd>
             <dt>{renderKeys('Ctrl+P')}</dt><dd>{t('shortcuts.printExport')}</dd>
             <dt>{renderKeys('Ctrl+E')}</dt><dd>{t('shortcuts.exportMenu')}</dd>

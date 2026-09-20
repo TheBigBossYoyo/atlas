@@ -116,6 +116,7 @@ export const messages = {
   'shortcuts.save': 'Save',
   'shortcuts.saveAs': 'Save As',
   'shortcuts.closeFile': 'Close file',
+  'shortcuts.nextPrevTab': 'Next / previous tab',
   'shortcuts.reopenClosed': 'Reopen last closed document',
   'shortcuts.printExport': 'Print / export',
   'shortcuts.exportMenu': 'Export menu',

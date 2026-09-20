@@ -121,6 +121,7 @@ export const messages = {
   'shortcuts.save': 'Enregistrer',
   'shortcuts.saveAs': 'Enregistrer sous',
   'shortcuts.closeFile': 'Fermer le fichier',
+  'shortcuts.nextPrevTab': 'Onglet suivant / précédent',
   'shortcuts.reopenClosed': 'Rouvrir le dernier document fermé',
   'shortcuts.printExport': 'Imprimer / exporter',
   'shortcuts.exportMenu': 'Menu Export',

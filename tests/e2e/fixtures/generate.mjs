@@ -17,6 +17,11 @@ const outputDir = path.join(projectRoot, 'tests', 'e2e', 'fixtures')
  * e2e coverage wants a document that exercises pdf.js's real outline path
  * (PdfViewer's `buildOutlineNavItems`), not only the no-outline fallback the
  * single-page `sample.pdf` fixture below exercises.
+ *
+ * @typedef {{ width: number, height: number, text: string }} PdfPage
+ * @param {PdfPage[]} pages
+ * @param {{ withOutline?: boolean }} [options]
+ * @returns {Buffer}
  */
 function buildPdfDocument(pages, { withOutline = false } = {}) {
   const objects = []
@@ -25,8 +30,11 @@ function buildPdfDocument(pages, { withOutline = false } = {}) {
   const fontNum = 3
   const outlinesNum = 4
   const firstContentObjNum = 5
+  /** @type {(index: number) => number} */
   const pageObjNum = (index) => firstContentObjNum + index * 2
+  /** @type {(index: number) => number} */
   const contentObjNum = (index) => firstContentObjNum + index * 2 + 1
+  /** @type {(index: number) => number} */
   const outlineItemObjNum = (index) => firstContentObjNum + pages.length * 2 + index
 
   objects[catalogNum - 1] = withOutline
@@ -49,7 +57,7 @@ function buildPdfDocument(pages, { withOutline = false } = {}) {
   })
 
   if (withOutline) {
-    pages.forEach((page, index) => {
+    pages.forEach((_page, index) => {
       const prev = index > 0 ? `/Prev ${outlineItemObjNum(index - 1)} 0 R ` : ''
       const next = index < pages.length - 1 ? `/Next ${outlineItemObjNum(index + 1)} 0 R ` : ''
       objects[outlineItemObjNum(index) - 1] =
@@ -96,6 +104,10 @@ function makeMultiPagePdfBuffer() {
   return buildPdfDocument(pages, { withOutline: true })
 }
 
+/**
+ * @param {import('xlsx').BookType} bookType
+ * @returns {Buffer}
+ */
 function makeWorkbookBuffer(bookType) {
   const workbook = XLSX.utils.book_new()
   const worksheet = XLSX.utils.aoa_to_sheet([
@@ -150,6 +162,10 @@ async function makeMultiPageDocxBuffer() {
 
 /** A real 2-sheet workbook (both visible) — X1/export.spec.ts exports this
  * to PDF and asserts one page-group per sheet. */
+/**
+ * @param {import('xlsx').BookType} bookType
+ * @returns {Buffer}
+ */
 function makeMultiSheetWorkbookBuffer(bookType) {
   const workbook = XLSX.utils.book_new()
   const sheet1 = XLSX.utils.aoa_to_sheet([
@@ -353,6 +369,11 @@ async function makeOdtBuffer() {
   return zip.generateAsync({ type: 'nodebuffer' })
 }
 
+/**
+ * @param {string} name
+ * @param {string | Buffer | Uint8Array} content
+ * @returns {Promise<string>}
+ */
 async function writeFixture(name, content) {
   const targetPath = path.join(outputDir, name)
   await fs.writeFile(targetPath, content)

@@ -16,6 +16,11 @@ const PNG_OUT = resolve(BUILD_DIR, 'icon.png');
 const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
 const PNG_MASTER = 1024;
 
+/**
+ * @param {Buffer} svgBuffer
+ * @param {number} size
+ * @returns {Promise<Buffer>}
+ */
 async function rasterize(svgBuffer, size) {
   return sharp(svgBuffer, { density: 384 })
     .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })

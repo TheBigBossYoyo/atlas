@@ -28,16 +28,25 @@ inserts; header/footer editing preserves images, fields and tables; DOCX page vi
 component coverage closed; packaged exe metadata/icon fixed (`signAndEditExecutable: false` had been
 disabling resource editing entirely).
 
+### Shipped since 3.3.0 (waves 7 and 8, not yet in a version bump)
+Save As (`Ctrl+Shift+S`) fixed for every non-markdown format; the OPC/OOXML/ODF spec-level package
+validator (`scripts/validate-office-file.mjs`); two a11y passes (focus traps on every remaining
+dialog/overlay, WCAG AA contrast fixed across all 5 themes); header/footer editing is now per-SEGMENT
+(a paragraph mixing text with a field/image is editable, not just read-only); spreadsheet formula
+references and defined names are now re-anchored through every structural edit, closing the leftovers
+listed below; an English/French UI (`src/i18n/`, DEFER-6 resolved — the owner is confirmed French-
+speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked too (P4.1 fully closed).
+
 ## What is left
 1. **Code signing (P5.1)** — the only item needing the owner's money. `docs/RELEASE.md` lists the
    certificate options and what changes in `electron-builder.yml`.
 2. **No Office verification** — nothing Atlas writes has ever been opened in real Microsoft Office or
-   LibreOffice (neither is installed here). Structural validation is the substitute.
-3. Spreadsheet leftovers: formulas referencing a renamed/deleted sheet, multi-area defined names,
-   whole-row/column ranges (e.g. `Print_Titles`) are not re-anchored.
-4. Header/footer: a paragraph mixing text with a field or image stays read-only.
-5. `.doc`/`.ppt` are read-only, text only. No split view. No UI localization (the owner is French).
-6. `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are still outside the type-checked projects.
+   LibreOffice (neither is installed here). Structural validation is the substitute (see above).
+3. `.doc`/`.ppt` are read-only, text only. No split view.
+4. i18n: `DocxViewer`, the slide editor, and PDF find/thumbnail internals are not translated
+   (`docs/KNOWN_LIMITATIONS.md`'s "Internationalization" section has the full list).
+5. A version bump + CHANGELOG/findings-register update for waves 7-8 hasn't happened yet — everything
+   above is on `main` but still sits under CHANGELOG's `[Unreleased]` heading.
 
 ## Environment rules (learned the hard way)
 - Windows 11; PowerShell primary, Git Bash available. Bash heredocs mangle `\\`, quotes and `\u`

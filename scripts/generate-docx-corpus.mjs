@@ -54,7 +54,6 @@ import {
   VerticalMergeType,
   VerticalPositionAlign,
   VerticalPositionRelativeFrom,
-  WidthType,
 } from 'docx'
 
 import { createSolidPng } from './lib/corpusPng.mjs'
@@ -74,11 +73,24 @@ const OUT_DIR = path.join(__dirname, '..', 'src', 'docx', '__fixtures__', 'corpu
 
 const AUTHOR = 'Atlas Corpus Generator'
 
+/** @typedef {Map<string, string | Buffer>} FixtureFiles */
+/**
+ * @typedef {{
+ *   id: string,
+ *   document: Document,
+ *   postProcess?: (files: FixtureFiles) => void,
+ * }} FixtureResult
+ */
+
 /**
  * Every fixture's body starts with this exact shape: one paragraph, one
  * plain run. The round-trip test targets `position([0], 0, <end>)` for its
  * trivial edit against every fixture without needing per-fixture knowledge
  * of what follows.
+ */
+/**
+ * @param {string} fixtureId
+ * @returns {Paragraph}
  */
 function introParagraph(fixtureId) {
   return new Paragraph({
@@ -192,6 +204,7 @@ function fixtureFootnotesEndnotes() {
 // ---------------------------------------------------------------------------
 function fixtureTableFixedGridMergedCells() {
   const id = 'table-fixed-grid-merged-cells'
+  /** @type {(text: string) => TableCell} */
   const cell = (text) => new TableCell({ children: [new Paragraph({ children: [new TextRun(text)] })] })
 
   const table = new Table({
@@ -245,7 +258,9 @@ const BANDED_TABLE_STYLE_XML = `
 
 function fixtureTableStyledBanded() {
   const id = 'table-styled-banded'
+  /** @type {(text: string) => TableCell} */
   const cell = (text) => new TableCell({ children: [new Paragraph({ children: [new TextRun(text)] })] })
+  /** @type {(a: string, b: string, c: string) => TableRow} */
   const row = (a, b, c) => new TableRow({ children: [cell(a), cell(b), cell(c)] })
 
   const table = new Table({
@@ -261,6 +276,7 @@ function fixtureTableStyledBanded() {
     sections: [{ children: [introParagraph(id), table] }],
   })
 
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     const stylesPath = 'word/styles.xml'
     const xml = files.get(stylesPath)
@@ -373,6 +389,7 @@ function fixtureImageCropRotationFlip() {
     ],
   })
 
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     const documentPath = 'word/document.xml'
     const xml = files.get(documentPath)
@@ -522,6 +539,7 @@ function fixtureCommentsWithReply() {
 
   // `docx` has no option for `w:comment/@w:parentId` (comment threading), so
   // splice it in directly: comment 2 is a reply to comment 1.
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     const commentsPath = 'word/comments.xml'
     const xml = files.get(commentsPath)
@@ -652,6 +670,7 @@ function fixtureContentControlAlternateContent() {
     ],
   })
 
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     const documentPath = 'word/document.xml'
     const xml = files.get(documentPath)
@@ -692,6 +711,9 @@ const FIXTURES = [
   fixtureContentControlAlternateContent,
 ]
 
+/**
+ * @param {() => FixtureResult} build
+ */
 async function buildFixture(build) {
   const { id, document, postProcess } = build()
   const packed = await Packer.toBuffer(document)

@@ -28,12 +28,34 @@ import { XMLParser, XMLValidator } from 'fast-xml-parser'
 
 import { readZipArchive } from './zipReader.mjs'
 
+/**
+ * @typedef {import('./officeValidator.d.mts').OfficeValidationIssue} Issue
+ * @typedef {import('./officeValidator.d.mts').OfficeFormat} OfficeFormat
+ * @typedef {import('./officeValidator.d.mts').OfficeValidationResult} OfficeValidationResult
+ * @typedef {import('./zipReader.mjs').ZipEntry} ZipEntry
+ */
+
+/** The package's part-path -> raw-bytes map, as returned by `readZipArchive`. */
+/** @typedef {Map<string, Buffer>} PackageFiles */
+
+/**
+ * A `fast-xml-parser` `preserveOrder: true` node: exactly one own key is the
+ * tag name (mapping to its element/text children, in document order), plus
+ * an optional `:@` key holding the element's attributes.
+ * @typedef {{ [tag: string]: OrderedNode[] | string | number | Record<string, string | number | boolean> | undefined, ':@'?: Record<string, string | number | boolean> }} OrderedNode
+ */
+
 // ---------------------------------------------------------------------------
 // Issue collection
 // ---------------------------------------------------------------------------
 
-/** @typedef {{ severity: 'error' | 'warning', code: string, part: string | null, message: string }} Issue */
-
+/**
+ * @param {Issue['severity']} severity
+ * @param {string} code
+ * @param {string | null} part
+ * @param {string} message
+ * @returns {Issue}
+ */
 function issue(severity, code, part, message) {
   return { severity, code, part, message }
 }
@@ -63,10 +85,18 @@ const ILLEGAL_CODE_UNIT_RANGES = [
   [0xfffe, 0xffff], // noncharacters
 ]
 
+/**
+ * @param {number} code
+ * @returns {boolean}
+ */
 function isIllegalCodeUnit(code) {
   return ILLEGAL_CODE_UNIT_RANGES.some(([lo, hi]) => code >= lo && code <= hi)
 }
 
+/**
+ * @param {string} text
+ * @returns {{ index: number, codePoint: number }[]}
+ */
 function findIllegalXmlChars(text) {
   const found = []
   for (let i = 0; i < text.length && found.length < 5; i++) {
@@ -96,7 +126,11 @@ const orderedXmlParser = new XMLParser({
   trimValues: false,
 })
 
-/** Returns `{ ok: true, tree }` or `{ ok: false, message }`. Never throws. */
+/**
+ * Returns `{ ok: true, tree }` or `{ ok: false, message }`. Never throws.
+ * @param {string} xmlText
+ * @returns {{ ok: true, tree: OrderedNode[] } | { ok: false, message: string }}
+ */
 function parseOrdered(xmlText) {
   const validation = XMLValidator.validate(xmlText, { allowBooleanAttributes: true })
   if (validation !== true) {
@@ -109,6 +143,10 @@ function parseOrdered(xmlText) {
   }
 }
 
+/**
+ * @param {OrderedNode} node
+ * @returns {string | undefined}
+ */
 function nodeName(node) {
   for (const key of Object.keys(node)) {
     if (key !== ':@') return key
@@ -116,27 +154,46 @@ function nodeName(node) {
   return undefined
 }
 
+/**
+ * @param {OrderedNode} node
+ * @returns {boolean}
+ */
 function isElementNode(node) {
   const name = nodeName(node)
   return name !== undefined && name !== '#text' && !name.startsWith('?')
 }
 
+/**
+ * @param {OrderedNode} node
+ * @returns {OrderedNode[]}
+ */
 function elementChildren(node) {
   const name = nodeName(node)
   const children = name === undefined ? undefined : node[name]
   return Array.isArray(children) ? children.filter(isElementNode) : []
 }
 
+/**
+ * @param {OrderedNode} node
+ * @returns {Record<string, string | number | boolean>}
+ */
 function attributesOf(node) {
   return node[':@'] ?? {}
 }
 
-/** Recursively collects every element node anywhere in the tree whose tag equals `tag`. */
+/**
+ * Recursively collects every element node anywhere in the tree whose tag equals `tag`.
+ * @param {OrderedNode[]} nodes
+ * @param {string} tag
+ * @param {OrderedNode[]} [out]
+ * @returns {OrderedNode[]}
+ */
 function collectByTag(nodes, tag, out = []) {
   for (const node of nodes) {
     if (!isElementNode(node)) continue
-    if (nodeName(node) === tag) out.push(node)
     const name = nodeName(node)
+    if (name === undefined) continue
+    if (name === tag) out.push(node)
     const children = node[name]
     if (Array.isArray(children)) collectByTag(children, tag, out)
   }
@@ -149,6 +206,10 @@ function collectByTag(nodes, tag, out = []) {
 
 const RESERVED_PREFIXES = new Set(['xml', 'xmlns'])
 
+/**
+ * @param {Record<string, string | number | boolean>} attrs
+ * @returns {string[]}
+ */
 function declaredPrefixesFrom(attrs) {
   const declared = []
   for (const key of Object.keys(attrs)) {
@@ -160,15 +221,27 @@ function declaredPrefixesFrom(attrs) {
   return declared
 }
 
+/**
+ * @param {string} qualifiedName
+ * @returns {string}
+ */
 function prefixOf(qualifiedName) {
   const colon = qualifiedName.indexOf(':')
   return colon === -1 ? '' : qualifiedName.slice(0, colon)
 }
 
+/**
+ * @param {OrderedNode[]} nodes
+ * @param {Set<string>} scope
+ * @param {string} partPath
+ * @param {Issue[]} issues
+ * @returns {void}
+ */
 function checkNamespacesDeclared(nodes, scope, partPath, issues) {
   for (const node of nodes) {
     if (!isElementNode(node)) continue
     const name = nodeName(node)
+    if (name === undefined) continue
     const attrs = attributesOf(node)
     const localScope = new Set([...scope, ...declaredPrefixesFrom(attrs)])
 
@@ -203,7 +276,15 @@ function checkNamespacesDeclared(nodes, scope, partPath, issues) {
 // Element-order checks
 // ---------------------------------------------------------------------------
 
-/** `tag`, if it occurs among `node`'s element children at all, must be the very first one. */
+/**
+ * `tag`, if it occurs among `node`'s element children at all, must be the very first one.
+ * @param {OrderedNode} node
+ * @param {string} tag
+ * @param {string} partPath
+ * @param {Issue[]} issues
+ * @param {string} [schemaNote]
+ * @returns {void}
+ */
 function assertFirstIfPresent(node, tag, partPath, issues, schemaNote) {
   const children = elementChildren(node)
   const index = children.findIndex((child) => nodeName(child) === tag)
@@ -225,14 +306,22 @@ function assertFirstIfPresent(node, tag, partPath, issues, schemaNote) {
  * only asserts ordering among the recognized set — the right level of
  * strictness for a large closed content model like CT_Worksheet where an
  * unrecognized/future element shouldn't fail the check on its own).
+ * @param {OrderedNode} node
+ * @param {string[]} canonicalOrder
+ * @param {string} partPath
+ * @param {Issue[]} issues
+ * @param {string} schemaLabel
+ * @returns {void}
  */
 function assertCanonicalOrder(node, canonicalOrder, partPath, issues, schemaLabel) {
   const rank = new Map(canonicalOrder.map((tag, i) => [tag, i]))
   const children = elementChildren(node)
   let lastRank = -1
+  /** @type {string | null} */
   let lastTag = null
   for (const child of children) {
     const tag = nodeName(child)
+    if (tag === undefined) continue
     const r = rank.get(tag)
     if (r === undefined) continue
     if (r < lastRank) {
@@ -294,6 +383,12 @@ const CT_WORKSHEET_ORDER = [
 const TX_BODY_ORDER = ['a:bodyPr', 'a:lstStyle', 'a:p']
 const TBL_ORDER = ['w:tblPr', 'w:tblGrid', 'w:tr']
 
+/**
+ * @param {OrderedNode[]} rootNodes
+ * @param {string} partPath
+ * @param {Issue[]} issues
+ * @returns {void}
+ */
 function checkElementOrder(rootNodes, partPath, issues) {
   for (const p of collectByTag(rootNodes, 'w:p')) {
     assertFirstIfPresent(p, 'w:pPr', partPath, issues, 'w:pPr must precede run content in w:p')
@@ -317,6 +412,11 @@ function checkElementOrder(rootNodes, partPath, issues) {
 // Zip container checks
 // ---------------------------------------------------------------------------
 
+/**
+ * @param {ZipEntry[]} entries
+ * @param {Issue[]} issues
+ * @returns {void}
+ */
 function checkZipEntryNames(entries, issues) {
   const seen = new Map()
   for (const entry of entries) {
@@ -338,6 +438,11 @@ function checkZipEntryNames(entries, issues) {
   }
 }
 
+/**
+ * @param {ZipEntry[]} entries
+ * @param {Issue[]} issues
+ * @returns {void}
+ */
 function checkOdfMimetypeEntry(entries, issues) {
   const mimetype = entries.find((e) => e.name === 'mimetype')
   if (!mimetype) return // caller only invokes this once ODF-ness is already established
@@ -354,16 +459,48 @@ function checkOdfMimetypeEntry(entries, issues) {
 // OPC content-types / relationships
 // ---------------------------------------------------------------------------
 
+/**
+ * Parses XML the "collapsed" (non-`preserveOrder`) way: one JS object whose
+ * shape mirrors the document, used only for the handful of known, fixed
+ * OPC/ODF control-file schemas below (`[Content_Types].xml`, `*.rels`,
+ * `manifest.xml`) — never for arbitrary document content, which uses
+ * `parseOrdered`'s `OrderedNode` tree instead. `fast-xml-parser` itself
+ * types `parse()` as `any`; callers narrow the result to the specific
+ * `*Tree` shape they expect via a `@type` cast.
+ * @param {string} xmlText
+ */
 function parseSimpleXml(xmlText) {
   const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
   return parser.parse(xmlText)
 }
 
+/**
+ * @template T
+ * @param {T | T[] | undefined} value
+ * @returns {T[]}
+ */
 function asList(value) {
   if (value === undefined) return []
   return Array.isArray(value) ? value : [value]
 }
 
+/** @typedef {{ '@_Extension'?: string }} ContentTypeDefault */
+/** @typedef {{ '@_PartName'?: string }} ContentTypeOverride */
+/** @typedef {{ Types?: { Default?: ContentTypeDefault | ContentTypeDefault[], Override?: ContentTypeOverride | ContentTypeOverride[] } }} ContentTypesTree */
+
+/** @typedef {{ '@_Id'?: string, '@_Target'?: string, '@_TargetMode'?: string, '@_Type'?: string }} RelationshipEntry */
+/** @typedef {{ Relationships?: { Relationship?: RelationshipEntry | RelationshipEntry[] } }} RelationshipsTree */
+
+/** @typedef {{ '@_manifest:full-path'?: string }} ManifestFileEntry */
+/** @typedef {{ 'manifest:manifest'?: { 'manifest:file-entry'?: ManifestFileEntry | ManifestFileEntry[] } }} ManifestTree */
+
+/** @typedef {{ defaults: Set<string>, overrides: Set<string> }} ContentTypesIndex */
+
+/**
+ * @param {PackageFiles} files
+ * @param {Issue[]} issues
+ * @returns {ContentTypesIndex}
+ */
 function checkContentTypes(files, issues) {
   const xml = files.get('[Content_Types].xml')
   if (xml === undefined) {
@@ -376,6 +513,7 @@ function checkContentTypes(files, issues) {
     return { defaults: new Set(), overrides: new Set() }
   }
 
+  /** @type {ContentTypesTree} */
   const tree = parseSimpleXml(xml.toString('utf8'))
   const defaultsSeen = new Map()
   const overridesSeen = new Map()
@@ -397,6 +535,11 @@ function checkContentTypes(files, issues) {
   return { defaults: new Set(defaultsSeen.keys()), overrides: new Set(overridesSeen.keys()) }
 }
 
+/**
+ * @param {ContentTypesIndex} contentTypes
+ * @param {string} partPath
+ * @returns {boolean}
+ */
 function hasContentType(contentTypes, partPath) {
   if (contentTypes.overrides.has(`/${partPath}`)) return true
   const dot = partPath.lastIndexOf('.')
@@ -404,6 +547,12 @@ function hasContentType(contentTypes, partPath) {
   return contentTypes.defaults.has(partPath.slice(dot + 1).toLowerCase())
 }
 
+/**
+ * @param {PackageFiles} files
+ * @param {ContentTypesIndex} contentTypes
+ * @param {Issue[]} issues
+ * @returns {void}
+ */
 function checkEveryPartHasContentType(files, contentTypes, issues) {
   for (const partPath of files.keys()) {
     if (partPath === '[Content_Types].xml') continue
@@ -415,12 +564,20 @@ function checkEveryPartHasContentType(files, contentTypes, issues) {
 
 const URL_SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z\d+\-.]*:/
 
+/**
+ * @param {string} relsPath
+ * @returns {string}
+ */
 function resolveRelsBaseDir(relsPath) {
   const marker = '_rels/'
   const index = relsPath.lastIndexOf(marker)
   return index === -1 ? '' : relsPath.slice(0, index)
 }
 
+/**
+ * @param {string} p
+ * @returns {string}
+ */
 function normalizePartPath(p) {
   const segments = p.split('/')
   const resolved = []
@@ -432,6 +589,12 @@ function normalizePartPath(p) {
   return resolved.join('/')
 }
 
+/**
+ * @param {PackageFiles} files
+ * @param {ContentTypesIndex} contentTypes
+ * @param {Issue[]} issues
+ * @returns {Map<string, Set<string>>}
+ */
 function checkRelationshipFiles(files, contentTypes, issues) {
   const relsByPart = new Map() // owning part path -> Set<relationship id>
   for (const [relsPath, bytes] of files) {
@@ -442,6 +605,7 @@ function checkRelationshipFiles(files, contentTypes, issues) {
       issues.push(issue('error', 'malformed-xml', relsPath, `Not well-formed: ${parsed.message}`))
       continue
     }
+    /** @type {RelationshipsTree} */
     const tree = parseSimpleXml(xmlText)
     const relationships = asList(tree.Relationships?.Relationship)
     const baseDir = resolveRelsBaseDir(relsPath)
@@ -474,12 +638,22 @@ function checkRelationshipFiles(files, contentTypes, issues) {
 const RELATIONSHIPS_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const R_ID_ATTR_NAMES = ['id', 'embed', 'link', 'cs', 'dm', 'lo', 'qs', 'href', 'pict', 'topLeft']
 
-/** Finds the namespace prefix a part binds to the `r:` relationships namespace (usually, but not necessarily, "r"). */
+/**
+ * Finds the namespace prefix a part binds to the `r:` relationships namespace (usually, but not necessarily, "r").
+ * @param {string} xmlText
+ * @returns {string | null}
+ */
 function relationshipsPrefixIn(xmlText) {
   const match = new RegExp(`xmlns:(\\w+)="${RELATIONSHIPS_NS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).exec(xmlText)
   return match ? match[1] : null
 }
 
+/**
+ * @param {PackageFiles} files
+ * @param {Map<string, Set<string>>} relsByPart
+ * @param {Issue[]} issues
+ * @returns {void}
+ */
 function checkDanglingRIdReferences(files, relsByPart, issues) {
   for (const [partPath, bytes] of files) {
     if (!partPath.endsWith('.xml') || partPath.endsWith('.rels') || partPath === '[Content_Types].xml') continue
@@ -515,6 +689,11 @@ function checkDanglingRIdReferences(files, relsByPart, issues) {
 // ODF manifest
 // ---------------------------------------------------------------------------
 
+/**
+ * @param {PackageFiles} files
+ * @param {Issue[]} issues
+ * @returns {void}
+ */
 function checkOdfManifest(files, issues) {
   const manifestXml = files.get('META-INF/manifest.xml')
   if (manifestXml === undefined) {
@@ -527,6 +706,7 @@ function checkOdfManifest(files, issues) {
     issues.push(issue('error', 'malformed-xml', 'META-INF/manifest.xml', `Not well-formed: ${parsed.message}`))
     return
   }
+  /** @type {ManifestTree} */
   const tree = parseSimpleXml(xmlText)
   const entries = asList(tree['manifest:manifest']?.['manifest:file-entry'])
   const listedPaths = new Set()
@@ -556,6 +736,7 @@ function checkOdfManifest(files, issues) {
 // Format detection
 // ---------------------------------------------------------------------------
 
+/** @type {Record<string, 'odt' | 'odp' | 'ods'>} */
 const ODF_MIME_TO_KIND = {
   'application/vnd.oasis.opendocument.text': 'odt',
   'application/vnd.oasis.opendocument.presentation': 'odp',
@@ -572,10 +753,13 @@ const OFFICE_DOCUMENT_REL_TYPE = 'http://schemas.openxmlformats.org/officeDocume
  * classified correctly (so `REQUIRED_PARTS` below can flag it as missing,
  * instead of silently falling through to "unknown" and skipping that check
  * entirely).
+ * @param {PackageFiles} files
+ * @returns {string | null}
  */
 function startPartKindFromRels(files) {
   const relsXml = files.get('_rels/.rels')
   if (relsXml === undefined) return null
+  /** @type {RelationshipsTree} */
   let tree
   try {
     tree = parseSimpleXml(relsXml.toString('utf8'))
@@ -598,6 +782,10 @@ function startPartKindFromRels(files) {
   return null
 }
 
+/**
+ * @param {PackageFiles} files
+ * @returns {OfficeFormat}
+ */
 function detectFormat(files) {
   const mimetype = files.get('mimetype')
   if (mimetype !== undefined) {
@@ -606,7 +794,9 @@ function detectFormat(files) {
   }
   if (files.has('[Content_Types].xml')) {
     const fromRels = startPartKindFromRels(files)
-    if (fromRels) return { family: 'opc', kind: fromRels }
+    if (fromRels === 'docx' || fromRels === 'pptx' || fromRels === 'xlsx' || fromRels === 'xlsb') {
+      return { family: 'opc', kind: fromRels }
+    }
     if (files.has('word/document.xml')) return { family: 'opc', kind: 'docx' }
     if (files.has('ppt/presentation.xml')) return { family: 'opc', kind: 'pptx' }
     if (files.has('xl/workbook.xml')) return { family: 'opc', kind: 'xlsx' }
@@ -615,6 +805,7 @@ function detectFormat(files) {
   return { family: 'unknown', kind: 'unknown' }
 }
 
+/** @type {Record<string, string[]>} */
 const REQUIRED_PARTS = {
   docx: ['word/document.xml', '_rels/.rels'],
   pptx: ['ppt/presentation.xml', '_rels/.rels'],
@@ -631,11 +822,15 @@ const REQUIRED_PARTS = {
 
 /**
  * @param {Buffer} buffer
- * @returns {{ format: { family: string, kind: string }, issues: Issue[] }}
+ * @returns {OfficeValidationResult}
  */
 export function validateOfficeFile(buffer) {
+  /** @type {Issue[]} */
   const issues = []
-  let entries, files
+  /** @type {ZipEntry[]} */
+  let entries
+  /** @type {PackageFiles} */
+  let files
   try {
     ;({ entries, files } = readZipArchive(buffer))
   } catch (cause) {
@@ -654,7 +849,6 @@ export function validateOfficeFile(buffer) {
   }
 
   // Every XML/rels part: well-formed, no illegal characters, namespaces declared.
-  const orderedTrees = new Map()
   for (const [partPath, bytes] of files) {
     if (!/\.(xml|rels)$/i.test(partPath)) continue
     const xmlText = bytes.toString('utf8')
@@ -670,7 +864,6 @@ export function validateOfficeFile(buffer) {
       issues.push(issue('error', 'malformed-xml', partPath, `Not well-formed: ${parsed.message}`))
       continue
     }
-    orderedTrees.set(partPath, parsed.tree)
     checkNamespacesDeclared(parsed.tree, new Set(), partPath, issues)
     checkElementOrder(parsed.tree, partPath, issues)
   }
@@ -688,6 +881,11 @@ export function validateOfficeFile(buffer) {
   return { format, issues }
 }
 
+/**
+ * @param {string} filePath
+ * @param {OfficeValidationResult} result
+ * @returns {string}
+ */
 export function formatIssuesReport(filePath, result) {
   const lines = [`${filePath}  (${result.format.family}/${result.format.kind})`]
   if (result.issues.length === 0) {

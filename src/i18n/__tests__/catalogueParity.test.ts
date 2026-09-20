@@ -45,4 +45,15 @@ describe('i18n catalogue parity', () => {
     expect(emptyInEn).toEqual([]);
     expect(emptyInFr).toEqual([]);
   });
+
+  // Regression: both the toolbar's view-mode button and the shortcuts modal's
+  // matching row translated "Split" (the Markdown preview/split/editor view
+  // toggle) as "Partagé" ("shared"), not "Fractionné" — the term Word/
+  // LibreOffice actually use for a split view. Caught by the same
+  // documentation-truth pass that found the two false claims in
+  // README/docs/KNOWN_LIMITATIONS.md.
+  it('translates the "Split" view mode as "Fractionné", not "Partagé"', () => {
+    expect(fr['toolbar.viewMode.split']).toBe('Fractionné');
+    expect(fr['shortcuts.split']).toBe('Fractionné');
+  });
 });

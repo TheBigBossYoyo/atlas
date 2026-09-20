@@ -18,6 +18,10 @@ function buildCrcTable() {
   return table
 }
 
+/**
+ * @param {Buffer} buf
+ * @returns {number}
+ */
 function crc32(buf) {
   let crc = 0xffffffff
   for (const byte of buf) {
@@ -26,6 +30,11 @@ function crc32(buf) {
   return (crc ^ 0xffffffff) >>> 0
 }
 
+/**
+ * @param {string} type
+ * @param {Buffer} data
+ * @returns {Buffer}
+ */
 function pngChunk(type, data) {
   const length = Buffer.alloc(4)
   length.writeUInt32BE(data.length, 0)
