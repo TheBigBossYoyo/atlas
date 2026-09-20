@@ -2106,8 +2106,16 @@ function DocxEditor({
         if (result?.saved && result.path) {
           setSavePath(result.path)
           // Save As: tell the shell where this document now lives, or its tab
-          // keeps pointing at the file it was opened from.
-          if (result.path !== savePath) reportSavedPath(result.path)
+          // keeps pointing at the file it was opened from. `file.path` (this
+          // viewer instance's own identity — ViewerRouter remounts on path
+          // change, so it never changes across this component's lifetime) is
+          // passed through as the path this save started from, so the shell
+          // can route the update to the RIGHT tab even if the user has since
+          // switched away (SAVE-1) — `savePath` itself isn't safe for that:
+          // it's already been reassigned above by the time this fires for a
+          // second save, and (in the spreadsheet editor's legacy-format case)
+          // can be `undefined` before the first save ever completes.
+          if (result.path !== savePath) reportSavedPath(file.path, result.path)
         }
 
         if (!result?.saved) {
@@ -2159,7 +2167,7 @@ function DocxEditor({
         return false
       }
     },
-    [bundle, flushHeaderFooterEdits, savePath, reportSavedPath, t],
+    [bundle, flushHeaderFooterEdits, savePath, file.path, reportSavedPath, t],
   )
 
   const handleSave = useCallback((): Promise<boolean> => handleSaveInternal(), [handleSaveInternal])

@@ -61,8 +61,13 @@ export function useViewerSaveAs(): () => Promise<boolean> {
   return useViewerCtx().saveAs
 }
 
-/** Reports the path a Save As landed on, so the shell moves this document's tab there. */
-export function useReportSavedPath(): (path: string) => void {
+/**
+ * Reports the path a Save As landed on, so the shell moves this document's
+ * tab there. Pass the path the save started from (this document's own
+ * identity, e.g. the local `savePath` state each viewer already tracks) as
+ * the first argument — see `reportSavedPath`'s doc comment for why (SAVE-1).
+ */
+export function useReportSavedPath(): (startedFromPath: string, savedPath: string) => void {
   return useViewerCtx().reportSavedPath
 }
 

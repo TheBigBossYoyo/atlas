@@ -423,15 +423,65 @@ describe('ViewerContext', () => {
       ),
     })
 
-    act(() => result.current('/new.docx'))
+    act(() => result.current('/old.docx', '/new.docx'))
 
-    expect(onSavedPath).toHaveBeenCalledWith('/new.docx')
+    expect(onSavedPath).toHaveBeenCalledWith('/old.docx', '/new.docx')
   })
 
   it('stays callable (and harmless) when the shell registers no handler', () => {
     const wrapper = makeWrapper('/old.docx')
     const { result } = renderHook(() => useReportSavedPath(), { wrapper })
 
-    expect(() => act(() => result.current('/new.docx'))).not.toThrow()
+    expect(() => act(() => result.current('/old.docx', '/new.docx'))).not.toThrow()
+  })
+
+  // SAVE-1 — a Save As can resolve after the user has already switched to a
+  // different tab: `filePath` (and thus `onSavedPath`, which App.tsx rebinds
+  // to a fresh closure over whichever tab is now active) changes *before*
+  // `reportSavedPath` is ever called. The test above only proves the
+  // callback fires while `filePath` is still the one that started the save —
+  // exactly the case that was never broken. This proves the two things the
+  // fix actually depends on: (1) `reportSavedPath`'s identity is stable
+  // across the filePath change (a viewer's in-flight save closes over it
+  // once, before any tab switch, and must still be able to call it), and (2)
+  // it forwards to whichever `onSavedPath` is current *along with* the path
+  // the save started from — so the shell (App.tsx's `handleViewerSavedPath`)
+  // can tell this report is about the OLD document, not the new one, even
+  // though its own closure now belongs to the new tab.
+  it('still reports the correct startedFromPath after filePath (and onSavedPath) has since changed', () => {
+    const onSavedPathForOldTab = vi.fn()
+    const onSavedPathForNewTab = vi.fn()
+
+    let filePath = '/old.docx'
+    let onSavedPath = onSavedPathForOldTab
+
+    const { result, rerender } = renderHook(() => useReportSavedPath(), {
+      wrapper: ({ children }: { children: React.ReactNode }) => (
+        <ViewerProvider filePath={filePath} onSavedPath={onSavedPath}>
+          {children}
+        </ViewerProvider>
+      ),
+    })
+
+    // The old tab's viewer captured this stable function before the switch.
+    const reportSavedPathFromOldTab = result.current
+
+    // The user switches tabs — App.tsx remounts the provider's subtree onto
+    // the new file and rebinds onSavedPath to a closure over the new tab.
+    filePath = '/new.pptx'
+    onSavedPath = onSavedPathForNewTab
+    rerender()
+
+    // The old tab's Save As now resolves, reporting the document it actually
+    // saved — NOT the new one that happens to be showing.
+    act(() => reportSavedPathFromOldTab('/old.docx', '/old-renamed.docx'))
+
+    // It reaches the CURRENT handler (App.tsx's own design: the ref always
+    // points at the latest committed onSavedPath, since only App.tsx knows
+    // how to look a path up across tab switches) carrying the old document's
+    // own identity, so App.tsx can route it correctly instead of assuming it
+    // is about whatever is showing now.
+    expect(onSavedPathForNewTab).toHaveBeenCalledWith('/old.docx', '/old-renamed.docx')
+    expect(onSavedPathForOldTab).not.toHaveBeenCalled()
   })
 })

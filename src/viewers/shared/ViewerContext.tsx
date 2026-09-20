@@ -48,8 +48,15 @@ export function ViewerProvider({
   children,
 }: {
   filePath: string | null
-  /** Called when the active viewer saved to a different path than it was opened from. */
-  onSavedPath?: (path: string) => void
+  /**
+   * Called when the active viewer saved to a different path than it was
+   * opened from. SAVE-1 — `startedFromPath` (the path the save began from)
+   * identifies which document this is actually about; the shell must not
+   * assume it's whatever tab is showing when this fires, since the write can
+   * resolve after the user has switched away. See `reportSavedPath`'s own
+   * doc comment in `viewerContextValue.ts` for the full story.
+   */
+  onSavedPath?: (startedFromPath: string, savedPath: string) => void
   children: React.ReactNode
 }): React.ReactElement {
   const [state, setState] = useState<InternalState>({
@@ -125,8 +132,8 @@ export function ViewerProvider({
     savedPathRef.current = onSavedPath
   }, [onSavedPath])
 
-  const reportSavedPath = useCallback((path: string) => {
-    savedPathRef.current?.(path)
+  const reportSavedPath = useCallback((startedFromPath: string, savedPath: string) => {
+    savedPathRef.current?.(startedFromPath, savedPath)
   }, [])
 
   // P1.1 placeholder — no viewer registers export content yet; real
