@@ -11,6 +11,25 @@ const STORE_NAME = 'metrics'
 const memoryCache = new Map<string, SerializedFontMetrics>()
 let databasePromise: Promise<IDBDatabase> | null = null
 
+/**
+ * MEM-01 follow-up — this in-memory L1 cache (mirroring the persistent
+ * IndexedDB store) has no explicit size cap, unlike `canvasMetrics.ts`'s
+ * fragment-width cache or `downscaleImage.ts`'s LRU. That's safe by
+ * construction rather than by omission: every key is
+ * `${substituteName}@${variant}@${hash(fileUrl)}` (see `loadFontMetrics` in
+ * `loader.ts`), and both `substituteName` and `fileUrl` are drawn from
+ * `FONT_FAMILIES` in `families.ts` — a fixed, bundled catalog of 5 substitute
+ * families x 4 `FontVariant`s, independent of how many documents (or how
+ * many distinct Word font names) get opened in a session. So this map can
+ * never hold more than `FONT_FAMILIES.length * 4` entries no matter how long
+ * the app runs — see `cache.test.ts`'s regression test, which opens far more
+ * distinct (arbitrary, made-up) font names than that and asserts the cache
+ * never grows past the fixed bound.
+ */
+export function __memoryCacheSizeForTests(): number {
+  return memoryCache.size
+}
+
 export async function getCachedMetrics(key: string): Promise<FontMetrics | null> {
   if (!hasIndexedDb()) {
     return deserializeFromMemory(key)
