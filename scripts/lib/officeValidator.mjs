@@ -683,6 +683,273 @@ function checkElementOrder(rootNodes, partPath, issues) {
 }
 
 // ---------------------------------------------------------------------------
+// Attribute datatype checks
+// ---------------------------------------------------------------------------
+//
+// Every check above is a STRUCTURE check (part inventory, element order,
+// well-formedness) -- none of them look at whether an attribute's *value*
+// actually has the shape its declared simple type requires. Two real
+// examples that slipped through before this section existed:
+// `<w:color w:val="#ff0000"/>` (ST_HexColor forbids the leading "#" -- Word
+// accepts only "auto" or six bare hex digits) and
+// `<w:abstractNumId w:val="atlas-list-2"/>` (ST_DecimalNumber is a bare
+// integer, not an arbitrary string). This section closes that gap for the
+// handful of simple types below, driven by one small table --
+// `ELEMENT_ATTRIBUTE_TYPES` -- of (element, attribute) -> type name, so
+// adding another checked attribute later is a one-line table entry, not a
+// new function.
+//
+// Every entry was checked against the actual WordprocessingML schema
+// (wml.xsd + shared-commonSimpleTypes.xsd from ECMA-376/ISO-29500) --
+// deliberately NOT exhaustive. A false positive here (rejecting a file
+// that's actually spec-valid) is worse than a missed check, so an attribute
+// only goes in the table once its exact type name has been confirmed
+// against the schema text; anywhere the sign/unit rules were unclear for a
+// specific attribute, it was left out rather than guessed at.
+
+const HEX_COLOR_RE = /^[0-9A-Fa-f]{6}$/
+const ON_OFF_VALUES = new Set(['true', 'false', '1', '0', 'on', 'off'])
+// ST_UnsignedDecimalNumber (xsd:unsignedLong) and ST_DecimalNumber
+// (xsd:integer) lexical spaces: an optional sign (unsigned allows only "+",
+// never "-") followed by digits.
+const UNSIGNED_DECIMAL_RE = /^\+?\d+$/
+const DECIMAL_RE = /^[+-]?\d+$/
+// ST_(Positive)UniversalMeasure: a decimal number immediately followed by a
+// unit, no space, no "auto". The signed form permits a leading "-"; the
+// positive/unsigned form permits no sign at all (not even "+").
+const MEASURE_UNIT = '(?:mm|cm|in|pt|pc|pi)'
+const POSITIVE_UNIVERSAL_MEASURE_RE = new RegExp(`^\\d+(?:\\.\\d+)?${MEASURE_UNIT}$`)
+const SIGNED_UNIVERSAL_MEASURE_RE = new RegExp(`^-?\\d+(?:\\.\\d+)?${MEASURE_UNIT}$`)
+
+/** @type {Record<string, (value: string) => boolean>} */
+const SIMPLE_TYPE_VALIDATORS = {
+  // ST_HexColor = union(ST_HexColorAuto, ST_HexColorRGB): the literal "auto"
+  // or exactly six hex digits (ST_HexColorRGB is xsd:hexBinary, length 3
+  // bytes) -- never a leading "#".
+  ST_HexColor: (v) => v === 'auto' || HEX_COLOR_RE.test(v),
+  // ST_DecimalNumber is xsd:integer everywhere it's used in wml.xsd -- a
+  // bare, optionally-signed integer.
+  ST_DecimalNumber: (v) => DECIMAL_RE.test(v),
+  // ST_OnOff = union(xsd:boolean, ST_OnOff1): xsd:boolean's lexical set
+  // (true/false/1/0) plus the literal on/off enumeration. An ABSENT
+  // attribute is not checked here at all (see `checkAttributeDatatypes`) --
+  // for every CT_OnOff element Atlas or Word emits, omitting `w:val`
+  // entirely means "on", which is a presence rule, not a value-format one.
+  ST_OnOff: (v) => ON_OFF_VALUES.has(v),
+  // ST_TwipsMeasure = union(ST_UnsignedDecimalNumber, ST_PositiveUniversalMeasure):
+  // non-negative twips, or a positive measurement with a unit suffix --
+  // never signed.
+  ST_TwipsMeasure: (v) => UNSIGNED_DECIMAL_RE.test(v) || POSITIVE_UNIVERSAL_MEASURE_RE.test(v),
+  // ST_SignedTwipsMeasure = union(xsd:integer, ST_UniversalMeasure): twips
+  // that may be negative, or a measurement with a unit suffix that may also
+  // be negative.
+  ST_SignedTwipsMeasure: (v) => DECIMAL_RE.test(v) || SIGNED_UNIVERSAL_MEASURE_RE.test(v),
+}
+
+/** @type {Record<keyof typeof SIMPLE_TYPE_VALIDATORS, string>} */
+const SIMPLE_TYPE_DESCRIPTIONS = {
+  ST_HexColor: '"auto" or exactly six hex digits (e.g. "FF0000"), never a leading "#"',
+  ST_DecimalNumber: 'an integer (e.g. "3" or "-1")',
+  ST_OnOff: 'one of "true", "false", "1", "0", "on", "off"',
+  ST_TwipsMeasure: 'a non-negative integer in twips, or a positive measurement with a unit, e.g. "720" or "0.5in"',
+  ST_SignedTwipsMeasure: 'an integer in twips (may be negative), or a measurement with a unit, e.g. "-720" or "-0.5in"',
+}
+
+// Border-position elements shared by CT_PBdr / CT_TblBorders / CT_TcBorders
+// (ECMA-376 §17.4.4 / §17.4.38 / §17.4.66) -- each is a CT_Border, so each
+// has its own `w:color` (ST_HexColor) and `w:shadow`/`w:frame` (ST_OnOff)
+// attributes.
+const BORDER_ELEMENTS = ['w:top', 'w:left', 'w:bottom', 'w:right', 'w:start', 'w:end', 'w:between', 'w:bar', 'w:insideH', 'w:insideV']
+
+// CT_OnOff-typed elements' `w:val` -- grouped by the schema group/type each
+// was confirmed against (see the module comment above: an element is only
+// listed here once its type was actually checked, never assumed from a
+// name that merely "sounds" boolean).
+const ON_OFF_ELEMENTS = [
+  // EG_RPrBase (run properties) -- ECMA-376 §17.3.2.28.
+  'w:b',
+  'w:bCs',
+  'w:i',
+  'w:iCs',
+  'w:caps',
+  'w:smallCaps',
+  'w:strike',
+  'w:dstrike',
+  'w:outline',
+  'w:shadow',
+  'w:emboss',
+  'w:imprint',
+  'w:noProof',
+  'w:snapToGrid',
+  'w:vanish',
+  'w:webHidden',
+  'w:rtl',
+  'w:cs',
+  'w:specVanish',
+  'w:oMath',
+  // CT_PPrBase (paragraph properties) -- §17.3.1.26.
+  'w:keepNext',
+  'w:keepLines',
+  'w:pageBreakBefore',
+  'w:widowControl',
+  'w:suppressLineNumbers',
+  'w:suppressAutoHyphens',
+  'w:kinsoku',
+  'w:wordWrap',
+  'w:overflowPunct',
+  'w:topLinePunct',
+  'w:autoSpaceDE',
+  'w:autoSpaceDN',
+  'w:bidi',
+  'w:adjustRightInd',
+  'w:contextualSpacing',
+  'w:mirrorIndents',
+  'w:suppressOverlap',
+  // CT_TblPrBase -- §17.4.60.
+  'w:bidiVisual',
+  // CT_TrPrBase -- §17.4.83.
+  'w:cantSplit',
+  'w:tblHeader',
+  'w:hidden',
+  // CT_TcPrBase -- §17.4.70.
+  'w:noWrap',
+  'w:hideMark',
+  // CT_Style -- §17.7.4.17.
+  'w:autoRedefine',
+  'w:semiHidden',
+  'w:unhideWhenUsed',
+  'w:qFormat',
+  'w:locked',
+  'w:personal',
+  'w:personalCompose',
+  'w:personalReply',
+  // The CT_Settings slice this file's element-order check already tracks
+  // (§17.15.1.32).
+  'w:trackChanges',
+  'w:removePersonalInformation',
+  'w:doNotDisplayPageBoundaries',
+  'w:displayBackgroundShape',
+  'w:embedTrueTypeFonts',
+  'w:embedSystemFonts',
+  'w:saveSubsetFonts',
+  'w:mirrorMargins',
+  'w:hideSpellingErrors',
+  'w:hideGrammaticalErrors',
+  'w:linkStyles',
+]
+
+/**
+ * `(element, attribute) -> ST_* type name`. See the module comment above
+ * this section for how conservatively this is populated -- this is the
+ * "small, obvious" extension point: a new checked attribute is a new entry
+ * here (plus, if it's a genuinely new type, a validator/description pair
+ * above), never a new special-cased function.
+ * @type {{ element: string, attribute: string, type: keyof typeof SIMPLE_TYPE_VALIDATORS }[]}
+ */
+const ELEMENT_ATTRIBUTE_TYPES = [
+  // --- ST_HexColor ---------------------------------------------------------
+  { element: 'w:color', attribute: 'w:val', type: 'ST_HexColor' }, // CT_Color (rPr run color, etc.)
+  { element: 'w:shd', attribute: 'w:fill', type: 'ST_HexColor' }, // CT_Shd
+  { element: 'w:shd', attribute: 'w:color', type: 'ST_HexColor' }, // CT_Shd
+  { element: 'w:u', attribute: 'w:color', type: 'ST_HexColor' }, // CT_Underline
+  ...BORDER_ELEMENTS.map((element) => ({ element, attribute: 'w:color', type: 'ST_HexColor' })),
+
+  // --- ST_OnOff --------------------------------------------------------------
+  ...ON_OFF_ELEMENTS.map((element) => ({ element, attribute: 'w:val', type: 'ST_OnOff' })),
+  ...BORDER_ELEMENTS.map((element) => ({ element, attribute: 'w:shadow', type: 'ST_OnOff' })), // CT_Border
+  ...BORDER_ELEMENTS.map((element) => ({ element, attribute: 'w:frame', type: 'ST_OnOff' })), // CT_Border
+
+  // --- ST_DecimalNumber -------------------------------------------------------
+  // CT_DecimalNumber's own `val`, plus the raw ST_DecimalNumber-typed
+  // attributes wml.xsd defines directly on their owning element.
+  { element: 'w:abstractNum', attribute: 'w:abstractNumId', type: 'ST_DecimalNumber' },
+  { element: 'w:num', attribute: 'w:numId', type: 'ST_DecimalNumber' },
+  { element: 'w:abstractNumId', attribute: 'w:val', type: 'ST_DecimalNumber' }, // child of w:num
+  { element: 'w:numId', attribute: 'w:val', type: 'ST_DecimalNumber' }, // child of w:numPr
+  { element: 'w:ilvl', attribute: 'w:val', type: 'ST_DecimalNumber' }, // child of w:numPr
+  { element: 'w:lvl', attribute: 'w:ilvl', type: 'ST_DecimalNumber' },
+  { element: 'w:lvlOverride', attribute: 'w:ilvl', type: 'ST_DecimalNumber' },
+  { element: 'w:startOverride', attribute: 'w:val', type: 'ST_DecimalNumber' },
+  { element: 'w:gridSpan', attribute: 'w:val', type: 'ST_DecimalNumber' },
+  { element: 'w:uiPriority', attribute: 'w:val', type: 'ST_DecimalNumber' },
+  { element: 'w:tblStyleColBandSize', attribute: 'w:val', type: 'ST_DecimalNumber' },
+  { element: 'w:tblStyleRowBandSize', attribute: 'w:val', type: 'ST_DecimalNumber' },
+  { element: 'w:outlineLvl', attribute: 'w:val', type: 'ST_DecimalNumber' },
+  { element: 'w:divId', attribute: 'w:val', type: 'ST_DecimalNumber' },
+
+  // --- ST_TwipsMeasure / ST_SignedTwipsMeasure --------------------------------
+  // CT_Spacing (§17.3.1.33) and CT_Ind (§17.3.1.12), confirmed
+  // attribute-by-attribute: before/after/hanging/firstLine never go
+  // negative; line/left/right/start/end do (RTL and negative-outdent use,
+  // respectively). CT_SignedTwipsMeasure (rPr character spacing, §17.3.2.32)
+  // is the *type itself* -- its single `val` attribute is signed.
+  { element: 'w:spacing', attribute: 'w:before', type: 'ST_TwipsMeasure' },
+  { element: 'w:spacing', attribute: 'w:after', type: 'ST_TwipsMeasure' },
+  { element: 'w:spacing', attribute: 'w:line', type: 'ST_SignedTwipsMeasure' },
+  { element: 'w:spacing', attribute: 'w:val', type: 'ST_SignedTwipsMeasure' }, // rPr character spacing (CT_SignedTwipsMeasure)
+  { element: 'w:ind', attribute: 'w:hanging', type: 'ST_TwipsMeasure' },
+  { element: 'w:ind', attribute: 'w:firstLine', type: 'ST_TwipsMeasure' },
+  { element: 'w:ind', attribute: 'w:left', type: 'ST_SignedTwipsMeasure' },
+  { element: 'w:ind', attribute: 'w:right', type: 'ST_SignedTwipsMeasure' },
+  { element: 'w:ind', attribute: 'w:start', type: 'ST_SignedTwipsMeasure' },
+  { element: 'w:ind', attribute: 'w:end', type: 'ST_SignedTwipsMeasure' },
+]
+
+/** @type {Map<string, Map<string, keyof typeof SIMPLE_TYPE_VALIDATORS>>} */
+const ELEMENT_ATTRIBUTE_TYPE_INDEX = new Map()
+for (const { element, attribute, type } of ELEMENT_ATTRIBUTE_TYPES) {
+  let byAttribute = ELEMENT_ATTRIBUTE_TYPE_INDEX.get(element)
+  if (!byAttribute) {
+    byAttribute = new Map()
+    ELEMENT_ATTRIBUTE_TYPE_INDEX.set(element, byAttribute)
+  }
+  byAttribute.set(attribute, type)
+}
+
+/**
+ * Recursively checks every element in the tree against
+ * `ELEMENT_ATTRIBUTE_TYPE_INDEX`: for each (element, attribute) pair the
+ * table knows about, and that's actually PRESENT on that element (an absent
+ * attribute is never wrong here -- e.g. a CT_OnOff element with no `w:val`
+ * at all means "on", a presence rule the table doesn't need to special-case),
+ * the value must match that simple type's lexical rules.
+ * @param {OrderedNode[]} nodes
+ * @param {string} partPath
+ * @param {Issue[]} issues
+ * @returns {void}
+ */
+function checkAttributeDatatypes(nodes, partPath, issues) {
+  for (const node of nodes) {
+    if (!isElementNode(node)) continue
+    const name = nodeName(node)
+    if (name === undefined) continue
+
+    const byAttribute = ELEMENT_ATTRIBUTE_TYPE_INDEX.get(name)
+    if (byAttribute) {
+      const attrs = attributesOf(node)
+      for (const [attribute, type] of byAttribute) {
+        const key = `@_${attribute}`
+        if (!(key in attrs)) continue
+        const value = String(attrs[key])
+        if (!SIMPLE_TYPE_VALIDATORS[type](value)) {
+          issues.push(
+            issue(
+              'error',
+              'invalid-attribute-value',
+              partPath,
+              `<${name}> attribute "${attribute}"="${value}" is not a valid ${type} (must be ${SIMPLE_TYPE_DESCRIPTIONS[type]}).`,
+            ),
+          )
+        }
+      }
+    }
+
+    const children = node[name]
+    if (Array.isArray(children)) checkAttributeDatatypes(children, partPath, issues)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Zip container checks
 // ---------------------------------------------------------------------------
 
@@ -1140,6 +1407,7 @@ export function validateOfficeFile(buffer) {
     }
     checkNamespacesDeclared(parsed.tree, new Set(), partPath, issues)
     checkElementOrder(parsed.tree, partPath, issues)
+    checkAttributeDatatypes(parsed.tree, partPath, issues)
   }
 
   if (format.family === 'odf') {
