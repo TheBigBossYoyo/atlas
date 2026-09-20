@@ -73,6 +73,29 @@ export function activateSession(state: DocumentSessionsState, id: string): Docum
 }
 
 /**
+ * Strips a document down to an empty placeholder of the same kind, keeping
+ * its path/format/name identity. `recentlyClosed` entries only ever exist so
+ * Ctrl+Shift+T can bring a document back — and bringing it back always
+ * re-reads it from disk via `reloadSessionFile` first (SHELL-17), which
+ * ignores whatever bytes a session was holding. Keeping the FULL original
+ * bytes alive in `recentlyClosed` (up to `MAX_RECENTLY_CLOSED` of them) was
+ * therefore pure waste for a closed binary document: confirmed by a heap
+ * snapshot after closing a 100k-row .xlsx tab, where the closed session's
+ * retained `ArrayBuffer` was the largest single object kept alive by the
+ * whole renderer.
+ *
+ * The only time these placeholder bytes are ever actually shown is if that
+ * re-read itself fails (the file was moved/deleted while its tab was
+ * closed) — previously that fell back to the last bytes the tab had, and
+ * now it shows an empty document instead. Accepted trade-off: reopening a
+ * file is expected to reflect what's on disk, not resurrect a memory of
+ * bytes that may no longer correspond to anything.
+ */
+function shedBytes(file: LoadedFile): LoadedFile {
+  return file.kind === 'text' ? { ...file, content: '' } : { ...file, content: new ArrayBuffer(0) }
+}
+
+/**
  * Closes a document. The neighbour to its right becomes active (or the one to
  * its left when it was last), mirroring every tabbed editor.
  */
@@ -85,10 +108,14 @@ export function closeSession(state: DocumentSessionsState, id: string): Document
   const activeId =
     state.activeId === id ? (sessions[index] ?? sessions[index - 1] ?? null)?.id ?? null : state.activeId
 
+  // Only the path/name/format need to survive into `recentlyClosed` — see
+  // `shedBytes`'s own comment for why the bytes themselves don't.
+  const shed: DocumentSession = { ...closed, file: shedBytes(closed.file) }
+
   return {
     sessions,
     activeId,
-    recentlyClosed: [closed, ...state.recentlyClosed.filter((session) => session.id !== id)].slice(
+    recentlyClosed: [shed, ...state.recentlyClosed.filter((session) => session.id !== id)].slice(
       0,
       MAX_RECENTLY_CLOSED,
     ),
