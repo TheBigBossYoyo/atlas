@@ -282,6 +282,11 @@ describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
       const notes = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
       expect(notes).toContain('<f>#REF!</f>')
       expect(notes).not.toContain('12.5')
+      // The cached value becomes the error itself (what Excel writes), not
+      // nothing: a formula cell with no <v> is skipped entirely by SheetJS,
+      // so the formula would look lost when the file is reopened.
+      expect(notes).toContain('t="e"')
+      expect(notes).toContain('<v>#REF!</v>')
     })
 
     it('re-anchors a cloned formula\'s cross-sheet coordinates through a row insert on the TARGET sheet', async () => {

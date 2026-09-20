@@ -307,9 +307,17 @@ function rewriteClonedFormula(
   // file is opened, so the emptied `<v>` is never actually shown to a user
   // in Excel.
   if (rewritten.includes('#REF!') && !text.includes('#REF!')) {
+    // Write the error as the cached value (`t="e"`, `<v>#REF!</v>`) — what
+    // Excel itself stores for a formula whose result is an error. Simply
+    // dropping the `<v>` would be valid OOXML but invisible on reopen:
+    // SheetJS, which every reader here goes through, skips a formula cell
+    // that has no cached value entirely, so the formula would look lost.
     const staleValue = firstChildElement(clone, 'v')
     if (staleValue) clone.removeChild(staleValue)
-    if (clone.hasAttribute('t')) clone.removeAttribute('t') // described the stale value's type (str/b/e/...), now meaningless without one
+    const errorValue = clone.ownerDocument.createElementNS(clone.namespaceURI, 'v')
+    errorValue.textContent = '#REF!'
+    clone.appendChild(errorValue)
+    clone.setAttribute('t', 'e')
   }
 }
 
