@@ -156,7 +156,12 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
         if (result.path) {
           setSavePath(result.path)
           // Save As: move this document's tab to the file it was written to.
-          if (result.path !== savePath) reportSavedPath(result.path)
+          // `filePath` (this hook instance's own identity — the caller
+          // remounts on path change, so it never changes across this
+          // instance's lifetime) is passed through as the path this save
+          // started from, so the shell can route the update to the RIGHT tab
+          // even if the user has since switched away (SAVE-1).
+          if (result.path !== savePath) reportSavedPath(filePath, result.path)
         }
         setSavedPkg(pkg)
         return true
@@ -165,7 +170,7 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
         return false
       }
     },
-    [saveFilter.extensions, saveFilter.name, savePath, reportSavedPath],
+    [saveFilter.extensions, saveFilter.name, savePath, filePath, reportSavedPath],
   )
 
   const save = useCallback(() => write(false), [write])

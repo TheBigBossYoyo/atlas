@@ -62,8 +62,17 @@ export type ViewerContextValue = {
    * title and later saves to the new file. Without it the tab keeps pointing
    * at the old path: reactivating it re-reads the ORIGINAL file (losing what
    * is on screen) and the next Ctrl+S writes to neither file.
+   *
+   * SAVE-1 — `startedFromPath` is the path the viewer had open when this save
+   * began (its own identity), not whatever tab happens to be showing when the
+   * save resolves: the write can outlive a tab switch, and the shell must
+   * route the rename to the document that was actually saved, never to
+   * whichever document the user has since switched to. `savedPath` is where
+   * it landed. Before this second argument existed, a save that resolved
+   * after the user switched tabs would rename (and re-read) the *new* tab
+   * instead — silently discarding whatever the user had typed there.
    */
-  reportSavedPath: (path: string) => void
+  reportSavedPath: (startedFromPath: string, savedPath: string) => void
   /** Phase-3 placeholder — no viewer registers this yet. */
   getExportableContent: () => ExportableContent | null
   /** Whether the active viewer has registered an in-viewer find implementation. */

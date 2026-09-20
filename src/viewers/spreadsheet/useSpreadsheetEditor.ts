@@ -260,7 +260,15 @@ export function useSpreadsheetEditor(
         if (result.path) {
           setSavePath(result.path)
           // Save As: move this document's tab to the file it was written to.
-          if (result.path !== savePath) reportSavedPath(result.path)
+          // `filePath` (this hook instance's own identity — the caller
+          // remounts on path change, so it never changes across this
+          // instance's lifetime) is passed through as the path this save
+          // started from, so the shell can route the update to the RIGHT tab
+          // even if the user has since switched away (SAVE-1). Unlike
+          // `savePath`, `filePath` is never `undefined` — `savePath` starts
+          // out that way for legacy formats (`seedExistingPath: false`)
+          // until their first save ever succeeds.
+          if (result.path !== savePath) reportSavedPath(filePath, result.path)
         }
         // See DocxViewer's identical comment: deliberately does NOT also
         // call setDirty(false) here — the dirty-tracking effect above

@@ -558,14 +558,34 @@ function AppShell() {
   // kept pointing at the file it was opened from, so coming back to it re-read
   // that original file over the user's work and the next Ctrl+S wrote to
   // neither file.
+  //
+  // SAVE-1 — the write this is reporting can resolve well after the user
+  // switched to a different tab (nothing awaits it), so trusting the ambient
+  // `file`/`filePath` closure to mean "the document that was saved" is wrong:
+  // it means "whatever is showing right now". `startedFromPath` (the path
+  // the viewer had open when its own save began — see `useReportSavedPath`'s
+  // doc comment) is used instead to look up the actual session that was
+  // saved. This mirrors the markdown save path's own
+  // `followSavedPath`/`applySavedPathToInactiveTab` split: the showing tab
+  // only gets `adoptFile`'d (via `showSessionFile`) when it is genuinely the
+  // document that was saved; any other tab is just renamed in place — no
+  // `adoptFile`, no re-read, no dirty/content change to whatever the user
+  // has since switched to.
   const handleViewerSavedPath = useCallback(
-    (savedPath: string): void => {
-      if (!file || savedPath === file.path) return;
-      const moved: LoadedFile = { ...file, path: savedPath };
-      setSessions((current) => renameSession(current, file.path, moved));
-      void showSessionFile(moved);
+    (startedFromPath: string, savedPath: string): void => {
+      if (!savedPath || savedPath === startedFromPath) return;
+      const savedSession = sessions.sessions.find((session) => session.id === startedFromPath);
+      if (!savedSession) return; // its tab was closed while the save was in flight
+      if (file && file.path === startedFromPath) {
+        const moved: LoadedFile = { ...file, path: savedPath };
+        setSessions((current) => renameSession(current, startedFromPath, moved));
+        void showSessionFile(moved);
+      } else {
+        const moved: LoadedFile = { ...savedSession.file, path: savedPath };
+        setSessions((current) => renameSession(current, startedFromPath, moved));
+      }
     },
-    [file, showSessionFile],
+    [file, sessions, showSessionFile],
   );
 
   // SHELL-17 — switching documents. Unsaved changes in
