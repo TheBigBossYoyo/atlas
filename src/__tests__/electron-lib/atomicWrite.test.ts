@@ -160,7 +160,10 @@ describe('atomicWriteFile', () => {
     expect(fs.statSync(target).isDirectory()).toBe(true)
   })
 
-  it('classifies a rename onto a read-only file as EROFS, not a file lock (found by driving the real app)', () => {
+  // Windows-only: POSIX rename() checks the DIRECTORY's permissions, so
+  // replacing a read-only file there simply succeeds and there is no error to
+  // classify. Atlas ships on Windows; CI's Linux job would see no throw.
+  it.skipIf(process.platform !== 'win32')('classifies a rename onto a read-only file as EROFS, not a file lock (found by driving the real app)', () => {
     // A file with Windows's read-only attribute set (`attrib +R` /
     // `fs.chmodSync(path, 0o444)`) also makes `fs.renameSync` throw EPERM —
     // the exact same ambiguity as the EISDIR case above, and just as
