@@ -126,6 +126,8 @@ async function assertNoLongTasksOpening(filePath: string, dataViewer: string, st
     // the app root means the document below is the final one — the init
     // script above has already installed the observer in it.
     await page.waitForSelector('#root', { timeout: 30_000 })
+    // Everything before this point is start-up, not document work.
+    const mountedAt = await page.evaluate(() => performance.now())
 
     // Redundant with the init script above in the common case; only does
     // real work if the window's document had already started executing by
@@ -158,7 +160,12 @@ async function assertNoLongTasksOpening(filePath: string, dataViewer: string, st
     )
 
     const budget = longTaskBudgetMs()
-    const offenders = longTasks.filter((task) => task.duration > budget)
+    // Only what happened once the app was up: this assertion is about the
+    // *document* not blocking the main thread. Start-up's own cost (module
+    // evaluation, JIT, the first React mount) is a different question, with
+    // its own test below — and on a shared CI runner it can alone exceed any
+    // budget that is still meaningful for the parse.
+    const offenders = longTasks.filter((task) => task.duration > budget && task.startTime >= mountedAt)
     expect(offenders, `long tasks over ${budget}ms: ${JSON.stringify(offenders)}`).toEqual([])
   } finally {
     await electronApp.close()
