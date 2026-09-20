@@ -6,6 +6,7 @@ import type { ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats, useRegisterViewerFind } from './shared/useViewerContext'
 import { useSpreadsheetGrid } from './shared/useSpreadsheetGrid'
 import { useGridFind } from './shared/useGridFind'
+import { useGridCellAnnouncement } from './shared/useGridCellAnnouncement'
 import { commitGridEdit, useGridBlankMargin } from './shared/useGridBlankMargin'
 import { parseCsv } from './shared/csvParse'
 import { ViewerLoading } from '../components/ViewerLoading'
@@ -180,6 +181,11 @@ function CsvViewerBase({ file }: ViewerProps) {
     return () => registerFind(null)
   }, [registerFind, gridFind.open])
 
+  // A11Y pass 3 — see useGridCellAnnouncement's own doc comment: the canvas
+  // grid has no cells for a screen reader to land on, so this is the
+  // current-cell equivalent of aria-activedescendant for it.
+  const cellAnnouncement = useGridCellAnnouncement(filteredRows, gridFind.gridSelection)
+
   const selection = useMemo(() => {
     const cell = gridFind.gridSelection?.current?.cell
     if (!cell) return null
@@ -257,7 +263,20 @@ function CsvViewerBase({ file }: ViewerProps) {
         onSaveAs={handleSaveAs}
       />
       {editor.saveError && <div className="csv-viewer__error">{editor.saveError}</div>}
-      <div className="csv-viewer__grid">
+      <div
+        className="csv-viewer__grid"
+        role="group"
+        aria-label={
+          sheet
+            ? t('csv.gridAria', {
+                dimensions: t('spreadsheet.dimensions', {
+                  rows: t('spreadsheet.rowsCount', { count: filteredRows.length }),
+                  cols: t('spreadsheet.colsCount', { count: sheet.colCount }),
+                }),
+              })
+            : undefined
+        }
+      >
         {!sheet ? null : search && filteredRows.length === 0 ? (
           <div className="csv-viewer__empty">
             <FileSpreadsheet size={48} />
@@ -290,6 +309,11 @@ function CsvViewerBase({ file }: ViewerProps) {
             />
           </Suspense>
         )}
+        {/* A11Y pass 3 — the canvas grid has no cells of its own to announce;
+            see useGridCellAnnouncement's doc comment. */}
+        <span className="visually-hidden" role="status" aria-live="polite">
+          {cellAnnouncement}
+        </span>
       </div>
     </div>
   )

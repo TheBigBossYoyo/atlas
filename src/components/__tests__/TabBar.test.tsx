@@ -69,4 +69,52 @@ describe('TabBar', () => {
     fireEvent.drop(second)
     expect(props.onReorder).toHaveBeenCalledWith(0, 1)
   })
+
+  describe('keyboard navigation (ARIA APG tablist pattern)', () => {
+    it('only the active tab is a Tab stop; the rest are roved out', () => {
+      renderBar()
+      expect(screen.getByRole('tab', { name: /a\.md/ })).toHaveAttribute('tabindex', '0')
+      expect(screen.getByRole('tab', { name: /b\.docx/ })).toHaveAttribute('tabindex', '-1')
+    })
+
+    it('ArrowRight/ArrowLeft move focus between tabs without selecting them', () => {
+      const props = renderBar()
+      const tabA = screen.getByRole('tab', { name: /a\.md/ })
+      const tabB = screen.getByRole('tab', { name: /b\.docx/ })
+      tabA.focus()
+
+      fireEvent.keyDown(tabA, { key: 'ArrowRight' })
+      expect(tabB).toHaveFocus()
+      expect(tabB).toHaveAttribute('tabindex', '0')
+      expect(tabA).toHaveAttribute('tabindex', '-1')
+      // Moving focus alone must never switch the open document.
+      expect(props.onSelect).not.toHaveBeenCalled()
+
+      fireEvent.keyDown(tabB, { key: 'ArrowRight' })
+      expect(tabA).toHaveFocus()
+
+      fireEvent.keyDown(tabA, { key: 'ArrowLeft' })
+      expect(tabB).toHaveFocus()
+    })
+
+    it('Home/End jump to the first/last tab', () => {
+      renderBar()
+      const tabA = screen.getByRole('tab', { name: /a\.md/ })
+      const tabB = screen.getByRole('tab', { name: /b\.docx/ })
+      tabA.focus()
+
+      fireEvent.keyDown(tabA, { key: 'End' })
+      expect(tabB).toHaveFocus()
+
+      fireEvent.keyDown(tabB, { key: 'Home' })
+      expect(tabA).toHaveFocus()
+    })
+
+    it('Enter/click on a focused tab still selects it', () => {
+      const props = renderBar()
+      const tabB = screen.getByRole('tab', { name: /b\.docx/ })
+      fireEvent.click(tabB)
+      expect(props.onSelect).toHaveBeenCalledWith('/b.docx')
+    })
+  })
 })

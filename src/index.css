@@ -376,6 +376,23 @@ input:focus-visible,
   }
 }
 
+/* A11Y pass 3 — shared "visually hidden but reachable by screen readers"
+   utility (`src/docx/editor/toolbar/__styles__/toolbar.css` has its own
+   scoped copy predating this one; this is the app-wide version for anything
+   outside the DOCX toolbar, e.g. StatusBar's/the spreadsheet grid's
+   position-change live regions). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---- 3. Layout ---- */
 .app {
   display: flex;

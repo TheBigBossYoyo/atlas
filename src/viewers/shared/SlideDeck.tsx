@@ -58,14 +58,20 @@ function ThumbnailRow({
 
   const isActive = index === activeIndex
   const thumbScale = THUMBNAIL_WIDTH / Math.max(slide.width, 1)
+  const label = slide.title || t('slides.deck.slideTitle', { n: index + 1 })
 
   return (
-    <div style={style} {...ariaAttributes} className="slide-deck__thumb-row">
+    <div style={style} {...ariaAttributes} className="slide-deck__thumb-row" role="listitem">
       <button
         type="button"
         className={isActive ? 'slide-deck__thumb slide-deck__thumb--active' : 'slide-deck__thumb'}
         aria-current={isActive ? 'true' : undefined}
-        title={slide.title || t('slides.deck.slideTitle', { n: index + 1 })}
+        // A11Y pass 3 — an explicit aria-label alongside `title` rather than
+        // relying on `title` alone as the accessible-name fallback (the
+        // button's only other content is `SlideCanvas`'s `<canvas>`, which
+        // contributes no accessible text of its own).
+        aria-label={label}
+        title={label}
         onClick={() => {
           onSelect(index)
         }}
@@ -202,7 +208,7 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
   return (
     <div ref={containerRef} className={isFullscreen ? 'slide-deck slide-deck--fullscreen' : 'slide-deck'}>
       {!isFullscreen && (
-        <div className="slide-deck__rail">
+        <div className="slide-deck__rail" role="list" aria-label={t('slides.deck.thumbnailRailAria')}>
           {slides.length > 0 && (
             <List
               rowComponent={ThumbnailRow}

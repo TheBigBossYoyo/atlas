@@ -127,6 +127,7 @@ import {
   useSetViewerStats,
 } from './shared/useViewerContext'
 import { useViewerShortcuts } from '../hooks/useShortcutManager'
+import { scrollIntoViewRespectingMotionPreference } from '../utils/motionPreference'
 
 type HeadingNavSeed = {
   id: string
@@ -1829,7 +1830,7 @@ function DocxEditor({
       if (target === null) {
         return false
       }
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      scrollIntoViewRespectingMotionPreference(target, { behavior: 'smooth', block: 'center' })
       return true
     }
 
@@ -3072,10 +3073,10 @@ function DocxViewerBase({ file }: ViewerProps) {
             label: seed.label,
             level: seed.level,
             onSelect: () => {
-              containerRef.current
+              const target = containerRef.current
                 ?.querySelectorAll<HTMLElement>('.docx-page__line[data-paragraph-path]')
                 .item(seed.paragraphIndex)
-                ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              if (target) scrollIntoViewRespectingMotionPreference(target, { behavior: 'smooth', block: 'start' })
             },
           })),
     [metrics],

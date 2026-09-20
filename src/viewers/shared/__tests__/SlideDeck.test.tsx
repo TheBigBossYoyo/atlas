@@ -70,4 +70,17 @@ describe('SlideDeck', () => {
     const rail = within(container.querySelector('.slide-deck__rail') as HTMLElement)
     expect(rail.getAllByRole('button').length).toBeGreaterThan(0)
   })
+
+  it('A11Y — the thumbnail rail is a labeled list, and each thumbnail has an accessible name', async () => {
+    const slides = await loadFixtureSlides()
+    const { getByRole } = render(<SlideDeck slides={slides} activeIndex={0} onSelect={vi.fn()} />)
+
+    const rail = getByRole('list', { name: 'Slide thumbnails' })
+    const railButtons = within(rail).getAllByRole('button')
+    expect(within(rail).getAllByRole('listitem').length).toBe(slides.length)
+    expect(railButtons.length).toBe(slides.length)
+    for (const button of railButtons) {
+      expect(button).toHaveAccessibleName()
+    }
+  })
 })

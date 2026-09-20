@@ -275,6 +275,10 @@ export const messages = {
   'spreadsheet.deleteSheetTitle': 'Supprimer la feuille {name}',
   'spreadsheet.addSheetAria': 'Ajouter une feuille',
   'spreadsheet.addSheetTitle': 'Ajouter une feuille',
+  'spreadsheet.gridAria': 'Grille de la feuille {sheet}, {dimensions}',
+  'csv.gridAria': 'Grille de données, {dimensions}',
+  'grid.cellAnnouncement': '{ref} : {value}',
+  'grid.cellAnnouncementEmpty': '{ref}, vide',
 
   // SpreadsheetEditToolbar.tsx
   'spreadsheetToolbar.undoAria': 'Annuler',
@@ -541,6 +545,7 @@ export const messages = {
 
   // src/viewers/shared/SlideDeck.tsx
   'slides.deck.slideTitle': 'Diapositive {n}',
+  'slides.deck.thumbnailRailAria': 'Vignettes des diapositives',
   'slides.deck.zoomOut': 'Zoom arrière',
   'slides.deck.zoomIn': 'Zoom avant',
   'slides.deck.zoomReset': 'Réinitialiser le zoom',
@@ -601,6 +606,7 @@ export const messages = {
 
   // src/viewers/pdf/PdfThumbnailRail.tsx
   'pdf.thumbnails.goToPage': 'Aller à la page {n}',
+  'pdf.thumbnails.railAria': 'Vignettes des pages',
 
   // src/formats/legacyOffice.ts (consumed by UnknownViewer.tsx, and reused
   // by LegacyDocViewer.tsx/LegacyPptViewer.tsx for the same format labels)

@@ -117,6 +117,7 @@ export function PdfThumbnailRail({
   rotation,
   onSelectPage,
 }: PdfThumbnailRailProps) {
+  const t = useTranslate()
   const railRef = useRef<HTMLDivElement | null>(null)
   const nodesRef = useRef<Map<number, HTMLButtonElement>>(new Map())
   const observerRef = useRef<IntersectionObserver | null>(null)
@@ -174,7 +175,7 @@ export function PdfThumbnailRail({
   if (!isOpen) return null
 
   return (
-    <div className="pdf-viewer__thumbnail-rail" ref={railRef}>
+    <div className="pdf-viewer__thumbnail-rail" ref={railRef} role="group" aria-label={t('pdf.thumbnails.railAria')}>
       {Array.from({ length: pageCount }, (_, index) => {
         const pageNumber = index + 1
         return (

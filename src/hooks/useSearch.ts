@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useShellShortcut } from './useShortcutManager';
 import type { ShortcutHandler } from './shortcutManagerContext';
+import { scrollIntoViewRespectingMotionPreference } from '../utils/motionPreference';
 
 /**
  * `enabled` gates in-app search entirely (P2.1/X4/DAT-15/RUN-08): pass
@@ -93,7 +94,7 @@ export function useSearch(contentRef: React.RefObject<HTMLElement | null>, enabl
     if (marks.length > 0) {
       setCurrentMatch(0);
       marks[0].classList.add('search-highlight--active');
-      marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      scrollIntoViewRespectingMotionPreference(marks[0], { behavior: 'smooth', block: 'center' });
     }
   }, [clearHighlights, contentRef]);
 
@@ -112,7 +113,7 @@ export function useSearch(contentRef: React.RefObject<HTMLElement | null>, enabl
 
     setCurrentMatch(next);
     marks[next]?.classList.add('search-highlight--active');
-    marks[next]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (marks[next]) scrollIntoViewRespectingMotionPreference(marks[next], { behavior: 'smooth', block: 'center' });
   }, [currentMatch]);
 
   const open = useCallback(() => setIsOpen(true), []);

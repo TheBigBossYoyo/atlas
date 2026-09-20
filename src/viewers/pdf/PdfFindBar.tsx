@@ -93,7 +93,13 @@ export function PdfFindBar({
         onKeyDown={handleKeyDown}
         aria-label={t('pdf.findBar.inputAria')}
       />
-      {statusText && <span className="pdf-viewer__find-count">{statusText}</span>}
+      {statusText && (
+        // A11Y pass 3 — mirrors SearchOverlay's own UX-15 fix: match-count
+        // changes ("3 of 12", "No results") reached sighted users only.
+        <span className="pdf-viewer__find-count" role="status" aria-live="polite">
+          {statusText}
+        </span>
+      )}
       {isIndexing && (
         <span className="pdf-viewer__find-progress" aria-live="polite">
           {t('pdf.findBar.indexingProgress', { indexed: indexedPageCount, total: totalPageCount })}
