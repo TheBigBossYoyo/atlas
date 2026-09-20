@@ -21,6 +21,7 @@ coverage
 
 # Agent worktrees
 .claude/worktrees
+.worktrees
 
 # Editor directories and files
 .vscode/*
