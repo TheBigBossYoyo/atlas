@@ -160,6 +160,33 @@ describe('atomicWriteFile', () => {
     expect(fs.statSync(target).isDirectory()).toBe(true)
   })
 
+  it('classifies a rename onto a read-only file as EROFS, not a file lock (found by driving the real app)', () => {
+    // A file with Windows's read-only attribute set (`attrib +R` /
+    // `fs.chmodSync(path, 0o444)`) also makes `fs.renameSync` throw EPERM —
+    // the exact same ambiguity as the EISDIR case above, and just as
+    // misleading: without this check, a plain read-only file was reported
+    // as "open in another program" (sending the user to close a program
+    // that was never open) instead of the accurate "read-only" message.
+    const target = path.join(tempDir, 'readonly.md')
+    fs.writeFileSync(target, 'original')
+    fs.chmodSync(target, 0o444)
+
+    let thrown: unknown
+    try {
+      atomicWriteFile(target, 'new content')
+    } catch (err) {
+      thrown = err
+    } finally {
+      fs.chmodSync(target, 0o666)
+    }
+
+    expect(thrown).not.toBeInstanceOf(FileLockedError)
+    expect((thrown as { code?: string } | undefined)?.code).toBe('EROFS')
+    expect(classifyWriteError(thrown)).toBe('That location is read-only — choose a different location.')
+    // The read-only file itself must be left alone.
+    expect(fs.readFileSync(target, 'utf-8')).toBe('original')
+  })
+
   it('classifies the EXDEV fallback writing onto an existing directory as EISDIR too', () => {
     const target = path.join(tempDir, 'a-folder')
     fs.mkdirSync(target)

@@ -40,6 +40,23 @@ export function useCodeRun(filePath: string) {
   const [isOpen, setIsOpen] = useState(false)
   const runIdRef = useRef<number | null>(null)
 
+  // Found by driving the real app: switching to another tab (or closing this
+  // one) while a program was running unmounted CodeViewer — and with it, the
+  // only Stop button that could ever reach this run. Main allows exactly one
+  // run at a time (electron/lib/codeRunner.cjs), so the orphaned child kept
+  // running with no way to stop it short of the 60s timeout or quitting the
+  // whole app, and every other file's Run just failed with "a program is
+  // already running". Stop whatever is still running when this viewer goes
+  // away so leaving the tab can never strand a run like that. Reads
+  // `runIdRef` (not `state`) so this always sees the latest run even though
+  // the effect itself only mounts/unmounts once.
+  useEffect(() => {
+    return () => {
+      const runId = runIdRef.current
+      if (runId !== null) void window.electronAPI?.codeRun?.stop(runId)
+    }
+  }, [])
+
   useEffect(() => {
     const api = window.electronAPI?.codeRun
     if (!api) return undefined

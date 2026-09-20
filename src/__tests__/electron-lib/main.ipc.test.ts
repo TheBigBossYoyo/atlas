@@ -217,6 +217,21 @@ describe('electron/main.cjs IPC handlers', () => {
         /could not be found/i,
       )
     })
+
+    // Found by driving the real app: dropping a folder onto the window
+    // allowlists it (path:register-dropped only checks fs.existsSync) and,
+    // since a folder has no recognized extension, the loader falls through
+    // to this handler. It used to let the raw `EISDIR: illegal operation on
+    // a directory, read` reach the UI's error banner verbatim.
+    it('surfaces a friendly message instead of a raw EISDIR error for a dropped folder', async () => {
+      const folderPath = fs.mkdtempSync(path.join(tempDir, 'dropped-folder-'))
+      const registerResult = (await handler('path:register-dropped')(ALLOWED_EVENT, folderPath)) as { ok: boolean }
+      expect(registerResult.ok).toBe(true)
+
+      await expect(handler('file:readBinaryByPath')(ALLOWED_EVENT, folderPath)).rejects.toThrow(
+        /folder, not a file/i,
+      )
+    })
   })
 
   describe('open-file-by-path', () => {

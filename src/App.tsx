@@ -649,9 +649,19 @@ function AppShell() {
     e.preventDefault(); e.stopPropagation();
     dragCounterRef.current = 0;
     setIsDragging(false);
-    void resolveDroppedFilePath(window.electronAPI, e.dataTransfer.files[0]).then((path) => {
-      if (path) void openFileFromPath(path);
-    });
+    // Dropping several files at once used to silently open only
+    // `files[0]` and discard the rest with no feedback at all — found by
+    // driving the real app. Atlas already supports many open tabs (SHELL-17),
+    // so every dropped file opens, one at a time (each fully awaited, so a
+    // dirty-document prompt or an extension-mismatch confirm from one drop
+    // resolves before the next file's own open begins).
+    const files = Array.from(e.dataTransfer.files);
+    void (async () => {
+      for (const droppedFile of files) {
+        const path = await resolveDroppedFilePath(window.electronAPI, droppedFile);
+        if (path) await openFileFromPath(path);
+      }
+    })();
   }, [openFileFromPath]);
 
   // P2.6/SHELL-12 — gated on `isMarkdownDocument` so switching to a binary

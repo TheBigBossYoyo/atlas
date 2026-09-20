@@ -118,6 +118,29 @@ function isExistingDirectory(targetPath) {
 }
 
 /**
+ * Found by driving the real app: a file with Windows's read-only attribute
+ * set (`attrib +R`, or `fs.chmodSync(path, 0o444)`) raises EPERM when
+ * `atomicWriteFile` renames its temp file over it — the exact same code
+ * `isLockError` below treats as "another program has this file locked".
+ * That misreported a plain read-only file as if Word (or similar) had it
+ * open, which sends the user to close a program that was never open. Same
+ * shape of ambiguity as the EISDIR case above; disambiguated the same way,
+ * by checking the target's actual state before trusting the error code.
+ * @param {string} targetPath
+ * @returns {boolean}
+ */
+function isReadOnlyFile(targetPath) {
+  try {
+    const stats = fs.statSync(targetPath);
+    // Windows surfaces FILE_ATTRIBUTE_READONLY to Node by clearing the
+    // write bits in `mode` — this is the same signal Node itself uses.
+    return stats.isFile() && (stats.mode & 0o200) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * @param {unknown} err
  * @param {string} [targetPath] the path the failing operation was writing to
  *   (omitted for the initial temp-file write, which is never `targetPath`
@@ -140,6 +163,14 @@ function rethrowAsFriendlyError(err, targetPath) {
     const dirErr = new Error('target path is a directory');
     dirErr.code = 'EISDIR';
     throw dirErr;
+  }
+  // Same EPERM ambiguity, this time against a read-only file — see
+  // `isReadOnlyFile`'s comment.
+  if (targetPath && isReadOnlyFile(targetPath)) {
+    /** @type {NodeJS.ErrnoException} */
+    const roErr = new Error('target path is read-only');
+    roErr.code = 'EROFS';
+    throw roErr;
   }
   if (isLockError(err)) {
     throw new FileLockedError();
