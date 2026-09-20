@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { useShellShortcut } from '../hooks/useShortcutManager';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useTranslate } from '../i18n';
 
 interface UnsavedChangesDialogProps {
@@ -11,8 +12,6 @@ interface UnsavedChangesDialogProps {
   onDiscard: () => void;
   onCancel: () => void;
 }
-
-const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 /**
  * P1.1 — the Save / Discard / Cancel confirmation shown before any open path
@@ -30,7 +29,6 @@ export function UnsavedChangesDialog({
 }: UnsavedChangesDialogProps) {
   const t = useTranslate();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   // P2.1 — Escape-close registered with the shared dispatcher instead of its
   // own ad hoc `window` listener; only listens while the dialog is open.
@@ -46,42 +44,15 @@ export function UnsavedChangesDialog({
     isOpen,
   );
 
-  // Focus trap: move focus into the dialog on open (this is a data-loss-
-  // adjacent alertdialog — every open path funnels through it — so it must
-  // not be possible to Tab straight past it into the document behind it),
-  // keep Tab/Shift+Tab cycling within it while open, and restore focus to
-  // whatever triggered it once it closes. Same pattern as ShortcutsModal's
-  // UX-13 fix; this dialog never had it.
-  useEffect(() => {
-    if (!isOpen) return;
-
-    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    const dialog = dialogRef.current;
-    dialog?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus();
-
-    const handleTab = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || !dialog) return;
-      const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-        el => !el.hasAttribute('disabled'),
-      );
-      if (focusables.length === 0) return;
-      const first = focusables[0]!;
-      const last = focusables[focusables.length - 1]!;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-
-    window.addEventListener('keydown', handleTab);
-    return () => {
-      window.removeEventListener('keydown', handleTab);
-      previouslyFocusedRef.current?.focus();
-    };
-  }, [isOpen]);
+  // A11Y-1 — focus trap: move focus into the dialog on open (this is a
+  // data-loss-adjacent alertdialog — every open path funnels through it — so
+  // it must not be possible to Tab straight past it into the document behind
+  // it), keep Tab/Shift+Tab cycling within it while open (skipping disabled
+  // controls, e.g. while isSaving), and restore focus to whatever triggered
+  // it once it closes. Migrated to the shared useFocusTrap hook — this used
+  // to be its own hand-rolled copy of the pattern ShortcutsModal also had
+  // (UX-13), now unified.
+  useFocusTrap(dialogRef, isOpen);
 
   if (!isOpen) return null;
 

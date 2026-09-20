@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { X } from 'lucide-react';
 import { useShellShortcut } from '../hooks/useShortcutManager';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useTranslate } from '../i18n';
 
 interface ShortcutsModalProps {
@@ -8,12 +9,9 @@ interface ShortcutsModalProps {
   onClose: () => void;
 }
 
-const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-
 export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
   const t = useTranslate();
   const modalRef = useRef<HTMLDivElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   // P2.1 — Escape-close registered with the shared dispatcher instead of its
   // own ad hoc `window` listener; only listens while the modal is open.
@@ -29,38 +27,14 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
     isOpen,
   );
 
-  // UX-13 — focus trap: move focus into the modal on open, keep Tab/Shift+Tab
-  // cycling within it while it's open, and restore focus to whatever
-  // triggered it once it closes (a separate effect/listener from the Escape
-  // handler above — this is Tab containment, not the close shortcut).
-  useEffect(() => {
-    if (!isOpen) return;
-
-    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    const modal = modalRef.current;
-    modal?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)?.focus();
-
-    const handleTab = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || !modal) return;
-      const focusables = Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-      if (focusables.length === 0) return;
-      const first = focusables[0]!;
-      const last = focusables[focusables.length - 1]!;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-
-    window.addEventListener('keydown', handleTab);
-    return () => {
-      window.removeEventListener('keydown', handleTab);
-      previouslyFocusedRef.current?.focus();
-    };
-  }, [isOpen]);
+  // UX-13 / A11Y-1 — focus trap: move focus into the modal on open, keep
+  // Tab/Shift+Tab cycling within it while it's open, and restore focus to
+  // whatever triggered it once it closes. Migrated to the shared
+  // useFocusTrap hook (this used to be its own hand-rolled copy — see
+  // UX-13's own comment on that hook — which had already drifted from
+  // UnsavedChangesDialog's: it never filtered out disabled controls before
+  // collecting focusable candidates).
+  useFocusTrap(modalRef, isOpen);
 
   if (!isOpen) return null;
 

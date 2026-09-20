@@ -9,6 +9,7 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 
 import { SlideCanvas } from './SlideCanvas'
 import type { SlideData } from './SlideDeck.types'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { useTranslate } from '../../i18n'
 
 type PresenterViewProps = {
@@ -42,14 +43,23 @@ function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterV
   const [elapsed, setElapsed] = useState(0)
   const { width, height } = useWindowSize()
 
+  // A11Y-2 — Tab containment + focus capture/restore via the shared hook
+  // (previously PresenterView had neither: it only captured/restored focus
+  // on mount/unmount below, with no Tab handling at all, so Tab walked
+  // straight out into the document behind it — worse still, that could
+  // happen silently since `requestFullscreen` below can be refused).
+  // `focusOnOpen: false` because this view focuses its own container (not a
+  // descendant control, see the effect below) so its Escape handler — bound
+  // to the container itself — keeps receiving keys regardless of whether
+  // fullscreen was granted; the hook's own querySelector-based autofocus
+  // would otherwise land on the (initially disabled) Previous-slide button.
+  // This component only exists in the tree while presenting (SlideDeck.tsx
+  // renders it conditionally), so "open" is simply "mounted" — pass a
+  // constant rather than a caller-managed boolean.
+  useFocusTrap(containerRef, true, { focusOnOpen: false })
+
   useEffect(() => {
     const container = containerRef.current
-    // A11Y-2 — remember whatever had focus (the "Present" button that
-    // mounted this view) so it can be restored once presenter mode exits;
-    // without this, closing (Escape, the exit button, or the OS ending
-    // fullscreen) dropped focus to document.body with nothing to pick it
-    // back up, same UX-13 gap ShortcutsModal/UnsavedChangesDialog had.
-    const previouslyFocused = document.activeElement as HTMLElement | null
     // Focus the dialog itself (not only on fullscreen success — that request
     // can be refused), or its Escape handler never sees a key.
     container?.focus()
@@ -61,7 +71,6 @@ function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterV
     return () => {
       document.removeEventListener('fullscreenchange', handleChange)
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined)
-      previouslyFocused?.focus()
     }
   }, [onExit])
 

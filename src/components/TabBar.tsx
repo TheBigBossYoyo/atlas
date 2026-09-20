@@ -5,7 +5,7 @@
  * shell's existing Save/Discard/Cancel prompt (see `App.tsx`), so a tab only
  * ever shows the dirty dot for the document currently being edited.
  */
-import { memo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
+import { memo, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
 import { X } from 'lucide-react'
 
 import type { DocumentSession } from '../session/documentSessions'
@@ -38,7 +38,38 @@ function TabBarBase({ sessions, activeId, isActiveDirty, onSelect, onClose, onRe
   const [focusedId, setFocusedId] = useState<string | null>(activeId)
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([])
 
+  // A11Y-3 — closing a tab (its own button, or the whole tab) unmounts that
+  // close button with nowhere for focus to go, so it fell back to
+  // `document.body` and the next Tab press started over from the top of the
+  // window. `useRestoreFocusOnClose` doesn't fit here — it restores focus to
+  // one fixed trigger across a single open/close toggle, but a tab list is a
+  // dynamic array where the "trigger" (the closed tab itself) is gone for
+  // good. Instead: remember which neighbouring tab should pick up focus
+  // *before* asking the parent to remove the session, then once `sessions`
+  // actually reflects the removal, focus that neighbour's own close button —
+  // mirroring how browser tab strips let you keep closing tabs by repeatedly
+  // pressing the same key/mouse button in place, which is more useful here
+  // than restoring focus to whatever was focused before the tab bar existed.
+  const closeButtonRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const pendingFocusIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const targetId = pendingFocusIdRef.current
+    if (targetId === null) return
+    pendingFocusIdRef.current = null
+    const targetIndex = sessions.findIndex((s) => s.id === targetId)
+    if (targetIndex === -1) return
+    setFocusedId(targetId)
+    closeButtonRefs.current[targetIndex]?.focus()
+  }, [sessions])
+
   if (sessions.length === 0) return null
+
+  const handleClose = (index: number, id: string): void => {
+    const neighbor = sessions[index + 1] ?? sessions[index - 1] ?? null
+    pendingFocusIdRef.current = neighbor ? neighbor.id : null
+    onClose(id)
+  }
 
   const focusedIndex = (() => {
     const idx = sessions.findIndex((s) => s.id === focusedId)
@@ -101,7 +132,7 @@ function TabBarBase({ sessions, activeId, isActiveDirty, onSelect, onClose, onRe
             onAuxClick={(event) => {
               if (event.button === 1) {
                 event.preventDefault()
-                onClose(session.id)
+                handleClose(index, session.id)
               }
             }}
           >
@@ -124,11 +155,14 @@ function TabBarBase({ sessions, activeId, isActiveDirty, onSelect, onClose, onRe
               <span className="tab-bar__name">{session.name}</span>
             </button>
             <button
+              ref={(node) => {
+                closeButtonRefs.current[index] = node
+              }}
               type="button"
               className="tab-bar__close"
               aria-label={t('tabBar.closeAria', { name: session.name })}
               title={t('tabBar.closeTitle', { name: session.name })}
-              onClick={() => onClose(session.id)}
+              onClick={() => handleClose(index, session.id)}
             >
               <X size={13} />
             </button>
