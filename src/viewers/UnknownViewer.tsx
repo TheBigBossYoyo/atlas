@@ -4,6 +4,7 @@ import { FileQuestion, FileWarning, FolderOpen, Type } from 'lucide-react'
 import type { LoadedFile } from '../formats/types'
 import { isLegacyOfficeMagic, guessLegacyOfficeKind, legacyOfficeMessage } from '../formats/legacyOffice'
 import { decodeTextBuffer } from '../utils/textDecoding'
+import { useTranslate } from '../i18n'
 import { VirtualizedPlainText } from './shared/VirtualizedPlainText'
 import './__styles__/viewer-unknown.css'
 
@@ -80,6 +81,7 @@ function formatFileSize(bytes: number): string {
  * generic "unknown format" copy.
  */
 function UnknownViewerBase({ file }: UnknownViewerProps) {
+  const t = useTranslate()
   const [showAsText, setShowAsText] = useState(false)
   const [revealError, setRevealError] = useState<string | null>(null)
 
@@ -114,12 +116,12 @@ function UnknownViewerBase({ file }: UnknownViewerProps) {
   const handleRevealInFolder = async () => {
     setRevealError(null)
     if (!window.electronAPI) {
-      setRevealError('Reveal in folder requires the Atlas desktop app.')
+      setRevealError(t('unknown.viewer.revealRequiresDesktop'))
       return
     }
     const result = await window.electronAPI.revealInFolder(file.path)
     if (!result.ok) {
-      setRevealError('Could not reveal this file — it may have moved or been deleted.')
+      setRevealError(t('unknown.viewer.revealFailed'))
     }
   }
 
@@ -128,12 +130,12 @@ function UnknownViewerBase({ file }: UnknownViewerProps) {
       <div className="unknown-viewer unknown-viewer--as-text">
         <div className="unknown-viewer__text-toolbar">
           <button type="button" onClick={() => setShowAsText(false)}>
-            Back
+            {t('unknown.viewer.back')}
           </button>
           <span className="unknown-viewer__text-filename">{fileName}</span>
           {isTruncated && (
             <span className="unknown-viewer__text-truncated">
-              Showing the first {formatFileSize(TEXT_PREVIEW_MAX_BYTES)} only
+              {t('unknown.viewer.truncatedNotice', { size: formatFileSize(TEXT_PREVIEW_MAX_BYTES) })}
             </span>
           )}
         </div>
@@ -166,17 +168,17 @@ function UnknownViewerBase({ file }: UnknownViewerProps) {
       <p className="unknown-viewer__explanation">
         {legacyKind !== null
           ? legacyOfficeMessage(legacyKind)
-          : "Atlas doesn't recognize this file's format, so there's nothing to preview here."}
+          : t('unknown.viewer.genericExplanation')}
       </p>
 
       <div className="unknown-viewer__actions">
         <button type="button" onClick={() => setShowAsText(true)}>
           <Type size={16} aria-hidden="true" />
-          Open as text
+          {t('unknown.viewer.openAsText')}
         </button>
         <button type="button" onClick={() => void handleRevealInFolder()}>
           <FolderOpen size={16} aria-hidden="true" />
-          Reveal in folder
+          {t('unknown.viewer.revealInFolder')}
         </button>
       </div>
 

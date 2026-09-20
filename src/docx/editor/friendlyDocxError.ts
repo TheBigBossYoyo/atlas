@@ -1,3 +1,5 @@
+import { t } from '../../i18n'
+
 /**
  * RUN-14 — friendly, format-specific DOCX load/save error messages.
  *
@@ -43,33 +45,33 @@ export function friendlyDocxErrorMessage(error: unknown, action: 'open' | 'save'
     // Already a clear, specific message (DocxParseError's own zip-bomb
     // guard) — just frame which operation it interrupted.
     return action === 'open'
-      ? `This file was not opened: ${detail}`
-      : `This file was not saved: ${detail}`
+      ? t('docx.error.notOpenedDetail', { detail })
+      : t('docx.error.notSavedDetail', { detail })
   }
 
   if (ZIP_CORRUPTION_PATTERN.test(detail)) {
     return action === 'open'
-      ? `This file doesn't appear to be a valid Word document (.docx). It may be corrupted, password-protected, or a different file type entirely. (${detail})`
-      : `The document could not be saved because its file data appears corrupted. Try again, or save a copy under a new name. (${detail})`
+      ? t('docx.error.invalidWordFile', { detail })
+      : t('docx.error.saveCorruptedData', { detail })
   }
 
   if (XML_CORRUPTION_PATTERN.test(detail)) {
     return action === 'open'
-      ? `This document's internal structure appears to be corrupted and could not be read. It may have been damaged by another application. (${detail})`
-      : `The document could not be saved because Atlas generated XML that failed its own validity check. Your changes were not written to disk — please try again or report this issue. (${detail})`
+      ? t('docx.error.openXmlCorrupted', { detail })
+      : t('docx.error.saveXmlInvalid', { detail })
   }
 
   if (name === 'DocxSaveError') {
-    return `Atlas could not verify the saved file was valid, so nothing was written to disk. Please try again or report this issue. (${detail})`
+    return t('docx.error.saveVerifyFailed', { detail })
   }
 
   if (name === 'DocxParseError') {
     return action === 'open'
-      ? `This Word document could not be opened. (${detail})`
-      : `This Word document could not be saved. (${detail})`
+      ? t('docx.error.openParseFailed', { detail })
+      : t('docx.error.saveParseFailed', { detail })
   }
 
   return action === 'open'
-    ? `Couldn't open this Word document. (${detail})`
-    : `Couldn't save this Word document. Your changes have not been written to disk. (${detail})`
+    ? t('docx.error.openGenericFailed', { detail })
+    : t('docx.error.saveGenericFailed', { detail })
 }

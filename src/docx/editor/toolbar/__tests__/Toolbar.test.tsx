@@ -71,26 +71,26 @@ describe('Toolbar', () => {
     const onCommand = vi.fn();
     const { getByTitle } = render(<Toolbar state={defaultState} onCommand={onCommand} />);
     
-    fireEvent.click(getByTitle('toggle-bold'));
+    fireEvent.click(getByTitle('Bold'));
     expect(onCommand).toHaveBeenCalledWith({ kind: 'toggle-bold' });
   });
 
   it('emits toggle-italic command on Italic button click', () => {
     const onCommand = vi.fn();
     const { getByTitle } = render(<Toolbar state={defaultState} onCommand={onCommand} />);
-    
-    fireEvent.click(getByTitle('toggle-italic'));
+
+    fireEvent.click(getByTitle('Italic'));
     expect(onCommand).toHaveBeenCalledWith({ kind: 'toggle-italic' });
   });
 
   it('visually distinguishes active state', () => {
     const stateWithBold = { ...defaultState, activeFormats: new Set(['bold'] as const) };
     const { getByTitle } = render(<Toolbar state={stateWithBold} onCommand={vi.fn()} />);
-    
-    const boldButton = getByTitle('toggle-bold');
+
+    const boldButton = getByTitle('Bold');
     expect(boldButton.className).toContain('docx-toolbar__button--active');
-    
-    const italicButton = getByTitle('toggle-italic');
+
+    const italicButton = getByTitle('Italic');
     expect(italicButton.className).not.toContain('docx-toolbar__button--active');
   });
 

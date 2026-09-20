@@ -3,6 +3,7 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { computeActivePageWindow } from './virtualization'
 import { combineRotation } from './rotation'
 import type { PageRotation, PdfDocument } from './types'
+import { useTranslate } from '../../i18n'
 
 const THUMBNAIL_WIDTH = 120
 const THUMBNAIL_OVERSCAN = 6
@@ -26,6 +27,7 @@ function PdfThumbnailBase({
   onSelect,
   registerNode,
 }: PdfThumbnailProps) {
+  const t = useTranslate()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
@@ -79,7 +81,7 @@ function PdfThumbnailBase({
       className={`pdf-viewer__thumbnail ${isCurrent ? 'pdf-viewer__thumbnail--current' : ''}`}
       data-page={pageNumber}
       onClick={() => onSelect(pageNumber)}
-      aria-label={`Go to page ${pageNumber}`}
+      aria-label={t('pdf.thumbnails.goToPage', { n: pageNumber })}
       aria-current={isCurrent}
     >
       <canvas className="pdf-viewer__thumbnail-canvas" ref={canvasRef} />

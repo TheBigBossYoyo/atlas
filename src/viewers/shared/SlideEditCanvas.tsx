@@ -19,6 +19,7 @@ import { SlideCanvas } from './SlideCanvas'
 import type { SlideData, SlideShape, SlideTextBox, SlideTransform } from './SlideDeck.types'
 import { isPointInShape, resizeBox, type DragMode, type Handle } from './slideGeometry'
 import { textBodyToCss } from './slideStyleHelpers'
+import { useTranslate } from '../../i18n'
 
 export type SlideShapeBox = { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
 
@@ -72,6 +73,7 @@ function TextShapeEditor({
   readonly shape: SlideTextBox
   readonly onDone: (text: string | null) => void
 }) {
+  const t = useTranslate()
   const ref = useRef<HTMLDivElement | null>(null)
   const doneRef = useRef(false)
   const firstParagraph = shape.paragraphs[0]
@@ -121,7 +123,7 @@ function TextShapeEditor({
       contentEditable="plaintext-only"
       role="textbox"
       aria-multiline="true"
-      aria-label="Edit slide text"
+      aria-label={t('slides.editCanvas.editTextAria')}
       suppressContentEditableWarning
       onBlur={() => finish(true)}
       onPointerDown={(event) => event.stopPropagation()}
@@ -149,6 +151,7 @@ function SlideEditCanvasBase({
   onCommitText,
   onDeleteShape,
 }: SlideEditCanvasProps) {
+  const t = useTranslate()
   const layerRef = useRef<HTMLDivElement | null>(null)
   const [drag, setDrag] = useState<Drag | null>(null)
   const [pendingBox, setPendingBox] = useState<{ readonly shapeId: string; readonly transform: SlideTransform } | null>(null)
@@ -247,7 +250,7 @@ function SlideEditCanvasBase({
         ref={layerRef}
         className="slide-edit__layer"
         tabIndex={0}
-        aria-label="Slide editing surface"
+        aria-label={t('slides.editCanvas.surfaceAria')}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}

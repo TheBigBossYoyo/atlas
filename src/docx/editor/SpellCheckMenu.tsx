@@ -12,6 +12,7 @@
 
 import { memo, useCallback, useEffect, useRef } from 'react'
 
+import { useTranslate } from '../../i18n'
 import './__styles__/spell-check-menu.css'
 
 export interface SpellCheckMenuProps {
@@ -33,6 +34,7 @@ function SpellCheckMenuBase({
   onAddToDictionary,
   onDismiss,
 }: SpellCheckMenuProps) {
+  const t = useTranslate()
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -80,7 +82,7 @@ function SpellCheckMenuBase({
       ref={menuRef}
       className="spellcheck-menu"
       role="menu"
-      aria-label={`Spell check suggestions for "${word}"`}
+      aria-label={t('docx.spellCheck.suggestionsAria', { word })}
       style={{ left: x, top: y }}
     >
       <div className="spellcheck-menu__header">
@@ -102,7 +104,7 @@ function SpellCheckMenuBase({
           ))}
         </ul>
       ) : (
-        <div className="spellcheck-menu__item spellcheck-menu__item--empty">No suggestions</div>
+        <div className="spellcheck-menu__item spellcheck-menu__item--empty">{t('docx.spellCheck.noSuggestions')}</div>
       )}
       <div className="spellcheck-menu__footer">
         <button
@@ -111,7 +113,7 @@ function SpellCheckMenuBase({
           role="menuitem"
           onClick={handleAddClick}
         >
-          Add to dictionary
+          {t('docx.spellCheck.addToDictionary')}
         </button>
       </div>
     </div>

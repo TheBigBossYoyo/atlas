@@ -37,22 +37,26 @@ function fileNotFoundError(): string {
 
 // P2.14/LOAD-04 — human-readable labels for the "extension vs. actual
 // contents disagree" confirm prompt below. Falls back to the bare FormatId
-// for anything not worth a friendlier label.
-const FORMAT_LABELS: Partial<Record<FormatId, string>> = {
-  docx: 'Word (.docx)',
-  xlsx: 'Excel (.xlsx)',
-  pptx: 'PowerPoint (.pptx)',
-  pdf: 'PDF (.pdf)',
-  odt: 'OpenDocument Text (.odt)',
-  ods: 'OpenDocument Spreadsheet (.ods)',
-  odp: 'OpenDocument Presentation (.odp)',
-  rtf: 'Rich Text (.rtf)',
-  doc: 'Word 97-2003 (.doc)',
-  ppt: 'PowerPoint 97-2003 (.ppt)',
+// for anything not worth a friendlier label (translated the same way as
+// `browserModeError`/`fileNotFoundError` above — resolved at call time, not
+// module load, so it always reflects the UI language at the moment the
+// prompt actually appears).
+const FORMAT_LABEL_KEYS: Partial<Record<FormatId, string>> = {
+  docx: 'fileHandler.formatLabel.docx',
+  xlsx: 'fileHandler.formatLabel.xlsx',
+  pptx: 'fileHandler.formatLabel.pptx',
+  pdf: 'fileHandler.formatLabel.pdf',
+  odt: 'fileHandler.formatLabel.odt',
+  ods: 'fileHandler.formatLabel.ods',
+  odp: 'fileHandler.formatLabel.odp',
+  rtf: 'fileHandler.formatLabel.rtf',
+  doc: 'fileHandler.formatLabel.doc',
+  ppt: 'fileHandler.formatLabel.ppt',
 };
 
 function formatLabel(format: FormatId): string {
-  return FORMAT_LABELS[format] ?? format;
+  const key = FORMAT_LABEL_KEYS[format];
+  return key !== undefined ? t(key) : format;
 }
 
 /**
@@ -81,8 +85,11 @@ function confirmMagicMatchesExtension(absPath: string, extFormat: FormatId, buff
 
   const name = absPath.split(/[\\/]/).pop() ?? absPath;
   return window.confirm(
-    `"${name}" doesn't look like a valid ${formatLabel(extFormat)} file — its contents look like ` +
-      `${formatLabel(magicFormat)} instead. Open it anyway?`,
+    t('fileHandler.extensionMismatchConfirm', {
+      name,
+      extFormat: formatLabel(extFormat),
+      magicFormat: formatLabel(magicFormat),
+    }),
   );
 }
 

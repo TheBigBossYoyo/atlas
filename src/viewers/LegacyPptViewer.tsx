@@ -1,6 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { ViewerProps } from '../formats/types'
+import { legacyOfficeLabelKey } from '../formats/legacyOffice'
+import { useTranslate } from '../i18n'
 import { SlideDeck } from './shared/SlideDeck'
 import type { SlideData } from './shared/SlideDeck.types'
 import { LegacyFormatBanner } from './shared/LegacyFormatBanner'
@@ -16,6 +18,7 @@ import './__styles__/viewer-legacy-ppt.css'
  * that module's header for exactly what is and isn't covered).
  */
 function LegacyPptViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
   const [slides, setSlides] = useState<ReadonlyArray<SlideData>>([])
@@ -31,12 +34,12 @@ function LegacyPptViewerBase({ file }: ViewerProps) {
     () =>
       slides.map((slide, index) => ({
         id: slide.id,
-        label: slide.title || `Slide ${index + 1}`,
+        label: slide.title || t('slides.deck.slideTitle', { n: index + 1 }),
         onSelect: () => {
           handleSelectSlide(index)
         },
       })),
-    [handleSelectSlide, slides],
+    [handleSelectSlide, slides, t],
   )
 
   useEffect(() => {
@@ -94,7 +97,7 @@ function LegacyPptViewerBase({ file }: ViewerProps) {
 
         setSlides(nextSlides)
         setActiveIndex(0)
-        setError(nextSlides.length > 0 ? null : 'No slides found in this presentation.')
+        setError(nextSlides.length > 0 ? null : t('legacy.ppt.noSlidesFound'))
         setIsLoading(false)
       } catch (err) {
         if (cancelled) return
@@ -106,12 +109,12 @@ function LegacyPptViewerBase({ file }: ViewerProps) {
     return () => {
       cancelled = true
     }
-  }, [file, setNavItems, setStats])
+  }, [file, setNavItems, setStats, t])
 
   if (file.kind !== 'binary') {
     return (
       <div className="legacy-ppt-viewer legacy-ppt-viewer--error">
-        LegacyPptViewer received a text file; expected binary.
+        {t('legacy.ppt.unexpectedTextFile')}
       </div>
     )
   }
@@ -119,18 +122,18 @@ function LegacyPptViewerBase({ file }: ViewerProps) {
   if (error !== null) {
     return (
       <div className="legacy-ppt-viewer legacy-ppt-viewer--error">
-        Couldn't read this PowerPoint 97-2003 presentation: {error}
+        {t('legacy.ppt.readError', { error })}
       </div>
     )
   }
 
   if (isLoading) {
-    return <div className="legacy-ppt-viewer">Reading legacy PowerPoint presentation…</div>
+    return <div className="legacy-ppt-viewer">{t('legacy.ppt.reading')}</div>
   }
 
   return (
     <div className="legacy-ppt-viewer">
-      <LegacyFormatBanner formatLabel="PowerPoint 97-2003 presentation (.ppt)" modernExtension=".pptx" />
+      <LegacyFormatBanner formatLabel={t(legacyOfficeLabelKey('ppt'))} modernExtension=".pptx" />
       <div className="legacy-ppt-viewer__deck">
         <SlideDeck slides={slides} activeIndex={activeIndex} onSelect={handleSelectSlide} />
       </div>

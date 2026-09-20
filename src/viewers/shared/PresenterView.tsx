@@ -9,6 +9,7 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 
 import { SlideCanvas } from './SlideCanvas'
 import type { SlideData } from './SlideDeck.types'
+import { useTranslate } from '../../i18n'
 
 type PresenterViewProps = {
   readonly slides: ReadonlyArray<SlideData>
@@ -36,6 +37,7 @@ function useWindowSize(): { readonly width: number; readonly height: number } {
 }
 
 function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterViewProps) {
+  const t = useTranslate()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [elapsed, setElapsed] = useState(0)
   const { width, height } = useWindowSize()
@@ -81,7 +83,7 @@ function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterV
       className="presenter-view"
       tabIndex={-1}
       role="dialog"
-      aria-label="Presenter view"
+      aria-label={t('slides.presenter.ariaLabel')}
       onKeyDown={(event) => {
         if (event.key === 'Escape') onExit()
       }}
@@ -90,34 +92,34 @@ function PresenterViewBase({ slides, activeIndex, onSelect, onExit }: PresenterV
         <SlideCanvas slide={current} scale={currentScale} interactive={false} />
       </div>
       <aside className="presenter-view__side">
-        <div className="presenter-view__label">Next</div>
+        <div className="presenter-view__label">{t('slides.presenter.next')}</div>
         {next ? (
           <SlideCanvas slide={next} scale={nextScale} interactive={false} />
         ) : (
-          <div className="presenter-view__end">End of presentation</div>
+          <div className="presenter-view__end">{t('slides.presenter.endOfPresentation')}</div>
         )}
-        <div className="presenter-view__label">Notes</div>
-        <div className="presenter-view__notes">{current.notes || 'No notes for this slide.'}</div>
+        <div className="presenter-view__label">{t('slides.presenter.notes')}</div>
+        <div className="presenter-view__notes">{current.notes || t('slides.presenter.noNotesForSlide')}</div>
       </aside>
       <footer className="presenter-view__footer">
-        <span className="presenter-view__timer" aria-label="Elapsed time">{formatElapsed(elapsed)}</span>
+        <span className="presenter-view__timer" aria-label={t('slides.presenter.elapsedTimeAria')}>{formatElapsed(elapsed)}</span>
         <div className="presenter-view__nav">
-          <button type="button" aria-label="Previous slide" disabled={activeIndex === 0} onClick={() => onSelect(activeIndex - 1)}>
+          <button type="button" aria-label={t('slides.presenter.previousSlideAria')} disabled={activeIndex === 0} onClick={() => onSelect(activeIndex - 1)}>
             <ChevronLeft size={20} />
           </button>
           <span>
-            Slide {activeIndex + 1} / {slides.length}
+            {t('slides.presenter.slideCounter', { current: activeIndex + 1, total: slides.length })}
           </span>
           <button
             type="button"
-            aria-label="Next slide"
+            aria-label={t('slides.presenter.nextSlideAria')}
             disabled={activeIndex >= slides.length - 1}
             onClick={() => onSelect(activeIndex + 1)}
           >
             <ChevronRight size={20} />
           </button>
         </div>
-        <button type="button" className="presenter-view__exit" aria-label="Exit presenter view" onClick={onExit}>
+        <button type="button" className="presenter-view__exit" aria-label={t('slides.presenter.exitPresenterViewAria')} onClick={onExit}>
           <X size={18} />
         </button>
       </footer>

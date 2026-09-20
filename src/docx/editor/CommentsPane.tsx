@@ -4,6 +4,7 @@ import { Check, MessageSquare, Reply, Trash2 } from 'lucide-react'
 
 import type { Comment, Document as DocxDocument } from '../model/document'
 import { extractCommentText, findCommentAnchors } from './comments'
+import { useTranslate } from '../../i18n'
 import './__styles__/comments-pane.css'
 
 export interface CommentsPaneProps {
@@ -37,25 +38,26 @@ function CommentsPaneBase({
   onResolve,
   onDelete,
 }: CommentsPaneProps) {
+  const t = useTranslate()
   const groups = useMemo(() => buildCommentGroups(document), [document])
   const count = document.comments.size
 
   return (
-    <aside className="comments-pane" aria-label="Comments">
+    <aside className="comments-pane" aria-label={t('docx.comments.aria')}>
       <header className="comments-pane__header">
         <div className="comments-pane__title">
           <MessageSquare size={16} aria-hidden="true" />
-          <span>Comments</span>
+          <span>{t('docx.comments.aria')}</span>
         </div>
         <button type="button" className="comments-pane__add-button" onClick={onAddComment}>
-          Add comment
+          {t('docx.comments.addComment')}
         </button>
       </header>
 
-      <div className="comments-pane__count">{count} comment{count === 1 ? '' : 's'}</div>
+      <div className="comments-pane__count">{t('docx.comments.count', { count })}</div>
 
       {groups.length === 0 ? (
-        <p className="comments-pane__empty">No comments yet.</p>
+        <p className="comments-pane__empty">{t('docx.comments.empty')}</p>
       ) : (
         <div className="comments-pane__groups">
           {groups.map((group) => (
@@ -71,8 +73,8 @@ function CommentsPaneBase({
                 disabled={group.anchorParagraphIndex === null}
               >
                 {group.anchorParagraphIndex === null
-                  ? 'Unanchored thread'
-                  : `Anchor paragraph ${group.anchorParagraphIndex + 1}`}
+                  ? t('docx.comments.unanchoredThread')
+                  : t('docx.comments.anchorParagraph', { n: group.anchorParagraphIndex + 1 })}
               </button>
 
               <div className="comments-pane__thread-list">
@@ -110,7 +112,8 @@ function CommentThreadView({
   onResolve,
   onDelete,
 }: CommentThreadViewProps) {
-  const author = thread.comment.author ?? 'Unknown author'
+  const t = useTranslate()
+  const author = thread.comment.author ?? t('docx.comments.unknownAuthor')
   const text = extractCommentText(thread.comment)
   const dateLabel = formatCommentDate(thread.comment.date)
 
@@ -129,21 +132,21 @@ function CommentThreadView({
           <span className="comments-pane__author">{author}</span>
           {dateLabel !== null ? <span className="comments-pane__date">{dateLabel}</span> : null}
         </div>
-        <div className="comments-pane__body">{text.length > 0 ? text : '(empty comment)'}</div>
+        <div className="comments-pane__body">{text.length > 0 ? text : t('docx.comments.emptyCommentBody')}</div>
       </button>
 
       <div className="comments-pane__actions">
         <button type="button" className="comments-pane__action" onClick={() => onReply(thread.id)}>
           <Reply size={14} aria-hidden="true" />
-          <span>Reply</span>
+          <span>{t('docx.comments.reply')}</span>
         </button>
         <button type="button" className="comments-pane__action" onClick={() => onResolve(thread.id)}>
           <Check size={14} aria-hidden="true" />
-          <span>Resolve</span>
+          <span>{t('docx.comments.resolve')}</span>
         </button>
         <button type="button" className="comments-pane__action comments-pane__action--danger" onClick={() => onDelete(thread.id)}>
           <Trash2 size={14} aria-hidden="true" />
-          <span>Delete</span>
+          <span>{t('docx.comments.delete')}</span>
         </button>
       </div>
 

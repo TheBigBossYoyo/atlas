@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import type { ToolbarCommand } from './toolbarTypes';
+import { useTranslate } from '../../../i18n';
 
 const TWIPS_PER_INCH = 1440;
 const DEFAULT_WIDTH_INCHES = 6;
@@ -36,6 +37,7 @@ export const TablePropertiesDialog = ({
   onApply: (cmd: Extract<ToolbarCommand, { kind: 'set-table-properties' }>) => void;
   onCancel: () => void;
 }) => {
+  const t = useTranslate();
   const [widthEnabled, setWidthEnabled] = useState(seed.widthTwips !== null);
   const [widthInches, setWidthInches] = useState(
     seed.widthTwips !== null ? twipsToInches(seed.widthTwips) : DEFAULT_WIDTH_INCHES,
@@ -43,10 +45,16 @@ export const TablePropertiesDialog = ({
   const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>(seed.alignment ?? 'left');
   const [bordersOn, setBordersOn] = useState(seed.bordersOn);
 
+  const ALIGNMENT_LABELS = {
+    left: t('docx.tableProperties.alignLeft'),
+    center: t('docx.tableProperties.alignCenter'),
+    right: t('docx.tableProperties.alignRight'),
+  } as const;
+
   return (
     <form
       className="docx-toolbar__table-props-form"
-      aria-label="Table properties"
+      aria-label={t('docx.tableProperties.ariaLabel')}
       onSubmit={(event) => {
         event.preventDefault();
         onApply({
@@ -64,7 +72,7 @@ export const TablePropertiesDialog = ({
             checked={widthEnabled}
             onChange={(event) => setWidthEnabled(event.target.checked)}
           />
-          Width (in)
+          {t('docx.tableProperties.widthLabel')}
         </label>
         <input
           type="number"
@@ -72,12 +80,12 @@ export const TablePropertiesDialog = ({
           step={0.1}
           disabled={!widthEnabled}
           value={widthInches}
-          aria-label="Table width in inches"
+          aria-label={t('docx.tableProperties.widthAria')}
           onChange={(event) => setWidthInches(Number(event.target.value))}
         />
       </div>
       <fieldset className="docx-toolbar__form-row">
-        <legend className="docx-toolbar__visually-hidden">Table alignment</legend>
+        <legend className="docx-toolbar__visually-hidden">{t('docx.tableProperties.alignmentLegend')}</legend>
         {(['left', 'center', 'right'] as const).map((option) => (
           <label key={option}>
             <input
@@ -86,21 +94,21 @@ export const TablePropertiesDialog = ({
               checked={alignment === option}
               onChange={() => setAlignment(option)}
             />
-            {option.charAt(0).toUpperCase() + option.slice(1)}
+            {ALIGNMENT_LABELS[option]}
           </label>
         ))}
       </fieldset>
       <div className="docx-toolbar__form-row">
         <label>
           <input type="checkbox" checked={bordersOn} onChange={(event) => setBordersOn(event.target.checked)} />
-          Show borders
+          {t('docx.tableProperties.showBorders')}
         </label>
       </div>
       <div className="docx-toolbar__form-row docx-toolbar__form-actions">
         <button type="button" onClick={onCancel}>
-          Cancel
+          {t('docx.tableProperties.cancel')}
         </button>
-        <button type="submit">Apply</button>
+        <button type="submit">{t('docx.tableProperties.apply')}</button>
       </div>
     </form>
   );

@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 /**
  * P2.11 / LOAD-11 — legacy (pre-XML) Microsoft Office binary format
  * detection. `.doc`/`.ppt` (and their `.dot`/`.pot`/`.pps` template/show
@@ -67,27 +69,31 @@ export function guessLegacyOfficeKind(path: string): LegacyOfficeKind {
   return LEGACY_EXTENSION_KIND[extension] ?? 'unknown'
 }
 
-const LEGACY_KIND_LABEL: Readonly<Record<LegacyOfficeKind, string>> = {
-  doc: 'Word 97-2003 document (.doc)',
-  xls: 'Excel 97-2003 workbook (.xls)',
-  ppt: 'PowerPoint 97-2003 presentation (.ppt)',
-  unknown: 'legacy Microsoft Office document',
+/** The `legacyOffice.label.*` i18n key for each kind — resolved at call time
+ * (not module load) so the message stays in the active locale even if it
+ * changes after this module is first imported. Also reused verbatim by
+ * `LegacyDocViewer.tsx`/`LegacyPptViewer.tsx` for their own format-label
+ * prop, so the "doc"/"ppt" wording never drifts between the two call sites. */
+export function legacyOfficeLabelKey(kind: LegacyOfficeKind): string {
+  return `legacyOffice.label.${kind}`
 }
 
-const LEGACY_KIND_MODERN_EXTENSION: Readonly<Record<LegacyOfficeKind, string>> = {
-  doc: '.docx',
-  xls: '.xlsx',
-  ppt: '.pptx',
-  unknown: 'its modern XML format (.docx / .xlsx / .pptx)',
+function legacyOfficeModernExtension(kind: LegacyOfficeKind): string {
+  switch (kind) {
+    case 'doc':
+      return '.docx'
+    case 'xls':
+      return '.xlsx'
+    case 'ppt':
+      return '.pptx'
+    case 'unknown':
+      return t('legacyOffice.modernExtensionUnknown')
+  }
 }
 
 export function legacyOfficeMessage(kind: LegacyOfficeKind): string {
-  const label = LEGACY_KIND_LABEL[kind]
-  const modernExtension = LEGACY_KIND_MODERN_EXTENSION[kind]
-
-  return (
-    `This is a ${label}. Atlas doesn't support the legacy binary Office ` +
-    `formats yet — re-save it as ${modernExtension} in Word, Excel, PowerPoint, ` +
-    `or a compatible app, then reopen it here.`
-  )
+  return t('legacyOffice.message', {
+    label: t(legacyOfficeLabelKey(kind)),
+    modernExtension: legacyOfficeModernExtension(kind),
+  })
 }

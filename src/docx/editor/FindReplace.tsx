@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Replace, Search, X } from 'lucide-react'
 
 import type { FindOptions } from './Find'
+import { useTranslate } from '../../i18n'
 import './__styles__/find-replace.css'
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ export function FindReplace({
   matchCount,
   currentMatchIndex,
 }: FindReplaceProps): React.JSX.Element {
+  const t = useTranslate()
   const [findQuery, setFindQuery] = useState('')
   const [, setReplaceQuery] = useState('')
   const [caseSensitive, setCaseSensitive] = useState(false)
@@ -134,13 +136,13 @@ export function FindReplace({
 
   const statusText =
     matchCount === 0
-      ? 'No matches'
+      ? t('docx.findReplace.noMatches')
       : currentMatchIndex !== null
-        ? `${currentMatchIndex + 1} of ${matchCount}`
-        : `${matchCount} match${matchCount === 1 ? '' : 'es'}`
+        ? t('search.resultCount', { current: currentMatchIndex + 1, total: matchCount })
+        : t('docx.findReplace.matchCount', { count: matchCount })
 
   return (
-    <div className={`docx-find${open ? '' : ' docx-find--closed'}`} role="dialog" aria-label="Find and Replace">
+    <div className={`docx-find${open ? '' : ' docx-find--closed'}`} role="dialog" aria-label={t('docx.findReplace.dialogAria')}>
       {/* Row 1: Find input + options */}
       <div className="docx-find__row">
         <Search size={14} aria-hidden="true" />
@@ -148,17 +150,17 @@ export function FindReplace({
           ref={findInputRef}
           className="docx-find__input"
           type="text"
-          placeholder="Find…"
+          placeholder={t('docx.findReplace.findPlaceholder')}
           value={findQuery}
           onChange={handleFindChange}
           onKeyDown={handleFindKeyDown}
-          aria-label="Find"
+          aria-label={t('docx.findReplace.findAria')}
         />
         <button
           className="docx-find__button docx-find__button--close"
           type="button"
           onClick={handleClose}
-          aria-label="Close"
+          aria-label={t('docx.findReplace.close')}
         >
           <X size={13} />
         </button>
@@ -168,11 +170,15 @@ export function FindReplace({
       <div className="docx-find__row">
         <Replace size={14} aria-hidden="true" />
         <input
-          className="docx-find__input"
+          // i18n — `docx-find__input--replace` (not the translated
+          // `aria-label` below) is what `DocxViewer.tsx`'s `getReplaceValue`
+          // queries for, so switching the UI language never breaks that
+          // lookup.
+          className="docx-find__input docx-find__input--replace"
           type="text"
-          placeholder="Replace…"
+          placeholder={t('docx.findReplace.replacePlaceholder')}
           onChange={handleReplaceChange}
-          aria-label="Replace"
+          aria-label={t('docx.findReplace.replaceFieldAria')}
         />
       </div>
 
@@ -183,27 +189,27 @@ export function FindReplace({
             type="checkbox"
             checked={caseSensitive}
             onChange={handleCaseSensitiveChange}
-            aria-label="Case sensitive"
+            aria-label={t('docx.findReplace.caseSensitive')}
           />
-          Case sensitive
+          {t('docx.findReplace.caseSensitive')}
         </label>
         <label className="docx-find__checkbox">
           <input
             type="checkbox"
             checked={wholeWord}
             onChange={handleWholeWordChange}
-            aria-label="Whole word"
+            aria-label={t('docx.findReplace.wholeWord')}
           />
-          Whole word
+          {t('docx.findReplace.wholeWord')}
         </label>
         <label className="docx-find__checkbox">
           <input
             type="checkbox"
             checked={useRegex}
             onChange={handleUseRegexChange}
-            aria-label="Regex"
+            aria-label={t('docx.findReplace.regex')}
           />
-          Regex
+          {t('docx.findReplace.regex')}
         </label>
       </div>
 
@@ -213,35 +219,35 @@ export function FindReplace({
           className="docx-find__button"
           type="button"
           onClick={handleFindPrev}
-          aria-label="Find previous"
+          aria-label={t('docx.findReplace.findPreviousAria')}
         >
           <ChevronUp size={13} />
-          Prev
+          {t('docx.findReplace.prev')}
         </button>
         <button
           className="docx-find__button"
           type="button"
           onClick={handleFindNext}
-          aria-label="Find next"
+          aria-label={t('docx.findReplace.findNextAria')}
         >
           <ChevronDown size={13} />
-          Next
+          {t('docx.findReplace.next')}
         </button>
         <button
           className="docx-find__button"
           type="button"
           onClick={handleReplace}
-          aria-label="Replace"
+          aria-label={t('docx.findReplace.replace')}
         >
-          Replace
+          {t('docx.findReplace.replace')}
         </button>
         <button
           className="docx-find__button"
           type="button"
           onClick={handleReplaceAll}
-          aria-label="Replace all"
+          aria-label={t('docx.findReplace.replaceAllAria')}
         >
-          Replace All
+          {t('docx.findReplace.replaceAllLabel')}
         </button>
         <span className="docx-find__status" aria-live="polite">
           {statusText}

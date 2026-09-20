@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react'
+import { useTranslate } from '../../i18n'
 
 export type PdfFindBarProps = {
   readonly isOpen: boolean
@@ -29,6 +30,7 @@ export function PdfFindBar({
   onPrev,
   onClose,
 }: PdfFindBarProps) {
+  const t = useTranslate()
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -73,10 +75,10 @@ export function PdfFindBar({
   const statusText = query.length === 0
     ? null
     : matchCount > 0
-      ? `${currentMatchIndex + 1} of ${matchCount}`
+      ? t('search.resultCount', { current: currentMatchIndex + 1, total: matchCount })
       : isIndexing
-        ? 'Searching…'
-        : 'No results'
+        ? t('pdf.findBar.searching')
+        : t('search.noResults')
 
   return (
     <div className="pdf-viewer__find-bar" role="search">
@@ -85,16 +87,16 @@ export function PdfFindBar({
         ref={inputRef}
         type="text"
         className="pdf-viewer__find-input"
-        placeholder="Find in document…"
+        placeholder={t('pdf.findBar.placeholder')}
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}
         onKeyDown={handleKeyDown}
-        aria-label="Find in PDF"
+        aria-label={t('pdf.findBar.inputAria')}
       />
       {statusText && <span className="pdf-viewer__find-count">{statusText}</span>}
       {isIndexing && (
         <span className="pdf-viewer__find-progress" aria-live="polite">
-          Indexing {indexedPageCount}/{totalPageCount}…
+          {t('pdf.findBar.indexingProgress', { indexed: indexedPageCount, total: totalPageCount })}
         </span>
       )}
       <div className="pdf-viewer__find-nav">
@@ -102,8 +104,8 @@ export function PdfFindBar({
           className="pdf-viewer__toolbar-button"
           onClick={onPrev}
           disabled={matchCount === 0}
-          title="Previous match (Shift+Enter)"
-          aria-label="Previous match"
+          title={t('pdf.findBar.previousMatchTitle')}
+          aria-label={t('search.previousAria')}
         >
           <ChevronUp size={16} />
         </button>
@@ -111,8 +113,8 @@ export function PdfFindBar({
           className="pdf-viewer__toolbar-button"
           onClick={onNext}
           disabled={matchCount === 0}
-          title="Next match (Enter)"
-          aria-label="Next match"
+          title={t('pdf.findBar.nextMatchTitle')}
+          aria-label={t('search.nextAria')}
         >
           <ChevronDown size={16} />
         </button>
@@ -120,8 +122,8 @@ export function PdfFindBar({
       <button
         className="pdf-viewer__toolbar-button"
         onClick={onClose}
-        title="Close (Esc)"
-        aria-label="Close find"
+        title={t('search.closeTitle')}
+        aria-label={t('pdf.findBar.closeAria')}
       >
         <X size={16} />
       </button>
