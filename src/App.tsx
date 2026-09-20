@@ -42,6 +42,7 @@ import { assertNever, type FormatId, type LoadedFile, type NavItem } from './for
 import type { NewDocumentFormat } from './electron';
 import { resolveDroppedFilePath } from './utils/dragDropPath';
 import { EmptyFileNotice } from './components/EmptyFileNotice';
+import { LARGE_MARKDOWN_PREVIEW_BYTES, LargeMarkdownNotice } from './components/LargeMarkdownNotice';
 import { ViewerProvider } from './viewers/shared/ViewerContext';
 import {
   useSetNavItems,
@@ -298,6 +299,13 @@ function AppShell() {
   // Sample session to a freshly-opened binary file — SHELL-05's stale dirty
   // dot). The token also means reopening the exact same path still counts as
   // a fresh load.
+  // Markdown parsing is superlinear and runs on the main thread, so a very
+  // large document would freeze the app for minutes. Its preview waits for an
+  // explicit request; the editor pane is unaffected. Opting in is per
+  // document — a new file starts guarded again.
+  const [renderLargePreview, setRenderLargePreview] = useState(false);
+  const previewTooLarge = !renderLargePreview && localMarkdown.length > LARGE_MARKDOWN_PREVIEW_BYTES;
+
   const fileIdentityKey = file ? `${file.path}#${loadGeneration}` : null;
   const [lastSyncedFileKey, setLastSyncedFileKey] = useState<string | null>(null);
 
@@ -319,6 +327,7 @@ function AppShell() {
     setLocalMarkdown(markdown);
     setIsDirty(false);
     setSaveError(null);
+    setRenderLargePreview(false);
     // SHELL-17 — a newly loaded (or re-activated) file becomes the showing tab.
     if (file) setSessions((current) => openSession(current, file));
     // A real file just loaded (not the initial mount, since fileIdentityKey
@@ -1166,13 +1175,20 @@ function AppShell() {
                 )}
                 {(viewMode === 'preview' || viewMode === 'split') && (
                   <div className="preview-panel" data-viewer={file?.format === 'markdown' ? 'markdown' : undefined}>
-                    <Suspense fallback={<ViewerLoading format="markdown" />}>
-                      <MarkdownRenderer
-                        ref={contentRef}
-                        markdown={localMarkdown}
-                        searchQuery={searchOpen ? searchQuery : undefined}
+                    {previewTooLarge ? (
+                      <LargeMarkdownNotice
+                        characters={localMarkdown.length}
+                        onRenderAnyway={() => setRenderLargePreview(true)}
                       />
-                    </Suspense>
+                    ) : (
+                      <Suspense fallback={<ViewerLoading format="markdown" />}>
+                        <MarkdownRenderer
+                          ref={contentRef}
+                          markdown={localMarkdown}
+                          searchQuery={searchOpen ? searchQuery : undefined}
+                        />
+                      </Suspense>
+                    )}
                   </div>
                 )}
               </main>
