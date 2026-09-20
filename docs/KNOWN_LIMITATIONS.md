@@ -370,6 +370,24 @@ regardless of what's on disk (or delete `dist/` first). CI's `e2e-windows`
 job never hits this, since it always runs a fresh `npx vite build`
 immediately before the e2e step.
 
+## Memory: a closed spreadsheet tab is not fully released
+
+Closing a tab frees most of what the document used, but a large spreadsheet
+leaves part of itself reachable. Measured after closing a 100 000-row `.xlsx`
+and forcing garbage collection: ~24 MB of JavaScript heap stays live
+(reproducible across runs, and unchanged by further re-renders, so it is
+genuine retention rather than collection lag).
+
+Root cause, traced through heap-snapshot retainer chains: the grid library
+(`@glideapps/glide-data-grid`) creates an image loader per mount whose
+callback shares a lexical scope with the viewer's own document state, so that
+state outlives the unmount. The fix belongs inside how the viewer hands
+callbacks to that library, and has not been attempted yet — guessing at a
+third-party release mechanism risked breaking editing for a memory-only gain.
+
+Practical effect: opening and closing several very large spreadsheets in one
+session grows memory. Closing and reopening the app releases it.
+
 ## Build & performance: the `rtf.js` bundle size
 
 `rtf.js` is, by a wide margin, the single largest chunk in Atlas's
