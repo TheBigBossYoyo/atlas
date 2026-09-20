@@ -116,6 +116,22 @@ describe('rewriteFormulaReferences — 3-D references', () => {
     ])
     expect(rewrite('Sheet1:Sheet3!A2', changes)).toBe('Sheet1:Sheet3!A3')
   })
+
+  it('leaves the range untouched when a row insert happened on the LAST sheet of the span, not the first (deliberate — see module header)', () => {
+    // Sheet3 (the SECOND endpoint, not consulted for the shift) had a row
+    // inserted; Sheet1 (the FIRST endpoint, the only one consulted) did not.
+    // A single A1-style reference cannot represent "A2 on Sheet1, A3 on
+    // Sheet3" after an edit to only one of them, and real Excel has the
+    // identical limitation for a structural edit on a non-first sheet in a
+    // 3-D span — so the reference is left exactly as it was, not #REF!\'d or
+    // guessed at.
+    const rowSources = sourcesAfter(3, [], [1]) // a row inserted at index 1 in the LAST sheet
+    const changes = new Map([
+      ['Sheet1', change()],
+      ['Sheet3', change({ rowSources })],
+    ])
+    expect(rewrite('Sheet1:Sheet3!A2', changes)).toBe('Sheet1:Sheet3!A2')
+  })
 })
 
 describe('rewriteFormulaReferences — coordinate re-anchoring (remapCoordinates: true)', () => {

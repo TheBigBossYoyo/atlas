@@ -301,10 +301,78 @@ export async function buildWorkbookWithOwnedParts(): Promise<ArrayBuffer> {
   return zip.generateAsync({ type: 'arraybuffer' })
 }
 
+/**
+ * Same as `buildWorkbookWithOwnedParts`, except "Main" (the SURVIVING sheet)
+ * has its own drawing that ALSO targets `xl/media/image1.png` — the image is
+ * genuinely shared across two sheets' drawings, not just shaped like it
+ * might be. Deleting "Extra" must leave it alone.
+ */
+export async function buildWorkbookWithSharedImage(): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(await buildWorkbookWithOwnedParts())
+
+  const contentTypes = await zip.file('[Content_Types].xml')!.async('string')
+  zip.file(
+    '[Content_Types].xml',
+    contentTypes.replace(
+      '</Types>',
+      '<Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>',
+    ),
+  )
+
+  const sheet1 = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+  zip.file('xl/worksheets/sheet1.xml', sheet1.replace('</worksheet>', `<drawing xmlns:r="${REL}" r:id="rId1"/></worksheet>`))
+  zip.file('xl/worksheets/_rels/sheet1.xml.rels', rels(`<Relationship Id="rId1" Type="${REL}/drawing" Target="../drawings/drawing2.xml"/>`))
+  zip.file('xl/drawings/drawing2.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="placeholder"/>`)
+  zip.file(
+    'xl/drawings/_rels/drawing2.xml.rels',
+    rels(`<Relationship Id="rId1" Type="${REL}/image" Target="../media/image1.png"/>`),
+  )
+
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
 // ---------------------------------------------------------------------------
 // A single-sheet workbook whose `xl/sharedStrings.xml` has one entry
 // ("Beta") no cell references at all, exercising `compactSharedStrings`.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// A shared-formula group (`<f t="shared" ref="B2:B4" si="0">A2*2</f>` on the
+// master cell B2, `<f t="shared" si="0"/>` follower cells on B3/B4) —
+// exercises re-anchoring the group's `ref` SPAN attribute through a
+// row insert/delete, not just the master's own formula TEXT.
+// ---------------------------------------------------------------------------
+
+export const SHARED_FORMULA_SHEET_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:B4"/>
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Base</t></is></c><c r="B1" t="inlineStr"><is><t>Doubled</t></is></c></row>
+    <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" ref="B2:B4" si="0">A2*2</f><v>4</v></c></row>
+    <row r="3"><c r="A3"><v>3</v></c><c r="B3"><f t="shared" si="0"/><v>6</v></c></row>
+    <row r="4"><c r="A4"><v>4</v></c><c r="B4"><f t="shared" si="0"/><v>8</v></c></row>
+  </sheetData>
+</worksheet>`
+
+export async function buildSharedFormulaWorkbook(): Promise<ArrayBuffer> {
+  const zip = new JSZip()
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>` +
+      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+      `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`,
+  )
+  zip.file('_rels/.rels', rels(`<Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/>`))
+  zip.file(
+    'xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${REL}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+  )
+  zip.file('xl/_rels/workbook.xml.rels', rels(`<Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/>`))
+  zip.file('xl/worksheets/sheet1.xml', SHARED_FORMULA_SHEET_XML)
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
 
 export async function buildSharedStringsWorkbook(): Promise<ArrayBuffer> {
   const zip = new JSZip()

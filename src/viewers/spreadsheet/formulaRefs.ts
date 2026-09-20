@@ -448,7 +448,19 @@ function rewriteReference(match: ReferenceMatch, options: FormulaRewriteOptions)
 
   if (!options.remapCoordinates) return `${prefix}!${match.rangeText}`
 
-  // A 3-D span's shift is taken from its FIRST sheet (see module header).
+  // A 3-D span's shift is taken from its FIRST sheet only (see module
+  // header): a row/column insert or delete on a MIDDLE sheet of the span
+  // never shifts this reference at all, even though that sheet's own cells
+  // did move. This is not an oversight — a single A1-style reference
+  // (`Sheet1:Sheet3!A2`) has exactly one row/column pair applied uniformly
+  // to every sheet in the span; it structurally cannot represent "A2 on
+  // Sheet1, A3 on Sheet2, A2 on Sheet3" after an edit that only touched
+  // Sheet2. Real Excel has the identical limitation — inserting/deleting
+  // rows on a sheet inside a 3-D reference's span other than its first is a
+  // well-known case where Excel does not reliably keep the reference
+  // pointing at the right cells either — so "shift only when the FIRST
+  // sheet moved, leave it alone otherwise" is the conservative, Excel-shaped
+  // choice, not a gap to close.
   const shiftSource = resolved[0]
   const rangeText = remapCoordinateText(match.rangeText, shiftSource.rowSources, shiftSource.colSources)
   return rangeText === REF_ERROR ? REF_ERROR : `${prefix}!${rangeText}`

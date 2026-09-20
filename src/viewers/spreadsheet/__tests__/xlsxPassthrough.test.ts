@@ -25,9 +25,11 @@ import { writeWorkbookThroughOriginal } from '../xlsxPassthrough'
 import {
   buildCrossSheetFormulaWorkbook,
   buildMultiSheetWorkbook,
+  buildSharedFormulaWorkbook,
   buildSharedStringsWorkbook,
   buildStyledWorkbook,
   buildWorkbookWithOwnedParts,
+  buildWorkbookWithSharedImage,
   STYLES_XML,
 } from './styledWorkbook'
 
@@ -270,13 +272,16 @@ describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
       expect(budget).toContain('<f>Info!A1</f>')
     })
 
-    it('turns a cloned formula\'s cross-sheet reference into #REF! when the target sheet is deleted', async () => {
+    it('turns a cloned formula\'s cross-sheet reference into #REF! when the target sheet is deleted, clearing its stale cached numeric value', async () => {
+      // Notes!A2 is `<c r="A2"><f>Budget!C2</f><v>12.5</v></c>` — the old
+      // cached `12.5` must not survive alongside the now-broken formula.
       const doc = deleteSheet(await load(crossSheet), 0) // delete Budget — Notes becomes the only sheet
       const bytes = (await writeWorkbookThroughOriginal(crossSheet, doc))!
       expect(bytes).not.toBeNull()
       const zip = await JSZip.loadAsync(bytes)
       const notes = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
       expect(notes).toContain('<f>#REF!</f>')
+      expect(notes).not.toContain('12.5')
     })
 
     it('re-anchors a cloned formula\'s cross-sheet coordinates through a row insert on the TARGET sheet', async () => {
@@ -318,6 +323,52 @@ describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
       const zip = await JSZip.loadAsync(bytes)
       const notes = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
       expect(notes).toContain('<f>Budget!C2</f>')
+    })
+
+    it('clears a cloned formula\'s stale cached STRING value when its cross-sheet reference becomes #REF!', async () => {
+      // Budget!D2 is `<c r="D2" t="str"><f>Notes!A1</f><v>See Budget</v></c>` —
+      // deleting Notes turns the formula into `#REF!`; the old cached "See
+      // Budget" text (and its now-meaningless t="str") must not survive
+      // alongside it.
+      const doc = deleteSheet(await load(crossSheet), 1) // delete Notes — Budget becomes the only sheet
+      const bytes = (await writeWorkbookThroughOriginal(crossSheet, doc))!
+      expect(bytes).not.toBeNull()
+      const zip = await JSZip.loadAsync(bytes)
+      const budget = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      expect(budget).toContain('<f>#REF!</f>')
+      expect(budget).not.toContain('See Budget')
+      expect(budget).not.toContain('D2" t="str"')
+    })
+  })
+
+  // ---------------------------------------------------------------------
+  // A shared-formula group's `ref` SPAN attribute is re-anchored right
+  // alongside the master cell's own formula text (USR-17 follow-up).
+  // ---------------------------------------------------------------------
+
+  describe('writeWorkbookThroughOriginal — shared-formula ref span re-anchoring', () => {
+    it('re-anchors the ref span (and the master formula text) through a row insert above the group', async () => {
+      const original = await buildSharedFormulaWorkbook()
+      let doc = await load(original)
+      doc = insertRowAt(doc, 0, 0) // insert a blank row above row 1 — everything slides down by one
+      const bytes = (await writeWorkbookThroughOriginal(original, doc))!
+      expect(bytes).not.toBeNull()
+      const zip = await JSZip.loadAsync(bytes)
+      const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      expect(sheet).toContain('<f t="shared" ref="B3:B5" si="0">A3*2</f>')
+    })
+
+    it('shrinks the ref span when a row insert/delete happens INSIDE the group', async () => {
+      const original = await buildSharedFormulaWorkbook()
+      let doc = await load(original)
+      doc = deleteRowAt(doc, 0, 2) // delete row 3 (a follower member of the group, A3/B3)
+      const bytes = (await writeWorkbookThroughOriginal(original, doc))!
+      expect(bytes).not.toBeNull()
+      const zip = await JSZip.loadAsync(bytes)
+      const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      // The master's own row (row 2) never moved, so its formula text is
+      // unchanged — only the group's ref span shrinks from B2:B4 to B2:B3.
+      expect(sheet).toContain('<f t="shared" ref="B2:B3" si="0">A2*2</f>')
     })
   })
 
@@ -387,7 +438,7 @@ describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
   // ---------------------------------------------------------------------
 
   describe('writeWorkbookThroughOriginal — sweeps a deleted sheet\'s exclusively-owned parts', () => {
-    it('removes the table, comments, VML note-shape drawing, drawing and chart parts, but leaves a shared-looking image orphaned', async () => {
+    it('removes the table, comments, VML note-shape drawing, drawing, chart AND its now-provably-unreferenced image', async () => {
       const original = await buildWorkbookWithOwnedParts()
       const doc = deleteSheet(await load(original), 1) // delete "Extra"
       const bytes = (await writeWorkbookThroughOriginal(original, doc))!
@@ -401,8 +452,10 @@ describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
       expect(zip.file('xl/drawings/drawing1.xml')).toBeNull()
       expect(zip.file('xl/drawings/_rels/drawing1.xml.rels')).toBeNull()
       expect(zip.file('xl/charts/chart1.xml')).toBeNull()
-      // The image is deliberately left orphaned (see module header) rather than risk deleting a part another sheet's drawing could also target.
-      expect(zip.file('xl/media/image1.png')).not.toBeNull()
+      // Nothing left in the package references it any more (`Extra`'s own
+      // drawing was its only reference) — reference-counting across the
+      // WHOLE package proves it, so it is swept too (`sweepOrphanedMedia`).
+      expect(zip.file('xl/media/image1.png')).toBeNull()
 
       const contentTypes = await zip.file('[Content_Types].xml')!.async('string')
       expect(contentTypes).not.toContain('table1.xml')
@@ -412,6 +465,18 @@ describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
 
       const reopened = await load(bytes.buffer as ArrayBuffer)
       expect(reopened.sheets.map((s) => s.name)).toEqual(['Main'])
+    })
+
+    it('leaves an image alone when another surviving sheet\'s drawing still targets it', async () => {
+      const original = await buildWorkbookWithSharedImage()
+      const doc = deleteSheet(await load(original), 1) // delete "Extra" — "Main" keeps its own drawing on the same image
+      const bytes = (await writeWorkbookThroughOriginal(original, doc))!
+      expect(bytes).not.toBeNull()
+
+      const zip = await JSZip.loadAsync(bytes)
+      expect(zip.file('xl/drawings/drawing1.xml')).toBeNull() // Extra's own drawing is still swept
+      expect(zip.file('xl/drawings/drawing2.xml')).not.toBeNull() // Main's own drawing survives (Main was not deleted)
+      expect(zip.file('xl/media/image1.png')).not.toBeNull() // still referenced by Main's drawing
     })
   })
 
