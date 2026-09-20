@@ -418,6 +418,60 @@ actually means here. Teach it the common simple types (`ST_HexColor`, `ST_Decima
 
 ---
 
+## 2.9 Execution status — batches 1 and 2 are merged and pushed
+
+**Batch 1** (`952a61e`) — DOCX-14, DOCX-15, DOCX-16, DOCX-17, TEST-8, SEC-1 all landed.
+Gate: tsc clean, eslint clean, 3363 unit tests, bundle gate passed, 86 e2e passed.
+
+**Batch 2** (`a947adc`) — DOCX-1, DOCX-12, DOCX-2, SAVE-1, SHEET-1, SHEET-2, SHEET-3,
+SHEET-5 all landed. Gate: tsc clean, eslint clean, 3434 unit tests, bundle gate passed,
+89 e2e passed.
+
+### New items found while executing (verified, not yet scheduled)
+
+**ZIP64-1 · medium** — the new synchronous zip budget in `spreadsheetZipBudget.ts`
+(`checkWorkbookZipBudgetSync`) reads declared sizes off the zip central directory, but
+**deliberately skips Zip64 archives** rather than risk misreading a 32-bit sentinel. It
+fails open there. Honest, and no worse than before the guard existed — but an attacker
+choosing Zip64 bypasses it entirely, which is not a property a security guard should have.
+
+**RPR-STYLES-1 · medium** — the general unknown-`w:rPr`-child passthrough covers
+`document.xml` (and, through `partWriterSupport.ts`, headers/footers/notes/comments) but
+**not `styles.xml`**. `src/docx/parser/styles.ts` uses a non-order-preserving XML shape, so
+an equivalent passthrough there is a separate, larger change. Unknown run properties in
+`w:docDefaults` and named styles are still dropped on save. Theme fonts *are* fixed there.
+
+**TEST-9 · medium** — `src/__tests__/App.dirtyState.characterization.test.tsx` **passes in
+the full suite and fails when run alone** (`npx vitest run --maxWorkers=1 <that file>`),
+confirmed on clean `main` at `952a61e`. It depends on state or timing from other tests, so
+it cannot be trusted as a regression signal, and it silently costs nothing when it breaks.
+
+**PARTWRITER-1 · resolved during batch 2, recorded for the register** —
+`partWriterSupport.ts`'s `buildBlockNodes` never consulted wrapper regions at the block
+level at all; only `documentWriter.ts`'s private copy did. A `w:sdt` wrapping a whole
+paragraph or table in a footnote could never have round-tripped, independently of DOCX-2's
+threading gap. Found and fixed by the DOCX-2 agent.
+
+**FIXTURE-1 · low** — `tests/e2e/fixtures/generate.mjs:407` produces a non-conforming
+`.ods`: `mimetype` is not the first zip entry (`odf-mimetype-not-first`, reproduced on
+`main`). The save-path fix for this landed in an earlier wave; the *fixture generator* never
+did. So every test asserting "Atlas opens `.ods`" proves it against a file no real tool
+would produce.
+
+**INSERT-TABLE-CURSOR-1 · low** — batch 1's Insert Table fix parks the cursor on the
+addressable paragraph *after* the table, because cells were unreachable at the time. Cells
+are now addressable, so moving it into the first cell (Word's actual behaviour) is a small
+follow-up plus a test update.
+
+**ARROW-VERT-1 · medium — promoted out of §4** — ArrowUp/ArrowDown misbehaviour is now
+**confirmed by running the app**: in a plain three-paragraph document with **no tables**,
+ArrowDown from paragraph 0 jumps to paragraph 2, and a second press does not move. Separate
+root cause from the table-caret bug: `Input.ts:696-700` returns `null` for vertical movement
+and `DocxViewer.tsx:1690-1710` does not `preventDefault`, so the keys fall through to native
+caret movement on the absolutely-positioned-per-line DOM.
+
+---
+
 ## 3. Batch execution plan
 
 ### Rules that apply to every batch
