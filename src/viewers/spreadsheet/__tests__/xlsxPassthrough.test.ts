@@ -22,7 +22,14 @@ import {
 } from '../spreadsheetDocument'
 import { readSheetPartPaths, readSheetTables } from '../spreadsheetTables'
 import { writeWorkbookThroughOriginal } from '../xlsxPassthrough'
-import { buildMultiSheetWorkbook, buildStyledWorkbook, STYLES_XML } from './styledWorkbook'
+import {
+  buildCrossSheetFormulaWorkbook,
+  buildMultiSheetWorkbook,
+  buildSharedStringsWorkbook,
+  buildStyledWorkbook,
+  buildWorkbookWithOwnedParts,
+  STYLES_XML,
+} from './styledWorkbook'
 
 async function load(buffer: ArrayBuffer): Promise<SpreadsheetDocument> {
   const [tables, partPaths] = await Promise.all([readSheetTables(buffer), readSheetPartPaths(buffer)])
@@ -240,6 +247,207 @@ describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
     // writes a bare `C2`, not the equivalent-but-redundant `C2:C2`.
     expect(sheet).toContain('<conditionalFormatting sqref="C2">')
     expect(sheet).toContain('<autoFilter ref="A1:C2"/>')
+  })
+})
+
+// ---------------------------------------------------------------------
+// Cell formulas referencing a renamed/deleted sheet or shifted cells
+// (USR-17 follow-up — see `formulaRefs.ts`).
+// ---------------------------------------------------------------------
+
+  describe('writeWorkbookThroughOriginal — cell formulas referencing a renamed/deleted sheet or shifted cells', () => {
+    let crossSheet: ArrayBuffer
+    beforeEach(async () => {
+      crossSheet = await buildCrossSheetFormulaWorkbook()
+    })
+
+    it('rewrites a cloned formula\'s cross-sheet reference on a rename', async () => {
+      const doc = renameSheet(await load(crossSheet), 1, 'Info') // Notes -> Info
+      const bytes = (await writeWorkbookThroughOriginal(crossSheet, doc))!
+      expect(bytes).not.toBeNull()
+      const zip = await JSZip.loadAsync(bytes)
+      const budget = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      expect(budget).toContain('<f>Info!A1</f>')
+    })
+
+    it('turns a cloned formula\'s cross-sheet reference into #REF! when the target sheet is deleted', async () => {
+      const doc = deleteSheet(await load(crossSheet), 0) // delete Budget — Notes becomes the only sheet
+      const bytes = (await writeWorkbookThroughOriginal(crossSheet, doc))!
+      expect(bytes).not.toBeNull()
+      const zip = await JSZip.loadAsync(bytes)
+      const notes = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
+      expect(notes).toContain('<f>#REF!</f>')
+    })
+
+    it('re-anchors a cloned formula\'s cross-sheet coordinates through a row insert on the TARGET sheet', async () => {
+      let doc = await load(crossSheet)
+      doc = insertRowAt(doc, 0, 1) // insert a blank row into Budget, between the header and "Paper"
+      const bytes = (await writeWorkbookThroughOriginal(crossSheet, doc))!
+      const zip = await JSZip.loadAsync(bytes)
+      const notes = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
+      // Notes!A2 referenced Budget!C2 ("Paper"'s cost) — Budget's row 2 slid down to row 3.
+      expect(notes).toContain('<f>Budget!C3</f>')
+    })
+
+    it('re-anchors a cloned formula\'s UNQUALIFIED (own-sheet) reference through its own row insert', async () => {
+      let doc = await load(crossSheet)
+      doc = insertRowAt(doc, 0, 1) // insert a blank row into Budget itself
+      const bytes = (await writeWorkbookThroughOriginal(crossSheet, doc))!
+      const zip = await JSZip.loadAsync(bytes)
+      const budget = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      // Budget!D3 referenced its own B2 ("Paper"'s flag) — that row slid down to row 3.
+      expect(budget).toContain('<f>B3</f>')
+    })
+
+    it('still fixes a stale sheet name on a freshly-typed formula, without touching its coordinates', async () => {
+      let doc = await load(crossSheet)
+      doc = setCellValue(doc, 0, 0, 3, '=Notes!A1') // user types this fresh into Budget!D1
+      doc = renameSheet(doc, 1, 'Info') // Notes -> Info, decided AFTER the formula was typed
+      const bytes = (await writeWorkbookThroughOriginal(crossSheet, doc))!
+      const zip = await JSZip.loadAsync(bytes)
+      const budget = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      expect(budget).toContain('<f>Info!A1</f>')
+    })
+
+    it('does NOT re-anchor a freshly-typed formula\'s coordinates even when the referenced sheet had rows inserted', async () => {
+      let doc = await load(crossSheet)
+      doc = insertRowAt(doc, 0, 1) // insert a blank row into Budget — its rowSources now record a shift
+      // The user types this AFTER the insert, so "C2" already means the CURRENT (post-insert) C2.
+      doc = setCellValue(doc, 1, 0, 0, '=Budget!C2')
+      const bytes = (await writeWorkbookThroughOriginal(crossSheet, doc))!
+      const zip = await JSZip.loadAsync(bytes)
+      const notes = await zip.file('xl/worksheets/sheet2.xml')!.async('string')
+      expect(notes).toContain('<f>Budget!C2</f>')
+    })
+  })
+
+  // ---------------------------------------------------------------------
+  // Generalized defined-name rewriting: multi-area, function-wrapped, and
+  // whole-row/whole-column ranges (USR-17 follow-up).
+  // ---------------------------------------------------------------------
+
+  async function withExtraDefinedNames(original: ArrayBuffer, extra: string): Promise<ArrayBuffer> {
+    const zip = await JSZip.loadAsync(original)
+    const workbookXml = await zip.file('xl/workbook.xml')!.async('string')
+    expect(workbookXml).toContain('</definedNames>')
+    zip.file('xl/workbook.xml', workbookXml.replace('</definedNames>', `${extra}</definedNames>`))
+    return zip.generateAsync({ type: 'arraybuffer' })
+  }
+
+  describe('writeWorkbookThroughOriginal — generalized defined-name rewriting', () => {
+    it('rewrites every area of a multi-area name independently, keeping the comma', async () => {
+      const multi = await withExtraDefinedNames(
+        await buildMultiSheetWorkbook(),
+        '<definedName name="MultiArea">Budget!$A$1,Notes!$A$1</definedName>',
+      )
+      const doc = renameSheet(await load(multi), 0, 'Plan')
+      const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+      const workbook = await (await JSZip.loadAsync(bytes)).file('xl/workbook.xml')!.async('string')
+      expect(workbook).toContain('<definedName name="MultiArea">Plan!$A$1,Notes!$A$1</definedName>')
+    })
+
+    it('keeps a multi-area name with a #REF! spliced into just the deleted area', async () => {
+      const multi = await withExtraDefinedNames(
+        await buildMultiSheetWorkbook(),
+        '<definedName name="MultiArea">Budget!$A$1,Notes!$A$1</definedName>',
+      )
+      const doc = deleteSheet(await load(multi), 0) // delete Budget
+      const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+      const workbook = await (await JSZip.loadAsync(bytes)).file('xl/workbook.xml')!.async('string')
+      expect(workbook).toContain('<definedName name="MultiArea">#REF!,Notes!$A$1</definedName>')
+    })
+
+    it('rewrites a sheet reference nested inside a function-wrapped name', async () => {
+      const multi = await withExtraDefinedNames(
+        await buildMultiSheetWorkbook(),
+        '<definedName name="Wrapped">OFFSET(Budget!$A$1,0,0,3,1)</definedName>',
+      )
+      const doc = renameSheet(await load(multi), 0, 'Plan')
+      const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+      const workbook = await (await JSZip.loadAsync(bytes)).file('xl/workbook.xml')!.async('string')
+      expect(workbook).toContain('<definedName name="Wrapped">OFFSET(Plan!$A$1,0,0,3,1)</definedName>')
+    })
+
+    it('re-anchors a whole-row range (a Print_Titles-style name) through a row insert', async () => {
+      const multi = await withExtraDefinedNames(
+        await buildMultiSheetWorkbook(),
+        '<definedName name="_xlnm.Print_Titles" localSheetId="0">Budget!$1:$1</definedName>',
+      )
+      let doc = await load(multi)
+      doc = insertRowAt(doc, 0, 0) // insert a blank row before Budget's own header row
+      const bytes = (await writeWorkbookThroughOriginal(multi, doc))!
+      const workbook = await (await JSZip.loadAsync(bytes)).file('xl/workbook.xml')!.async('string')
+      expect(workbook).toContain('<definedName name="_xlnm.Print_Titles" localSheetId="0">Budget!$2:$2</definedName>')
+    })
+  })
+
+  // ---------------------------------------------------------------------
+  // A deleted sheet's own exclusively-owned parts are swept, not orphaned
+  // (USR-17 follow-up).
+  // ---------------------------------------------------------------------
+
+  describe('writeWorkbookThroughOriginal — sweeps a deleted sheet\'s exclusively-owned parts', () => {
+    it('removes the table, comments, VML note-shape drawing, drawing and chart parts, but leaves a shared-looking image orphaned', async () => {
+      const original = await buildWorkbookWithOwnedParts()
+      const doc = deleteSheet(await load(original), 1) // delete "Extra"
+      const bytes = (await writeWorkbookThroughOriginal(original, doc))!
+      expect(bytes).not.toBeNull()
+
+      const zip = await JSZip.loadAsync(bytes)
+      expect(zip.file('xl/worksheets/sheet2.xml')).toBeNull()
+      expect(zip.file('xl/tables/table1.xml')).toBeNull()
+      expect(zip.file('xl/comments1.xml')).toBeNull()
+      expect(zip.file('xl/drawings/vmlDrawing1.vml')).toBeNull()
+      expect(zip.file('xl/drawings/drawing1.xml')).toBeNull()
+      expect(zip.file('xl/drawings/_rels/drawing1.xml.rels')).toBeNull()
+      expect(zip.file('xl/charts/chart1.xml')).toBeNull()
+      // The image is deliberately left orphaned (see module header) rather than risk deleting a part another sheet's drawing could also target.
+      expect(zip.file('xl/media/image1.png')).not.toBeNull()
+
+      const contentTypes = await zip.file('[Content_Types].xml')!.async('string')
+      expect(contentTypes).not.toContain('table1.xml')
+      expect(contentTypes).not.toContain('comments1.xml')
+      expect(contentTypes).not.toContain('drawing1.xml')
+      expect(contentTypes).not.toContain('chart1.xml')
+
+      const reopened = await load(bytes.buffer as ArrayBuffer)
+      expect(reopened.sheets.map((s) => s.name)).toEqual(['Main'])
+    })
+  })
+
+  // ---------------------------------------------------------------------
+  // sharedStrings.xml hygiene: unused entries dropped, count/uniqueCount
+  // recomputed (USR-17 follow-up).
+  // ---------------------------------------------------------------------
+
+  describe('writeWorkbookThroughOriginal — sharedStrings.xml hygiene', () => {
+    it('drops an entry no cell references, compacting indices and recomputing count/uniqueCount', async () => {
+      const original = await buildSharedStringsWorkbook()
+      const doc = await load(original) // no edits at all — still exercises the compaction pass on every save
+      const bytes = (await writeWorkbookThroughOriginal(original, doc))!
+      expect(bytes).not.toBeNull()
+
+      const zip = await JSZip.loadAsync(bytes)
+      const sharedStrings = await zip.file('xl/sharedStrings.xml')!.async('string')
+      expect(sharedStrings).not.toContain('Beta')
+      expect(sharedStrings).toContain('<si><t>Alpha</t></si><si><t>Gamma</t></si>')
+      expect(sharedStrings).toContain('count="2"')
+      expect(sharedStrings).toContain('uniqueCount="2"')
+
+      const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+      expect(sheet).toContain('<c r="A1" t="s"><v>0</v></c>') // unchanged — already the lowest index
+      expect(sheet).toContain('<c r="A2" t="s"><v>1</v></c>') // compacted from 2 down to 1
+
+      const reopened = await load(bytes.buffer as ArrayBuffer)
+      expect(reopened.sheets[0].rows[0][0]).toBe('Alpha')
+      expect(reopened.sheets[0].rows[1][0]).toBe('Gamma')
+    })
+  })
+
+describe('writeWorkbookThroughOriginal — structural sheet changes (column ranges)', () => {
+  let multi: ArrayBuffer
+  beforeEach(async () => {
+    multi = await buildMultiSheetWorkbook()
   })
 
   it('re-anchors through a column insert/delete', async () => {

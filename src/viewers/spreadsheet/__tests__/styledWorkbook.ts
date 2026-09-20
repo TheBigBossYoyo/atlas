@@ -162,3 +162,179 @@ export async function buildMultiSheetWorkbook(): Promise<ArrayBuffer> {
   return zip.generateAsync({ type: 'arraybuffer' })
 }
 
+// ---------------------------------------------------------------------------
+// Cross-sheet formulas — a formula referencing ANOTHER sheet (qualified) and
+// one referencing its own sheet (unqualified), each both as a cell the user
+// never touched (needs full re-anchoring on save) and, in tests, as one the
+// user retypes fresh (needs only its sheet name fixed, never its
+// coordinates) — see `formulaRefs.ts`.
+// ---------------------------------------------------------------------------
+
+export const CROSS_SHEET_BUDGET_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:D3"/>
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Item</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>Flag</t></is></c>
+      <c r="C1" t="inlineStr"><is><t>Cost</t></is></c>
+      <c r="D1" t="inlineStr"><is><t>Ref</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>Paper</t></is></c>
+      <c r="B2" t="inlineStr"><is><t>y</t></is></c>
+      <c r="C2"><v>12.5</v></c>
+      <c r="D2" t="str"><f>Notes!A1</f><v>See Budget</v></c>
+    </row>
+    <row r="3">
+      <c r="A3" t="inlineStr"><is><t>Ink</t></is></c>
+      <c r="B3" t="inlineStr"><is><t>n</t></is></c>
+      <c r="C3"><v>25</v></c>
+      <c r="D3" t="str"><f>B2</f><v>y</v></c>
+    </row>
+  </sheetData>
+  <autoFilter ref="A1:C3"/>
+  <conditionalFormatting sqref="C2:C3"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>20</formula></cfRule></conditionalFormatting>
+  <dataValidations count="1"><dataValidation type="list" sqref="B2:B3"><formula1>"y,n"</formula1></dataValidation></dataValidations>
+  <hyperlinks><hyperlink ref="A2" location="Notes!A1" display="Notes!A1"/></hyperlinks>
+  <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</worksheet>`
+
+export const CROSS_SHEET_NOTES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:A2"/>
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>See Budget</t></is></c></row>
+    <row r="2"><c r="A2"><f>Budget!C2</f><v>12.5</v></c></row>
+  </sheetData>
+</worksheet>`
+
+/** `buildMultiSheetWorkbook`'s two sheets, with a cross-sheet and an own-sheet formula added to "Budget" and "Notes" respectively. */
+export async function buildCrossSheetFormulaWorkbook(): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(await buildMultiSheetWorkbook())
+  zip.file('xl/worksheets/sheet1.xml', CROSS_SHEET_BUDGET_XML)
+  zip.file('xl/worksheets/sheet2.xml', CROSS_SHEET_NOTES_XML)
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
+// ---------------------------------------------------------------------------
+// A second sheet ("Extra") owning a table, comments (+ VML note-shape
+// drawing) and a drawing embedding a chart and an image — every part kind
+// `removeSheetOwnedParts` in `xlsxPassthrough.ts` sweeps (or, for the image,
+// deliberately leaves orphaned) when that sheet is deleted.
+// ---------------------------------------------------------------------------
+
+export async function buildWorkbookWithOwnedParts(): Promise<ArrayBuffer> {
+  const zip = new JSZip()
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+      `<Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/>` +
+      `<Default Extension="vml" ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing"/>` +
+      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+      `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      `<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      `<Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>` +
+      `<Override PartName="/xl/comments1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>` +
+      `<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>` +
+      `<Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/></Types>`,
+  )
+  zip.file('_rels/.rels', rels(`<Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/>`))
+  zip.file(
+    'xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${REL}">` +
+      `<sheets><sheet name="Main" sheetId="1" r:id="rId1"/><sheet name="Extra" sheetId="2" r:id="rId2"/></sheets></workbook>`,
+  )
+  zip.file(
+    'xl/_rels/workbook.xml.rels',
+    rels(
+      `<Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/>` +
+        `<Relationship Id="rId2" Type="${REL}/worksheet" Target="worksheets/sheet2.xml"/>`,
+    ),
+  )
+  zip.file(
+    'xl/worksheets/sheet1.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Main</t></is></c></row></sheetData></worksheet>`,
+  )
+  zip.file(
+    'xl/worksheets/sheet2.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${REL}">` +
+      `<dimension ref="A1:B2"/><sheetViews><sheetView workbookViewId="0"/></sheetViews>` +
+      `<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>X</t></is></c></row></sheetData>` +
+      `<tableParts count="1"><tablePart r:id="rId10"/></tableParts>` +
+      `<legacyDrawing r:id="rId12"/><drawing r:id="rId13"/></worksheet>`,
+  )
+  zip.file(
+    'xl/worksheets/_rels/sheet2.xml.rels',
+    rels(
+      `<Relationship Id="rId10" Type="${REL}/table" Target="../tables/table1.xml"/>` +
+        `<Relationship Id="rId11" Type="${REL}/comments" Target="../comments1.xml"/>` +
+        `<Relationship Id="rId12" Type="${REL}/vmlDrawing" Target="../drawings/vmlDrawing1.vml"/>` +
+        `<Relationship Id="rId13" Type="${REL}/drawing" Target="../drawings/drawing1.xml"/>`,
+    ),
+  )
+  zip.file(
+    'xl/tables/table1.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Table1" displayName="Table1" ref="A1:A1"><tableColumns count="1"><tableColumn id="1" name="Column1"/></tableColumns></table>`,
+  )
+  zip.file(
+    'xl/comments1.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>Atlas</author></authors><commentList><comment ref="A1" authorId="0"><text><t>Note</t></text></comment></commentList></comments>`,
+  )
+  zip.file('xl/drawings/vmlDrawing1.vml', '<xml>placeholder vml note shape</xml>')
+  zip.file(
+    'xl/drawings/drawing1.xml',
+    rels(`<Relationship Id="rId1" Type="${REL}/chart" Target="../charts/chart1.xml"/><Relationship Id="rId2" Type="${REL}/image" Target="../media/image1.png"/>`),
+  )
+  zip.file(
+    'xl/drawings/_rels/drawing1.xml.rels',
+    rels(
+      `<Relationship Id="rId1" Type="${REL}/chart" Target="../charts/chart1.xml"/>` +
+        `<Relationship Id="rId2" Type="${REL}/image" Target="../media/image1.png"/>`,
+    ),
+  )
+  zip.file('xl/charts/chart1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><chartSpace xmlns="placeholder"/>`)
+  zip.file('xl/media/image1.png', new Uint8Array([137, 80, 78, 71]))
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
+// ---------------------------------------------------------------------------
+// A single-sheet workbook whose `xl/sharedStrings.xml` has one entry
+// ("Beta") no cell references at all, exercising `compactSharedStrings`.
+// ---------------------------------------------------------------------------
+
+export async function buildSharedStringsWorkbook(): Promise<ArrayBuffer> {
+  const zip = new JSZip()
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>` +
+      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+      `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      `<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>`,
+  )
+  zip.file('_rels/.rels', rels(`<Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/>`))
+  zip.file(
+    'xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${REL}"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+  )
+  zip.file(
+    'xl/_rels/workbook.xml.rels',
+    rels(`<Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL}/sharedStrings" Target="sharedStrings.xml"/>`),
+  )
+  zip.file(
+    'xl/worksheets/sheet1.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:A2"/><sheetViews><sheetView workbookViewId="0"/></sheetViews>` +
+      `<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c></row></sheetData></worksheet>`,
+  )
+  zip.file(
+    'xl/sharedStrings.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="3">` +
+      `<si><t>Alpha</t></si><si><t>Beta</t></si><si><t>Gamma</t></si></sst>`,
+  )
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
