@@ -129,6 +129,21 @@ export function reopenLastClosed(state: DocumentSessionsState): DocumentSessions
   return { sessions: [...state.sessions, last], activeId: last.id, recentlyClosed: rest }
 }
 
+/**
+ * Ctrl+Shift+T's other half: the path to reopen, and the state with that entry
+ * popped. A closed session keeps no bytes (see `shedBytes`), so the shell
+ * re-opens it through the normal load path — which re-reads the file, reports
+ * a file that has since been moved or deleted instead of showing an empty
+ * document, and re-registers it as a tab on success.
+ */
+export function takeLastClosedPath(
+  state: DocumentSessionsState,
+): { readonly state: DocumentSessionsState; readonly path: string } | null {
+  const [last, ...rest] = state.recentlyClosed
+  if (!last) return null
+  return { state: { ...state, recentlyClosed: rest }, path: last.file.path }
+}
+
 /** Ctrl+Tab / Ctrl+Shift+Tab — the next document in tab order, wrapping around. */
 export function neighbourSession(state: DocumentSessionsState, delta: 1 | -1): DocumentSession | null {
   if (state.sessions.length < 2) return null

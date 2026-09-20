@@ -13,6 +13,7 @@ import {
   renameSession,
   reloadSessionFile,
   reopenLastClosed,
+  takeLastClosedPath,
 } from '../documentSessions'
 
 function file(path: string, content = 'x'): LoadedFile {
@@ -66,14 +67,14 @@ describe('closing', () => {
   })
 
   // MEM-01 — `recentlyClosed` used to keep every closed document's full
-  // bytes alive (a real ArrayBuffer for a binary file) purely so
-  // `reopenLastClosed` had *something* to hand back — but the shell always
-  // re-reads the file from disk before showing it again (`showSessionFile` /
-  // `reloadSessionFile`), so those bytes were never actually used on the
-  // happy path. For a 100k-row .xlsx this was confirmed (via a heap
-  // snapshot) to be the largest single object kept alive after closing its
-  // tab. A closed session must keep its identity (path/name/format) but not
-  // its content.
+  // bytes alive (a real ArrayBuffer for a binary file) purely so the reopen
+  // path had *something* to hand back — but the shell re-reads the file from
+  // disk before showing it again, so those bytes were never used on the happy
+  // path: up to five closed documents' worth of content stayed reachable for
+  // nothing. (Measured source-side, from the call paths; a heap-snapshot diff
+  // for the 100k-row .xlsx case was started but never completed on a loaded
+  // machine, so no number is claimed here.) A closed session keeps its
+  // identity (path/name/format) and not its content.
   it('sheds a closed document\'s bytes — only its identity survives into recentlyClosed', () => {
     const bigText = closeSession(openAll('/a.md', '/big.md'), '/big.md')
     const closedText = bigText.recentlyClosed[0]
@@ -92,6 +93,19 @@ describe('closing', () => {
     // bytes come back from `showSessionFile`'s disk re-read, not from here.
     const reopened = reopenLastClosed(withBinary)
     expect(activeSession(reopened)?.id).toBe('/big.xlsx')
+  })
+
+  it('hands the shell a path to reopen, and pops it off the stack', () => {
+    const closed = closeSession(openAll('/a.md', '/b.md'), '/b.md')
+    const taken = takeLastClosedPath(closed)
+
+    expect(taken?.path).toBe('/b.md')
+    expect(taken?.state.recentlyClosed).toEqual([])
+    // Reopening goes through the shell's normal load, so the document is not
+    // a tab again until that load succeeds — a file deleted meanwhile reports
+    // itself instead of reopening as an empty document.
+    expect(taken?.state.sessions.map((session) => session.id)).toEqual(['/a.md'])
+    expect(takeLastClosedPath(taken!.state)).toBeNull()
   })
 
   it('remembers only the last few closed documents', () => {

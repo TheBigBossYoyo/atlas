@@ -14,7 +14,7 @@ import {
   neighbourSession,
   openSession,
   renameSession,
-  reopenLastClosed,
+  takeLastClosedPath,
   type DocumentSessionsState,
   reloadSessionFile,
 } from './session/documentSessions';
@@ -618,13 +618,14 @@ function AppShell() {
   );
 
   const reopenClosedSession = useCallback((): void => {
-    const next = reopenLastClosed(sessions);
-    if (next === sessions) return;
-    const reopened = activeSession(next);
-    if (!reopened) return;
-    setSessions(next);
-    void showSessionFile(reopened.file);
-  }, [sessions, showSessionFile]);
+    const taken = takeLastClosedPath(sessions);
+    if (!taken) return;
+    setSessions(taken.state);
+    // A real load, not a replay of kept bytes: a closed document keeps no
+    // content, and this way a file that has since been moved or deleted says
+    // so through the usual banner instead of reopening as an empty document.
+    void openFileFromPath(taken.path);
+  }, [openFileFromPath, sessions]);
 
   // SHELL-17 — Ctrl+Tab / Ctrl+Shift+Tab walk the open documents, and
   // Ctrl+Shift+T brings back the last one that was closed.
