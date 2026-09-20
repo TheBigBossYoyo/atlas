@@ -855,6 +855,7 @@ function fixtureWatermarkHeader() {
     ],
   })
 
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     const headerPath = 'word/header1.xml'
     const xml = files.get(headerPath)
@@ -888,6 +889,7 @@ function fixtureCustomXmlPart() {
     sections: [{ children: [introParagraph(id), new Paragraph({ children: [new TextRun('A document carrying an unreferenced custom XML metadata part.')] })] }],
   })
 
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     files.set(
       'customXml/item1.xml',
@@ -928,6 +930,7 @@ function fixtureMacroEnabledVbaProject() {
     sections: [{ children: [introParagraph(id), new Paragraph({ children: [new TextRun('A macro-enabled document carrying a VBA project part.')] })] }],
   })
 
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     // Not a real compiled VBA project (no macro actually needs to run for a
     // round-trip fidelity test) — just enough bytes, with a real OLE
@@ -973,6 +976,7 @@ function fixtureEmbeddedFonts() {
     ],
   })
 
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     files.set(
       'word/fontTable.xml',
@@ -1006,6 +1010,13 @@ function fixtureEmbeddedFonts() {
 // ---------------------------------------------------------------------------
 const EMF_WMF_MARKER = 'ATLAS_EMF_WMF_PLACEHOLDER'
 
+/**
+ * @param {string} relId
+ * @param {string} name
+ * @param {number} cx
+ * @param {number} cy
+ * @returns {string}
+ */
 function buildInlineBlipDrawingXml(relId, name, cx, cy) {
   return (
     `<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">` +
@@ -1033,6 +1044,7 @@ function fixtureImageEmfWmf() {
     sections: [{ children: [introParagraph(id), new Paragraph({ children: [new TextRun(EMF_WMF_MARKER)] })] }],
   })
 
+  /** @type {(files: FixtureFiles) => void} */
   const postProcess = (files) => {
     // EMR_HEADER-shaped filler (real magic number, arbitrary body) and a
     // placeable-WMF-shaped filler (`0xD7CDC69A` magic) — enough for "is this
