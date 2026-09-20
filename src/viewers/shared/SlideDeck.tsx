@@ -150,6 +150,30 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
   const [presenterOpen, setPresenterOpen] = useState(false)
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null)
   const [editingShapeId, setEditingShapeId] = useState<string | null>(null)
+  // A text box just inserted from the toolbar: its `sourceId` is resolved
+  // before the re-parsed slide (with the matching shape) has committed to
+  // `slides`, so looking it up in the promise callback would race a stale
+  // `activeSlide` closure and silently find nothing (USR-16 lost-text bug).
+  // Instead we park the sourceId here and resolve it once `slides` actually
+  // contains it, below.
+  const [pendingTextBoxSourceId, setPendingTextBoxSourceId] = useState<string | null>(null)
+  // Whether an Insert Text Box click is in flight — from the click itself
+  // (`onInsertTextBoxStart`, synchronous) until the new shape's editor
+  // actually opens, below. While true, every keystroke is captured here
+  // (see the `keydown` effect further down) so that no matter how long the
+  // insert's queued edit + re-parse takes, nothing typed since the click is
+  // ever lost to whatever happened to have focus in the meantime.
+  const [isInsertingTextBox, setIsInsertingTextBox] = useState(false)
+  const [pendingTypedText, setPendingTypedText] = useState('')
+  // The buffered text (above), and which shape it's the seed text for — set
+  // together when a freshly inserted shape's editor is about to open, and
+  // cleared as soon as editing moves off that shape, so a later, unrelated
+  // double-click/Escape/re-edit of that SAME shape starts from its real
+  // committed text instead of replaying a stale buffer.
+  const [pendingEditSeed, setPendingEditSeed] = useState<{ readonly shapeId: string; readonly text: string } | null>(null)
+  if (pendingEditSeed !== null && editingShapeId !== pendingEditSeed.shapeId) {
+    setPendingEditSeed(null)
+  }
   const exitPresenter = useCallback(() => setPresenterOpen(false), [])
   const { isFullscreen, toggle: toggleFullscreen } = useFullscreen(containerRef)
 
@@ -162,6 +186,50 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
     setSelectedShapeId(null)
     setEditingShapeId(null)
   }
+
+  // Once the newly inserted text box's shape shows up on the (now current)
+  // active slide, select it AND immediately open it for editing so keys
+  // typed right after "Insert Text Box" land in the shape instead of
+  // vanishing with nowhere focused to receive them. Same "adjust state
+  // during render" shape as `selectionSlideId`/`pendingEditSeed` above:
+  // this reacts to `slides`/`activeIndex` (via `activeSlide`) actually
+  // updating to contain the new shape, which a `useEffect` here could only
+  // do one extra, unnecessary render behind.
+  if (pendingTextBoxSourceId) {
+    const shape = activeSlide?.shapes.find((candidate) => candidate.sourceId === pendingTextBoxSourceId)
+    if (shape) {
+      setSelectedShapeId(shape.id)
+      setEditingShapeId(shape.id)
+      setPendingEditSeed({ shapeId: shape.id, text: pendingTypedText })
+      setPendingTextBoxSourceId(null)
+      // The new shape's editor is about to mount and take over focus/typing
+      // for real (via `pendingEditSeed`, read once as its seed text) — stop
+      // capturing keystrokes ourselves.
+      setIsInsertingTextBox(false)
+    }
+  }
+
+  // Captures every keystroke from the moment "Insert Text Box" is clicked
+  // until its new shape's editor actually opens (above), so a keystroke
+  // typed into that gap — wherever focus happened to be sitting, the
+  // toolbar button most likely — is buffered instead of silently discarded.
+  // `capture: true` and no `preventDefault()`: this only ever *adds* a
+  // second, harmless observer of the same keys already being (or about to
+  // be) handled natively/by the toolbar button/by the shortcut dispatcher;
+  // it never intercepts or changes what any of them do.
+  useEffect(() => {
+    if (!isInsertingTextBox) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (event.key === 'Backspace') {
+        setPendingTypedText((current) => current.slice(0, -1))
+      } else if (event.key.length === 1) {
+        setPendingTypedText((current) => current + event.key)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [isInsertingTextBox])
 
   const fitScale = useMemo(() => {
     if (!activeSlide) {
@@ -242,9 +310,17 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
                 editor={editor}
                 slideIndex={activeIndex}
                 slideCount={slides.length}
+                onInsertTextBoxStart={() => {
+                  setPendingTypedText('')
+                  setIsInsertingTextBox(true)
+                }}
                 onTextBoxInserted={(sourceId) => {
-                  const shape = activeSlide.shapes.find((candidate) => candidate.sourceId === sourceId)
-                  setSelectedShapeId(shape?.id ?? null)
+                  if (sourceId) {
+                    setPendingTextBoxSourceId(sourceId)
+                  } else {
+                    // The insert itself failed — nothing to type into.
+                    setIsInsertingTextBox(false)
+                  }
                 }}
               />
             )}
@@ -285,6 +361,7 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
               scale={mainScale}
               selectedShapeId={selectedShapeId}
               editingShapeId={editingShapeId}
+              pendingEditText={editingShapeId !== null && pendingEditSeed?.shapeId === editingShapeId ? pendingEditSeed.text : undefined}
               onSelectShape={setSelectedShapeId}
               onEditShape={setEditingShapeId}
               onCommitBox={editor.onShapeBox}

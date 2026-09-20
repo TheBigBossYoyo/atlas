@@ -6,7 +6,7 @@
  */
 import {
   memo,
-  useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -42,6 +42,8 @@ export type SlideEditCanvasProps = {
   readonly scale: number
   readonly selectedShapeId: string | null
   readonly editingShapeId: string | null
+  /** See `TextShapeEditor`'s `pendingText` — only meaningful while `editingShapeId` is a freshly inserted shape's id. */
+  readonly pendingEditText?: string
   readonly onSelectShape: (shapeId: string | null) => void
   readonly onEditShape: (shapeId: string | null) => void
   readonly onCommitBox: (sourceId: string, box: SlideShapeBox) => Promise<void>
@@ -68,9 +70,18 @@ function hitTest(shapes: ReadonlyArray<SlideShape>, x: number, y: number): Slide
 /** Plain-text editor laid over a text shape, styled like its first run so typing looks like the slide. */
 function TextShapeEditor({
   shape,
+  pendingText,
   onDone,
 }: {
   readonly shape: SlideTextBox
+  /**
+   * Keystrokes buffered by `SlideDeck` from the moment "Insert Text Box" was
+   * clicked (see its own comment) — used to seed this editor's content
+   * instead of `shape.text` when this is that freshly inserted shape's
+   * FIRST time opening for editing, so nothing typed before this editor
+   * existed is lost.
+   */
+  readonly pendingText?: string
   readonly onDone: (text: string | null) => void
 }) {
   const t = useTranslate()
@@ -80,14 +91,26 @@ function TextShapeEditor({
   const firstRun = shape.paragraphs.flatMap((p) => p.runs).find((run) => run.text !== '\n')
   const fontScale = shape.fontScale ?? 1
 
-  useEffect(() => {
+  // useLayoutEffect, not useEffect: this runs synchronously right after the
+  // DOM commit, before the browser paints or processes the next queued
+  // input event. "Insert Text Box" opens this editor as part of the SAME
+  // insert flow the user is typing into (USR-16) — useEffect's extra,
+  // deferred-past-paint tick was a real window in which a keystroke typed
+  // right after the insert could still be delivered to whatever had focus
+  // beforehand (the toolbar button) instead of here, and then get wiped by
+  // the `element.innerText = shape.text` line below once this effect
+  // finally ran. Moving focus as early as React allows narrows that window,
+  // and `pendingText` (seeded here) closes it entirely for keystrokes typed
+  // before this point is even reached.
+  useLayoutEffect(() => {
     const element = ref.current
     if (!element) return
-    element.innerText = shape.text
+    const seedText = pendingText ?? shape.text
+    element.innerText = seedText
     element.focus()
     const selection = window.getSelection()
     selection?.selectAllChildren(element)
-    if (shape.text !== '') selection?.collapseToEnd()
+    if (seedText !== '') selection?.collapseToEnd()
     // Mount-only: the editor owns its DOM text while open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -145,6 +168,7 @@ function SlideEditCanvasBase({
   scale,
   selectedShapeId,
   editingShapeId,
+  pendingEditText,
   onSelectShape,
   onEditShape,
   onCommitBox,
@@ -288,6 +312,7 @@ function SlideEditCanvasBase({
         <TextShapeEditor
           key={editing.id}
           shape={editing}
+          pendingText={pendingEditText}
           onDone={(text) => {
             onEditShape(null)
             if (text !== null && editing.sourceId) onCommitText(editing.sourceId, text)

@@ -65,6 +65,24 @@ describe('shape edits', () => {
     expect(afterDelete.shapes.some((shape) => shape.kind === 'text' && shape.text === 'Added here')).toBe(false)
   })
 
+  // USR-16 regression — the new shape is seeded with empty text (so typing
+  // immediately replaces it, rather than landing after a leftover filler
+  // word). A `draw:text-box` used to parse away to nothing when empty
+  // (`buildTextShape` returned `null` for `!text`), which is fine for a
+  // bare `draw:rect`/`draw:custom-shape` with merely-incidental inline text,
+  // but wrong for an explicit text box: it's a real, user-placed object the
+  // moment it exists, the same way an ODP frame with an image or table
+  // child is never dropped for being "empty".
+  it('keeps a freshly inserted, still-empty text box addressable (not filtered out as invisible)', async () => {
+    const inserted = insertTextBox(pkg, 0, { x: 10, y: 10, w: 200, h: 50 }, '')
+    expect(inserted.sourceId).not.toBeNull()
+
+    const [withBox] = await slidesOf(inserted.pkg)
+    const added = withBox.shapes.find((shape) => shape.sourceId === inserted.sourceId)
+    expect(added).toBeDefined()
+    expect(added).toMatchObject({ kind: 'text', text: '', movable: true })
+  })
+
   it('leaves the package untouched when the shape or slide does not exist', () => {
     expect(setShapeText(pkg, 9, '0', 'nope')).toBe(pkg)
     expect(setShapeText(pkg, 0, '999', 'nope')).toBe(pkg)

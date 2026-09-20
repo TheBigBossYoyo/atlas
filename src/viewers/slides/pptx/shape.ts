@@ -72,7 +72,19 @@ export function buildShapeElement(
 
   const placeholderPrompt = text.length === 0 && ref ? PLACEHOLDER_PROMPTS[ref.type ?? 'body'] : undefined
 
-  if (text.length > 0 || placeholderPrompt !== undefined) {
+  // A manually inserted text box (`p:cNvSpPr txBox="1"`, as opposed to a
+  // layout placeholder) is a real, user-placed object the moment it's
+  // created — selectable and editable — even before it has any text, the
+  // same way an empty title/body placeholder stays on the slide via
+  // `placeholderPrompt` above. Without this, "Insert Text Box" followed by
+  // typing immediately had nothing to type into: the brand-new shape starts
+  // out with no text and (by design) `<a:noFill/>`/no border, so it fell
+  // through to the `hasVisibleFill || border || ...` check below, which
+  // returned `null` for it — an invisible, unselectable shape that a
+  // pending caret could never resolve against.
+  const isManualTextBox = shape.localName === 'sp' && getFirstByLocalName(shape, 'cNvSpPr')?.getAttribute('txBox') === '1'
+
+  if (text.length > 0 || placeholderPrompt !== undefined || isManualTextBox) {
     const bodyPr = getFirstByLocalName(getFirstByLocalName(shape, 'txBody') ?? shape, 'bodyPr')
     const inheritedBodyPrs = ref
       ? [findMatchingPlaceholder(chain.layoutDocument, ref), findMatchingPlaceholder(chain.masterDocument, ref)].map(

@@ -13,7 +13,12 @@ import { REL_TYPE, readRels, relsPathFor } from './opcXml'
 import * as edits from './pptxEdits'
 import * as slideOps from './pptxSlideOps'
 
-const NEW_TEXT_BOX_TEXT = 'Text'
+// Empty, not a filler word: insertTextBox() now opens the new shape for
+// editing immediately (see SlideDeck's pendingTextBoxSourceId), and its text
+// editor places the caret at the END of any existing text — a filler word
+// here would sit in front of whatever the user types next instead of being
+// replaced by it.
+const NEW_TEXT_BOX_TEXT = ''
 
 /** The parts a parsed slide depends on; unchanged references mean the cached parse is still valid. */
 function slideInputs(pkg: OfficePackage, path: string): ReadonlyArray<unknown> {
