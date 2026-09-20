@@ -339,14 +339,19 @@ regresses contrast in any theme fails immediately) — `--border-primary` and
 carve-out for decorative boundaries and inactive components.
 
 Every modal/overlay (`ShortcutsModal`, the unsaved-changes dialog,
-`SearchOverlay`, `PdfPasswordDialog`, and slide `PresenterView`) traps
-`Tab`/`Shift+Tab` inside itself while open and restores focus to whatever
-triggered it once closed, via a shared `useFocusTrap` hook. A toolbar
-dropdown restores focus to its own trigger button on close the same way.
-Beyond these two passes (contrast and focus), no dedicated screen-reader
-testing has been done — ARIA roles/labels exist where a component already
-needed them (e.g. dialog roles, icon-only button labels) but haven't been
-audited end-to-end with an actual screen reader.
+`SearchOverlay`, `PdfPasswordDialog`, the PDF find bar, and slide
+`PresenterView`) traps `Tab`/`Shift+Tab` inside itself while open and
+restores focus to whatever triggered it once closed, via a shared
+`useFocusTrap` hook — `PresenterView` traps it even when the browser refuses
+its `requestFullscreen()` call. A toolbar dropdown restores focus to its own
+trigger button on close the same way; closing a tab in the tab bar instead
+moves focus to a neighbouring tab's own close button (there's no single
+fixed "trigger" to return to for a dynamic list), via TabBar's own
+`useEffect`, so keyboard users can keep closing tabs in place instead of
+losing focus to `<body>`. Beyond these two passes (contrast and focus), no
+dedicated screen-reader testing has been done — ARIA roles/labels exist
+where a component already needed them (e.g. dialog roles, icon-only button
+labels) but haven't been audited end-to-end with an actual screen reader.
 
 ## Export
 

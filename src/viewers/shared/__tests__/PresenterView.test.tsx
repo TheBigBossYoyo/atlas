@@ -38,6 +38,45 @@ describe('PresenterView', () => {
     expect(onExit).toHaveBeenCalled()
   })
 
+  // A11Y-2 — PresenterView used to only capture/restore focus on mount/
+  // unmount, with no Tab handling at all: Tab walked straight out into the
+  // document behind it, which was worse than it sounds because
+  // `requestFullscreen` (see the effect above) can be silently refused.
+  it('traps Tab within its own controls, skipping the disabled Previous button on the first slide', () => {
+    render(<PresenterView slides={slides} activeIndex={0} onSelect={vi.fn()} onExit={vi.fn()} />)
+
+    const prevButton = screen.getByRole('button', { name: 'Previous slide' })
+    const nextButton = screen.getByRole('button', { name: 'Next slide' })
+    const exitButton = screen.getByRole('button', { name: 'Exit presenter view' })
+    expect(prevButton).toBeDisabled()
+
+    // Next is the first real (enabled) focusable — Previous is excluded.
+    // Shift+Tab from it must wrap to Exit (the last), not to the disabled
+    // Previous button and not out of the view entirely.
+    nextButton.focus()
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
+    expect(exitButton).toHaveFocus()
+
+    // And Tab from Exit (the last) must wrap back to Next (the first).
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(nextButton).toHaveFocus()
+  })
+
+  it('traps Tab even though jsdom has no Fullscreen API (equivalent to requestFullscreen being refused)', () => {
+    // jsdom implements no Fullscreen API at all, so `container.requestFullscreen`
+    // is undefined here — the same code path a real refusal takes
+    // (`.catch(() => undefined)` swallows it either way). If Tab containment
+    // depended on fullscreen having actually been granted, this would fail.
+    render(<PresenterView slides={slides} activeIndex={0} onSelect={vi.fn()} onExit={vi.fn()} />)
+    const nextButton = screen.getByRole('button', { name: 'Next slide' })
+    const exitButton = screen.getByRole('button', { name: 'Exit presenter view' })
+
+    exitButton.focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+
+    expect(nextButton).toHaveFocus()
+  })
+
   it('shows the next slide, the notes and the slide counter', () => {
     render(<PresenterView slides={slides} activeIndex={0} onSelect={vi.fn()} onExit={vi.fn()} />)
     expect(screen.getByText('Next')).toBeInTheDocument()

@@ -123,6 +123,38 @@ describe('UnsavedChangesDialog', () => {
     expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
   });
 
+  // A11Y-1 — this dialog already filtered out disabled controls before
+  // ShortcutsModal migrated to share this behavior (see useFocusTrap.ts and
+  // ShortcutsModal.test.tsx's own "excludes disabled controls" test for the
+  // gap that migration closed). `isSaving` disables all three buttons at
+  // once, so it can't exercise "some enabled, one disabled" — inject a
+  // disabled probe alongside the three real (enabled) buttons to prove the
+  // shared hook still excludes a disabled control from the wrap even when
+  // real controls remain focusable around it.
+  it('excludes a disabled control from the wrap while real controls stay enabled', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'trigger unsaved dialog' }));
+
+    const dialog = screen.getByRole('alertdialog');
+    const cancelButton = screen.getByRole('button', { name: 'Cancel' });
+    const saveButton = screen.getByRole('button', { name: 'Save' });
+
+    const disabledProbe = document.createElement('button');
+    disabledProbe.textContent = 'disabled probe';
+    disabledProbe.disabled = true;
+    dialog.appendChild(disabledProbe);
+
+    saveButton.focus();
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+
+    // Save is still the last real focusable (the probe is excluded), so Tab
+    // from it must wrap to Cancel (the first), not land on the disabled probe.
+    expect(event.defaultPrevented).toBe(true);
+    expect(cancelButton).toHaveFocus();
+    expect(disabledProbe).not.toHaveFocus();
+  });
+
   it('is a labeled, accessible alertdialog', () => {
     render(
       <UnsavedChangesDialog

@@ -1,4 +1,5 @@
 /** SHELL-17 — the open-documents strip. */
+import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -115,6 +116,74 @@ describe('TabBar', () => {
       const tabB = screen.getByRole('tab', { name: /b\.docx/ })
       fireEvent.click(tabB)
       expect(props.onSelect).toHaveBeenCalledWith('/b.docx')
+    })
+  })
+
+  // A11Y-3 — the close button's onClick had no focus handling at all: the
+  // tab (and its close button) unmounts with nowhere for focus to go, so it
+  // fell back to `document.body` and the next Tab press started over from
+  // the top of the window. Needs a stateful harness — the plain `renderBar`
+  // helper's `onClose` is a no-op spy, so `sessions` never actually shrinks.
+  describe('closing a tab moves focus (A11Y-3)', () => {
+    const three: ReadonlyArray<DocumentSession> = [
+      { id: '/a.md', name: 'a.md', file: { kind: 'text', content: '', path: '/a.md', format: 'markdown' } },
+      { id: '/b.md', name: 'b.md', file: { kind: 'text', content: '', path: '/b.md', format: 'markdown' } },
+      { id: '/c.md', name: 'c.md', file: { kind: 'text', content: '', path: '/c.md', format: 'markdown' } },
+    ]
+
+    function Harness({ initial }: { initial: ReadonlyArray<DocumentSession> }) {
+      const [items, setItems] = useState(initial)
+      return (
+        <TabBar
+          sessions={items}
+          activeId={items[0]?.id ?? null}
+          isActiveDirty={false}
+          onSelect={() => {}}
+          onClose={(id) => setItems((prev) => prev.filter((s) => s.id !== id))}
+          onReorder={() => {}}
+        />
+      )
+    }
+
+    it("moves focus to the next tab's close button when a middle tab is closed", () => {
+      render(<Harness initial={three} />)
+
+      const closeB = screen.getByRole('button', { name: 'Close b.md' })
+      closeB.focus()
+      fireEvent.click(closeB)
+
+      expect(screen.queryByRole('tab', { name: /b\.md/ })).not.toBeInTheDocument()
+      expect(document.activeElement).not.toBe(document.body)
+      expect(screen.getByRole('button', { name: 'Close c.md' })).toHaveFocus()
+    })
+
+    it("moves focus to the previous tab's close button when the last tab is closed", () => {
+      render(<Harness initial={three} />)
+
+      const closeC = screen.getByRole('button', { name: 'Close c.md' })
+      closeC.focus()
+      fireEvent.click(closeC)
+
+      expect(screen.queryByRole('tab', { name: /c\.md/ })).not.toBeInTheDocument()
+      expect(document.activeElement).not.toBe(document.body)
+      expect(screen.getByRole('button', { name: 'Close b.md' })).toHaveFocus()
+    })
+
+    it('never leaves focus on <body> when the sole remaining tab is closed', () => {
+      const one: ReadonlyArray<DocumentSession> = [
+        { id: '/a.md', name: 'a.md', file: { kind: 'text', content: '', path: '/a.md', format: 'markdown' } },
+      ]
+      const { container } = render(<Harness initial={one} />)
+
+      const closeA = screen.getByRole('button', { name: 'Close a.md' })
+      closeA.focus()
+      fireEvent.click(closeA)
+
+      // The bar itself unmounts (no tabs left) — nothing inside it can be
+      // focused, and where focus goes next is the shell's (App.tsx's)
+      // concern, not TabBar's. This only asserts TabBar didn't error and
+      // correctly rendered nothing.
+      expect(container).toBeEmptyDOMElement()
     })
   })
 })

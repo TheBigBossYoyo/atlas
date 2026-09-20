@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { ChevronDown, ChevronUp, Search, X } from 'lucide-react'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { useTranslate } from '../../i18n'
 
 export type PdfFindBarProps = {
@@ -32,6 +33,7 @@ export function PdfFindBar({
 }: PdfFindBarProps) {
   const t = useTranslate()
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const barRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (isOpen) {
@@ -40,6 +42,13 @@ export function PdfFindBar({
     }
     return undefined
   }, [isOpen])
+
+  // A11Y-4 — Tab was never contained inside the find bar, so it leaked focus
+  // straight into the PDF page behind it. The input above already handles
+  // its own (mount-delayed) autofocus, so this only adds Tab containment and
+  // restores focus to whatever triggered find-in-page once the bar closes —
+  // same pattern as SearchOverlay's own A11Y-2 fix.
+  useFocusTrap(barRef, isOpen, { focusOnOpen: false })
 
   // Escape closes the bar wherever the focus is: the input only takes focus
   // 50ms after the bar opens, and a click on a page moves it away again, so
@@ -81,7 +90,7 @@ export function PdfFindBar({
         : t('search.noResults')
 
   return (
-    <div className="pdf-viewer__find-bar" role="search">
+    <div className="pdf-viewer__find-bar" role="search" ref={barRef}>
       <Search size={15} className="pdf-viewer__find-icon" aria-hidden="true" />
       <input
         ref={inputRef}

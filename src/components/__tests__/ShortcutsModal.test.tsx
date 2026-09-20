@@ -80,6 +80,39 @@ describe('ShortcutsModal (UX-13)', () => {
     expect(closeButton).toHaveFocus();
   });
 
+  // A11Y-1 — this modal's own hand-rolled trap (before its migration to the
+  // shared useFocusTrap hook) never filtered out disabled elements when
+  // collecting focusable candidates, unlike UnsavedChangesDialog's. That was
+  // latent because the modal ships only one focusable control; it becomes a
+  // real escape-from-trap the moment a disabled one exists alongside it. The
+  // real markup has no disabled control today, so this injects one to prove
+  // the shared hook (now the only trap implementation) actually excludes it.
+  it('excludes disabled controls when trapping Tab', () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByRole('button', { name: 'open shortcuts' }));
+    const dialog = screen.getByRole('dialog');
+    const closeButton = screen.getByRole('button', { name: 'Close' });
+
+    const disabledProbe = document.createElement('button');
+    disabledProbe.textContent = 'disabled probe';
+    disabledProbe.disabled = true;
+    dialog.appendChild(disabledProbe);
+
+    expect(closeButton).toHaveFocus();
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+
+    // With the disabled probe excluded, the close button is both "first"
+    // and "last", so Tab from it must wrap straight back to itself — and
+    // the trap must actually have intercepted the key (defaultPrevented) to
+    // prove it didn't just silently do nothing, which is what would let Tab
+    // escape into the page once a real disabled control existed here.
+    expect(event.defaultPrevented).toBe(true);
+    expect(closeButton).toHaveFocus();
+    expect(disabledProbe).not.toHaveFocus();
+  });
+
   it('is a labeled, accessible dialog', () => {
     render(<ShortcutsModal isOpen onClose={() => {}} />);
     const dialog = screen.getByRole('dialog');
