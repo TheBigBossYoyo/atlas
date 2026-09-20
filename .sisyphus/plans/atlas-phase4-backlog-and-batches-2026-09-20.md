@@ -427,6 +427,33 @@ Gate: tsc clean, eslint clean, 3363 unit tests, bundle gate passed, 86 e2e passe
 SHEET-6 all landed. Gate: tsc clean, eslint clean, 3528 unit tests, bundle gate passed,
 91 e2e passed.
 
+### CI flake investigation (`3f2d134`) — both causes found, CI green
+
+**Resolved · was a real product defect, not a flaky test** — the close-confirmation IPC
+listener (`src/App.tsx`) was subscribed in an effect depending on `[saveFile]`, and
+`saveFile` closes over `localMarkdown`, so the app **tore down and re-registered a real
+Electron IPC listener on every keystroke**. A close request landing in the window before
+React ran the passive effect that re-subscribes ran the *stale* closure, where
+`isMarkdownDocument` was still false, routing to `viewerSaveRef.current()` → `false`. Now
+reads `saveFileRef.current()` from a mount-once listener. The regression test asserts the
+listener is registered exactly once across an open plus two edits (fails pre-fix with
+`expected 1, got 4`).
+
+**Resolved · genuine budgeting error** — `tests/e2e/export.spec.ts` nested a 30 s
+`waitForViewer` and a 60 s `waitForFile` inside playwright.config.ts's 60 s **outer**
+per-test timeout. Each inner budget had been raised independently over time without anyone
+noticing they share one outer clock, so neither could ever be honoured. Now
+`test.setTimeout(120_000)`, matching the pattern `memory-retention.spec.ts` and
+`perf.spec.ts` already use.
+
+**TEST-10 · medium · OPEN** — four tests in the App-shell area now behave differently under
+CPU contention: they pass in isolation and fail in a loaded full-suite or CI run.
+`App.shellSession.test.tsx`'s close-confirmation case (now fixed — and it turned out to be
+a **product** bug), `App.dirtyState.characterization.test.tsx` (passes in the suite, fails
+alone — the opposite direction), `App.export.test.tsx`, and whatever couples them. Given
+the first one investigated was a real defect, these should not be assumed to be noise.
+Worth one focused investigation of the cluster rather than four separate chases.
+
 ### New items found while executing batch 3
 
 **QUIT-DRAFT-1 · medium** — a discard at *quit* still leaves the autosave draft behind.
