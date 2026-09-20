@@ -18,8 +18,21 @@
  *
  * Scope: OOXML (.xlsx/.xlsm) only. Structured references inside formulas
  * (`Table1[Qty]`) are kept as formula text but not evaluated by Atlas's own
- * formula engine; filter/sort state is dropped on save (column indexes may
- * have moved) while the table itself, its style and its totals row survive.
+ * formula engine.
+ *
+ * Filter/sort state (SHEET-2): a table untouched by any column insert/delete
+ * or reorder keeps its `sortState` and `filterColumn`s byte-for-byte — an
+ * earlier version dropped both unconditionally on EVERY save, even one that
+ * never touched that table's columns at all (an edit to an unrelated cell
+ * elsewhere in the workbook was enough to silently reset an active
+ * AutoFilter). When the table's columns DID move, `filterColumn`'s `colId`
+ * (an index relative to the table, already tracked across edits by
+ * `columnSources`) is re-anchored to the column's new position, or the
+ * `filterColumn` dropped if that column no longer exists; `sortState` (whose
+ * `ref`/`sortCondition/@ref` are absolute worksheet cell references, not
+ * relative indexes this module has enough information to re-derive safely)
+ * is dropped in that case, matching Excel's own "sort state doesn't survive
+ * a structural edit it can't reconcile" behavior — see `rewriteTableXml`.
  */
 import { readSheetParts } from './spreadsheetPanes'
 import { loadWorkbookZip } from './spreadsheetZipBudget'
@@ -244,18 +257,59 @@ function removeAll(root: Element, tagName: string): void {
   for (const el of Array.from(root.getElementsByTagName(tagName))) el.parentNode?.removeChild(el)
 }
 
+/**
+ * True when neither the table's range nor its column set moved since the
+ * original part (`root`, still holding the ORIGINAL `ref` at this point) was
+ * read — i.e. nothing about this save requires distrusting `sortState`
+ * (whose `ref`/`sortCondition/@ref` are absolute worksheet cell references
+ * this module cannot safely re-derive).
+ */
+function isTableShapeUnchanged(table: SheetTable, root: Element): boolean {
+  const originalRange = decodeRange(root.getAttribute('ref') ?? '')
+  if (!originalRange) return false
+  const sameRange =
+    originalRange.r0 === table.r0 && originalRange.c0 === table.c0 && originalRange.r1 === table.r1 && originalRange.c1 === table.c1
+  return sameRange && table.columnSources.every((source, i) => source === i)
+}
+
+/**
+ * Re-anchors each `filterColumn`'s `colId` (0-based, relative to the
+ * table's own first column — NOT the worksheet) through `columnSources`
+ * (new column index -> original column index, or `null` for a column
+ * inserted since load): a `filterColumn` whose original column survives is
+ * kept with its `colId` updated to that column's new position; one whose
+ * original column was deleted goes with it. A no-op (every `colId`
+ * unchanged) when `columnSources` is the identity mapping.
+ */
+function reanchorFilterColumns(root: Element, columnSources: ReadonlyArray<number | null>): void {
+  const newIndexByOriginal = new Map<number, number>()
+  columnSources.forEach((source, newIndex) => {
+    if (source !== null) newIndexByOriginal.set(source, newIndex)
+  })
+  for (const filterColumn of Array.from(root.getElementsByTagName('filterColumn'))) {
+    const originalColId = Number(filterColumn.getAttribute('colId'))
+    const newColId = newIndexByOriginal.get(originalColId)
+    if (newColId === undefined) filterColumn.parentNode?.removeChild(filterColumn)
+    else filterColumn.setAttribute('colId', String(newColId))
+  }
+}
+
 /** Rewrites a table part for the table's current range and column list. */
 export function rewriteTableXml(table: SheetTable, tableId: number, names: ReadonlyArray<string>): string {
   const doc = new DOMParser().parseFromString(table.xml, 'application/xml')
   const root = doc.documentElement
   const ns = root.namespaceURI
+  const shapeUnchanged = isTableShapeUnchanged(table, root)
   root.setAttribute('id', String(tableId))
   root.setAttribute('ref', encodeRange(table.r0, table.c0, table.r1, table.c1))
   if (!table.totalsRow) root.removeAttribute('totalsRowCount')
 
-  // Column indexes may have moved, so filter/sort state cannot be trusted.
-  removeAll(root, 'sortState')
-  removeAll(root, 'filterColumn')
+  // `sortState`'s cell references only stay correct when the table's range
+  // and columns are exactly where they were when the part was read; a
+  // `filterColumn`'s `colId` is relative to the table itself, so it can
+  // always be re-anchored (a no-op when nothing moved) instead of dropped.
+  if (!shapeUnchanged) removeAll(root, 'sortState')
+  reanchorFilterColumns(root, table.columnSources)
   for (const autoFilter of Array.from(root.getElementsByTagName('autoFilter'))) {
     const lastDataRow = table.r1 - (table.totalsRow ? 1 : 0)
     autoFilter.setAttribute('ref', encodeRange(table.r0, table.c0, lastDataRow, table.c1))

@@ -25,6 +25,19 @@
  * document model). A range entirely consumed by a delete has nowhere left to
  * anchor to and is dropped (`null`), matching what Excel does to a named
  * range or a filter whose whole area was deleted.
+ *
+ * A `sqref`/`ref` piece may also be a WHOLE-COLUMN (`A:A`, `C:E`) or
+ * WHOLE-ROW (`1:1`, `3:5`) range — valid OOXML `decodeRange` (which only
+ * understands `A1`-style cell corners) cannot parse, so before this module
+ * handled them they were treated as malformed input and silently dropped
+ * (`updateShiftedRanges` in `xlsxPassthrough.ts` then removed the owning
+ * conditional format / data validation / hyperlink / autoFilter entirely —
+ * SHEET-3). `remapSqref` now recognizes both shapes itself and re-anchors
+ * only the axis they actually carry: a whole-column range's columns are
+ * mapped through `colSources` while its (nonexistent) row bound is left
+ * alone (`undefined` rowSources = identity), and vice versa for a whole-row
+ * range — mirroring how `formulaRefs.ts`'s `remapCoordinateText` already
+ * treats the identical `A:C`/`1:5` shapes inside formula text.
  */
 import { decodeRange, encodeCol } from './spreadsheetTables'
 
@@ -100,9 +113,55 @@ export function encodeRangeRef(range: RangeBounds): string {
   return `${start}:${encodeCol(range.c1)}${range.r1 + 1}`
 }
 
+const COLUMN_ONLY = /^\$?([A-Za-z]{1,3})$/
+const ROW_ONLY = /^\$?([0-9]+)$/
+
+function decodeColumnLetters(letters: string): number {
+  let c = 0
+  for (const ch of letters.toUpperCase()) c = c * 26 + (ch.charCodeAt(0) - 64)
+  return c - 1
+}
+
+type RangePiece =
+  | { readonly kind: 'cell'; readonly range: RangeBounds }
+  | { readonly kind: 'col'; readonly c0: number; readonly c1: number }
+  | { readonly kind: 'row'; readonly r0: number; readonly r1: number }
+
+/**
+ * Decodes one `sqref`/`ref` piece: an `A1`/`A1:B2`-style cell range (via
+ * `decodeRange`), or a whole-column (`A:A`, `C:E`) or whole-row (`1:1`,
+ * `3:5`) range — the two shapes `decodeRange` itself cannot parse, since
+ * `A`/`1` alone have no cell corner. Returns `null` for anything else
+ * (malformed input in the source file).
+ */
+function decodeRangePiece(piece: string): RangePiece | null {
+  const cellRange = decodeRange(piece)
+  if (cellRange) return { kind: 'cell', range: cellRange }
+
+  const [start, end = start] = piece.split(':')
+  const startCol = COLUMN_ONLY.exec(start.trim())
+  const endCol = COLUMN_ONLY.exec(end.trim())
+  if (startCol && endCol) {
+    const a = decodeColumnLetters(startCol[1])
+    const b = decodeColumnLetters(endCol[1])
+    return { kind: 'col', c0: Math.min(a, b), c1: Math.max(a, b) }
+  }
+
+  const startRow = ROW_ONLY.exec(start.trim())
+  const endRow = ROW_ONLY.exec(end.trim())
+  if (startRow && endRow) {
+    const a = Number(startRow[1]) - 1
+    const b = Number(endRow[1]) - 1
+    return { kind: 'row', r0: Math.min(a, b), r1: Math.max(a, b) }
+  }
+
+  return null // malformed piece in the source file — drop rather than propagate garbage
+}
+
 /**
  * Re-anchors a `sqref`/hyperlink-`ref`/autoFilter-`ref`-style value — one or
- * more (space-separated) ranges. A sub-range fully consumed by a delete is
+ * more (space-separated) ranges, each either an `A1`-style cell range or a
+ * whole-column/whole-row range. A sub-range fully consumed by a delete is
  * dropped; `null` is returned only when EVERY sub-range was dropped, so the
  * caller should remove the owning element entirely (an empty `sqref` is not
  * valid OOXML).
@@ -111,10 +170,25 @@ export function remapSqref(sqref: string, rowSources: IndexSources, colSources: 
   const pieces = sqref.trim().split(/\s+/).filter(Boolean)
   const mapped: string[] = []
   for (const piece of pieces) {
-    const range = decodeRange(piece)
-    if (!range) continue // malformed piece in the source file — drop rather than propagate garbage
-    const next = remapRange(range, rowSources, colSources)
-    if (next) mapped.push(encodeRangeRef(next))
+    const decoded = decodeRangePiece(piece)
+    if (!decoded) continue
+
+    if (decoded.kind === 'cell') {
+      const next = remapRange(decoded.range, rowSources, colSources)
+      if (next) mapped.push(encodeRangeRef(next))
+      continue
+    }
+
+    if (decoded.kind === 'col') {
+      // Whole-column: no row bound exists to shift — pass `undefined`
+      // (identity) for that axis, same as `formulaRefs.ts`'s `A:C` handling.
+      const next = remapRange({ r0: 0, c0: decoded.c0, r1: 0, c1: decoded.c1 }, undefined, colSources)
+      if (next) mapped.push(`${encodeCol(next.c0)}:${encodeCol(next.c1)}`)
+      continue
+    }
+
+    const next = remapRange({ r0: decoded.r0, c0: 0, r1: decoded.r1, c1: 0 }, rowSources, undefined)
+    if (next) mapped.push(`${next.r0 + 1}:${next.r1 + 1}`)
   }
   return mapped.length > 0 ? mapped.join(' ') : null
 }
