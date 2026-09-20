@@ -43,13 +43,19 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
  * quietly with no download fallback — cancelling isn't a failure. A real
  * failure (`error` present) throws so callers can surface it. Outside
  * Electron, falls back to a browser download.
+ *
+ * Resolves `true` when the file was actually written (or the browser
+ * download was triggered), `false` when the user cancelled the native
+ * dialog — a caller driving several dialogs in sequence (e.g. one CSV file
+ * per sheet — see `exportSpreadsheetCsvPerSheet`) needs this to stop after a
+ * cancel instead of ploughing on to the next dialog.
  */
 export async function saveTextOutput(
   content: string,
   fileName: string,
   mimeType: string,
   filters?: readonly SaveFilter[],
-): Promise<void> {
+): Promise<boolean> {
   const electronAPI = window.electronAPI;
   if (electronAPI?.saveFile) {
     const result = await electronAPI.saveFile({
@@ -60,18 +66,23 @@ export async function saveTextOutput(
     if (!result.saved && result.error) {
       throw new Error(result.error);
     }
-    return;
+    return result.saved;
   }
   triggerBlobDownload(new Blob([content], { type: mimeType }), fileName);
+  return true;
 }
 
-/** Binary counterpart of {@link saveTextOutput} — routes through `saveBinaryFile`. */
+/**
+ * Binary counterpart of {@link saveTextOutput} — routes through
+ * `saveBinaryFile`. See {@link saveTextOutput} for the meaning of the
+ * resolved boolean.
+ */
 export async function saveBinaryOutput(
   content: Uint8Array | ArrayBuffer,
   fileName: string,
   mimeType: string,
   filters?: readonly SaveFilter[],
-): Promise<void> {
+): Promise<boolean> {
   // Always copy into a fresh, plain-`ArrayBuffer`-backed view: `content` may
   // already be a `Uint8Array` typed over a general `ArrayBufferLike` (which
   // also admits `SharedArrayBuffer`), and `Blob`'s `BlobPart` type only
@@ -87,7 +98,8 @@ export async function saveBinaryOutput(
     if (!result.saved && result.error) {
       throw new Error(result.error);
     }
-    return;
+    return result.saved;
   }
   triggerBlobDownload(new Blob([bytes], { type: mimeType }), fileName);
+  return true;
 }
