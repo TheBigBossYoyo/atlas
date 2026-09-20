@@ -117,6 +117,7 @@ import {
 import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import { TableEditMenuItems } from '../docx/editor/toolbar/TableEditMenuItems'
 import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolbarTypes'
+import { DocxPromptDialog } from './DocxPromptDialog'
 import './__styles__/viewer-docx.css'
 import {
   useRegisterViewerSave,
@@ -664,6 +665,19 @@ const SELECTION_HIGHLIGHT_NAME = 'docx-selection'
 type HighlightRegistry = { set: (name: string, highlight: unknown) => void; delete: (name: string) => void }
 type HighlightConstructor = new (...ranges: globalThis.Range[]) => unknown
 
+// F1 — a pending DocxPromptDialog open request. `id` is a monotonically
+// increasing token (see `promptIdRef`) used as the dialog's React `key` so
+// it remounts fresh for every open instead of reusing a previous prompt's
+// leftover input value. `selection`/`range` are captured at the moment the
+// user triggers the action (matching the old, synchronous `window.prompt`
+// call's timing) rather than re-read from the `range` state when the dialog
+// is confirmed, since the dialog itself doesn't keep the document selection
+// current while it's open.
+type DocxPromptRequest =
+  | { readonly kind: 'hyperlink'; readonly id: number; readonly selection: Range }
+  | { readonly kind: 'comment'; readonly id: number; readonly selection: Range }
+  | { readonly kind: 'reply'; readonly id: number; readonly commentId: string; readonly range: Range | null }
+
 /**
  * USR-06 — paints a model range without touching the DOM selection (and so
  * without stealing focus), using the CSS Custom Highlight API. `null` clears
@@ -948,6 +962,12 @@ function DocxEditor({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [commentsPaneOpen, setCommentsPaneOpen] = useState(bundle.document.comments.size > 0)
   const [resolvedCommentIds, setResolvedCommentIds] = useState<ReadonlySet<string>>(new Set())
+  // F1 — the single-line text prompt backing Insert Hyperlink/Add Comment/
+  // Reply (see DocxPromptDialog.tsx and handlePromptConfirm below). `id` is
+  // bumped on every open so the dialog remounts instead of reusing stale
+  // input state from a previous prompt.
+  const [promptRequest, setPromptRequest] = useState<DocxPromptRequest | null>(null)
+  const promptIdRef = useRef(0)
   // DXE-11/D17 — seeded from the source document's real `word/settings.xml`
   // `<w:trackChanges/>` setting (parsed by `docx/parser/settings.ts`) rather
   // than always starting `false`, and every toggle writes back into
@@ -1435,6 +1455,11 @@ function DocxEditor({
     }
   }, [bundle, commitState, documentModel, onBundleChange, range, t])
 
+  // F1 — Electron doesn't implement `window.prompt` (it throws), so this used
+  // to silently do nothing at all in the packaged app. Opens the shared
+  // DocxPromptDialog instead; the actual insertion happens in
+  // `handlePromptConfirm` once the user submits it (see that callback for
+  // the rest of this logic, preserved as-is from the old synchronous flow).
   const handleInsertHyperlink = useCallback(() => {
     const selection = range
     if (selection === null) {
@@ -1442,24 +1467,9 @@ function DocxEditor({
       return
     }
 
-    const url = window.prompt(t('docx.viewer.enterUrlPrompt'), 'https://')
-    if (url === null) {
-      return
-    }
-    const trimmedUrl = url.trim()
-    if (trimmedUrl.length === 0) {
-      return
-    }
-
-    try {
-      const insertResult = insertHyperlinkIntoBundle({ ...bundle, document: documentModel }, selection, trimmedUrl)
-      historyRef.current.push(insertResult.inverse)
-      onBundleChange(insertResult.bundle)
-      commitState(insertResult.document, insertResult.range)
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error))
-    }
-  }, [bundle, commitState, documentModel, onBundleChange, range, t])
+    promptIdRef.current += 1
+    setPromptRequest({ kind: 'hyperlink', id: promptIdRef.current, selection })
+  }, [range, t])
 
   const handleToggleList = useCallback(
     (kind: 'bullet' | 'number') => {
@@ -1919,6 +1929,9 @@ function DocxEditor({
     [spellCheck],
   )
 
+  // F1 — see handleInsertHyperlink's comment above: opens the shared
+  // DocxPromptDialog instead of the (Electron-unsupported) `window.prompt`;
+  // the actual mutation happens in `handlePromptConfirm`.
   const handleAddComment = useCallback(() => {
     const selection = range
     if (selection === null) {
@@ -1926,50 +1939,92 @@ function DocxEditor({
       return
     }
 
-    const text = window.prompt(t('docx.viewer.addCommentPrompt'), '')
-    if (text === null) {
-      return
-    }
-
-    try {
-      const result = addCommentToDocument(documentModel, selection, text, 'Atlas')
-      // DIRTY-1 — comments are not undoable through `historyRef` (no
-      // push/coalesce call here), so `commitState`'s revision read would
-      // otherwise stay unchanged and this edit would be silently missed by
-      // the dirty check; `bumpRevision` allocates a fresh one for it.
-      historyRef.current.bumpRevision()
-      commitState(result.document, selection)
-      setCommentsPaneOpen(true)
-      setResolvedCommentIds((current) => {
-        const next = new Set(current)
-        next.delete(result.commentId)
-        return next
-      })
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error))
-    }
-  }, [commitState, documentModel, range, t])
+    promptIdRef.current += 1
+    setPromptRequest({ kind: 'comment', id: promptIdRef.current, selection })
+  }, [range, t])
 
   const handleReplyToComment = useCallback(
     (commentId: string) => {
-      const text = window.prompt(t('docx.viewer.replyPrompt'), '')
-      if (text === null) {
+      promptIdRef.current += 1
+      setPromptRequest({ kind: 'reply', id: promptIdRef.current, commentId, range })
+    },
+    [range],
+  )
+
+  // F1 — applies whichever DocxPromptDialog request is pending once the user
+  // submits it. Each branch is the exact body the old synchronous
+  // `window.prompt(...)` callers ran right after reading a non-null result;
+  // only the "how do we get the string" part changed (a real dialog instead
+  // of a call Electron doesn't support), not the mutation logic itself.
+  const handlePromptConfirm = useCallback(
+    (value: string) => {
+      const request = promptRequest
+      setPromptRequest(null)
+      if (request === null) return
+
+      if (request.kind === 'hyperlink') {
+        // Matches the old `url === null` (Cancel) vs. empty-after-trim
+        // handling: both are silent no-ops, never an insertion.
+        const trimmedUrl = value.trim()
+        if (trimmedUrl.length === 0) {
+          return
+        }
+
+        try {
+          const insertResult = insertHyperlinkIntoBundle(
+            { ...bundle, document: documentModel },
+            request.selection,
+            trimmedUrl,
+          )
+          historyRef.current.push(insertResult.inverse)
+          onBundleChange(insertResult.bundle)
+          commitState(insertResult.document, insertResult.range)
+        } catch (error) {
+          setSaveError(error instanceof Error ? error.message : String(error))
+        }
         return
       }
 
-      // DIRTY-1 — see handleAddComment's comment: not undoable through
+      if (request.kind === 'comment') {
+        try {
+          const result = addCommentToDocument(documentModel, request.selection, value, 'Atlas')
+          // DIRTY-1 — comments are not undoable through `historyRef` (no
+          // push/coalesce call here), so `commitState`'s revision read would
+          // otherwise stay unchanged and this edit would be silently missed by
+          // the dirty check; `bumpRevision` allocates a fresh one for it.
+          historyRef.current.bumpRevision()
+          commitState(result.document, request.selection)
+          setCommentsPaneOpen(true)
+          setResolvedCommentIds((current) => {
+            const next = new Set(current)
+            next.delete(result.commentId)
+            return next
+          })
+        } catch (error) {
+          setSaveError(error instanceof Error ? error.message : String(error))
+        }
+        return
+      }
+
+      // request.kind === 'reply'
+      //
+      // DIRTY-1 — see the 'comment' branch above: not undoable through
       // History, so the revision must be bumped explicitly.
       historyRef.current.bumpRevision()
-      commitState(replyToComment(documentModel, commentId, text, 'Atlas'), range)
+      commitState(replyToComment(documentModel, request.commentId, value, 'Atlas'), request.range)
       setCommentsPaneOpen(true)
       setResolvedCommentIds((current) => {
         const next = new Set(current)
-        next.delete(commentId)
+        next.delete(request.commentId)
         return next
       })
     },
-    [commitState, documentModel, range, t],
+    [bundle, commitState, documentModel, onBundleChange, promptRequest],
   )
+
+  const handlePromptCancel = useCallback(() => {
+    setPromptRequest(null)
+  }, [])
 
   const handleResolveComment = useCallback((commentId: string) => {
     setResolvedCommentIds((current) => new Set(current).add(commentId))
@@ -2668,6 +2723,33 @@ function DocxEditor({
     [documentModel.sections.length, pages],
   )
 
+  // F1 — per-request copy (and, for hyperlink, the `https://` prefill the
+  // old `window.prompt(..., 'https://')` call used) for the shared
+  // DocxPromptDialog rendered below. Computed unconditionally (not just
+  // while a request is pending) so the dialog always gets a defined
+  // `initialValue`/labels even while `isOpen` is false and it renders null.
+  const promptDialogCopy =
+    promptRequest === null || promptRequest.kind === 'hyperlink'
+      ? {
+          titleText: t('docx.promptDialog.hyperlinkTitle'),
+          label: t('docx.promptDialog.hyperlinkLabel'),
+          confirmLabel: t('docx.promptDialog.hyperlinkConfirm'),
+          initialValue: 'https://',
+        }
+      : promptRequest.kind === 'comment'
+        ? {
+            titleText: t('docx.promptDialog.commentTitle'),
+            label: t('docx.promptDialog.commentLabel'),
+            confirmLabel: t('docx.promptDialog.commentConfirm'),
+            initialValue: '',
+          }
+        : {
+            titleText: t('docx.promptDialog.replyTitle'),
+            label: t('docx.promptDialog.replyLabel'),
+            confirmLabel: t('docx.promptDialog.replyConfirm'),
+            initialValue: '',
+          }
+
   return (
     <div className="docx-viewer__editor-shell">
       <div className="docx-viewer__topbar">
@@ -3041,6 +3123,16 @@ function DocxEditor({
             onDelete={handleDeleteComment}
           />
         ) : null}
+        <DocxPromptDialog
+          key={promptRequest?.id ?? 'docx-prompt-closed'}
+          isOpen={promptRequest !== null}
+          titleText={promptDialogCopy.titleText}
+          label={promptDialogCopy.label}
+          initialValue={promptDialogCopy.initialValue}
+          confirmLabel={promptDialogCopy.confirmLabel}
+          onConfirm={handlePromptConfirm}
+          onCancel={handlePromptCancel}
+        />
       </div>
       {saveError !== null ? (
         <div className="docx-viewer__error" role="alert">

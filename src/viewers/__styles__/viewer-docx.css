@@ -480,3 +480,49 @@
 .docx-viewer__header-footer-add:hover {
   background: var(--bg-secondary, #f6f8fa);
 }
+
+/* ---- F1 — single-line text prompt dialog (Insert Hyperlink/Add Comment/
+ * Reply), replacing the three `window.prompt` calls Electron doesn't
+ * implement. Backdrop/card/title/buttons reuse the shared `.modal-backdrop`
+ * `.modal` `.modal__title` and `.confirm-dialog__btn*` classes
+ * (UnsavedChangesDialog.tsx); only the label+input field is dialog-specific. ---- */
+.docx-prompt-dialog {
+  max-width: 420px;
+}
+
+.docx-prompt-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.docx-prompt-dialog__label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary, #57606a);
+}
+
+.docx-prompt-dialog__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.docx-prompt-dialog__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.docx-prompt-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
