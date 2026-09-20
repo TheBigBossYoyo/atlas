@@ -591,6 +591,40 @@ describe('writeDocumentXml', () => {
         '<w:sdt><w:sdtContent><w:p><w:r><w:t>Content control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/>',
       ),
     ],
+    [
+      'right-to-left paragraph + run (round-trip fidelity audit, DXS round 2)',
+      documentXml(
+        '<w:p><w:pPr><w:bidi/></w:pPr><w:r><w:rPr><w:rtl/></w:rPr><w:t>مرحبا</w:t></w:r></w:p><w:sectPr/>',
+      ),
+    ],
+    [
+      'page borders + section bidi (round-trip fidelity audit, DXS round 2)',
+      documentXml(
+        '<w:p><w:r><w:t>Bordered section</w:t></w:r></w:p>'
+          + '<w:sectPr>'
+          + '<w:pgBorders w:offsetFrom="page" w:display="firstPage" w:zOrder="back">'
+          + '<w:top w:val="single" w:sz="24" w:space="24" w:color="4472C4"/>'
+          + '<w:left w:val="single" w:sz="24" w:space="24" w:color="4472C4"/>'
+          + '<w:bottom w:val="single" w:sz="24" w:space="24" w:color="4472C4"/>'
+          + '<w:right w:val="single" w:sz="24" w:space="24" w:color="4472C4"/>'
+          + '</w:pgBorders>'
+          + '<w:bidi/>'
+          + '</w:sectPr>',
+      ),
+    ],
+    [
+      'docGrid/textDirection/rtlGutter/formProt/noEndnote (round-trip fidelity audit, DXS round 2)',
+      documentXml(
+        '<w:p><w:r><w:t>Vertical text section</w:t></w:r></w:p>'
+          + '<w:sectPr>'
+          + '<w:formProt w:val="true"/>'
+          + '<w:noEndnote/>'
+          + '<w:textDirection w:val="tbRl"/>'
+          + '<w:rtlGutter/>'
+          + '<w:docGrid w:type="linesAndChars" w:linePitch="360" w:charSpace="0"/>'
+          + '</w:sectPr>',
+      ),
+    ],
   ])('round-trips parsed ASTs for %s', (_label, xml) => {
     expectRoundTrip(xml)
   })

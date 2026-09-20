@@ -40,6 +40,7 @@ function buildAbstractNumXml(abstractNum: AbstractNum): XmlNode {
 
   return {
     '@_w:abstractNumId': abstractNum.abstractNumId,
+    ...buildValElement('w:multiLevelType', abstractNum.multiLevelType),
     ...buildValElement('w:styleLink', abstractNum.styleLink),
     ...buildValElement('w:numStyleLink', abstractNum.numberStyleLink),
     ...(levels.length > 0 ? { 'w:lvl': levels } : {}),

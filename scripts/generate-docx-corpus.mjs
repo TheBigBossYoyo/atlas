@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import {
   AlignmentType,
   Bookmark,
+  BorderStyle,
   CommentRangeEnd,
   CommentRangeStart,
   CommentReference,
@@ -39,6 +40,10 @@ import {
   InsertedTextRun,
   InternalHyperlink,
   LevelFormat,
+  Math,
+  MathFraction,
+  MathRun,
+  MathSuperScript,
   Packer,
   PageNumber,
   PageOrientation,
@@ -59,6 +64,9 @@ import {
 
 import { createSolidPng } from './lib/corpusPng.mjs'
 import {
+  addContentTypeDefault,
+  addContentTypeOverride,
+  addRelationshipEntry,
   FIXED_DATE,
   FIXED_DATE_ISO,
   replaceRunContaining,
@@ -673,6 +681,365 @@ function fixtureContentControlAlternateContent() {
 }
 
 // ---------------------------------------------------------------------------
+// 14. Math (OMML): a fraction and a superscript, each its own paragraph.
+// ---------------------------------------------------------------------------
+function fixtureMathOmml() {
+  const id = 'math-omml'
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [
+      {
+        children: [
+          introParagraph(id),
+          new Paragraph({
+            children: [
+              new Math({
+                children: [
+                  new MathFraction({ numerator: [new MathRun('x+1')], denominator: [new MathRun('2')] }),
+                ],
+              }),
+            ],
+          }),
+          new Paragraph({
+            children: [
+              new Math({
+                children: [new MathSuperScript({ children: [new MathRun('e')], superScript: [new MathRun('x')] })],
+              }),
+            ],
+          }),
+        ],
+      },
+    ],
+  })
+  return { id, document }
+}
+
+// ---------------------------------------------------------------------------
+// 15. Right-to-left text: a bidirectional paragraph (w:bidi) with rtl runs
+// (w:rtl) in Hebrew and Arabic, plus a mixed-direction paragraph.
+// ---------------------------------------------------------------------------
+function fixtureRtlText() {
+  const id = 'rtl-text'
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [
+      {
+        children: [
+          introParagraph(id),
+          new Paragraph({
+            bidirectional: true,
+            alignment: AlignmentType.RIGHT,
+            children: [new TextRun({ text: 'שלום עולם', rightToLeft: true })],
+          }),
+          new Paragraph({
+            bidirectional: true,
+            children: [
+              new TextRun({ text: 'مرحبا بالعالم', rightToLeft: true }),
+              new TextRun({ text: ' — mixed with ', rightToLeft: false }),
+              new TextRun({ text: 'English', rightToLeft: false, bold: true }),
+              new TextRun({ text: ' text.', rightToLeft: false }),
+            ],
+          }),
+        ],
+      },
+    ],
+  })
+  return { id, document }
+}
+
+// ---------------------------------------------------------------------------
+// 16. Page borders (w:pgBorders) + a two-column section layout (w:cols).
+// ---------------------------------------------------------------------------
+function fixturePageBordersColumns() {
+  const id = 'page-borders-columns'
+  const pageBorder = { style: BorderStyle.SINGLE, size: 24, color: '4472C4', space: 24 }
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [
+      {
+        properties: {
+          page: {
+            borders: {
+              pageBorderTop: pageBorder,
+              pageBorderBottom: pageBorder,
+              pageBorderLeft: pageBorder,
+              pageBorderRight: pageBorder,
+            },
+          },
+          column: { space: 708, count: 2, separate: true },
+        },
+        children: [
+          introParagraph(id),
+          new Paragraph({
+            children: [
+              new TextRun(
+                'A paragraph flowing through a two-column section layout, framed by a single-line page border.',
+              ),
+            ],
+          }),
+        ],
+      },
+    ],
+  })
+  return { id, document }
+}
+
+// ---------------------------------------------------------------------------
+// 17. Watermark: a VML `v:shape`/`v:textpath` diagonal text watermark in a
+// header, exactly the shape real Word's "Insert Watermark" produces
+// (`docx` has no API for VML at all, so this is hand-authored XML spliced
+// into the header `docx` generated normally — same technique as the
+// mc:AlternateContent shape above).
+// ---------------------------------------------------------------------------
+const WATERMARK_HEADER_MARKER = 'Header text alongside the watermark shape.'
+const WATERMARK_PARAGRAPH_XML = `
+<w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr><w:r>
+<w:pict>
+<v:shapetype id="_x0000_t136" coordsize="1600,21600" o:spt="136" adj="10800" path="m@7,0l@8,0m@5,21600l@6,21600e">
+<v:formulas>
+<v:f eqn="sum #0 0 10800"/><v:f eqn="prod #0 2 1"/><v:f eqn="sum 21600 0 @1"/><v:f eqn="sum 0 0 @2"/>
+<v:f eqn="sum 21600 0 @3"/><v:f eqn="if @0 @3 @1"/><v:f eqn="if @0 @4 @2"/><v:f eqn="if @0 0 21600"/>
+<v:f eqn="if @0 21600 0"/><v:f eqn="mid @5 @6"/><v:f eqn="mid @8 @5"/><v:f eqn="mid @7 @8"/><v:f eqn="mid @6 @7"/>
+<v:f eqn="sum @6 0 @5"/>
+</v:formulas>
+<v:path textpathok="t" o:connecttype="custom" o:connectlocs="@9,0;@10,10800;@11,21600;@12,10800" o:connectangles="270,180,90,0"/>
+<v:textpath on="t" fitshape="t"/>
+<v:handles><v:h position="#0,bottomRight" xrange="0,21600"/></v:handles>
+<o:lock v:ext="edit" text="t" shapetype="t"/>
+</v:shapetype>
+<v:shape id="AtlasWatermark" o:spid="_x0000_s2049" type="#_x0000_t136"
+style="position:absolute;margin-left:0;margin-top:0;width:415pt;height:207.5pt;rotation:315;z-index:-251656192;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin"
+o:allowincell="f" fillcolor="silver" stroked="f">
+<v:fill opacity=".5"/>
+<v:textpath style="font-family:&quot;Calibri&quot;;font-size:1pt" string="ATLAS DRAFT"/>
+<w10:wrap anchorx="margin" anchory="margin"/>
+</v:shape>
+</w:pict>
+</w:r></w:p>`
+  .replace(/>\s+</g, '><')
+  .trim()
+
+function fixtureWatermarkHeader() {
+  const id = 'watermark-header'
+  const header = new Header({ children: [new Paragraph({ children: [new TextRun(WATERMARK_HEADER_MARKER)] })] })
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [
+      {
+        headers: { default: header },
+        children: [introParagraph(id), new Paragraph({ children: [new TextRun('Body content under a watermarked header.')] })],
+      },
+    ],
+  })
+
+  const postProcess = (files) => {
+    const headerPath = 'word/header1.xml'
+    const xml = files.get(headerPath)
+    if (typeof xml !== 'string' || !xml.includes(WATERMARK_HEADER_MARKER)) {
+      throw new Error(`${id}: expected ${headerPath} to contain the marker paragraph`)
+    }
+    files.set(
+      headerPath,
+      wrapParagraphContaining(xml, WATERMARK_HEADER_MARKER, (paragraphXml) => `${WATERMARK_PARAGRAPH_XML}${paragraphXml}`),
+    )
+  }
+
+  return { id, document, postProcess }
+}
+
+// ---------------------------------------------------------------------------
+// 18. Custom XML part: a package-level `customXml/item1.xml` data island +
+// `itemProps1.xml` (schema ref) + its own relationship, the pattern Word
+// itself (and most SharePoint/CMS integrations) uses for document metadata
+// that lives outside `docProps/custom.xml`. `docx` has no API for this at
+// all, so the whole part set is hand-authored and spliced in via
+// `postProcess` — there is no placeholder for it to replace.
+// ---------------------------------------------------------------------------
+const CUSTOM_XML_STORE_ITEM_ID = '{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}'
+
+function fixtureCustomXmlPart() {
+  const id = 'custom-xml-part'
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [{ children: [introParagraph(id), new Paragraph({ children: [new TextRun('A document carrying an unreferenced custom XML metadata part.')] })] }],
+  })
+
+  const postProcess = (files) => {
+    files.set(
+      'customXml/item1.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ns0:AtlasMetadata xmlns:ns0="http://atlas.example.com/metadata"><ns0:DocumentClass>Corpus</ns0:DocumentClass></ns0:AtlasMetadata>',
+    )
+    files.set(
+      'customXml/itemProps1.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ds:datastoreItem ds:itemID="${CUSTOM_XML_STORE_ITEM_ID}" xmlns:ds="http://schemas.openxmlformats.org/officeDocument/2006/customXml"><ds:schemaRefs><ds:schemaRef ds:uri="http://atlas.example.com/metadata"/></ds:schemaRefs></ds:datastoreItem>`,
+    )
+    files.set(
+      'customXml/_rels/item1.xml.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXmlProps" Target="itemProps1.xml"/></Relationships>',
+    )
+    addContentTypeOverride(files, '/customXml/itemProps1.xml', 'application/vnd.openxmlformats-officedocument.customXmlProperties+xml')
+    addRelationshipEntry(
+      files,
+      'word/_rels/document.xml.rels',
+      'rIdCustomXml',
+      'http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml',
+      '../customXml/item1.xml',
+    )
+  }
+
+  return { id, document, postProcess }
+}
+
+// ---------------------------------------------------------------------------
+// 19. Macro-enabled document: a `word/vbaProject.bin` part + its
+// relationship, the marker of a `.docm`-class document (content type is a
+// package-level concept independent of the `.docx` file extension this
+// fixture keeps for corpus-harness convenience).
+// ---------------------------------------------------------------------------
+function fixtureMacroEnabledVbaProject() {
+  const id = 'macro-enabled-vba-project'
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [{ children: [introParagraph(id), new Paragraph({ children: [new TextRun('A macro-enabled document carrying a VBA project part.')] })] }],
+  })
+
+  const postProcess = (files) => {
+    // Not a real compiled VBA project (no macro actually needs to run for a
+    // round-trip fidelity test) — just enough bytes, with a real OLE
+    // compound-file magic number, to exercise "opaque binary part survives
+    // untouched".
+    const vbaProjectBytes = Buffer.concat([
+      Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
+      Buffer.alloc(120, 0),
+    ])
+    files.set('word/vbaProject.bin', vbaProjectBytes)
+    addContentTypeDefault(files, 'bin', 'application/vnd.ms-office.vbaProject')
+    addRelationshipEntry(
+      files,
+      'word/_rels/document.xml.rels',
+      'rIdVbaProject',
+      'http://schemas.microsoft.com/office/2006/relationships/vbaProject',
+      'vbaProject.bin',
+    )
+  }
+
+  return { id, document, postProcess }
+}
+
+// ---------------------------------------------------------------------------
+// 20. Embedded font: `word/fontTable.xml` with a `w:embedRegular` reference
+// to an obfuscated `.odttf` font part — the "Embed fonts in the file" Word
+// feature `src/docx/fonts/embedded.ts` reads. `docx` always emits an empty
+// `word/fontTable.xml` + `word/_rels/fontTable.xml.rels`; both are replaced
+// wholesale here.
+// ---------------------------------------------------------------------------
+function fixtureEmbeddedFonts() {
+  const id = 'embedded-fonts'
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [
+      {
+        children: [
+          introParagraph(id),
+          new Paragraph({ children: [new TextRun({ text: 'Styled with an embedded font family.', font: 'Atlas Embedded Font' })] }),
+        ],
+      },
+    ],
+  })
+
+  const postProcess = (files) => {
+    files.set(
+      'word/fontTable.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        '<w:font w:name="Atlas Embedded Font">' +
+        '<w:embedRegular r:id="rIdFontRegular" w:fontKey="{11111111-2222-3333-4444-555555555555}" w:subsetted="1"/>' +
+        '</w:font></w:fonts>',
+    )
+    files.set(
+      'word/_rels/fontTable.xml.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rIdFontRegular" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/font1.odttf"/>' +
+        '</Relationships>',
+    )
+    // 32-byte obfuscation header (XORed with the fontKey GUID by a real
+    // Word save) followed by arbitrary "sfnt table" filler bytes — this
+    // fixture only proves the part round-trips untouched, not that the
+    // bytes form a loadable font.
+    files.set('word/fonts/font1.odttf', Buffer.alloc(96, 0x5a))
+  }
+
+  return { id, document, postProcess }
+}
+
+// ---------------------------------------------------------------------------
+// 21. Embedded EMF/WMF images: `docx` has no `ImageRun` support for either
+// vector metafile format, so both the media parts and their `w:drawing`
+// blocks are hand-authored, following the exact `wp:inline`/`pic:pic`
+// shape `docx` itself emits for a raster `ImageRun` (see `image-inline`).
+// ---------------------------------------------------------------------------
+const EMF_WMF_MARKER = 'ATLAS_EMF_WMF_PLACEHOLDER'
+
+function buildInlineBlipDrawingXml(relId, name, cx, cy) {
+  return (
+    `<w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">` +
+    `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent t="0" r="0" b="0" l="0"/>` +
+    `<wp:docPr id="1" name="${name}" descr="${name}" title="${name}"/>` +
+    `<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
+    `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+    `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="${name}" descr="${name}"/>` +
+    `<pic:cNvPicPr><a:picLocks noChangeAspect="1" noChangeArrowheads="1"/></pic:cNvPicPr></pic:nvPicPr>` +
+    `<pic:blipFill><a:blip r:embed="${relId}" cstate="none"/><a:srcRect/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+    `<pic:spPr bwMode="auto"><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
+    `</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`
+  )
+}
+
+const EMF_WMF_RUN_XML =
+  `<w:r>${buildInlineBlipDrawingXml('rIdEmf', 'AtlasEmf', 609600, 457200)}</w:r>` +
+  `<w:r>${buildInlineBlipDrawingXml('rIdWmf', 'AtlasWmf', 457200, 457200)}</w:r>`
+
+function fixtureImageEmfWmf() {
+  const id = 'image-emf-wmf'
+  const document = new Document({
+    creator: AUTHOR,
+    lastModifiedBy: AUTHOR,
+    sections: [{ children: [introParagraph(id), new Paragraph({ children: [new TextRun(EMF_WMF_MARKER)] })] }],
+  })
+
+  const postProcess = (files) => {
+    // EMR_HEADER-shaped filler (real magic number, arbitrary body) and a
+    // placeable-WMF-shaped filler (`0xD7CDC69A` magic) — enough for "is this
+    // an EMF/WMF part" identification, not enough to actually rasterize.
+    const emfBytes = Buffer.alloc(88)
+    emfBytes.writeUInt32LE(1, 0)
+    const wmfBytes = Buffer.concat([Buffer.from([0xd7, 0xcd, 0xc6, 0x9a]), Buffer.alloc(60, 0)])
+    files.set('word/media/image2.emf', emfBytes)
+    files.set('word/media/image3.wmf', wmfBytes)
+    addContentTypeDefault(files, 'emf', 'image/x-emf')
+    addContentTypeDefault(files, 'wmf', 'image/x-wmf')
+    addRelationshipEntry(files, 'word/_rels/document.xml.rels', 'rIdEmf', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', 'media/image2.emf')
+    addRelationshipEntry(files, 'word/_rels/document.xml.rels', 'rIdWmf', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image', 'media/image3.wmf')
+
+    const documentPath = 'word/document.xml'
+    const xml = files.get(documentPath)
+    if (typeof xml !== 'string') {
+      throw new Error(`${id}: expected ${documentPath} to exist`)
+    }
+    files.set(documentPath, replaceRunContaining(xml, EMF_WMF_MARKER, EMF_WMF_RUN_XML))
+  }
+
+  return { id, document, postProcess }
+}
+
+// ---------------------------------------------------------------------------
 // Build + write
 // ---------------------------------------------------------------------------
 const FIXTURES = [
@@ -690,6 +1057,14 @@ const FIXTURES = [
   fixtureTrackedChangesInsertDelete,
   fixtureSectionBreaks,
   fixtureContentControlAlternateContent,
+  fixtureMathOmml,
+  fixtureRtlText,
+  fixturePageBordersColumns,
+  fixtureWatermarkHeader,
+  fixtureCustomXmlPart,
+  fixtureMacroEnabledVbaProject,
+  fixtureEmbeddedFonts,
+  fixtureImageEmfWmf,
 ]
 
 async function buildFixture(build) {

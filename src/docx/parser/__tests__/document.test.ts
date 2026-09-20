@@ -356,6 +356,13 @@ describe('parseDocument', () => {
             <w:titlePg/>
             <w:headerReference w:type="default" r:id="rIdHeader"/>
             <w:footerReference w:type="even" r:id="rIdFooter"/>
+            <w:pgBorders w:offsetFrom="page" w:display="firstPage" w:zOrder="back">
+              <w:top w:val="single" w:sz="24" w:space="24" w:color="4472C4"/>
+              <w:left w:val="single" w:sz="24" w:space="24" w:color="4472C4"/>
+              <w:bottom w:val="single" w:sz="24" w:space="24" w:color="4472C4"/>
+              <w:right w:val="single" w:sz="24" w:space="24" w:color="4472C4"/>
+            </w:pgBorders>
+            <w:bidi/>
           </w:sectPr>
         </w:pPr>
         <w:r><w:t>Section A</w:t></w:r>
@@ -393,9 +400,54 @@ describe('parseDocument', () => {
       titlePg: true,
       headerReference: [{ id: 'rIdHeader', type: 'default' }],
       footerReference: [{ id: 'rIdFooter', type: 'even' }],
+      pgBorders: {
+        top: { style: 'single', size: 24, space: 24, color: '4472C4' },
+        left: { style: 'single', size: 24, space: 24, color: '4472C4' },
+        bottom: { style: 'single', size: 24, space: 24, color: '4472C4' },
+        right: { style: 'single', size: 24, space: 24, color: '4472C4' },
+      },
+      pgBorderOffsetFrom: 'page',
+      pgBorderDisplay: 'firstPage',
+      pgBorderZOrder: 'back',
+      bidi: true,
     })
     expect(document.sections[1].props).toMatchObject({ type: 'nextPage' })
     expect(document.sections[1].blocks).toHaveLength(1)
+  })
+
+  it('parses docGrid/textDirection/rtlGutter/formProt/noEndnote on a section', () => {
+    const document = parseBody(`
+      <w:p><w:r><w:t>Vertical text section</w:t></w:r></w:p>
+      <w:sectPr>
+        <w:formProt w:val="true"/>
+        <w:noEndnote/>
+        <w:textDirection w:val="tbRl"/>
+        <w:rtlGutter/>
+        <w:docGrid w:type="linesAndChars" w:linePitch="360" w:charSpace="0"/>
+      </w:sectPr>
+    `)
+
+    expect(document.sections[0].props).toMatchObject({
+      formProt: true,
+      noEndnote: true,
+      textDirection: 'tbRl',
+      rtlGutter: true,
+      docGrid: { type: 'linesAndChars', linePitch: 360, charSpace: 0 },
+    })
+  })
+
+  it('parses a right-to-left paragraph (w:bidi) distinctly from a section\'s own w:bidi', () => {
+    const document = parseBody(`
+      <w:p>
+        <w:pPr><w:bidi/></w:pPr>
+        <w:r><w:rPr><w:rtl/></w:rPr><w:t>שלום עולם</w:t></w:r>
+      </w:p>
+    `)
+
+    const paragraph = expectParagraph(document.sections[0].blocks[0])
+    expect(paragraph.props?.bidi).toBe(true)
+    const run = expectRun(paragraph.children[0])
+    expect(run.props?.rtl).toBe(true)
   })
 
   it('parses shading on paragraph and run props', () => {
