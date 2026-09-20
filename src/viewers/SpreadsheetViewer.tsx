@@ -7,6 +7,7 @@ import { useSetNavItems, useSetViewerStats, useRegisterViewerFind } from './shar
 import { useSpreadsheetWorkbook } from './shared/useSpreadsheetWorkbook'
 import { useSpreadsheetGrid } from './shared/useSpreadsheetGrid'
 import { useGridFind } from './shared/useGridFind'
+import { useGridCellAnnouncement } from './shared/useGridCellAnnouncement'
 import { commitGridEdit, useGridBlankMargin } from './shared/useGridBlankMargin'
 import { ViewerLoading } from '../components/ViewerLoading'
 import { SearchOverlay } from '../components/SearchOverlay'
@@ -264,6 +265,11 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     return () => registerFind(null)
   }, [registerFind, gridFind.open])
 
+  // A11Y pass 3 — see useGridCellAnnouncement's own doc comment: the canvas
+  // grid has no cells for a screen reader to land on, so this is the
+  // current-cell equivalent of aria-activedescendant for it.
+  const cellAnnouncement = useGridCellAnnouncement(bodyRows, gridFind.gridSelection)
+
   // The currently-selected cell, sheet-absolute (mapped through
   // `bodyRowIndices`, which already accounts for both frozen rows AND an
   // active search filter — see that array's own comment) — read straight off
@@ -436,7 +442,21 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
           onCommit={handleFrozenRowCommit}
         />
       )}
-      <div className="spreadsheet-viewer__grid">
+      <div
+        className="spreadsheet-viewer__grid"
+        role="group"
+        aria-label={
+          activeSheet
+            ? t('spreadsheet.gridAria', {
+                sheet: activeSheet.name,
+                dimensions: t('spreadsheet.dimensions', {
+                  rows: t('spreadsheet.rowsCount', { count: filteredRows.length }),
+                  cols: t('spreadsheet.colsCount', { count: activeSheet.colCount }),
+                }),
+              })
+            : undefined
+        }
+      >
         {isFiltering && filteredRows.length === 0 ? (
           <div className="spreadsheet-viewer__empty">
             <FileSpreadsheet size={48} />
@@ -470,6 +490,11 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
             )}
           </Suspense>
         )}
+        {/* A11Y pass 3 — the canvas grid has no cells of its own to announce;
+            see useGridCellAnnouncement's doc comment. */}
+        <span className="visually-hidden" role="status" aria-live="polite">
+          {cellAnnouncement}
+        </span>
       </div>
       <div className="spreadsheet-viewer__tabs">
         {visibleSheets.map((sheet) => (

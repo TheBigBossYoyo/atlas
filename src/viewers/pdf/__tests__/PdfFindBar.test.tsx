@@ -53,4 +53,17 @@ describe('PdfFindBar', () => {
     fireEvent.keyDown(document.body, { key: 'Escape' })
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  it('announces the match count as a polite live region', () => {
+    renderBar({ query: 'foo', matchCount: 12, currentMatchIndex: 2 })
+    const status = screen.getByText('3 of 12')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    expect(status).toHaveAttribute('role', 'status')
+  })
+
+  it('announces "no results" the same way', () => {
+    renderBar({ query: 'zzz', matchCount: 0 })
+    const status = screen.getByText('No results')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+  })
 })

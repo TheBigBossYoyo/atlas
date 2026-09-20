@@ -142,6 +142,21 @@ describe('PdfThumbnailRail', () => {
     expect(screen.getByLabelText('Go to page 1')).toHaveAttribute('aria-current', 'false')
   })
 
+  it('gives the rail itself an accessible name', () => {
+    render(
+      <PdfThumbnailRail
+        isOpen
+        pdfDoc={makePdfDoc([])}
+        pageCount={5}
+        currentPage={3}
+        rotation={0}
+        onSelectPage={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('group', { name: 'Page thumbnails' })).toBeInTheDocument()
+  })
+
   it('calls onSelectPage with the clicked page number', () => {
     const onSelectPage = vi.fn()
     render(

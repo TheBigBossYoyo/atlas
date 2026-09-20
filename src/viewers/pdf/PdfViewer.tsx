@@ -22,6 +22,7 @@ import { localMatchIndexOnPage } from './search'
 import { usePdfFind } from './usePdfFind'
 import { usePdfPageGeometry } from './usePdfPageGeometry'
 import { runDetectingFakeWorkerFallback } from './workerSetup'
+import { scrollIntoViewRespectingMotionPreference } from '../../utils/motionPreference'
 import { PdfPage } from './PdfPage'
 import { PdfToolbar } from './PdfToolbar'
 import { PdfFindBar } from './PdfFindBar'
@@ -108,7 +109,7 @@ function PdfViewerBase({ file }: ViewerProps) {
     if (!node) return undefined
 
     isProgrammaticScrollRef.current = true
-    node.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    scrollIntoViewRespectingMotionPreference(node, { behavior: 'smooth', block: 'start' })
     const timeout = setTimeout(() => {
       isProgrammaticScrollRef.current = false
       setPendingJumpPage(null)

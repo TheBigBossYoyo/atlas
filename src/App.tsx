@@ -57,6 +57,7 @@ import { ToastProvider } from './components/ToastProvider';
 import { LocaleProvider, useTranslate } from './i18n';
 import { translateWriteError } from './i18n/translateWriteError';
 import { useToast } from './hooks/useToast';
+import { scrollIntoViewRespectingMotionPreference } from './utils/motionPreference';
 
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
@@ -717,7 +718,8 @@ function AppShell() {
         label: item.text,
         level: item.level,
         onSelect: () => {
-          document.getElementById(item.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          const target = document.getElementById(item.id);
+          if (target) scrollIntoViewRespectingMotionPreference(target, { behavior: 'smooth', block: 'start' });
         },
       })),
     [tocItems]

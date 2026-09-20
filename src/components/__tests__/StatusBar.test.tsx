@@ -118,4 +118,48 @@ describe('StatusBar', () => {
 
     expectStatusText(`${formatNumber(5000)} words · ${formatNumber(18)} pages`);
   });
+
+  describe('position-change announcements', () => {
+    it('announces the pdf page in a polite live region', () => {
+      render(
+        <ViewerProvider filePath="/tmp/file.pdf">
+          <StatusBarHarness stats={{ kind: 'pdf', page: 4, pageCount: 24 }} />
+        </ViewerProvider>
+      );
+
+      expect(screen.getByRole('status')).toHaveTextContent(`Page ${formatNumber(4)} / ${formatNumber(24)}`);
+    });
+
+    it('announces the current slide in a polite live region', () => {
+      render(
+        <ViewerProvider filePath="/tmp/deck.pptx">
+          <StatusBarHarness stats={{ kind: 'slides', slide: 2, slideCount: 15 }} />
+        </ViewerProvider>
+      );
+
+      expect(screen.getByRole('status')).toHaveTextContent(`Slide ${formatNumber(2)} / ${formatNumber(15)}`);
+    });
+
+    it('does not wire markdown word counts (or any other stat) into the live region', () => {
+      // Word/row/line counts change on every keystroke — announcing those
+      // would be exactly the "wall of chatter" this pass is meant to avoid.
+      render(
+        <ViewerProvider filePath="/tmp/readme.md">
+          <StatusBarHarness stats={{ kind: 'markdown', words: 1200, headings: 8 }} />
+        </ViewerProvider>
+      );
+
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    });
+
+    it('stays empty with no stats at all', () => {
+      render(
+        <ViewerProvider filePath="/tmp/atlas.pdf">
+          <StatusBarHarness stats={null} />
+        </ViewerProvider>
+      );
+
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    });
+  });
 });

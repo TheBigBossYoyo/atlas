@@ -3,6 +3,7 @@ import { memo, useEffect, useMemo } from 'react'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import type { ViewerProps } from '../formats/types'
 import { useToc } from '../hooks/useToc'
+import { scrollIntoViewRespectingMotionPreference } from '../utils/motionPreference'
 import {
   useSetNavItems,
   useSetViewerStats,
@@ -27,10 +28,10 @@ function MarkdownViewerBase({ file }: ViewerProps) {
         id: item.id,
         label: item.text,
         level: item.level,
-        onSelect: () =>
-          document
-            .getElementById(item.id)
-            ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+        onSelect: () => {
+          const target = document.getElementById(item.id)
+          if (target) scrollIntoViewRespectingMotionPreference(target, { behavior: 'smooth', block: 'start' })
+        },
       })),
     [tocItems],
   )

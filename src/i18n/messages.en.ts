@@ -270,6 +270,14 @@ export const messages = {
   'spreadsheet.deleteSheetTitle': 'Delete sheet {name}',
   'spreadsheet.addSheetAria': 'Add sheet',
   'spreadsheet.addSheetTitle': 'Add sheet',
+  // A11Y pass 3 — accessible name for the canvas-rendered grid (glide-data-grid
+  // has no DOM cells of its own for a screen reader to name) and the live
+  // region announcing the currently-selected cell; shared by SpreadsheetViewer
+  // and CsvViewer via useGridCellAnnouncement.ts.
+  'spreadsheet.gridAria': '{sheet} sheet grid, {dimensions}',
+  'csv.gridAria': 'Data grid, {dimensions}',
+  'grid.cellAnnouncement': '{ref}: {value}',
+  'grid.cellAnnouncementEmpty': '{ref}, blank',
 
   // SpreadsheetEditToolbar.tsx
   'spreadsheetToolbar.undoAria': 'Undo',
@@ -536,6 +544,7 @@ export const messages = {
 
   // src/viewers/shared/SlideDeck.tsx
   'slides.deck.slideTitle': 'Slide {n}',
+  'slides.deck.thumbnailRailAria': 'Slide thumbnails',
   'slides.deck.zoomOut': 'Zoom out',
   'slides.deck.zoomIn': 'Zoom in',
   'slides.deck.zoomReset': 'Reset zoom',
@@ -596,6 +605,7 @@ export const messages = {
 
   // src/viewers/pdf/PdfThumbnailRail.tsx
   'pdf.thumbnails.goToPage': 'Go to page {n}',
+  'pdf.thumbnails.railAria': 'Page thumbnails',
 
   // src/formats/legacyOffice.ts (consumed by UnknownViewer.tsx, and reused
   // by LegacyDocViewer.tsx/LegacyPptViewer.tsx for the same format labels)

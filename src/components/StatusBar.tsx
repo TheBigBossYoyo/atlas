@@ -43,10 +43,32 @@ function renderStats(stats: ViewerStats, t: TranslateFn): string {
   return assertNever(exhaustiveCheck);
 }
 
+// A11Y pass 3 — only page/slide position changes (an explicit jump/next/prev,
+// never a per-keystroke count) get announced; see this file's own doc
+// comment on `announcedPositionLabel` for why the other `ViewerStats` kinds
+// are deliberately excluded from the live region.
+function announcedPositionLabel(stats: ViewerStats, t: TranslateFn): string | null {
+  switch (stats.kind) {
+    case 'pdf':
+    case 'slides':
+      return renderStats(stats, t);
+    default:
+      return null;
+  }
+}
+
 export function StatusBar({ fileName, isDirty }: StatusBarProps) {
   const stats = useViewerStats();
   const t = useTranslate();
   const statsLabel = stats ? renderStats(stats, t) : null;
+  // Deliberately a SEPARATE, narrower live region from the visible stats
+  // item below rather than making `.statusbar__item` itself `aria-live`:
+  // markdown's word count and the spreadsheet's row/col count are part of
+  // the same `ViewerStats` union but change on every keystroke, and a live
+  // region there would read exactly like the "wall of chatter" this pass is
+  // supposed to avoid. Page/slide numbers only change on an explicit
+  // navigation, so those alone are safe to announce.
+  const announcedPosition = stats ? announcedPositionLabel(stats, t) : null;
 
   return (
     <footer className="statusbar">
@@ -63,6 +85,9 @@ export function StatusBar({ fileName, isDirty }: StatusBarProps) {
           <span className="statusbar__item">{statsLabel}</span>
         </div>
       ) : null}
+      <span className="visually-hidden" role="status" aria-live="polite">
+        {announcedPosition}
+      </span>
     </footer>
   );
 }

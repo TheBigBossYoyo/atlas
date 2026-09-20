@@ -6,6 +6,7 @@ import { applyRotationToDimensions, combineRotation } from './rotation'
 import { renderAnnotationOverlay } from './annotationOverlay'
 import type { RawPdfAnnotation } from './annotations'
 import type { PageGeometry, PageRotation, PdfDocument, PdfjsRuntime, TextLayerInstance, ZoomMode } from './types'
+import { scrollIntoViewRespectingMotionPreference } from '../../utils/motionPreference'
 
 export type PdfPageProps = {
   readonly pdfjs: PdfjsRuntime
@@ -327,7 +328,7 @@ function PdfPageBase({
     if (isActiveFindPage && activeMatchLocalIndex >= 0 && activeMatchLocalIndex < marks.length) {
       const activeMark = marks[activeMatchLocalIndex]
       activeMark.classList.add('pdf-viewer__find-highlight--active')
-      activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      scrollIntoViewRespectingMotionPreference(activeMark, { behavior: 'smooth', block: 'center' })
     }
   }, [findQuery, isTextLayerReady, isActiveFindPage, activeMatchLocalIndex])
 
