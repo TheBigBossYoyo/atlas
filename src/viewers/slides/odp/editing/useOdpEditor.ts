@@ -10,7 +10,12 @@ import { useSlideEditorCore } from '../../shared/useSlideEditorCore'
 import { parseOdpSlides } from '../parser'
 import * as edits from './odpEdits'
 
-const NEW_TEXT_BOX_TEXT = 'Text'
+// Empty, not a filler word: insertTextBox() now opens the new shape for
+// editing immediately (see SlideDeck's pendingTextBoxSourceId), and its text
+// editor places the caret at the END of any existing text — a filler word
+// here would sit in front of whatever the user types next instead of being
+// replaced by it.
+const NEW_TEXT_BOX_TEXT = ''
 
 function parseOdpDeck(pkg: OfficePackage): Promise<ReadonlyArray<SlideData>> {
   return parseOdpSlides(packageArchive(pkg), { cancelled: false })

@@ -55,6 +55,25 @@ describe('shape edits', () => {
     expect(second.shapes.some((s) => s.sourceId === '3')).toBe(false)
   })
 
+  // USR-16 regression — "Insert Text Box" seeds the new shape with empty
+  // text (so typing immediately replaces it instead of landing after a
+  // leftover filler word), which used to make the shape parse away to
+  // nothing: it has no text AND no fill/border (`<a:noFill/>`, rect
+  // geometry), so it fell through `buildShapeElement`'s
+  // `text.length > 0 || placeholderPrompt !== undefined` check into the
+  // `hasVisibleFill || border || ...` branch below it and came back `null`
+  // — an invisible shape nothing could select, open for editing, or type
+  // into. A manually inserted text box (`p:cNvSpPr txBox="1"`) must stay
+  // addressable even with no text yet, same as an empty placeholder does.
+  it('keeps a freshly inserted, still-empty text box addressable (not filtered out as invisible)', async () => {
+    const inserted = insertTextBox(pkg, SLIDE_2, { x: 100, y: 100, w: 400, h: 50 }, '')
+    expect(inserted.sourceId).toBe('3')
+    const [, second] = await slides(inserted.pkg)
+    const shape = second.shapes.find((s) => s.sourceId === '3')
+    expect(shape).toBeDefined()
+    expect(shape).toMatchObject({ kind: 'text', text: '', movable: true })
+  })
+
   it('edits existing notes and creates a notes page from the notes master', async () => {
     expect(canEditNotes(pkg, SLIDE_2)).toBe(true)
     let next = setSlideNotes(pkg, SLIDE_1, 'Thank the team')

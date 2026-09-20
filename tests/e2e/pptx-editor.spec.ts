@@ -152,3 +152,86 @@ test('USR-16: an ODP presentation is editable too', async () => {
     kill(app)
   }
 })
+
+/**
+ * USR-16 — "Insert Text Box" then typing right away used to lose every
+ * keystroke and could leave a duplicate, empty shape on the slide. Root
+ * causes (both fixed):
+ *  1. The new shape's id resolved before the re-parsed slide containing it
+ *     had reached `SlideDeck`'s `slides` prop, so the same-tick lookup that
+ *     used to select/open it always failed silently — nothing was ever
+ *     opened for editing, so keystrokes had nowhere to land.
+ *  2. The toolbar button keeps focus after the click. "Hello world"
+ *     contains a space, which the browser turns into a second native click
+ *     on a still-focused button, firing a second insert.
+ * Typed right after the click, exactly as the button leaves the user
+ * positioned — no click on the new shape to "rescue" focus.
+ */
+test('USR-16: insert a text box and type immediately — no rescuing click, exactly one shape, text survives save/reopen', async () => {
+  const file = await createDeck()
+  const { app, page } = await launch(file)
+  try {
+    const before = await page.locator(`${main} .slide-shape--text`).count()
+
+    await page.getByRole('button', { name: 'Insert text box' }).click()
+    await page.keyboard.type('Hello world', { delay: 30 })
+    await page.keyboard.press('Escape')
+
+    // Exactly one new shape: not zero (the text-lost bug) and not two (the
+    // Space in "Hello world" duplicating the insert).
+    await expect(page.locator(`${main} .slide-shape--text`)).toHaveCount(before + 1)
+    await expect(shapeText(page, 'Hello world')).toBeVisible({ timeout: 10_000 })
+
+    const zip = await saveAndRead(page, file)
+    const slide = await zip.file('ppt/slides/slide1.xml')!.async('string')
+    const matches = slide.match(/<a:t>Hello world<\/a:t>/g) ?? []
+    expect(matches).toHaveLength(1)
+  } finally {
+    kill(app)
+  }
+
+  const validation = execSync(`node scripts/validate-office-file.mjs "${file}"`, { cwd: projectRoot, encoding: 'utf8' })
+  expect(validation).not.toContain('error')
+
+  // Reopen: relaunch the real app against the saved file and confirm the
+  // typed text is there — not just present in the raw XML, but rendered.
+  const reopened = await launch(file)
+  try {
+    await expect(shapeText(reopened.page, 'Hello world')).toBeVisible()
+  } finally {
+    kill(reopened.app)
+  }
+})
+
+test('USR-16: an ODP text box, too, is typeable immediately after Insert Text Box with no rescuing click', async () => {
+  const source = path.join(projectRoot, 'tests', 'e2e', 'fixtures', 'sample.odp')
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-odp-insert-textbox-')), 'deck.odp')
+  fs.copyFileSync(source, file)
+
+  const { app, page } = await launch(file)
+  try {
+    const before = await page.locator(`${main} .slide-shape--text`).count()
+
+    await page.getByRole('button', { name: 'Insert text box' }).click()
+    await page.keyboard.type('Hello world', { delay: 30 })
+    await page.keyboard.press('Escape')
+
+    await expect(page.locator(`${main} .slide-shape--text`)).toHaveCount(before + 1)
+    await expect(shapeText(page, 'Hello world')).toBeVisible({ timeout: 10_000 })
+
+    const before2 = fs.statSync(file).mtimeMs
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect.poll(() => fs.statSync(file).mtimeMs, { timeout: 10_000 }).toBeGreaterThan(before2)
+    await page.waitForTimeout(300)
+
+    const zip = await JSZip.loadAsync(fs.readFileSync(file))
+    const contentXml = await zip.file('content.xml')!.async('string')
+    const matches = contentXml.match(/Hello world/g) ?? []
+    expect(matches).toHaveLength(1)
+  } finally {
+    kill(app)
+  }
+
+  const validation = execSync(`node scripts/validate-office-file.mjs "${file}"`, { cwd: projectRoot, encoding: 'utf8' })
+  expect(validation).not.toContain('error')
+})

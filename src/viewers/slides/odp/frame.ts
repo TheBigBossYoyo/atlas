@@ -31,9 +31,19 @@ function buildTextShape(
   transform: SlideTransform,
   styleName: string | null,
   index: OdpStyleIndex,
+  // A `draw:text-box` (as opposed to a bare `draw:rect`/`draw:custom-shape`
+  // with incidental inline text) is unambiguously a text box: it stays on
+  // the slide — selectable and editable — even with no text yet, the same
+  // way PPTX keeps an empty layout placeholder around. Without this, a
+  // freshly inserted, still-empty text box (USR-16 "Insert Text Box")
+  // vanished from the parsed model entirely (falling through to the
+  // fill/border/geometry check below, which a plain, unfilled `<a:noFill/>`
+  // text box also fails), so nothing was ever there for the immediately-
+  // following keystrokes to land in.
+  keepEmpty = false,
 ): SlideShape | null {
   const { paragraphs, text } = parseOdpTextBody(container, index)
-  if (!text) {
+  if (!text && !keepEmpty) {
     return null
   }
 
@@ -100,7 +110,7 @@ export async function buildOdpShape(
 
   const textBox = getFirstByLocalName(shape, 'text-box')
   if (textBox) {
-    return buildTextShape(textBox, id, transform, styleName, index)
+    return buildTextShape(textBox, id, transform, styleName, index, true)
   }
 
   return null
