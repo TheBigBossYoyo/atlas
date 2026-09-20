@@ -16,10 +16,12 @@
 //    part's own `.rels` file actually declares, required parts are present;
 //  - ODF: `META-INF/manifest.xml` lists every file (and nothing that isn't
 //    one), required parts are present;
-//  - schema-mandated element order in the three spots most prone to silent
-//    breakage: `w:pPr` first in `w:p`, `w:tblPr`/`w:tblGrid`/`w:tr` order in
-//    `w:tbl`, `a:bodyPr`/`a:lstStyle`/`a:p` order in `p:txBody`, and the
-//    OOXML `CT_Worksheet` child sequence.
+//  - schema-mandated element order: `w:pPr` first in `w:p`; `w:tblPr`/
+//    `w:tblGrid`/`w:tr` order in `w:tbl`; `a:bodyPr`/`a:lstStyle`/`a:p` order
+//    in `p:txBody`; the OOXML `CT_Worksheet` child sequence; and the full
+//    ECMA-376 child sequence of every property/container element Atlas's
+//    DOCX writers emit (`w:sectPr`, `w:pPr`, `w:rPr`, `w:tblPr`, `w:trPr`,
+//    `w:tcPr`, `w:numPr`, `w:style`, `w:settings`).
 //
 // Used both by `scripts/validate-office-file.mjs` (CLI) and by unit tests
 // (`src/**/__tests__/*.test.ts`, which import this module directly — see
@@ -383,6 +385,251 @@ const CT_WORKSHEET_ORDER = [
 const TX_BODY_ORDER = ['a:bodyPr', 'a:lstStyle', 'a:p']
 const TBL_ORDER = ['w:tblPr', 'w:tblGrid', 'w:tr']
 
+// The remaining sequences below cover every property/container element type
+// Atlas's DOCX writers (`src/docx/serializer/**`) actually emit, added after
+// a structural-fidelity review found several of those writers emitting
+// children out of schema order (the classic cause of Word's "found
+// unreadable content" repair prompt, since every one of these content models
+// is `xsd:sequence`, not a bag). Each array is the *full* ECMA-376 child
+// sequence for that complex type, copied from wml.xsd — not just the subset
+// Atlas currently writes — so `assertCanonicalOrder`'s "ignore unrecognized
+// tags" behavior stays correct if a writer starts emitting a member it
+// doesn't today, and so the list itself doubles as a spec reference instead
+// of needing one maintained separately.
+const CT_SECT_PR_ORDER = [
+  'w:headerReference',
+  'w:footerReference',
+  'w:footnotePr',
+  'w:endnotePr',
+  'w:type',
+  'w:pgSz',
+  'w:pgMar',
+  'w:paperSrc',
+  'w:pgBorders',
+  'w:lnNumType',
+  'w:pgNumType',
+  'w:cols',
+  'w:formProt',
+  'w:vAlign',
+  'w:noEndnote',
+  'w:titlePg',
+  'w:textDirection',
+  'w:bidi',
+  'w:rtlGutter',
+  'w:docGrid',
+  'w:printerSettings',
+  'w:sectPrChange',
+]
+
+// CT_PPrBase (§17.3.1.26) followed by CT_PPr's own trailing sequence
+// (rPr, sectPr, pPrChange).
+const CT_PPR_ORDER = [
+  'w:pStyle',
+  'w:keepNext',
+  'w:keepLines',
+  'w:pageBreakBefore',
+  'w:framePr',
+  'w:widowControl',
+  'w:numPr',
+  'w:suppressLineNumbers',
+  'w:pBdr',
+  'w:shd',
+  'w:tabs',
+  'w:suppressAutoHyphens',
+  'w:kinsoku',
+  'w:wordWrap',
+  'w:overflowPunct',
+  'w:topLinePunct',
+  'w:autoSpaceDE',
+  'w:autoSpaceDN',
+  'w:bidi',
+  'w:adjustRightInd',
+  'w:snapToGrid',
+  'w:spacing',
+  'w:ind',
+  'w:contextualSpacing',
+  'w:mirrorIndents',
+  'w:suppressOverlap',
+  'w:jc',
+  'w:textDirection',
+  'w:textAlignment',
+  'w:textboxTightWrap',
+  'w:outlineLvl',
+  'w:divId',
+  'w:cnfStyle',
+  'w:rPr',
+  'w:sectPr',
+  'w:pPrChange',
+]
+
+// CT_RPr / EG_RPrBase (§17.3.2.28) followed by CT_RPr's trailing rPrChange.
+const CT_RPR_ORDER = [
+  'w:rStyle',
+  'w:rFonts',
+  'w:b',
+  'w:bCs',
+  'w:i',
+  'w:iCs',
+  'w:caps',
+  'w:smallCaps',
+  'w:strike',
+  'w:dstrike',
+  'w:outline',
+  'w:shadow',
+  'w:emboss',
+  'w:imprint',
+  'w:noProof',
+  'w:snapToGrid',
+  'w:vanish',
+  'w:webHidden',
+  'w:color',
+  'w:spacing',
+  'w:w',
+  'w:kern',
+  'w:position',
+  'w:sz',
+  'w:szCs',
+  'w:highlight',
+  'w:u',
+  'w:effect',
+  'w:bdr',
+  'w:shd',
+  'w:fitText',
+  'w:vertAlign',
+  'w:rtl',
+  'w:cs',
+  'w:em',
+  'w:lang',
+  'w:eastAsianLayout',
+  'w:specVanish',
+  'w:oMath',
+  'w:rPrChange',
+]
+
+// CT_TblPrBase (§17.4.60) followed by CT_TblPr's trailing tblPrChange.
+const CT_TBL_PR_ORDER = [
+  'w:tblStyle',
+  'w:tblpPr',
+  'w:tblOverlap',
+  'w:bidiVisual',
+  'w:tblStyleRowBandSize',
+  'w:tblStyleColBandSize',
+  'w:tblW',
+  'w:jc',
+  'w:tblCellSpacing',
+  'w:tblInd',
+  'w:tblBorders',
+  'w:shd',
+  'w:tblLayout',
+  'w:tblCellMar',
+  'w:tblLook',
+  'w:tblCaption',
+  'w:tblDescription',
+  'w:tblPrChange',
+]
+
+// CT_TrPrBase (§17.4.83) followed by CT_TrPr's trailing ins/del/trPrChange.
+const CT_TR_PR_ORDER = [
+  'w:cnfStyle',
+  'w:divId',
+  'w:gridBefore',
+  'w:gridAfter',
+  'w:wBefore',
+  'w:wAfter',
+  'w:cantSplit',
+  'w:trHeight',
+  'w:tblHeader',
+  'w:tblCellSpacing',
+  'w:jc',
+  'w:hidden',
+  'w:ins',
+  'w:del',
+  'w:trPrChange',
+]
+
+// CT_TcPrBase (§17.4.70) followed by CT_TcPr's trailing members.
+const CT_TC_PR_ORDER = [
+  'w:cnfStyle',
+  'w:tcW',
+  'w:gridSpan',
+  'w:hMerge',
+  'w:vMerge',
+  'w:tcBorders',
+  'w:shd',
+  'w:noWrap',
+  'w:tcMar',
+  'w:textDirection',
+  'w:tcFitText',
+  'w:vAlign',
+  'w:hideMark',
+  'w:headers',
+  'w:cellIns',
+  'w:cellDel',
+  'w:cellMerge',
+  'w:tcPrChange',
+]
+
+// CT_NumPr (§17.9.11).
+const CT_NUM_PR_ORDER = ['w:ilvl', 'w:numId', 'w:numberingChange', 'w:ins']
+
+// CT_Style (§17.7.4.17).
+const CT_STYLE_ORDER = [
+  'w:name',
+  'w:aliases',
+  'w:basedOn',
+  'w:next',
+  'w:link',
+  'w:autoRedefine',
+  'w:hidden',
+  'w:uiPriority',
+  'w:semiHidden',
+  'w:unhideWhenUsed',
+  'w:qFormat',
+  'w:locked',
+  'w:personal',
+  'w:personalCompose',
+  'w:personalReply',
+  'w:rsid',
+  'w:pPr',
+  'w:rPr',
+  'w:tblPr',
+  'w:trPr',
+  'w:tcPr',
+  'w:tblStylePr',
+]
+
+// A conservative prefix of CT_Settings (§17.15.1.32)'s child sequence:
+// mirrors `src/docx/serializer/settingsWriter.ts`'s own
+// `ELEMENTS_BEFORE_TRACK_CHANGES` list (the elements whose position relative
+// to `w:trackChanges` that writer already reasons about when it needs to
+// insert one), plus `trackChanges` itself. Intentionally not the full
+// ~90-member CT_Settings sequence — Atlas only ever *writes* into this part
+// via that narrow trackChanges edit, so this is the slice worth asserting on;
+// `assertCanonicalOrder` ignores every element outside the list, so a
+// `settings.xml` passed through from Word with other members present in
+// between is unaffected.
+const CT_SETTINGS_ORDER = [
+  'w:writeProtection',
+  'w:view',
+  'w:zoom',
+  'w:removePersonalInformation',
+  'w:doNotDisplayPageBoundaries',
+  'w:displayBackgroundShape',
+  'w:embedTrueTypeFonts',
+  'w:embedSystemFonts',
+  'w:saveSubsetFonts',
+  'w:mirrorMargins',
+  'w:hideSpellingErrors',
+  'w:hideGrammaticalErrors',
+  'w:proofState',
+  'w:attachedTemplate',
+  'w:linkStyles',
+  'w:documentType',
+  'w:mailMerge',
+  'w:revisionView',
+  'w:trackChanges',
+]
+
 /**
  * @param {OrderedNode[]} rootNodes
  * @param {string} partPath
@@ -405,6 +652,33 @@ function checkElementOrder(rootNodes, partPath, issues) {
   }
   for (const worksheet of collectByTag(rootNodes, 'worksheet')) {
     assertCanonicalOrder(worksheet, CT_WORKSHEET_ORDER, partPath, issues, 'CT_Worksheet')
+  }
+  for (const sectPr of collectByTag(rootNodes, 'w:sectPr')) {
+    assertCanonicalOrder(sectPr, CT_SECT_PR_ORDER, partPath, issues, 'CT_SectPr')
+  }
+  for (const pPr of collectByTag(rootNodes, 'w:pPr')) {
+    assertCanonicalOrder(pPr, CT_PPR_ORDER, partPath, issues, 'CT_PPr')
+  }
+  for (const rPr of collectByTag(rootNodes, 'w:rPr')) {
+    assertCanonicalOrder(rPr, CT_RPR_ORDER, partPath, issues, 'CT_RPr')
+  }
+  for (const tblPr of collectByTag(rootNodes, 'w:tblPr')) {
+    assertCanonicalOrder(tblPr, CT_TBL_PR_ORDER, partPath, issues, 'CT_TblPr')
+  }
+  for (const trPr of collectByTag(rootNodes, 'w:trPr')) {
+    assertCanonicalOrder(trPr, CT_TR_PR_ORDER, partPath, issues, 'CT_TrPr')
+  }
+  for (const tcPr of collectByTag(rootNodes, 'w:tcPr')) {
+    assertCanonicalOrder(tcPr, CT_TC_PR_ORDER, partPath, issues, 'CT_TcPr')
+  }
+  for (const numPr of collectByTag(rootNodes, 'w:numPr')) {
+    assertCanonicalOrder(numPr, CT_NUM_PR_ORDER, partPath, issues, 'CT_NumPr')
+  }
+  for (const style of collectByTag(rootNodes, 'w:style')) {
+    assertCanonicalOrder(style, CT_STYLE_ORDER, partPath, issues, 'CT_Style')
+  }
+  for (const settings of collectByTag(rootNodes, 'w:settings')) {
+    assertCanonicalOrder(settings, CT_SETTINGS_ORDER, partPath, issues, 'CT_Settings')
   }
 }
 

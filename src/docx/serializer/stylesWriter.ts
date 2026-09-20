@@ -59,6 +59,11 @@ export function writeStylesXml(stylesPart: StylesPart): string {
   return `${XML_DECLARATION}${xmlBuilder.build({ 'w:styles': root })}`
 }
 
+// Child order follows ECMA-376 `CT_PPrBase`/`CT_PPr` (§17.3.1.26), restricted
+// to the members `ParaProps` models — see `documentWriter.ts`'s
+// `buildParagraphPropertiesNode` doc comment for the violations an
+// element-order review found in the equivalent (pre-fix) ordering there,
+// which this duplicate builder shared.
 export function buildParagraphPropertiesXml(
   props: ParaProps | undefined,
 ): Record<string, unknown> | undefined {
@@ -66,24 +71,25 @@ export function buildParagraphPropertiesXml(
 
   const node: XmlNode = {
     ...buildValElement('w:pStyle', props.pStyle),
-    ...withElement('w:numPr', buildNumPrXml(props.numPr)),
-    ...withElement('w:spacing', buildSpacingXml(props.spacing)),
-    ...withElement('w:ind', buildIndentXml(props.ind)),
-    ...buildValElement('w:jc', props.jc),
     ...withElement('w:keepNext', buildOnOffElement(props.keepNext)),
     ...withElement('w:keepLines', buildOnOffElement(props.keepLines)),
     ...withElement('w:pageBreakBefore', buildOnOffElement(props.pageBreakBefore)),
+    ...withElement('w:framePr', buildFramePropsXml(props.framePr)),
     ...withElement('w:widowControl', buildOnOffElement(props.widowControl)),
+    ...withElement('w:numPr', buildNumPrXml(props.numPr)),
     ...withElement('w:suppressLineNumbers', buildOnOffElement(props.suppressLineNumbers)),
-    ...withElement('w:suppressAutoHyphens', buildOnOffElement(props.suppressAutoHyphens)),
-    ...withElement('w:contextualSpacing', buildOnOffElement(props.contextualSpacing)),
-    ...withElement('w:mirrorIndents', buildOnOffElement(props.mirrorIndents)),
-    ...buildValElement('w:outlineLvl', props.outlineLvl),
-    ...buildValElement('w:textAlignment', props.textAlignment),
-    ...withElement('w:tabs', buildTabsXml(props.tabs)),
     ...withElement('w:pBdr', buildBorderSetXml(props.pBdr)),
     ...withElement('w:shd', buildShadingXml(props.shd)),
-    ...withElement('w:framePr', buildFramePropsXml(props.framePr)),
+    ...withElement('w:tabs', buildTabsXml(props.tabs)),
+    ...withElement('w:suppressAutoHyphens', buildOnOffElement(props.suppressAutoHyphens)),
+    ...withElement('w:bidi', buildOnOffElement(props.bidi)),
+    ...withElement('w:spacing', buildSpacingXml(props.spacing)),
+    ...withElement('w:ind', buildIndentXml(props.ind)),
+    ...withElement('w:contextualSpacing', buildOnOffElement(props.contextualSpacing)),
+    ...withElement('w:mirrorIndents', buildOnOffElement(props.mirrorIndents)),
+    ...buildValElement('w:jc', props.jc),
+    ...buildValElement('w:textAlignment', props.textAlignment),
+    ...buildValElement('w:outlineLvl', props.outlineLvl),
     ...buildValElement('w:divId', props.divId),
     ...withElement('w:sectPr', buildSectionPropsXml(props.sectPr)),
   }
@@ -91,6 +97,11 @@ export function buildParagraphPropertiesXml(
   return hasEntries(node) ? node : undefined
 }
 
+// Child order follows ECMA-376 `CT_RPr`/`EG_RPrBase` (§17.3.2.28), restricted
+// to the members `RunProps` models — see `documentWriter.ts`'s
+// `buildRunPropertiesNode` doc comment for the violations an element-order
+// review found in the equivalent (pre-fix) ordering there, which this
+// duplicate builder shared.
 export function buildRunPropertiesXml(
   props: RunProps | undefined,
 ): Record<string, unknown> | undefined {
@@ -98,29 +109,29 @@ export function buildRunPropertiesXml(
 
   const node: XmlNode = {
     ...buildValElement('w:rStyle', props.rStyle),
+    ...withElement('w:rFonts', buildFontSetXml(props.rFonts)),
     ...withElement('w:b', buildOnOffElement(props.bold)),
     ...withElement('w:bCs', buildOnOffElement(props.boldCs)),
     ...withElement('w:i', buildOnOffElement(props.italic)),
     ...withElement('w:iCs', buildOnOffElement(props.italicCs)),
-    ...withElement('w:u', buildUnderlineXml(props.underline)),
+    ...withElement('w:caps', buildOnOffElement(props.caps)),
+    ...withElement('w:smallCaps', buildOnOffElement(props.smallCaps)),
     ...withElement('w:strike', buildOnOffElement(props.strike)),
     ...withElement('w:dstrike', buildOnOffElement(props.dstrike)),
-    ...buildValElement('w:vertAlign', props.vertAlign),
+    ...withElement('w:vanish', buildOnOffElement(props.vanish)),
+    ...withElement('w:webHidden', buildOnOffElement(props.webHidden)),
     ...buildValElement('w:color', props.color),
-    ...buildValElement('w:highlight', props.highlight),
-    ...withElement('w:shd', buildShadingXml(props.shd)),
-    ...buildValElement('w:sz', props.sz),
-    ...buildValElement('w:szCs', props.szCs),
-    ...withElement('w:rFonts', buildFontSetXml(props.rFonts)),
     ...buildValElement('w:spacing', props.spacing),
     ...buildValElement('w:kern', props.kern),
     ...buildValElement('w:position', props.position),
-    ...withElement('w:lang', buildLanguageSetXml(props.lang)),
-    ...withElement('w:caps', buildOnOffElement(props.caps)),
-    ...withElement('w:smallCaps', buildOnOffElement(props.smallCaps)),
-    ...withElement('w:vanish', buildOnOffElement(props.vanish)),
-    ...withElement('w:webHidden', buildOnOffElement(props.webHidden)),
+    ...buildValElement('w:sz', props.sz),
+    ...buildValElement('w:szCs', props.szCs),
+    ...buildValElement('w:highlight', props.highlight),
+    ...withElement('w:u', buildUnderlineXml(props.underline)),
+    ...withElement('w:shd', buildShadingXml(props.shd)),
+    ...buildValElement('w:vertAlign', props.vertAlign),
     ...withElement('w:rtl', buildOnOffElement(props.rtl)),
+    ...withElement('w:lang', buildLanguageSetXml(props.lang)),
   }
 
   return hasEntries(node) ? node : undefined
@@ -156,8 +167,9 @@ function buildStyleXml(style: Style): XmlNode {
     ...buildValElement('w:basedOn', style.basedOn),
     ...buildValElement('w:next', style.next),
     ...buildValElement('w:link', style.linked),
-    ...buildValElement('w:uiPriority', style.uiPriority),
+    // CT_Style (§17.7.4.17) orders `hidden` before `uiPriority`.
     ...withElement('w:hidden', buildOnOffElement(style.hidden)),
+    ...buildValElement('w:uiPriority', style.uiPriority),
     ...withElement('w:semiHidden', buildOnOffElement(style.semiHidden)),
     ...withElement('w:unhideWhenUsed', buildOnOffElement(style.unhideWhenUsed)),
     ...withElement('w:qFormat', buildOnOffElement(style.qFormat)),
@@ -191,10 +203,13 @@ function buildTableConditionalFormatsXml(
   }))
 }
 
+// Child order follows ECMA-376 `CT_TrPrBase` (§17.4.83): `cantSplit`
+// precedes `trHeight`.
 function buildTableConditionalRowPropertiesXml(row: TableRowProps | undefined): XmlNode | undefined {
   if (row === undefined) return undefined
 
   const node: XmlNode = {
+    ...withElement('w:cantSplit', buildOnOffElement(row.cantSplit)),
     ...(row.trHeight !== undefined
       ? {
           'w:trHeight': {
@@ -203,7 +218,6 @@ function buildTableConditionalRowPropertiesXml(row: TableRowProps | undefined): 
           },
         }
       : {}),
-    ...withElement('w:cantSplit', buildOnOffElement(row.cantSplit)),
     ...withElement('w:tblHeader', buildOnOffElement(row.tblHeader)),
     ...buildValElement('w:jc', row.jc),
   }
@@ -211,6 +225,8 @@ function buildTableConditionalRowPropertiesXml(row: TableRowProps | undefined): 
   return hasEntries(node) ? node : undefined
 }
 
+// Child order follows ECMA-376 `CT_TcPrBase` (§17.4.70): `noWrap` precedes
+// `tcMar`/`vAlign`.
 function buildTableConditionalCellPropertiesXml(cell: TableCellProps | undefined): XmlNode | undefined {
   if (cell === undefined) return undefined
 
@@ -220,9 +236,9 @@ function buildTableConditionalCellPropertiesXml(cell: TableCellProps | undefined
     ...(cell.vMerge !== undefined ? { 'w:vMerge': withAttribute('@_w:val', cell.vMerge) } : {}),
     ...withElement('w:tcBorders', buildBorderSetXml(cell.tcBorders)),
     ...withElement('w:shd', buildShadingXml(cell.shd)),
+    ...withElement('w:noWrap', buildOnOffElement(cell.noWrap)),
     ...withElement('w:tcMar', buildInsetSetXml(cell.tcMar)),
     ...buildValElement('w:vAlign', cell.vAlign),
-    ...withElement('w:noWrap', buildOnOffElement(cell.noWrap)),
     ...withElement('w:hideMark', buildOnOffElement(cell.hideMark)),
   }
 
@@ -377,6 +393,11 @@ function buildFramePropsXml(frameProps: FrameProps | undefined): XmlNode | undef
   return hasEntries(node) ? node : undefined
 }
 
+// Child order follows ECMA-376 `EG_SectPrContents` (§17.6.17), restricted to
+// the members modeled here — see `documentWriter.ts`'s
+// `buildSectionPropertiesNode` doc comment for the full member list and the
+// violations an element-order review found in the equivalent (pre-fix)
+// ordering there.
 function buildSectionPropsXml(sectionProps: SectionProps | undefined): XmlNode | undefined {
   if (sectionProps === undefined) return undefined
 
@@ -391,16 +412,16 @@ function buildSectionPropsXml(sectionProps: SectionProps | undefined): XmlNode |
   }))
 
   const node: XmlNode = {
-    ...withElement('w:pgSz', buildPageSizeXml(sectionProps.pgSz)),
-    ...withElement('w:pgMar', buildPageMarginsXml(sectionProps.pgMar)),
-    ...withElement('w:cols', buildSectionColumnsXml(sectionProps.cols)),
-    ...withElement('w:pgNumType', buildPageNumberTypeXml(sectionProps.pgNumType)),
-    ...withElement('w:titlePg', buildOnOffElement(sectionProps.titlePg)),
-    ...buildValElement('w:type', sectionProps.type),
     ...(headerReference.length > 0 ? { 'w:headerReference': headerReference } : {}),
     ...(footerReference.length > 0 ? { 'w:footerReference': footerReference } : {}),
+    ...buildValElement('w:type', sectionProps.type),
+    ...withElement('w:pgSz', buildPageSizeXml(sectionProps.pgSz)),
+    ...withElement('w:pgMar', buildPageMarginsXml(sectionProps.pgMar)),
     ...withElement('w:lnNumType', buildLineNumberTypeXml(sectionProps.lnNumType)),
+    ...withElement('w:pgNumType', buildPageNumberTypeXml(sectionProps.pgNumType)),
+    ...withElement('w:cols', buildSectionColumnsXml(sectionProps.cols)),
     ...buildValElement('w:vAlign', sectionProps.vAlign),
+    ...withElement('w:titlePg', buildOnOffElement(sectionProps.titlePg)),
   }
 
   return hasEntries(node) ? node : undefined
@@ -510,20 +531,22 @@ function buildLanguageSetXml(languageSet: LanguageSet | undefined): XmlNode | un
   return hasEntries(node) ? node : undefined
 }
 
+// Child order follows ECMA-376 `CT_TblPrBase` (§17.4.60), restricted to the
+// members `TableStyleProps` models.
 function buildTableStylePropertiesXml(tableStyleProps: TableStyleProps | undefined): XmlNode | undefined {
   if (tableStyleProps === undefined) return undefined
 
   const node: XmlNode = {
-    ...withElement('w:tblW', buildWidthXml(tableStyleProps.width)),
-    ...withElement('w:tblInd', buildWidthXml(tableStyleProps.indent)),
-    ...withElement('w:tblBorders', buildBorderSetXml(tableStyleProps.borders)),
-    ...withElement('w:tblCellMar', buildInsetSetXml(tableStyleProps.cellMargin)),
-    ...buildValElement('w:tblLayout', tableStyleProps.layout),
     ...buildValElement('w:tblStyleRowBandSize', tableStyleProps.rowBandSize),
     ...buildValElement('w:tblStyleColBandSize', tableStyleProps.colBandSize),
-    ...withElement('w:tblLook', buildTableLookXml(tableStyleProps.look)),
+    ...withElement('w:tblW', buildWidthXml(tableStyleProps.width)),
     ...buildValElement('w:jc', tableStyleProps.justification),
+    ...withElement('w:tblInd', buildWidthXml(tableStyleProps.indent)),
+    ...withElement('w:tblBorders', buildBorderSetXml(tableStyleProps.borders)),
     ...withElement('w:shd', buildShadingXml(tableStyleProps.shading)),
+    ...buildValElement('w:tblLayout', tableStyleProps.layout),
+    ...withElement('w:tblCellMar', buildInsetSetXml(tableStyleProps.cellMargin)),
+    ...withElement('w:tblLook', buildTableLookXml(tableStyleProps.look)),
   }
 
   return hasEntries(node) ? node : undefined
