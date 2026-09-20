@@ -304,6 +304,8 @@ describe('toolbarToCommand — DXE-14 table structural editing', () => {
       document,
     )
 
+    // DOCX-14 — ST_HexColor never carries a leading '#'; hexColor() strips
+    // it, so TABLE_BORDER_ON's color comes out as '000000'.
     expect(command).toEqual({
       kind: 'apply-table-props',
       tablePath: [0, 0],
@@ -311,12 +313,12 @@ describe('toolbarToCommand — DXE-14 table structural editing', () => {
         tblW: { type: 'dxa', value: 5000 },
         jc: 'center',
         tblBorders: {
-          top: { style: 'single', size: 4, color: '#000000' },
-          bottom: { style: 'single', size: 4, color: '#000000' },
-          left: { style: 'single', size: 4, color: '#000000' },
-          right: { style: 'single', size: 4, color: '#000000' },
-          insideH: { style: 'single', size: 4, color: '#000000' },
-          insideV: { style: 'single', size: 4, color: '#000000' },
+          top: { style: 'single', size: 4, color: '000000' },
+          bottom: { style: 'single', size: 4, color: '000000' },
+          left: { style: 'single', size: 4, color: '000000' },
+          right: { style: 'single', size: 4, color: '000000' },
+          insideH: { style: 'single', size: 4, color: '000000' },
+          insideV: { style: 'single', size: 4, color: '000000' },
         },
       },
     })
@@ -507,6 +509,22 @@ describe('toolbarToCommand', () => {
   })
 
   // ---------------------------------------------------------------------------
+  // DOCX-14 — the toolbar's color picker is a browser <input type="color">,
+  // which always hands back "#rrggbb". ST_HexColor never carries a leading
+  // '#'; hexColor() (see model/styles.ts) is the choke point that strips it.
+  // ---------------------------------------------------------------------------
+  it('set-font-color strips the "#" a color <input> produces before it reaches the command', () => {
+    const document = createDocument([
+      Object.freeze({ kind: 'paragraph', children: Object.freeze([createRun('Hello')]) }) as Paragraph,
+    ])
+    const range: Range = { anchor: pos([0, 0], 0, 0), focus: pos([0, 0], 0, 5) }
+
+    const command = toolbarToCommand({ kind: 'set-font-color', colorHex: '#ff0000' }, range, document)
+
+    expect(command).toEqual({ kind: 'apply-run-format', range, format: { color: 'ff0000' } })
+  })
+
+  // ---------------------------------------------------------------------------
   // Regression — a real Word document almost always already defines its own
   // numId "1" (and often "2"). Hardcoding those for the toolbar's list
   // toggle meant clicking "Bulleted List" on such a document silently reused
@@ -566,7 +584,10 @@ describe('toolbarToCommand', () => {
           String(allocatedNumId),
           {
             numId: String(allocatedNumId),
-            abstractNumId: `atlas-list-${allocatedNumId}`,
+            // A plain integer, as DOCX-15 requires — reuse is now signaled
+            // by `atlasManaged`, not by an `atlas-list-` prefix on the id.
+            abstractNumId: String(allocatedNumId + 1000),
+            atlasManaged: true,
             levels: new Map([[0, { level: 0, format: 'bullet' }]]),
           },
         ],

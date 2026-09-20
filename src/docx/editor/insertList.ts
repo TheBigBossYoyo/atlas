@@ -36,13 +36,13 @@ const LIST_FORMAT_BY_KIND: Readonly<Record<ListKind, string>> = {
  * creating Atlas's own bullet definition.
  *
  * Reuses an Atlas-created list definition of the matching kind if one
- * already exists in this document (identified by the `atlas-list-` prefix
- * `ensureListNumbering` gives its own `abstractNumId`s, plus a matching
- * level-0 format) so repeated toggles/pastes of the same kind keep
- * converging on one shared definition; otherwise allocates one past every
- * numId already in use, which can never collide with the source document's
- * own numbering or with a different-kind list Atlas already created in this
- * session.
+ * already exists in this document (identified by `NumberingDef.atlasManaged`
+ * — see that field's doc comment for why this can no longer be a prefix on
+ * `abstractNumId` itself — plus a matching level-0 format) so repeated
+ * toggles/pastes of the same kind keep converging on one shared definition;
+ * otherwise allocates one past every numId already in use, which can never
+ * collide with the source document's own numbering or with a different-kind
+ * list Atlas already created in this session.
  */
 export function pickListNumId(numbering: ReadonlyMap<string, NumberingDef>, kind: ListKind): number {
   const wantedFormat = LIST_FORMAT_BY_KIND[kind]
@@ -56,7 +56,7 @@ export function pickListNumId(numbering: ReadonlyMap<string, NumberingDef>, kind
 
     if (
       Number.isFinite(parsed) &&
-      def.abstractNumId?.startsWith('atlas-list-') === true &&
+      def.atlasManaged === true &&
       def.levels.get(0)?.format === wantedFormat
     ) {
       return parsed
@@ -73,17 +73,56 @@ export interface ListNumberingEntry {
 }
 
 /**
+ * DOCX-15 fix — `w:abstractNumId` (both the `w:abstractNum` element's own
+ * attribute and the `w:num/w:abstractNumId/@w:val` that points at it) is
+ * `ST_DecimalNumber` in the OOXML schema: a plain integer, never a string
+ * tag. Returns one integer past every abstractNumId already present in the
+ * document's numbering part (real ones from the source file and any Atlas
+ * minted earlier in this session alike), so a freshly minted id can never
+ * collide with one already in use regardless of how sparse or dense the
+ * existing ids are. Non-numeric existing ids (there shouldn't be any once
+ * this fix ships, but a document round-tripped through an older, buggy
+ * Atlas build could still have one on disk) are simply ignored rather than
+ * treated as a parse failure — this only needs to find the numeric
+ * high-water mark.
+ */
+function nextAbstractNumId(existingAbstractNumIds: Iterable<string>): number {
+  let max = -1
+  for (const id of existingAbstractNumIds) {
+    const parsed = Number.parseInt(id, 10)
+    if (Number.isFinite(parsed) && parsed > max) {
+      max = parsed
+    }
+  }
+  return max + 1
+}
+
+/**
  * Builds the abstractNum/num/NumberingDef triple for a fresh single-level
  * (level 0 only) bullet or decimal-numbered list definition under `numId`.
  * Pure and side-effect-free so both `ensureListNumbering` (below, for the
  * toolbar's bundle-level list toggle) and DXE-19 rich paste's own
  * `pasteRich.ts` (which mints these against a locally-tracked numbering map
  * rather than a whole `DocxBundle`, potentially several in one paste) can
- * share the exact same definition shape.
+ * share the exact same definition shape. `existingAbstractNumIds` is every
+ * `abstractNumId` already present in the numbering part this entry will be
+ * added to — see `nextAbstractNumId` for why the caller supplies this
+ * rather than the function tracking it internally: it's the same
+ * "bundle-level state the pure helper doesn't own" reason `numId` itself is
+ * a parameter rather than self-allocated.
+ *
+ * `abstractNumId` is kept identical across `abstractNum.abstractNumId`,
+ * `numInstance.abstractNumId` and `numberingDef.abstractNumId` — the num
+ * instance and the def both have to point at the abstract definition this
+ * same call mints, not at some other id.
  */
-export function createListNumberingEntry(numId: number, kind: ListKind): ListNumberingEntry {
+export function createListNumberingEntry(
+  numId: number,
+  kind: ListKind,
+  existingAbstractNumIds: Iterable<string>,
+): ListNumberingEntry {
   const numIdStr = String(numId)
-  const abstractNumId = `atlas-list-${numIdStr}`
+  const abstractNumId = String(nextAbstractNumId(existingAbstractNumIds))
   const level: LvlDef =
     kind === 'number'
       ? { level: 0, format: 'decimal', text: { value: '%1.', placeholders: [1] }, suffix: 'tab' }
@@ -92,7 +131,11 @@ export function createListNumberingEntry(numId: number, kind: ListKind): ListNum
   return {
     abstractNum: { abstractNumId, levels: new Map([[0, level]]) },
     numInstance: { numId: numIdStr, abstractNumId },
-    numberingDef: { numId: numIdStr, abstractNumId, levels: new Map([[0, level]]) },
+    // atlasManaged — see NumberingDef's doc comment — is what pickListNumId
+    // now uses to recognize a definition Atlas minted for reuse, now that
+    // abstractNumId itself is a plain integer and can no longer carry an
+    // `atlas-list-` prefix.
+    numberingDef: { numId: numIdStr, abstractNumId, levels: new Map([[0, level]]), atlasManaged: true },
   }
 }
 
@@ -110,9 +153,13 @@ export function ensureListNumbering(bundle: DocxBundle, numId: number, kind: Lis
     return bundle
   }
 
-  const { abstractNum, numInstance, numberingDef } = createListNumberingEntry(numId, kind)
-
   const previousPart = bundle.numberingPart ?? { abstractNums: new Map(), nums: new Map() }
+  const { abstractNum, numInstance, numberingDef } = createListNumberingEntry(
+    numId,
+    kind,
+    previousPart.abstractNums.keys(),
+  )
+
   const nextNumberingPart: NumberingPart = {
     abstractNums: new Map(previousPart.abstractNums).set(abstractNum.abstractNumId, abstractNum),
     nums: new Map(previousPart.nums).set(numInstance.numId, numInstance),
