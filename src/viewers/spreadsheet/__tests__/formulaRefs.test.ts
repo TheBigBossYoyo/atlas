@@ -71,6 +71,16 @@ describe('rewriteFormulaReferences — sheet rename/delete', () => {
     ])
     expect(rewrite('Sheet2!A1+Sheet3!B2', changes)).toBe('Data!A1+#REF!')
   })
+
+  it('rewrites an unquoted, unqualified-looking accented sheet name on rename (e.g. French sheet names)', () => {
+    const changes = new Map([['Résumé', change({ newName: 'Sales' })]])
+    expect(rewrite('Résumé!A1', changes)).toBe('Sales!A1')
+  })
+
+  it('replaces an unquoted accented sheet name reference with #REF! on delete', () => {
+    const changes = new Map([['Résumé', change({ deleted: true })]])
+    expect(rewrite('Résumé!A1:B2', changes)).toBe('#REF!')
+  })
 })
 
 describe('rewriteFormulaReferences — 3-D references', () => {

@@ -135,7 +135,6 @@ function isIdentStart(ch: string | undefined): boolean {
 // scanning/backtracking across the rest of the formula).
 // ---------------------------------------------------------------------------
 
-const RE_BARE_IDENT = /[A-Za-z_][A-Za-z0-9_.]*/y
 const RE_QUOTED_SHEET = /'(?:[^']|'')*'/y
 const RE_EXTERNAL_MARKER = /\[[0-9]+\]/y
 const RE_CELL_RANGE = /\$?[A-Za-z]{1,3}\$?[0-9]+:\$?[A-Za-z]{1,3}\$?[0-9]+/y
@@ -147,6 +146,30 @@ function execAt(re: RegExp, text: string, at: number): string | null {
   re.lastIndex = at
   const match = re.exec(text)
   return match && match.index === at ? match[0] : null
+}
+
+/**
+ * Matches a bare (unquoted) identifier — a sheet name, table name or defined
+ * name — starting exactly at `at`, per the SAME character classification as
+ * `isIdentStart`/`isIdentContinue` above (ASCII letter/underscore to start,
+ * plus any non-ASCII code unit — e.g. an accented sheet name like "Résumé" —
+ * to continue). This mirrors those functions rather than using a separate
+ * ASCII-only regex: an earlier version matched with an ASCII-only identifier
+ * pattern (letters/digits/underscore/period), which stops before the first
+ * non-ASCII character, so `formula[end]` never
+ * lands on the `!` that follows a real sheet-qualified reference — a sheet
+ * named "Résumé" (unquoted, exactly as Excel itself writes it — quoting is
+ * only required for a space or other punctuation, not for a plain accented
+ * letter) silently failed to match `Sheet!Ref` at all, so a rename or delete
+ * of that sheet left every formula referencing it unrewritten: a silent
+ * stale/wrong reference, not the `#REF!`/renamed text Excel itself would
+ * produce.
+ */
+function matchBareIdentAt(text: string, at: number): string | null {
+  if (!isIdentStart(text[at])) return null
+  let end = at + 1
+  while (isIdentContinue(text[end])) end += 1
+  return text.slice(at, end)
 }
 
 // ---------------------------------------------------------------------------
@@ -281,7 +304,7 @@ function scanBracketSpan(formula: string, openAt: number): number | null {
 function matchStructuredRefEnd(formula: string, at: number): number | null {
   let pos = at
   if (isIdentStart(formula[pos])) {
-    const ident = execAt(RE_BARE_IDENT, formula, pos)
+    const ident = matchBareIdentAt(formula, pos)
     if (!ident) return null
     pos += ident.length
   }
@@ -346,7 +369,7 @@ function matchSheetNameAt(formula: string, at: number): SheetToken | null {
     return { name: quoted.slice(1, -1).replace(/''/g, "'"), end: at + quoted.length }
   }
   if (!isIdentStart(formula[at])) return null
-  const bare = execAt(RE_BARE_IDENT, formula, at)
+  const bare = matchBareIdentAt(formula, at)
   if (!bare) return null
   return { name: bare, end: at + bare.length }
 }
