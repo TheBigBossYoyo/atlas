@@ -153,6 +153,20 @@ correct z-order).
   borders, effects — everything except the crop/rotation/flip transform)
   are not re-emitted on save, a schema-validity gap pre-dating wave 3 that
   wave 3's own picture-fidelity work did not introduce or fix.
+- **Content controls (`w:sdt`) and a shape/text box's legacy fallback
+  (`mc:AlternateContent`) now round-trip byte-for-byte through a save —
+  including a content control's own id/alias/tag/binding/lock/placeholder/
+  appearance, and a shape's rejected `mc:Fallback` branch — as long as
+  nothing inside the wrapper was actually edited (round-trip fidelity
+  audit, DXS round 2 follow-up). The moment an edit touches content inside
+  one, or it sits somewhere the parser doesn't track a passthrough region
+  for (a table cell, header, or footer), it falls back to the older
+  behavior: the visible content survives, but the wrapper itself — and
+  everything Atlas doesn't model about it — is stripped on save. When that
+  happens, Atlas now tells you in a plain-language, dismissible notice
+  right after the save that triggered it (once per document, not on every
+  save) — see `detectLossySaveWarnings`/`categorizeLossySaveWarnings` in
+  `src/docx/fidelity/lossySaveWarnings.ts` and `DocxViewer.tsx`'s save flow.
 - **Spell check** runs through Electron/Chromium's own native spellchecker
   (`window.electronAPI.spellcheck`, backed by `session.setSpellCheckerLanguages`)
   rather than the bundled-Hunspell-dictionary (`nspell` + `dictionary-en`/

@@ -586,7 +586,7 @@ describe('writeDocumentXml', () => {
       ),
     ],
     [
-      'w:sdt-wrapped paragraph, content unwrapped (D8 / DXP-08)',
+      'w:sdt-wrapped paragraph, unedited — passed through verbatim (round-trip fidelity audit, DXS round 2 follow-up)',
       documentXml(
         '<w:sdt><w:sdtContent><w:p><w:r><w:t>Content control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sectPr/>',
       ),
@@ -780,5 +780,119 @@ describe('writeDocumentXml', () => {
       expect(xml).toContain('<w:b/>')
       expect(xml).toContain('Bold Author')
     })
+  })
+})
+
+// Round-trip fidelity audit, DXS round 2 follow-up — `WrapperPassthrough`
+// (see `../../model/document.ts`'s doc comment): an unedited `w:sdt`/
+// `mc:AlternateContent` now round-trips byte-for-byte instead of always
+// being stripped to its inner content, but only for as long as an identity
+// check on its captured content holds. These tests exercise both sides of
+// that check directly against `writeDocumentXml`, rather than only through
+// `expectRoundTrip`'s structural-AST comparison above (which can't tell
+// "the wrapper round-tripped" from "the wrapper was stripped the same way
+// on both sides").
+describe('writeDocumentXml — wrapper-passthrough regions', () => {
+  it('re-emits an unedited body-level w:sdt verbatim, including metadata Atlas never models', () => {
+    const xml = documentXml(
+      '<w:sdt>'
+        + '<w:sdtPr><w:id w:val="7"/><w:alias w:val="Reviewer"/><w:tag w:val="atlasTag"/></w:sdtPr>'
+        + '<w:sdtContent><w:p><w:r><w:t>Control text</w:t></w:r></w:p></w:sdtContent>'
+        + '</w:sdt><w:sectPr/>',
+    )
+    const parsed = parseDocument(xml)
+
+    const written = writeDocumentXml(parsed)
+
+    expect(written).toContain(
+      '<w:sdt><w:sdtPr><w:id w:val="7"/><w:alias w:val="Reviewer"/><w:tag w:val="atlasTag"/></w:sdtPr>'
+        + '<w:sdtContent><w:p><w:r><w:t>Control text</w:t></w:r></w:p></w:sdtContent></w:sdt>',
+    )
+  })
+
+  it('falls back to stripping the w:sdt wrapper once its paragraph has been replaced (simulating an edit)', () => {
+    const xml = documentXml(
+      '<w:sdt>'
+        + '<w:sdtPr><w:id w:val="7"/><w:alias w:val="Reviewer"/></w:sdtPr>'
+        + '<w:sdtContent><w:p><w:r><w:t>Control text</w:t></w:r></w:p></w:sdtContent>'
+        + '</w:sdt><w:sectPr/>',
+    )
+    const parsed = parseDocument(xml)
+
+    // A real edit rebuilds the touched paragraph as a new object (Atlas's
+    // edit pipeline never mutates one in place) — a shallow clone breaks
+    // the region's identity check the same way without needing a whole
+    // editor-command round trip.
+    const edited: Document = {
+      ...parsed,
+      sections: parsed.sections.map((section) => ({
+        ...section,
+        blocks: section.blocks.map((block) => ({ ...block })),
+      })),
+    }
+
+    const written = writeDocumentXml(edited)
+
+    expect(written).not.toContain('<w:sdt>')
+    expect(written).not.toContain('w:alias')
+    expect(written).toContain('Control text')
+  })
+
+  it('re-emits an unedited run-level mc:AlternateContent verbatim, including the mc:Fallback branch it would otherwise drop', () => {
+    const xml = documentXml(
+      '<w:p><w:r>'
+        + '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+        + '<mc:Choice Requires="wps"><w:drawing/></mc:Choice>'
+        + '<mc:Fallback><w:pict><v:rect/></w:pict></mc:Fallback>'
+        + '</mc:AlternateContent>'
+        + '</w:r></w:p><w:sectPr/>',
+    )
+    const parsed = parseDocument(xml)
+
+    const written = writeDocumentXml(parsed)
+
+    expect(written).toContain('<mc:Fallback><w:pict><v:rect/></w:pict></mc:Fallback>')
+  })
+
+  it('falls back to mc:Choice-only once the run holding mc:AlternateContent has been replaced (simulating an edit)', () => {
+    const xml = documentXml(
+      '<w:p><w:r>'
+        + '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+        + '<mc:Choice Requires="wps"><w:drawing/></mc:Choice>'
+        + '<mc:Fallback><w:pict><v:rect/></w:pict></mc:Fallback>'
+        + '</mc:AlternateContent>'
+        + '</w:r></w:p><w:sectPr/>',
+    )
+    const parsed = parseDocument(xml)
+
+    // The region's captured content is the *drawing* (the run's own child),
+    // so the clone has to go one level deeper than the w:sdt case above:
+    // cloning only the `Run` would leave its `children` array — and the
+    // drawing inside it — as the exact same references, and the identity
+    // check would (correctly) still consider that unedited.
+    const edited: Document = {
+      ...parsed,
+      sections: parsed.sections.map((section) => ({
+        ...section,
+        blocks: section.blocks.map((block) =>
+          block.kind === 'paragraph'
+            ? {
+                ...block,
+                children: block.children.map((child) =>
+                  child.kind === 'run'
+                    ? { ...child, children: child.children.map((runChild) => ({ ...runChild }) as typeof runChild) }
+                    : child,
+                ),
+              }
+            : block,
+        ),
+      })),
+    }
+
+    const written = writeDocumentXml(edited)
+
+    expect(written).not.toContain('mc:AlternateContent')
+    expect(written).not.toContain('mc:Fallback')
+    expect(written).toContain('<w:drawing/>')
   })
 })

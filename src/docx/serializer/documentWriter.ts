@@ -60,6 +60,7 @@ import {
   type TextNode,
   type UnknownNode,
   type Width,
+  type WrapperPassthrough,
 } from '../model'
 
 interface XmlAttributes {
@@ -85,6 +86,16 @@ interface OrderedXmlNode {
 export interface SerializeState {
   readonly unknownXml: Map<string, string>
   nextUnknownId: number
+  /**
+   * `w:sdt`/`mc:AlternateContent` wrapper regions captured while parsing
+   * the source document (round-trip fidelity audit, DXS round 2 follow-up)
+   * — see `WrapperPassthrough`'s doc comment on `../model/document.ts`.
+   * Empty for any part other than `word/document.xml` (headers/footers/
+   * comments/footnotes each create their own state with none), which is
+   * exactly "never matches, always falls back to normal serialization" —
+   * the pre-existing behavior for those parts.
+   */
+  readonly wrapperRegions: ReadonlyArray<WrapperPassthrough>
 }
 
 const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -101,7 +112,7 @@ const xmlBuilder = new XMLBuilder({
 })
 
 export function writeDocumentXml(doc: Document): string {
-  const state = createSerializeState()
+  const state = createSerializeState(doc.wrappers)
   const documentNode = createElement('w:document', [buildBodyNodeWithState(doc, state)], buildDocumentAttributes(doc))
   const xml = `${XML_DECLARATION}${xmlBuilder.build([documentNode])}`
   return restoreUnknownXml(collapseEmptyElements(xml), state)
@@ -165,53 +176,101 @@ function buildBodyNodeWithState(doc: Document, state: SerializeState): OrderedXm
 }
 
 function buildIntermediateSectionChildren(section: Section, state: SerializeState): OrderedXmlNode[] {
-  const children: OrderedXmlNode[] = []
   const lastBlock = section.blocks[section.blocks.length - 1]
 
   if (lastBlock?.kind === 'paragraph') {
-    for (let index = 0; index < section.blocks.length - 1; index += 1) {
-      const block = section.blocks[index]
-      if (block !== undefined) {
-        children.push(buildBlockNode(block, state))
-      }
-    }
-
+    const children = buildBlockNodes(section.blocks.slice(0, -1), state)
     children.push(buildParagraphWithState(withSectionProps(lastBlock, section.props), state))
     return children
   }
 
-  for (const block of section.blocks) {
-    children.push(buildBlockNode(block, state))
-  }
-
+  const children = buildBlockNodes(section.blocks, state)
   children.push(buildParagraphWithState(createSectionBoundaryParagraph(section.props), state))
   return children
 }
 
 function buildFinalSectionChildren(section: Section, state: SerializeState): OrderedXmlNode[] {
-  const children: OrderedXmlNode[] = []
   const lastBlock = section.blocks[section.blocks.length - 1]
   const hasTrailingSectionParagraph =
     lastBlock?.kind === 'paragraph' && lastBlock.props?.sectPr !== undefined
 
   if (hasTrailingSectionParagraph && lastBlock.kind === 'paragraph') {
-    for (let index = 0; index < section.blocks.length - 1; index += 1) {
-      const block = section.blocks[index]
-      if (block !== undefined) {
-        children.push(buildBlockNode(block, state))
-      }
-    }
-
+    const children = buildBlockNodes(section.blocks.slice(0, -1), state)
     children.push(buildParagraphWithState(withSectionProps(lastBlock, section.props), state))
     return children
   }
 
-  for (const block of section.blocks) {
-    children.push(buildBlockNode(block, state))
-  }
-
+  const children = buildBlockNodes(section.blocks, state)
   children.push(buildSectionPropertiesNode(section.props))
   return children
+}
+
+/**
+ * Builds a sibling run of blocks, splicing in an unedited `w:sdt`/
+ * `mc:AlternateContent` wrapper's exact source bytes in place of the
+ * block(s) it covers wherever `state.wrapperRegions` proves none of them
+ * were touched since parse (round-trip fidelity audit, DXS round 2
+ * follow-up) — see `findWrapperRegionAt`/`WrapperPassthrough`'s doc
+ * comments. Falls back to the normal per-block build for everything else,
+ * identical to the plain `blocks.map((b) => buildBlockNode(b, state))`
+ * this replaces.
+ */
+function buildBlockNodes(blocks: ReadonlyArray<Block>, state: SerializeState): OrderedXmlNode[] {
+  const nodes: OrderedXmlNode[] = []
+  let index = 0
+  while (index < blocks.length) {
+    const region = findWrapperRegionAt(state.wrapperRegions, blocks, index)
+    if (region !== undefined) {
+      nodes.push(buildRawPassthroughPlaceholder(region.raw, state))
+      index += region.content.length
+      continue
+    }
+
+    const block = blocks[index]
+    if (block !== undefined) {
+      nodes.push(buildBlockNode(block, state))
+    }
+    index += 1
+  }
+  return nodes
+}
+
+/**
+ * Finds a recorded wrapper-passthrough region whose captured content
+ * starts exactly at `items[index]` (round-trip fidelity audit, DXS round 2
+ * follow-up) — see `WrapperPassthrough`'s doc comment on
+ * `../model/document.ts`. Reference equality only: every one of the
+ * region's captured objects must still be the SAME object, in the same
+ * position, as when it was captured at parse time — proof that nothing
+ * inside the wrapper (and nothing about the wrapper's position among its
+ * siblings) has changed since. `items`/`index` are generic over the three
+ * sibling-list shapes a wrapper can sit in (a section's `Block[]`, a
+ * paragraph's `ParagraphChild[]`, a run's `RunChild[]`).
+ */
+function findWrapperRegionAt<T>(
+  regions: ReadonlyArray<WrapperPassthrough>,
+  items: ReadonlyArray<T>,
+  index: number,
+): WrapperPassthrough | undefined {
+  for (const region of regions) {
+    const content = region.content as ReadonlyArray<unknown>
+    const length = content.length
+    if (length === 0 || index + length > items.length) {
+      continue
+    }
+
+    let matches = true
+    for (let offset = 0; offset < length; offset += 1) {
+      if ((items[index + offset] as unknown) !== content[offset]) {
+        matches = false
+        break
+      }
+    }
+    if (matches) {
+      return region
+    }
+  }
+  return undefined
 }
 
 function buildBlockNode(block: Block, state: SerializeState): OrderedXmlNode {
@@ -235,8 +294,24 @@ export function buildParagraphWithState(paragraph: Paragraph, state: SerializeSt
     children.push(props)
   }
 
-  for (const child of paragraph.children) {
-    children.push(...buildParagraphChildNodes(child, state))
+  // Round-trip fidelity audit, DXS round 2 follow-up: same wrapper-region
+  // passthrough `buildBlockNodes` does for a section's blocks — see
+  // `findWrapperRegionAt`'s doc comment.
+  const paragraphChildren = paragraph.children
+  let index = 0
+  while (index < paragraphChildren.length) {
+    const region = findWrapperRegionAt(state.wrapperRegions, paragraphChildren, index)
+    if (region !== undefined) {
+      children.push(buildRawPassthroughPlaceholder(region.raw, state))
+      index += region.content.length
+      continue
+    }
+
+    const child = paragraphChildren[index]
+    if (child !== undefined) {
+      children.push(...buildParagraphChildNodes(child, state))
+    }
+    index += 1
   }
 
   return createElement('w:p', children, buildParagraphAttributes(paragraph))
@@ -318,8 +393,25 @@ function buildRunWithState(run: Run, state: SerializeState, asDel = false): Orde
     children.push(props)
   }
 
-  for (const child of run.children) {
-    children.push(buildRunChildNode(child, state, asDel))
+  // Round-trip fidelity audit, DXS round 2 follow-up: same wrapper-region
+  // passthrough as `buildParagraphWithState`'s — this is the level real
+  // Word documents put `mc:AlternateContent` at (a shape/text box's
+  // modern-vs-legacy-VML pair sits directly inside its "containing" run).
+  const runChildren = run.children
+  let index = 0
+  while (index < runChildren.length) {
+    const region = findWrapperRegionAt(state.wrapperRegions, runChildren, index)
+    if (region !== undefined) {
+      children.push(buildRawPassthroughPlaceholder(region.raw, state))
+      index += region.content.length
+      continue
+    }
+
+    const child = runChildren[index]
+    if (child !== undefined) {
+      children.push(buildRunChildNode(child, state, asDel))
+    }
+    index += 1
   }
 
   return createElement('w:r', children, buildRunAttributes(run))
@@ -1681,10 +1773,11 @@ function buildDocumentAttributes(doc: Document): XmlAttributes {
   return attributes
 }
 
-export function createSerializeState(): SerializeState {
+export function createSerializeState(wrapperRegions: ReadonlyArray<WrapperPassthrough> = []): SerializeState {
   return {
     unknownXml: new Map(),
     nextUnknownId: 0,
+    wrapperRegions,
   }
 }
 

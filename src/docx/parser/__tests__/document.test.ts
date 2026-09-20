@@ -1200,6 +1200,93 @@ describe('parseDocument', () => {
     })
   })
 
+  describe('wrapper-passthrough region capture (round-trip fidelity audit, DXS round 2 follow-up)', () => {
+    it('captures a body-level w:sdt as a region over the exact paragraph object it unwrapped to', () => {
+      const document = parseBody(`
+        <w:sdt>
+          <w:sdtPr><w:alias w:val="Title Control"/></w:sdtPr>
+          <w:sdtContent>
+            <w:p><w:r><w:t>Content control text</w:t></w:r></w:p>
+          </w:sdtContent>
+        </w:sdt>
+      `)
+
+      const paragraph = document.sections[0].blocks[0]
+      expect(document.wrappers).toHaveLength(1)
+      const region = document.wrappers![0]
+      expect(region.wrapper).toBe('w:sdt')
+      expect(region.raw.startsWith('<w:sdt>')).toBe(true)
+      expect(region.raw).toContain('<w:alias w:val="Title Control"/>')
+      expect(region.raw).toContain('Content control text')
+      // Reference equality, not deep equality: this is the exact same
+      // object `document.sections[0].blocks[0]` is, proving the region
+      // doesn't clone/re-derive the content it captured.
+      expect(region.content).toEqual([paragraph])
+      expect(region.content[0]).toBe(paragraph)
+    })
+
+    it('captures a paragraph-level (inline) w:sdt as a region over the exact run object it unwrapped to', () => {
+      const document = parseBody(`
+        <w:p>
+          <w:r><w:t>Before </w:t></w:r>
+          <w:sdt>
+            <w:sdtContent>
+              <w:r><w:t>inline control</w:t></w:r>
+            </w:sdtContent>
+          </w:sdt>
+          <w:r><w:t> after</w:t></w:r>
+        </w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      expect(document.wrappers).toHaveLength(1)
+      const region = document.wrappers![0]
+      expect(region.wrapper).toBe('w:sdt')
+      expect(region.content).toEqual([paragraph.children[1]])
+      expect(region.content[0]).toBe(paragraph.children[1])
+    })
+
+    it('captures a run-level mc:AlternateContent (the shape of a real shape/text box) as a region over the exact drawing it unwrapped to', () => {
+      const document = parseBody(`
+        <w:p>
+          <w:r>
+            <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+              <mc:Choice Requires="wps"><w:drawing/></mc:Choice>
+              <mc:Fallback><w:pict><v:rect/></w:pict></mc:Fallback>
+            </mc:AlternateContent>
+          </w:r>
+        </w:p>
+      `)
+
+      const paragraph = expectParagraph(document.sections[0].blocks[0])
+      const run = expectRun(paragraph.children[0])
+      expect(document.wrappers).toHaveLength(1)
+      const region = document.wrappers![0]
+      expect(region.wrapper).toBe('mc:AlternateContent')
+      expect(region.raw.startsWith('<mc:AlternateContent')).toBe(true)
+      expect(region.raw).toContain('<mc:Fallback>')
+      expect(region.raw).toContain('v:rect')
+      expect(region.content).toEqual([run.children[0]])
+      expect(region.content[0]).toBe(run.children[0])
+    })
+
+    it('records no region for a w:sdt with an empty sdtContent (nothing to anchor it to)', () => {
+      const document = parseBody(`
+        <w:sdt>
+          <w:sdtContent/>
+        </w:sdt>
+      `)
+
+      expect(document.wrappers ?? []).toHaveLength(0)
+    })
+
+    it('records no wrappers at all for a document with none', () => {
+      const document = parseBody('<w:p><w:r><w:t>Plain</w:t></w:r></w:p>')
+
+      expect(document.wrappers ?? []).toHaveLength(0)
+    })
+  })
+
   describe('malformed XML handling (D28 / DXP-16)', () => {
     it('wraps a fast-xml-parser failure in DocxParseError instead of letting it propagate raw', () => {
       expect(() => parseDocument('<<< not xml <<<')).toThrow(DocxParseError)

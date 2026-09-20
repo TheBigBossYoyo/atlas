@@ -6,37 +6,32 @@ import { describe, expect, it } from 'vitest'
 
 import { loadDocx, saveDocx } from '../../index'
 import { listCorpusFixtureIds, readCorpusFixture } from '../../__tests__/corpusRoundtripHelpers'
-import { describeLossySaveWarnings, detectLossySaveWarnings } from '../lossySaveWarnings'
+import { categorizeLossySaveWarnings, describeLossySaveWarnings, detectLossySaveWarnings } from '../lossySaveWarnings'
 
-// `content-control-alternate-content` deliberately triggers two
-// already-documented, already-decided Atlas trade-offs (not bugs this task
-// introduced or is fixing): `w:sdt` content controls are unwrapped to their
-// inner content on save (D8/DXP-08 — see parser/document.ts's module doc
-// above `expandWrapperNodes`), and `mc:AlternateContent` keeps only its
-// `mc:Choice` branch, dropping `mc:Fallback` (same module, `resolveAlternate
-// ContentChildren`). Both lose real OOXML structure/metadata (a content
-// control's id/alias/tag/binding; the legacy VML fallback shape) even
-// though the visible content survives — exactly the class of "known,
-// visible-if-you-look-for-it limitation" this detector exists to surface.
-// Tracked here explicitly (matching `roundtrip.corpus.test.ts`'s own
-// `KNOWN_FAILURES` convention) so a change to either behavior — a fix, or a
-// regression — flips this assertion instead of silently doing nothing.
-const KNOWN_ACCEPTED_WARNINGS: Partial<Record<string, ReadonlyArray<{ readonly tag: string }>>> = {
-  'content-control-alternate-content': [
-    { tag: 'w:sdt' },
-    { tag: 'w:sdtPr' },
-    { tag: 'w:id' },
-    { tag: 'w:alias' },
-    { tag: 'w:tag' },
-    { tag: 'w:text' },
-    { tag: 'w:sdtContent' },
-    { tag: 'mc:AlternateContent' },
-    { tag: 'mc:Choice' },
-    { tag: 'mc:Fallback' },
-    { tag: 'w:pict' },
-    { tag: 'v:rect' },
-  ],
-}
+import { validateOfficeFile } from '../../../../scripts/lib/officeValidator.mjs'
+
+// `content-control-alternate-content` used to deliberately trigger two
+// then-documented, then-accepted Atlas trade-offs: `w:sdt` content controls
+// were unwrapped to their inner content on save (D8/DXP-08 — see
+// parser/document.ts's module doc above `expandWrapperNodes`), and
+// `mc:AlternateContent` kept only its `mc:Choice` branch, dropping
+// `mc:Fallback` (same module, `resolveAlternateContentChildren`). Both lost
+// real OOXML structure/metadata (a content control's id/alias/tag/binding;
+// the legacy VML fallback shape) even though the visible content survived.
+//
+// Round-trip fidelity audit, DXS round 2 follow-up: `documentWriter.ts` now
+// re-emits an unedited wrapper's exact source bytes instead of discarding
+// it (`WrapperPassthrough` — see `../../model/document.ts`'s doc comment),
+// so for THIS fixture — saved with no edits, exactly what this test does —
+// nothing is lost anymore and the accepted-warnings list below is empty.
+// The wrapper is still dropped (and still reported here) for a control/
+// shape whose content an edit actually touches, or one sitting somewhere
+// the parser doesn't capture a region for (a table cell, header, or
+// footer) — this fixture doesn't exercise either case. Kept as an explicit
+// list (matching `roundtrip.corpus.test.ts`'s own `KNOWN_FAILURES`
+// convention) so a regression in either direction flips this assertion
+// instead of silently doing nothing.
+const KNOWN_ACCEPTED_WARNINGS: Partial<Record<string, ReadonlyArray<{ readonly tag: string }>>> = {}
 
 describe('detectLossySaveWarnings', () => {
   it('reports no warnings for any corpus fixture, saved with no edits, beyond the known-accepted ones', async () => {
@@ -88,5 +83,36 @@ describe('detectLossySaveWarnings', () => {
     expect(describeLossySaveWarnings(warnings)).toEqual([
       'word/document.xml: w:printerSettings (1 occurrence) is not supported and will be removed',
     ])
+  })
+
+  // Round-trip fidelity audit, DXS round 2 follow-up — the flip side of the
+  // "no warnings for an unedited save" test above: once an edit invalidates
+  // a wrapper-passthrough region's identity check (`WrapperPassthrough` —
+  // see `../../model/document.ts`'s doc comment), the wrapper falls back to
+  // being stripped exactly as it always was, and the detector must still
+  // catch that and categorize it in non-technical, user-facing terms.
+  it('reports content-control and shape-fallback categories once an edit invalidates their wrapper-passthrough regions', async () => {
+    const buffer = await readCorpusFixture('content-control-alternate-content')
+    const bundle = await loadDocx(buffer)
+
+    // `structuredClone` rebuilds every Section/Block/ParagraphChild/RunChild
+    // object with a fresh identity while leaving their content untouched —
+    // standing in for "the user edited this" without needing to know which
+    // paragraph/run index the fixture's content control and shape live at.
+    // `bundle.document.wrappers` (left untouched here) still points at the
+    // ORIGINAL objects, so this is exactly what a real edit invalidating the
+    // region's identity check looks like from `documentWriter.ts`'s side.
+    const editedDocument = { ...bundle.document, sections: structuredClone(bundle.document.sections) }
+    const saved = await saveDocx({ ...bundle, document: editedDocument })
+
+    const warnings = await detectLossySaveWarnings(bundle, saved)
+    expect(categorizeLossySaveWarnings(warnings)).toEqual(new Set(['content-control', 'shape-fallback']))
+
+    // The "edit" was purely structural — proving the fallback (stripping
+    // the wrapper, same as Atlas has always done) still produces a package
+    // Office accepts, not a corrupted file.
+    const result = validateOfficeFile(Buffer.from(saved))
+    expect(result.format).toEqual({ family: 'opc', kind: 'docx' })
+    expect(result.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   })
 })

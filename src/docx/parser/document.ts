@@ -93,6 +93,7 @@ import {
   type UnknownNode,
   type VerticalAlign,
   type Width,
+  type WrapperPassthrough,
 } from '../model'
 
 interface OrderedXmlNode {
@@ -143,6 +144,17 @@ const xmlBuilder = new XMLBuilder({
  */
 let sourceRangeContext: SourceRangeContext | undefined
 
+/**
+ * `w:sdt`/`mc:AlternateContent` wrapper regions captured while parsing the
+ * body of the document currently being parsed (round-trip fidelity audit,
+ * DXS round 2 follow-up to D8/DXP-08) — see `WrapperPassthrough`'s doc
+ * comment on `../model/document.ts`. Module-level for the same reason
+ * `sourceRangeContext` is (see its own doc comment just above): exactly one
+ * parse active at a time, set at entry, appended to throughout, cleared in
+ * `finally`.
+ */
+let wrapperRegions: WrapperPassthrough[] | undefined
+
 export function parseDocument(xml: string): DocxDocument {
   assertXmlPartSizeWithinLimit(xml, 'word/document.xml')
   let raw: OrderedXmlNode[]
@@ -154,10 +166,12 @@ export function parseDocument(xml: string): DocxDocument {
   }
 
   sourceRangeContext = computeSourceRangeContext(xml, raw)
+  wrapperRegions = []
   try {
     return parseDocumentTree(raw)
   } finally {
     sourceRangeContext = undefined
+    wrapperRegions = undefined
   }
 }
 
@@ -180,6 +194,7 @@ function parseDocumentTree(raw: ReadonlyArray<OrderedXmlNode>): DocxDocument {
     footers: Object.freeze(new Map<string, Footer>()),
     ...(rootNamespaces.size > 0 ? { rootNamespaces } : {}),
     ...(mcIgnorable !== undefined ? { mcIgnorable } : {}),
+    ...(wrapperRegions !== undefined && wrapperRegions.length > 0 ? { wrappers: wrapperRegions } : {}),
   }
 }
 
@@ -227,6 +242,22 @@ function parseRootNamespaces(element: OrderedXmlNode | undefined): ReadonlyMap<s
 // metadata, or its rejected alternate branch) — an accepted, documented
 // trade-off for making the content visible at all, consistent with this
 // plan's freeze on new structural editing surface.
+//
+// Round-trip fidelity audit, DXS round 2 follow-up: at the three call
+// sites where a wrapper can sit as a direct sibling of body-level blocks,
+// paragraph-level children, or run-level children (`parseBody`,
+// `parseParagraph`, `parseRun` — the shapes real Word documents
+// overwhelmingly use both wrappers in), `captureWrapperRaw`/
+// `recordWrapperRegion` below additionally remember the wrapper's exact
+// source bytes alongside the very model object(s) its content unwrapped
+// to, as a `WrapperPassthrough` region on the document. This doesn't
+// change the "no new structural editing surface" trade-off above at all —
+// the visible model is identical either way — it only lets
+// `documentWriter.ts` opportunistically re-emit the original wrapper
+// byte-for-byte on save when an identity check proves none of its content
+// was touched, rather than always discarding it. See `WrapperPassthrough`'s
+// doc comment on `../model/document.ts` for how that identity check works
+// and why it needs no cooperation from the edit pipeline.
 // ---------------------------------------------------------------------------
 
 /**
@@ -280,6 +311,29 @@ function resolveAlternateContentChildren(element: OrderedXmlNode): ReadonlyArray
   return []
 }
 
+/** `entry`'s tag name if it's a wrapper this module knows how to passthrough-capture, else `undefined`. */
+function wrapperKindOf(entry: OrderedXmlNode): 'w:sdt' | 'mc:AlternateContent' | undefined {
+  const name = nodeName(entry)
+  return name === 'w:sdt' || name === 'mc:AlternateContent' ? name : undefined
+}
+
+/**
+ * The exact source XML for one `w:sdt`/`mc:AlternateContent` element,
+ * captured the same way `captureRawSpan`/`parseUnknownNode` do.
+ * `undefined` only for a lookup miss (no active `sourceRangeContext` — a
+ * unit test calling this file's parse helpers directly rather than through
+ * `parseDocument`).
+ */
+function captureWrapperRaw(entry: OrderedXmlNode): string | undefined {
+  const info = sourceRangeContext?.info.get(entry)
+  return info !== undefined ? sourceRangeContext!.xml.slice(info.start, info.end) : undefined
+}
+
+/** Appends one wrapper-passthrough region to this parse's accumulator, if there is one (see `wrapperRegions`'s doc comment). */
+function recordWrapperRegion(region: WrapperPassthrough): void {
+  wrapperRegions?.push(region)
+}
+
 function parseBody(element: OrderedXmlNode | undefined): {
   readonly blocks: ReadonlyArray<Block>
   readonly sectionProps?: SectionProps
@@ -287,9 +341,9 @@ function parseBody(element: OrderedXmlNode | undefined): {
   const blocks: Block[] = []
   let sectionProps: SectionProps | undefined
 
-  for (const entry of expandWrapperNodes(nodeChildren(element))) {
+  const pushEntry = (entry: OrderedXmlNode): void => {
     if (isIgnorableText(entry)) {
-      continue
+      return
     }
 
     switch (nodeName(entry)) {
@@ -305,6 +359,35 @@ function parseBody(element: OrderedXmlNode | undefined): {
       default:
         blocks.push(parseUnknownNode(entry))
         break
+    }
+  }
+
+  // Round-trip fidelity audit, DXS round 2 follow-up: a body-level
+  // `w:sdt`/`mc:AlternateContent` (a content control or shape wrapping one
+  // or more whole paragraphs/tables) is expanded one entry at a time here,
+  // rather than pre-flattening the whole sibling list the way the old
+  // single `expandWrapperNodes(nodeChildren(element))` loop did, so its
+  // exact source span and the block(s) it expanded to can be captured
+  // together as a `WrapperPassthrough` region — see `captureWrapperRaw`/
+  // `recordWrapperRegion`'s doc comments. A non-wrapper entry goes straight
+  // through `pushEntry` unchanged, identical to the old behavior.
+  for (const entry of nodeChildren(element)) {
+    const wrapper = wrapperKindOf(entry)
+    if (wrapper === undefined) {
+      pushEntry(entry)
+      continue
+    }
+
+    const raw = captureWrapperRaw(entry)
+    const before = blocks.length
+    for (const inner of expandWrapperNodes([entry])) {
+      pushEntry(inner)
+    }
+    if (raw !== undefined) {
+      const content = blocks.slice(before)
+      if (content.length > 0) {
+        recordWrapperRegion({ wrapper, raw, content })
+      }
     }
   }
 
@@ -351,20 +434,59 @@ function parseParagraph(element: OrderedXmlNode): Block {
   const props = parseParaProps(child(element, 'w:pPr'))
   const children: ParagraphChild[] = []
 
-  for (const entry of groupComplexFieldRuns(expandWrapperNodes(nodeChildren(element)))) {
-    if (isComplexFieldGroup(entry)) {
-      children.push(parseComplexField(entry.runs))
+  const consumeGroup = (entries: ReadonlyArray<OrderedXmlNode>): void => {
+    for (const entry of groupComplexFieldRuns(entries)) {
+      if (isComplexFieldGroup(entry)) {
+        children.push(parseComplexField(entry.runs))
+        continue
+      }
+
+      if (isIgnorableText(entry)) {
+        continue
+      }
+
+      const parsedChild = parseParagraphChild(entry)
+      if (parsedChild !== null) {
+        children.push(parsedChild)
+      }
+    }
+  }
+
+  // Round-trip fidelity audit, DXS round 2 follow-up: same one-entry-at-a-
+  // time restructuring as `parseBody`'s, for the same reason — a paragraph-
+  // level wrapper (most commonly a content control around inline text)
+  // needs its exact span and resulting children captured together. Runs of
+  // consecutive non-wrapper siblings are buffered into `pending` and run
+  // through the original `groupComplexFieldRuns(expandWrapperNodes(...))`
+  // pipeline together (`consumeGroup`), so a complex field's begin/.../end
+  // `w:r` siblings still group correctly as long as nothing wraps only PART
+  // of that span — the same assumption real, non-pathological Word output
+  // already satisfies.
+  let pending: OrderedXmlNode[] = []
+  for (const entry of nodeChildren(element)) {
+    const wrapper = wrapperKindOf(entry)
+    if (wrapper === undefined) {
+      pending.push(entry)
       continue
     }
 
-    if (isIgnorableText(entry)) {
-      continue
+    if (pending.length > 0) {
+      consumeGroup(expandWrapperNodes(pending))
+      pending = []
     }
 
-    const child = parseParagraphChild(entry)
-    if (child !== null) {
-      children.push(child)
+    const raw = captureWrapperRaw(entry)
+    const before = children.length
+    consumeGroup(expandWrapperNodes([entry]))
+    if (raw !== undefined) {
+      const content = children.slice(before)
+      if (content.length > 0) {
+        recordWrapperRegion({ wrapper, raw, content })
+      }
     }
+  }
+  if (pending.length > 0) {
+    consumeGroup(expandWrapperNodes(pending))
   }
 
   return {
@@ -424,9 +546,9 @@ function parseRun(element: OrderedXmlNode): Run {
   const props = parseRunProps(child(element, 'w:rPr'))
   const children: RunChild[] = []
 
-  for (const entry of expandWrapperNodes(nodeChildren(element))) {
+  const pushEntry = (entry: OrderedXmlNode): void => {
     if (isIgnorableText(entry) || nodeName(entry) === 'w:rPr') {
-      continue
+      return
     }
 
     switch (nodeName(entry)) {
@@ -462,6 +584,32 @@ function parseRun(element: OrderedXmlNode): Run {
       default:
         children.push(parseUnknownNode(entry))
         break
+    }
+  }
+
+  // Round-trip fidelity audit, DXS round 2 follow-up: same one-entry-at-a-
+  // time restructuring as `parseBody`'s/`parseParagraph`'s — this is where
+  // real Word documents put `mc:AlternateContent` (a shape/text box's
+  // modern-vs-legacy-VML fallback pair sits directly inside the run that
+  // "contains" the drawing), so capturing its span here is what lets a
+  // shape/text box survive a save untouched.
+  for (const entry of nodeChildren(element)) {
+    const wrapper = wrapperKindOf(entry)
+    if (wrapper === undefined) {
+      pushEntry(entry)
+      continue
+    }
+
+    const raw = captureWrapperRaw(entry)
+    const before = children.length
+    for (const inner of expandWrapperNodes([entry])) {
+      pushEntry(inner)
+    }
+    if (raw !== undefined) {
+      const content = children.slice(before)
+      if (content.length > 0) {
+        recordWrapperRegion({ wrapper, raw, content })
+      }
     }
   }
 
