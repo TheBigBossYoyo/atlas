@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Endnote, Footnote, Paragraph } from '../../model'
+import { parseEndnotes, parseFootnotes } from '../../parser'
 import { writeEndnotesXml, writeFootnotesXml } from '../footnotesWriter'
 
 function makeParagraphWithUnknownRunChild(rawXml: string, text: string): Paragraph {
@@ -118,4 +119,51 @@ describe('writeFootnotesXml', () => {
       expect(xml).toContain('<w:proofErr w:type="spellEnd"/>')
     },
   )
+
+  // DOCX-2 — round-trip fidelity audit follow-up: parseFootnotes/parseEndnotes
+  // (via partBody.ts's parseBlocksFromXmlFragment) now record any w:sdt/
+  // mc:AlternateContent wrapper region for a note's body, and
+  // writeFootnotesXml/writeEndnotesXml now retrieve it (through
+  // getWrapperRegionsForFragmentBlocks) instead of discarding it — see
+  // partBody.ts's WeakMap doc comment for why this needs no new field on
+  // the Footnote/Endnote model types themselves. These go through the real
+  // parser, not a hand-built model object, because the passthrough is keyed
+  // on the exact `blocks` array reference the parser produced.
+  it('round-trips an unedited w:sdt content control inside a footnote byte-identical (DOCX-2)', () => {
+    const footnotesXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:footnote w:id="1"><w:sdt><w:sdtPr><w:id w:val="42"/><w:alias w:val="My Control"/></w:sdtPr>'
+      + '<w:sdtContent><w:p><w:r><w:t xml:space="preserve">Hi</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+      + '</w:footnote></w:footnotes>'
+
+    const footnotes = Array.from(parseFootnotes(footnotesXml).values())
+    const xml = writeFootnotesXml(footnotes)
+
+    expect(xml).toContain(
+      '<w:sdt><w:sdtPr><w:id w:val="42"/><w:alias w:val="My Control"/></w:sdtPr>'
+        + '<w:sdtContent><w:p><w:r><w:t xml:space="preserve">Hi</w:t></w:r></w:p></w:sdtContent></w:sdt>',
+    )
+  })
+
+  it('round-trips an unedited mc:AlternateContent shape fallback inside an endnote byte-identical (DOCX-2)', () => {
+    const endnotesXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+      + 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+      + '<w:endnote w:id="1"><mc:AlternateContent><mc:Choice Requires="wps">'
+      + '<w:p><w:r><w:t xml:space="preserve">Shape text</w:t></w:r></w:p></mc:Choice>'
+      + '<mc:Fallback><w:p><w:r><w:t xml:space="preserve">Fallback text</w:t></w:r></w:p></mc:Fallback>'
+      + '</mc:AlternateContent></w:endnote></w:endnotes>'
+
+    const endnotes = Array.from(parseEndnotes(endnotesXml).values())
+    const xml = writeEndnotesXml(endnotes)
+
+    expect(xml).toContain(
+      '<mc:AlternateContent><mc:Choice Requires="wps">'
+        + '<w:p><w:r><w:t xml:space="preserve">Shape text</w:t></w:r></w:p></mc:Choice>'
+        + '<mc:Fallback><w:p><w:r><w:t xml:space="preserve">Fallback text</w:t></w:r></w:p></mc:Fallback>'
+        + '</mc:AlternateContent>',
+    )
+  })
 })

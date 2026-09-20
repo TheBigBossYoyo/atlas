@@ -1,6 +1,7 @@
 import { XMLBuilder } from 'fast-xml-parser'
 
 import type { Comment } from '../model'
+import { getWrapperRegionsForFragmentBlocks } from '../parser/partBody'
 import type { OrderedXmlNode, SerializeState } from './partWriterSupport'
 import { XML_DECLARATION, buildBlockNodes, createSerializeState } from './partWriterSupport'
 import { buildNamespaceDeclarationAttributes, restoreUnknownXml, STANDARD_NAMESPACE_URIS } from './documentWriter'
@@ -27,10 +28,16 @@ const orderedXmlBuilder = new XMLBuilder({
  * type this serializer doesn't model (e.g. `w:proofErr`, ubiquitous in real
  * Word documents) nested inside any comment's body gets its
  * `atlas-raw-unknown` placeholder substituted back to the real raw XML —
- * see `partWriterSupport.ts`'s `buildBlockNodes` doc comment.
+ * see `partWriterSupport.ts`'s `buildBlockNodes` doc comment. The shared
+ * state also carries every comment's own recorded `w:sdt`/
+ * `mc:AlternateContent` wrapper regions (DOCX-2 — see
+ * `getWrapperRegionsForFragmentBlocks`'s doc comment in
+ * `../parser/partBody.ts`), unioned the same way, and for the same reason,
+ * as `footnotesWriter.ts`'s `collectWrapperRegions`.
  */
 export function writeCommentsXml(comments: ReadonlyArray<Comment>): string {
-  const state = createSerializeState()
+  const wrapperRegions = comments.flatMap((comment) => getWrapperRegionsForFragmentBlocks(comment.body))
+  const state = createSerializeState(wrapperRegions)
   const root: OrderedXmlNode = {
     'w:comments': comments.map((comment) => buildCommentNode(comment, state)),
     ':@': buildNamespaceDeclarationAttributes(STANDARD_NAMESPACE_URIS),

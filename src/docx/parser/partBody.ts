@@ -27,7 +27,7 @@
  */
 
 import { parseDocument } from './document'
-import type { Block } from '../model/document'
+import type { Block, WrapperPassthrough } from '../model/document'
 
 const WORD_NAMESPACE = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 const WORD_2010_NAMESPACE = 'http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas'
@@ -38,10 +38,42 @@ const RELATIONSHIPS_NAMESPACE =
 const ID_ATTR_RE = /w:id\s*=\s*"([^"]*)"|w:id\s*=\s*'([^']*)'/
 
 /**
+ * DOCX-2 (round-trip fidelity audit follow-up): associates a `Block[]`
+ * returned by {@link parseBlocksFromXmlFragment} with the `w:sdt`/
+ * `mc:AlternateContent` wrapper regions `parseDocument` captured while
+ * parsing that same fragment — see `WrapperPassthrough`'s doc comment on
+ * `../model/document.ts`.
+ *
+ * A `WeakMap` keyed by the blocks array's own identity, rather than a new
+ * field on `Footnote`/`Endnote`/`Comment`, because those model interfaces
+ * live in `../model/document.ts`, which this change does not touch (see
+ * this module's own doc comment). This is not a workaround of convenience:
+ * it is *more* correct than a model field would be for this specific case.
+ * `footnotes.ts`/`endnotes.ts`/`comments.ts` each store the exact array
+ * this function returns, unmodified, as `Footnote.blocks`/`Endnote.blocks`/
+ * `Comment.body` — and, critically, each note/comment is its own
+ * independent `Map` entry, so an edit to *one* note/comment rebuilds only
+ * *that* note/comment's own blocks array (Atlas's edit pipeline never
+ * mutates a Block in place — see `WrapperPassthrough`'s doc comment), while
+ * every other note/comment's blocks array — and this `WeakMap`'s entry for
+ * it — is untouched. So a lookup miss here means exactly "this specific
+ * note/comment was edited since parse", which is exactly the condition
+ * under which the wrapper passthrough should fall back — the same
+ * identity-check philosophy `documentWriter.ts`'s `findWrapperRegionAt`
+ * already uses for the main body, just keyed one level up.
+ */
+const wrapperRegionsByFragmentBlocks = new WeakMap<ReadonlyArray<Block>, ReadonlyArray<WrapperPassthrough>>()
+
+/**
  * Parse a raw XML fragment — the inner content of a wrapper element, i.e.
  * everything between its opening and closing tag — into `Block[]`
  * (paragraphs and tables alike) by re-rooting it under a synthetic
  * `<w:document><w:body>` and running it through the real `parseDocument()`.
+ *
+ * Also records any `w:sdt`/`mc:AlternateContent` wrapper regions
+ * `parseDocument` captured for this fragment (DOCX-2) — retrieve them via
+ * {@link getWrapperRegionsForFragmentBlocks}, passing the exact array this
+ * function returns.
  *
  * @param innerXml - Inner XML of a `w:hdr`/`w:ftr`/`w:footnote`/`w:endnote`/
  *   `w:comment` element (or `undefined`/empty for one with no content).
@@ -62,7 +94,28 @@ export function parseBlocksFromXmlFragment(innerXml: string | undefined): Readon
   for (const section of document.sections) {
     blocks.push(...section.blocks)
   }
+
+  if (document.wrappers !== undefined && document.wrappers.length > 0) {
+    wrapperRegionsByFragmentBlocks.set(blocks, document.wrappers)
+  }
+
   return blocks
+}
+
+/**
+ * Retrieves the `w:sdt`/`mc:AlternateContent` wrapper regions recorded for
+ * a `Block[]` previously returned by {@link parseBlocksFromXmlFragment} —
+ * see {@link wrapperRegionsByFragmentBlocks}'s doc comment for why this is
+ * a `WeakMap` lookup rather than a model field. `blocks` must be that exact
+ * array (by reference) for the association to be found; any other array —
+ * in particular one rebuilt by an edit to this note/comment — correctly
+ * returns `[]`, the same "nothing to passthrough" result a fragment with
+ * no wrappers at all produces.
+ */
+export function getWrapperRegionsForFragmentBlocks(
+  blocks: ReadonlyArray<Block>,
+): ReadonlyArray<WrapperPassthrough> {
+  return wrapperRegionsByFragmentBlocks.get(blocks) ?? []
 }
 
 /**

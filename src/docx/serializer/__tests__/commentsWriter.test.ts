@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Comment, Paragraph } from '../../model'
+import { parseComments } from '../../parser'
 import { writeCommentsXml } from '../commentsWriter'
 
 function makeParagraph(text: string): Paragraph {
@@ -119,4 +120,30 @@ describe('writeCommentsXml', () => {
       expect(xml).toContain('<w:proofErr w:type="spellStart"/>')
     },
   )
+
+  // DOCX-2 — round-trip fidelity audit follow-up: parseComments (via
+  // partBody.ts's parseBlocksFromXmlFragment) now records any w:sdt/
+  // mc:AlternateContent wrapper region for a comment's body, and
+  // writeCommentsXml now retrieves it (through
+  // getWrapperRegionsForFragmentBlocks) instead of discarding it — see
+  // partBody.ts's WeakMap doc comment for why this needs no new field on
+  // the Comment model type itself. Goes through the real parser, not a
+  // hand-built model object, because the passthrough is keyed on the exact
+  // `body` array reference the parser produced.
+  it('round-trips an unedited w:sdt content control inside a comment byte-identical (DOCX-2)', () => {
+    const commentsXml =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:comment w:id="1" w:author="Reviewer"><w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr>'
+      + '<w:sdtContent><w:p><w:r><w:t xml:space="preserve">Approved</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+      + '</w:comment></w:comments>'
+
+    const comments = Array.from(parseComments(commentsXml).values())
+    const xml = writeCommentsXml(comments)
+
+    expect(xml).toContain(
+      '<w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr>'
+        + '<w:sdtContent><w:p><w:r><w:t xml:space="preserve">Approved</w:t></w:r></w:p></w:sdtContent></w:sdt>',
+    )
+  })
 })
