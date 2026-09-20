@@ -3,6 +3,7 @@ import { FilePlus, FileText, FileSpreadsheet, FileType, Presentation } from 'luc
 import type { NewDocumentFormat } from '../electron';
 import { useShellShortcut } from '../hooks/useShortcutManager';
 import { useRestoreFocusOnClose } from '../hooks/useRestoreFocusOnClose';
+import { useTranslate } from '../i18n';
 
 interface NewDocumentMenuProps {
   onCreate: (format: NewDocumentFormat) => void;
@@ -12,7 +13,7 @@ interface NewDocumentMenuProps {
 
 interface NewDocumentMenuItem {
   value: NewDocumentFormat;
-  label: string;
+  labelKey: string;
   Icon: typeof FileText;
 }
 
@@ -20,16 +21,17 @@ interface NewDocumentMenuItem {
 // `electron/lib/newDocumentTemplates.cjs`'s header for why plain text/code
 // and CSV/TSV are deliberately left out).
 const NEW_DOCUMENT_ITEMS: readonly NewDocumentMenuItem[] = [
-  { value: 'markdown', label: 'Markdown (.md)', Icon: FileText },
-  { value: 'docx', label: 'Word document (.docx)', Icon: FileType },
-  { value: 'xlsx', label: 'Excel workbook (.xlsx)', Icon: FileSpreadsheet },
-  { value: 'ods', label: 'OpenDocument Spreadsheet (.ods)', Icon: FileSpreadsheet },
-  { value: 'pptx', label: 'PowerPoint presentation (.pptx)', Icon: Presentation },
-  { value: 'odp', label: 'OpenDocument Presentation (.odp)', Icon: Presentation },
+  { value: 'markdown', labelKey: 'newDocument.markdown', Icon: FileText },
+  { value: 'docx', labelKey: 'newDocument.docx', Icon: FileType },
+  { value: 'xlsx', labelKey: 'newDocument.xlsx', Icon: FileSpreadsheet },
+  { value: 'ods', labelKey: 'newDocument.ods', Icon: FileSpreadsheet },
+  { value: 'pptx', labelKey: 'newDocument.pptx', Icon: Presentation },
+  { value: 'odp', labelKey: 'newDocument.odp', Icon: Presentation },
 ];
 
 /** NEW-01 — a toolbar dropdown offering every "New document" type, styled and behaving exactly like ExportMenu (outside-click/Escape-to-close, plain labeled buttons rather than the `role="menu"` pattern). */
 export function NewDocumentMenu({ onCreate, open, onOpenChange }: NewDocumentMenuProps) {
+  const t = useTranslate();
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   useRestoreFocusOnClose(open, triggerRef);
@@ -73,21 +75,21 @@ export function NewDocumentMenu({ onCreate, open, onOpenChange }: NewDocumentMen
       <button
         ref={triggerRef}
         className="toolbar__btn toolbar__nodrag"
-        title="New document (Ctrl+N)"
+        title={t('newDocument.triggerTitle')}
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => onOpenChange(!open)}
       >
         <FilePlus size={16} />
-        <span>New</span>
+        <span>{t('newDocument.trigger')}</span>
       </button>
       {open && (
-        <ul className="dropdown__menu" aria-label="New document">
-          {NEW_DOCUMENT_ITEMS.map(({ value, label, Icon }) => (
+        <ul className="dropdown__menu" aria-label={t('newDocument.menuLabel')}>
+          {NEW_DOCUMENT_ITEMS.map(({ value, labelKey, Icon }) => (
             <li key={value}>
               <button className="dropdown__item" onClick={() => handleCreate(value)}>
                 <Icon size={15} />
-                <span className="dropdown__item-label">{label}</span>
+                <span className="dropdown__item-label">{t(labelKey)}</span>
               </button>
             </li>
           ))}

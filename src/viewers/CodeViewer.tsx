@@ -13,6 +13,8 @@ import {
   useSetViewerDirty,
   useSetViewerStats,
 } from './shared/useViewerContext'
+import { useTranslate } from '../i18n'
+import { translateWriteError } from '../i18n/translateWriteError'
 import './__styles__/viewer-code.css'
 
 /** USR-18 — CodeMirror is a sizeable chunk; only code files pay for it. */
@@ -58,6 +60,7 @@ function CodeViewerBase({ file }: ViewerProps) {
   const usesCrlf = original.includes('\r\n')
   const lang = getLangForExt(`.${extensionOf(file.path)}`) || 'text'
   const { theme } = useTheme()
+  const t = useTranslate()
 
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
@@ -99,14 +102,14 @@ function CodeViewerBase({ file }: ViewerProps) {
       existingPath: savePath,
     })
     if (!result?.saved) {
-      setSaveError(result?.error ?? 'Save was cancelled or unavailable.')
+      setSaveError(result?.error ? translateWriteError(t, result) : t('codeViewer.saveCancelled'))
       return false
     }
     if (result.path) setSavePath(result.path)
     setDirty(false)
     setSymbolSource(text)
     return true
-  }, [savePath, setDirty, usesCrlf])
+  }, [savePath, setDirty, usesCrlf, t])
 
   useEffect(() => {
     registerSave(save)
@@ -149,15 +152,15 @@ function CodeViewerBase({ file }: ViewerProps) {
 
   return (
     <div className="code-viewer">
-      <div className="code-viewer__toolbar" role="toolbar" aria-label="Code editor">
+      <div className="code-viewer__toolbar" role="toolbar" aria-label={t('codeViewer.toolbarAria')}>
         <span className="code-viewer__language">{lang}</span>
         <div className="code-viewer__actions">
           {runner.isAvailable && (
             <button
               type="button"
               className="code-viewer__button"
-              aria-label={runner.state.status === 'running' ? 'Stop' : 'Run'}
-              title={runner.state.status === 'running' ? 'Stop the running program' : 'Save and run this file'}
+              aria-label={runner.state.status === 'running' ? t('codeViewer.stop') : t('codeViewer.run')}
+              title={runner.state.status === 'running' ? t('codeViewer.stopTitle') : t('codeViewer.runTitle')}
               onClick={() => {
                 if (runner.state.status === 'running') {
                   runner.stop()
@@ -168,21 +171,21 @@ function CodeViewerBase({ file }: ViewerProps) {
               }}
             >
               {runner.state.status === 'running' ? <Square size={15} /> : <Play size={15} />}
-              {runner.state.status === 'running' ? 'Stop' : 'Run'}
+              {runner.state.status === 'running' ? t('codeViewer.stop') : t('codeViewer.run')}
             </button>
           )}
-          <button type="button" className="code-viewer__button" aria-label="Find and replace" title="Find and replace (Ctrl+F)" onClick={() => apiRef.current?.openSearch()}>
+          <button type="button" className="code-viewer__button" aria-label={t('codeViewer.findReplaceAria')} title={t('codeViewer.findReplaceTitle')} onClick={() => apiRef.current?.openSearch()}>
             <Search size={15} />
           </button>
-          <button type="button" className="code-viewer__button" aria-label="Go to line" title="Go to line (Ctrl+G)" onClick={() => apiRef.current?.goToLine()}>
+          <button type="button" className="code-viewer__button" aria-label={t('codeViewer.goToLineAria')} title={t('codeViewer.goToLineTitle')} onClick={() => apiRef.current?.goToLine()}>
             <ListOrdered size={15} />
           </button>
-          <button type="button" className="code-viewer__button" aria-label="Word wrap" aria-pressed={wrap} title="Word wrap" onClick={toggleWrap}>
+          <button type="button" className="code-viewer__button" aria-label={t('codeViewer.wordWrapAria')} aria-pressed={wrap} title={t('codeViewer.wordWrapAria')} onClick={toggleWrap}>
             <WrapText size={15} />
           </button>
-          <button type="button" className="code-viewer__button code-viewer__button--primary" aria-label="Save" title="Save (Ctrl+S)" onClick={() => void save()}>
+          <button type="button" className="code-viewer__button code-viewer__button--primary" aria-label={t('codeViewer.saveAria')} title={t('codeViewer.saveTitle')} onClick={() => void save()}>
             <Save size={15} />
-            Save
+            {t('codeViewer.saveAria')}
           </button>
         </div>
       </div>
@@ -204,20 +207,20 @@ function CodeViewerBase({ file }: ViewerProps) {
         </Suspense>
       </div>
       {runner.isOpen && (
-        <div className="code-viewer__output" role="region" aria-label="Program output">
+        <div className="code-viewer__output" role="region" aria-label={t('codeViewer.outputRegionAria')}>
           <div className="code-viewer__output-header">
             <span className="code-viewer__output-status" role="status">
               {runner.state.status === 'running'
-                ? 'Running…'
+                ? t('codeViewer.running')
                 : runner.state.status === 'finished'
                   ? runner.state.summary
-                  : 'Output'}
+                  : t('codeViewer.output')}
             </span>
             <div className="code-viewer__actions">
-              <button type="button" className="code-viewer__button" aria-label="Clear output" title="Clear output" onClick={runner.clear}>
+              <button type="button" className="code-viewer__button" aria-label={t('codeViewer.clearOutputAria')} title={t('codeViewer.clearOutputAria')} onClick={runner.clear}>
                 <Trash2 size={14} />
               </button>
-              <button type="button" className="code-viewer__button" aria-label="Close output" title="Close output" onClick={runner.close}>
+              <button type="button" className="code-viewer__button" aria-label={t('codeViewer.closeOutputAria')} title={t('codeViewer.closeOutputAria')} onClick={runner.close}>
                 <X size={14} />
               </button>
             </div>

@@ -19,6 +19,8 @@ import type { NewDocumentFormat } from '../electron';
 import { ExportMenu } from './ExportMenu';
 import { NewDocumentMenu } from './NewDocumentMenu';
 import { ThemeMenu } from './ThemeMenu';
+import { LanguageMenu } from './LanguageMenu';
+import { useTranslate } from '../i18n';
 
 interface ToolbarProps {
   theme: Theme;
@@ -58,10 +60,10 @@ interface ToolbarProps {
   onExportMenuOpenChange: (open: boolean) => void;
 }
 
-const VIEW_MODES: { mode: ViewMode; icon: typeof Eye; label: string }[] = [
-  { mode: 'preview', icon: Eye, label: 'Preview' },
-  { mode: 'split', icon: Columns2, label: 'Split' },
-  { mode: 'editor', icon: Code2, label: 'Editor' },
+const VIEW_MODES: { mode: ViewMode; icon: typeof Eye; labelKey: string }[] = [
+  { mode: 'preview', icon: Eye, labelKey: 'toolbar.viewMode.preview' },
+  { mode: 'split', icon: Columns2, labelKey: 'toolbar.viewMode.split' },
+  { mode: 'editor', icon: Code2, labelKey: 'toolbar.viewMode.editor' },
 ];
 
 export function Toolbar({
@@ -98,14 +100,15 @@ export function Toolbar({
   onResetFont,
   onExportMenuOpenChange,
 }: ToolbarProps) {
+  const t = useTranslate();
   return (
     <header className={`toolbar ${isElectron ? 'toolbar--electron' : ''}`}>
       <div className="toolbar__left">
         <button
           className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
           onClick={onToggleSidebar}
-          title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-          aria-label="Toggle sidebar"
+          title={sidebarOpen ? t('toolbar.hideSidebar') : t('toolbar.showSidebar')}
+          aria-label={t('toolbar.toggleSidebarAria')}
         >
           {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
         </button>
@@ -115,26 +118,26 @@ export function Toolbar({
             `window.electronAPI`), the same way `openFile` already does. */}
         <NewDocumentMenu onCreate={onNewDocument} open={newMenuOpen} onOpenChange={onNewMenuOpenChange} />
 
-        <button className="toolbar__btn toolbar__nodrag" onClick={onOpenFile} title="Open file (Ctrl+O)">
+        <button className="toolbar__btn toolbar__nodrag" onClick={onOpenFile} title={t('toolbar.openTitle')}>
           <FileText size={16} />
-          <span>Open</span>
+          <span>{t('toolbar.open')}</span>
         </button>
 
         {canSave ? (
           <button
             className="toolbar__btn toolbar__nodrag"
             onClick={onSave}
-            title="Save (Ctrl+S)"
+            title={t('toolbar.saveTitle')}
           >
             <Save size={16} />
-            <span>Save</span>
+            <span>{t('toolbar.save')}</span>
           </button>
         ) : null}
 
         {fileName && (
           <span className="toolbar__filename">
             {fileName}
-            {isDirty && <span className="toolbar__dirty" aria-label="Unsaved changes"> ●</span>}
+            {isDirty && <span className="toolbar__dirty" aria-label={t('common.unsavedChanges')}> ●</span>}
           </span>
         )}
 
@@ -142,8 +145,8 @@ export function Toolbar({
           <button
             className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
             onClick={onCloseFile}
-            title="Close file (Ctrl+W)"
-            aria-label="Close file"
+            title={t('toolbar.closeFileTitle')}
+            aria-label={t('toolbar.closeFileAria')}
           >
             <X size={16} />
           </button>
@@ -153,46 +156,49 @@ export function Toolbar({
       <div className="toolbar__center">
         {isMarkdown ? (
           <div className="toolbar__view-toggle toolbar__nodrag">
-            {VIEW_MODES.map(({ mode, icon: Icon, label }) => (
-              <button
-                key={mode}
-                className={`toolbar__view-btn ${viewMode === mode ? 'toolbar__view-btn--active' : ''}`}
-                onClick={() => onViewModeChange(mode)}
-                title={label}
-                aria-label={label}
-              >
-                <Icon size={15} />
-                <span>{label}</span>
-              </button>
-            ))}
+            {VIEW_MODES.map(({ mode, icon: Icon, labelKey }) => {
+              const label = t(labelKey);
+              return (
+                <button
+                  key={mode}
+                  className={`toolbar__view-btn ${viewMode === mode ? 'toolbar__view-btn--active' : ''}`}
+                  onClick={() => onViewModeChange(mode)}
+                  title={label}
+                  aria-label={label}
+                >
+                  <Icon size={15} />
+                  <span>{label}</span>
+                </button>
+              );
+            })}
           </div>
         ) : null}
       </div>
 
       <div className="toolbar__right">
         {canChangeFontSize ? (
-          <div className="toolbar__font-group toolbar__nodrag" role="group" aria-label="Font size">
+          <div className="toolbar__font-group toolbar__nodrag" role="group" aria-label={t('toolbar.fontSizeGroupAria')}>
             <button
               className="toolbar__btn toolbar__btn--icon"
               onClick={onDecreaseFont}
-              title="Decrease font size (Ctrl+-)"
-              aria-label="Decrease font size"
+              title={t('toolbar.decreaseFontTitle')}
+              aria-label={t('toolbar.decreaseFontAria')}
             >
               <Minus size={16} />
             </button>
             <button
               className="toolbar__btn toolbar__btn--icon"
               onClick={onResetFont}
-              title="Reset font size (Ctrl+0)"
-              aria-label="Reset font size"
+              title={t('toolbar.resetFontTitle')}
+              aria-label={t('toolbar.resetFontTitle')}
             >
               <RotateCcw size={14} />
             </button>
             <button
               className="toolbar__btn toolbar__btn--icon"
               onClick={onIncreaseFont}
-              title="Increase font size (Ctrl+=)"
-              aria-label="Increase font size"
+              title={t('toolbar.increaseFontTitle')}
+              aria-label={t('toolbar.increaseFontAria')}
             >
               <Plus size={16} />
             </button>
@@ -203,8 +209,8 @@ export function Toolbar({
           <button
             className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
             onClick={onOpenSearch}
-            title="Search (Ctrl+F)"
-            aria-label="Search"
+            title={t('toolbar.searchTitle')}
+            aria-label={t('toolbar.searchAria')}
           >
             <Search size={18} />
           </button>
@@ -221,11 +227,13 @@ export function Toolbar({
 
         <ThemeMenu current={theme} themes={themes} onSelect={onSelectTheme} />
 
+        <LanguageMenu />
+
         <button
           className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
           onClick={onShowShortcuts}
-          title="Keyboard shortcuts (Ctrl+/)"
-          aria-label="Keyboard shortcuts"
+          title={t('toolbar.shortcutsTitle')}
+          aria-label={t('toolbar.shortcutsAria')}
         >
           <Keyboard size={18} />
         </button>

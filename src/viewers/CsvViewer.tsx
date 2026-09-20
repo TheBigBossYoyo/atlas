@@ -14,6 +14,7 @@ import { createDocumentFromRows } from './spreadsheet/spreadsheetDocument'
 import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from './spreadsheet/useSpreadsheetEditor'
 import { SpreadsheetEditToolbar } from './spreadsheet/SpreadsheetEditToolbar'
 import type { SpreadsheetDocument } from './spreadsheet/spreadsheetDocument'
+import { useTranslate } from '../i18n'
 import './__styles__/viewer-spreadsheet.css'
 
 // Lazy load the grid (shared/SpreadsheetDataEditor pulls in glide-data-grid and its CSS)
@@ -33,8 +34,8 @@ type LoadState =
   | { status: 'error'; error: string }
 
 const CSV_SAVE_FORMATS = [
-  { id: 'csv', label: 'CSV (comma-separated)' },
-  { id: 'tsv', label: 'TSV (tab-separated)' },
+  { id: 'csv', labelKey: 'csv.format.csv' },
+  { id: 'tsv', labelKey: 'csv.format.tsv' },
 ] as const
 
 function targetFor(formatId: string): SpreadsheetSaveTarget {
@@ -44,6 +45,7 @@ function targetFor(formatId: string): SpreadsheetSaveTarget {
 }
 
 function CsvViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
   const registerFind = useRegisterViewerFind()
@@ -199,7 +201,7 @@ function CsvViewerBase({ file }: ViewerProps) {
     [editor, sheetRowForGridRow],
   )
 
-  const saveFormats = useMemo(() => CSV_SAVE_FORMATS.map((f) => ({ id: f.id, label: f.label })), [])
+  const saveFormats = useMemo(() => CSV_SAVE_FORMATS.map((f) => ({ id: f.id, label: t(f.labelKey) })), [t])
 
   const handleSaveAs = useCallback((formatId: string) => void editor.handleSaveAs(targetFor(formatId)), [editor])
 
@@ -225,12 +227,15 @@ function CsvViewerBase({ file }: ViewerProps) {
       />
       <div className="csv-viewer__toolbar">
         <div className="csv-viewer__stats">
-          {filteredRows.length} rows × {sheet?.colCount ?? 0} columns
+          {t('spreadsheet.dimensions', {
+            rows: t('spreadsheet.rowsCount', { count: filteredRows.length }),
+            cols: t('spreadsheet.colsCount', { count: sheet?.colCount ?? 0 }),
+          })}
         </div>
         <div className="csv-viewer__search">
           <input
             type="search"
-            placeholder="Search rows..."
+            placeholder={t('spreadsheet.searchRowsPlaceholder')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -256,7 +261,7 @@ function CsvViewerBase({ file }: ViewerProps) {
         {!sheet ? null : search && filteredRows.length === 0 ? (
           <div className="csv-viewer__empty">
             <FileSpreadsheet size={48} />
-            <p>No rows match your search.</p>
+            <p>{t('spreadsheet.noSearchResults')}</p>
           </div>
         ) : (
           <Suspense fallback={null}>

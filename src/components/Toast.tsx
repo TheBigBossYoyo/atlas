@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 import type { ToastItem } from './ToastContext';
+import { useTranslate } from '../i18n';
 
 interface ToastViewportProps {
   readonly toasts: readonly ToastItem[];
@@ -15,10 +16,11 @@ const VARIANT_ICON = { error: AlertCircle, success: CheckCircle2, info: Info } a
  * info toasts use the calmer `role="status"`/`aria-live="polite"`.
  */
 export function ToastViewport({ toasts, onDismiss }: ToastViewportProps) {
+  const t = useTranslate();
   if (toasts.length === 0) return null;
 
   return (
-    <div className="toast-viewport" aria-label="Notifications">
+    <div className="toast-viewport" aria-label={t('toast.viewportAria')}>
       {toasts.map(({ id, message, variant }) => {
         const Icon = VARIANT_ICON[variant];
         return (
@@ -30,7 +32,7 @@ export function ToastViewport({ toasts, onDismiss }: ToastViewportProps) {
           >
             <Icon size={16} className="toast__icon" aria-hidden="true" />
             <span className="toast__message">{message}</span>
-            <button className="toast__close" onClick={() => onDismiss(id)} aria-label="Dismiss notification">
+            <button className="toast__close" onClick={() => onDismiss(id)} aria-label={t('toast.dismissAria')}>
               <X size={14} />
             </button>
           </div>

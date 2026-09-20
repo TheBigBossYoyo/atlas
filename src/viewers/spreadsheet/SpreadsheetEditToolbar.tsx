@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine, ArrowDownToLine, ClipboardPaste, Redo2, Save, Trash2, Undo2 } from 'lucide-react'
 
 import { tsvToRows } from './spreadsheetClipboard'
+import { useTranslate } from '../../i18n'
 
 export type SaveFormatOption = {
   readonly id: string
@@ -73,6 +74,7 @@ export function SpreadsheetEditToolbar({
   saveFormats,
   onSaveAs,
 }: SpreadsheetEditToolbarProps) {
+  const t = useTranslate()
   const [saveFormat, setSaveFormat] = useState(saveFormats[0]?.id ?? '')
 
   const handlePasteClick = (): void => {
@@ -84,10 +86,10 @@ export function SpreadsheetEditToolbar({
   return (
     <div className="spreadsheet-edit-toolbar">
       <div className="spreadsheet-edit-toolbar__group">
-        <button type="button" onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)" aria-label="Undo">
+        <button type="button" onClick={onUndo} disabled={!canUndo} title={t('spreadsheetToolbar.undoTitle')} aria-label={t('spreadsheetToolbar.undoAria')}>
           <Undo2 size={14} />
         </button>
-        <button type="button" onClick={onRedo} disabled={!canRedo} title="Redo (Ctrl+Y)" aria-label="Redo">
+        <button type="button" onClick={onRedo} disabled={!canRedo} title={t('spreadsheetToolbar.redoTitle')} aria-label={t('spreadsheetToolbar.redoAria')}>
           <Redo2 size={14} />
         </button>
       </div>
@@ -97,8 +99,8 @@ export function SpreadsheetEditToolbar({
           type="button"
           onClick={() => selection && onInsertRowAbove(selection.row)}
           disabled={!selection}
-          title="Insert row above the selected cell"
-          aria-label="Insert row above"
+          title={t('spreadsheetToolbar.insertRowAboveTitle')}
+          aria-label={t('spreadsheetToolbar.insertRowAboveAria')}
         >
           <ArrowUpToLine size={14} />
         </button>
@@ -106,8 +108,8 @@ export function SpreadsheetEditToolbar({
           type="button"
           onClick={() => selection && onDeleteRow(selection.row)}
           disabled={!selection}
-          title="Delete the selected row"
-          aria-label="Delete row"
+          title={t('spreadsheetToolbar.deleteRowTitle')}
+          aria-label={t('spreadsheetToolbar.deleteRowAria')}
         >
           <ArrowDownToLine size={14} />
           <Trash2 size={10} />
@@ -116,8 +118,8 @@ export function SpreadsheetEditToolbar({
           type="button"
           onClick={() => selection && onInsertColumnLeft(selection.col)}
           disabled={!selection}
-          title="Insert column left of the selected cell"
-          aria-label="Insert column left"
+          title={t('spreadsheetToolbar.insertColumnLeftTitle')}
+          aria-label={t('spreadsheetToolbar.insertColumnLeftAria')}
         >
           <ArrowLeftToLine size={14} />
         </button>
@@ -125,26 +127,26 @@ export function SpreadsheetEditToolbar({
           type="button"
           onClick={() => selection && onDeleteColumn(selection.col)}
           disabled={!selection}
-          title="Delete the selected column"
-          aria-label="Delete column"
+          title={t('spreadsheetToolbar.deleteColumnTitle')}
+          aria-label={t('spreadsheetToolbar.deleteColumnAria')}
         >
           <ArrowRightToLine size={14} />
           <Trash2 size={10} />
         </button>
-        <button type="button" onClick={handlePasteClick} title="Paste from clipboard" aria-label="Paste">
+        <button type="button" onClick={handlePasteClick} title={t('spreadsheetToolbar.pasteTitle')} aria-label={t('spreadsheetToolbar.pasteAria')}>
           <ClipboardPaste size={14} />
         </button>
       </div>
 
       <div className="spreadsheet-edit-toolbar__group spreadsheet-edit-toolbar__save">
-        <button type="button" onClick={onSave} title="Save (Ctrl+S)" aria-label="Save">
+        <button type="button" onClick={onSave} title={t('spreadsheetToolbar.saveTitle')} aria-label={t('spreadsheetToolbar.saveAria')}>
           <Save size={14} />
-          <span>Save</span>
+          <span>{t('spreadsheetToolbar.saveAria')}</span>
         </button>
         {saveFormats.length > 1 && (
           <>
             <select
-              aria-label="Save As format"
+              aria-label={t('spreadsheetToolbar.saveAsFormatAria')}
               value={saveFormat}
               onChange={(e) => setSaveFormat(e.target.value)}
             >
@@ -157,10 +159,10 @@ export function SpreadsheetEditToolbar({
             <button
               type="button"
               onClick={() => onSaveAs(saveFormat)}
-              title="Save As…"
-              aria-label="Save As"
+              title={t('spreadsheetToolbar.saveAsLabel')}
+              aria-label={t('spreadsheetToolbar.saveAsAria')}
             >
-              Save As…
+              {t('spreadsheetToolbar.saveAsLabel')}
             </button>
           </>
         )}

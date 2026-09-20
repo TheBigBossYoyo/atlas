@@ -22,3 +22,13 @@ export function atomicWriteFile(
  * runtime export has existed since this file's own X5 commit.)
  */
 export function classifyWriteError(err: unknown): string | undefined;
+
+/**
+ * i18n — the stable-key counterpart to `classifyWriteError`, one of
+ * `'fileLocked' | 'permissionDenied' | 'diskFull' | 'isDirectory' |
+ * 'destinationMissing' | 'readOnly' | 'nameTooLong'`, or `undefined` for an
+ * unclassified error. The renderer maps this to `src/i18n`'s `errors.write.*`
+ * catalogue keys instead of displaying `classifyWriteError`'s English text
+ * directly, so the message is translated in a French UI.
+ */
+export function classifyWriteErrorCode(err: unknown): string | undefined;

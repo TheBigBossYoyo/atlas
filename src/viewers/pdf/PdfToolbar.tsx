@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import type { ZoomMode } from './types'
+import { useTranslate } from '../../i18n'
 
 const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
@@ -60,6 +61,7 @@ export function PdfToolbar({
   onToggleFind,
   onPrint,
 }: PdfToolbarProps) {
+  const t = useTranslate()
   return (
     <div className="pdf-viewer__toolbar">
       <div className="pdf-viewer__toolbar-group">
@@ -67,7 +69,7 @@ export function PdfToolbar({
           className={`pdf-viewer__toolbar-button ${isThumbnailRailOpen ? 'pdf-viewer__toolbar-button--active' : ''}`}
           onClick={onToggleThumbnailRail}
           aria-pressed={isThumbnailRailOpen}
-          title="Toggle page thumbnails"
+          title={t('pdfToolbar.toggleThumbnails')}
         >
           <LayoutGrid size={18} />
         </button>
@@ -78,7 +80,7 @@ export function PdfToolbar({
           className="pdf-viewer__toolbar-button"
           onClick={onPrevPage}
           disabled={currentPage <= 1}
-          title="Previous Page (Up / PageUp)"
+          title={t('pdfToolbar.previousPage')}
         >
           <ChevronUp size={18} />
         </button>
@@ -89,7 +91,7 @@ export function PdfToolbar({
             onChange={(e) => onPageInputChange(e.target.value)}
             onKeyDown={onPageInputKeyDown}
             onBlur={onPageInputBlur}
-            aria-label="Page number"
+            aria-label={t('pdfToolbar.pageNumberAria')}
           />
           <span>/ {pageCount || '?'}</span>
         </div>
@@ -97,26 +99,26 @@ export function PdfToolbar({
           className="pdf-viewer__toolbar-button"
           onClick={onNextPage}
           disabled={currentPage >= pageCount}
-          title="Next Page (Down / PageDown)"
+          title={t('pdfToolbar.nextPage')}
         >
           <ChevronDown size={18} />
         </button>
       </div>
 
       <div className="pdf-viewer__toolbar-group pdf-viewer__toolbar-group--end">
-        <button className="pdf-viewer__toolbar-button" onClick={onToggleFind} title="Find (Ctrl+F)">
+        <button className="pdf-viewer__toolbar-button" onClick={onToggleFind} title={t('pdfToolbar.find')}>
           <Search size={18} />
         </button>
 
-        <button className="pdf-viewer__toolbar-button" onClick={onRotate} title="Rotate page">
+        <button className="pdf-viewer__toolbar-button" onClick={onRotate} title={t('pdfToolbar.rotate')}>
           <RotateCw size={18} />
         </button>
 
-        <button className="pdf-viewer__toolbar-button" onClick={onPrint} title="Print (Ctrl+P)">
+        <button className="pdf-viewer__toolbar-button" onClick={onPrint} title={t('pdfToolbar.print')}>
           <Printer size={18} />
         </button>
 
-        <button className="pdf-viewer__toolbar-button" onClick={onZoomOut} title="Zoom Out (Ctrl+-)">
+        <button className="pdf-viewer__toolbar-button" onClick={onZoomOut} title={t('pdfToolbar.zoomOut')}>
           <ZoomOut size={18} />
         </button>
 
@@ -142,19 +144,19 @@ export function PdfToolbar({
                 className={`pdf-viewer__zoom-menu-item ${zoomMode === 'fit-width' ? 'pdf-viewer__zoom-menu-item--active' : ''}`}
                 onClick={() => onSelectZoom('fit-width')}
               >
-                Fit Width
+                {t('pdfToolbar.fitWidth')}
               </button>
               <button
                 className={`pdf-viewer__zoom-menu-item ${zoomMode === 'fit-page' ? 'pdf-viewer__zoom-menu-item--active' : ''}`}
                 onClick={() => onSelectZoom('fit-page')}
               >
-                Fit Page
+                {t('pdfToolbar.fitPage')}
               </button>
             </div>
           )}
         </div>
 
-        <button className="pdf-viewer__toolbar-button" onClick={onZoomIn} title="Zoom In (Ctrl++)">
+        <button className="pdf-viewer__toolbar-button" onClick={onZoomIn} title={t('pdfToolbar.zoomIn')}>
           <ZoomIn size={18} />
         </button>
       </div>

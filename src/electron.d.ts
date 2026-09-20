@@ -10,8 +10,10 @@ interface SaveFileResult {
   saved: boolean;
   path?: string;
   name?: string;
-  /** Present on failure when a specific, user-friendly reason is known (e.g. the file is locked by another program). */
+  /** Present on failure when a specific, user-friendly reason is known (e.g. the file is locked by another program). English fallback text — prefer `errorCode` (see `src/i18n`) for a translated message. */
   error?: string;
+  /** Stable key for `error` (`errors.write.*` in `src/i18n`), set whenever `classifyWriteError`/`FileLockedError` recognized the failure. Absent for an unclassified error, where `error`'s English text is the only signal available. */
+  errorCode?: string;
 }
 
 interface SaveFileRequest {
@@ -47,7 +49,7 @@ export type NewDocumentFormat = 'markdown' | 'docx' | 'xlsx' | 'ods' | 'pptx' | 
 /** Result of `document:new` — a native Save dialog was shown and either a blank document was written at the chosen path, or the user cancelled. */
 type NewDocumentResult =
   | { readonly created: true; readonly path: string }
-  | { readonly created: false; readonly error?: string };
+  | { readonly created: false; readonly error?: string; readonly errorCode?: string };
 
 /** Result of `export:printToPdf` — X1's real per-format PDF export. */
 type PrintToPdfResult =
@@ -69,6 +71,8 @@ interface ElectronAPI {
   printToPdf?: (html: string) => Promise<PrintToPdfResult>;
   onFileOpened: (callback: (data: ElectronFileData) => void) => () => void;
   setTheme: (theme: Theme) => void;
+  /** i18n — backs the renderer's "System" language option; see `src/i18n`. Optional so existing test doubles keep compiling. */
+  getLocale?: () => Promise<string>;
   /**
    * P2.5/SHELL-02/ELEC-06 — pushes the renderer's combined dirty state to
    * main's window `close` handler. Optional (like `image`/`spellcheck`

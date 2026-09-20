@@ -1,27 +1,42 @@
 import { assertNever, type ViewerStats } from '../formats/types';
 import { useViewerStats } from '../viewers/shared/useViewerContext';
+import { useTranslate } from '../i18n';
+import type { TranslateFn } from '../i18n';
 
 interface StatusBarProps {
   fileName: string | null;
   isDirty: boolean;
 }
 
-function renderStats(stats: ViewerStats, formatter: Intl.NumberFormat): string {
+function renderStats(stats: ViewerStats, t: TranslateFn): string {
   switch (stats.kind) {
     case 'markdown':
-      return `${formatter.format(stats.words)} words · ${formatter.format(stats.headings)} headings`;
+      return t('statusBar.markdownStats', {
+        words: t('statusBar.words', { count: stats.words }),
+        headings: t('statusBar.headings', { count: stats.headings }),
+      });
     case 'spreadsheet':
-      return `Sheet: ${stats.sheet} · ${formatter.format(stats.rows)} rows × ${formatter.format(stats.cols)} cols`;
+      return t('statusBar.spreadsheetStats', {
+        sheet: stats.sheet,
+        rows: t('statusBar.rows', { count: stats.rows }),
+        cols: t('statusBar.cols', { count: stats.cols }),
+      });
     case 'pdf':
-      return `Page ${formatter.format(stats.page)} / ${formatter.format(stats.pageCount)}`;
+      return t('statusBar.pdfStats', { page: stats.page, pageCount: stats.pageCount });
     case 'slides':
-      return `Slide ${formatter.format(stats.slide)} / ${formatter.format(stats.slideCount)}`;
+      return t('statusBar.slidesStats', { slide: stats.slide, slideCount: stats.slideCount });
     case 'code':
-      return `${stats.language} · ${formatter.format(stats.lines)} lines`;
+      return t('statusBar.codeStats', { language: stats.language, lines: t('statusBar.lines', { count: stats.lines }) });
     case 'text':
-      return `${formatter.format(stats.lines)} lines · ${formatter.format(stats.chars)} chars`;
+      return t('statusBar.textStats', {
+        lines: t('statusBar.lines', { count: stats.lines }),
+        chars: t('statusBar.chars', { count: stats.chars }),
+      });
     case 'document':
-      return `${formatter.format(stats.words)} ${stats.words === 1 ? 'word' : 'words'} · ${formatter.format(stats.pages)} ${stats.pages === 1 ? 'page' : 'pages'}`;
+      return t('statusBar.documentStats', {
+        words: t('statusBar.words', { count: stats.words }),
+        pages: t('statusBar.pages', { count: stats.pages }),
+      });
   }
 
   const exhaustiveCheck: never = stats;
@@ -30,17 +45,17 @@ function renderStats(stats: ViewerStats, formatter: Intl.NumberFormat): string {
 
 export function StatusBar({ fileName, isDirty }: StatusBarProps) {
   const stats = useViewerStats();
-  const formatter = new Intl.NumberFormat();
-  const statsLabel = stats ? renderStats(stats, formatter) : null;
+  const t = useTranslate();
+  const statsLabel = stats ? renderStats(stats, t) : null;
 
   return (
     <footer className="statusbar">
       <div className="statusbar__left">
-        <span className="statusbar__file" title={fileName ?? 'Untitled'}>
-          {fileName ?? 'Untitled'}
+        <span className="statusbar__file" title={fileName ?? t('statusBar.untitled')}>
+          {fileName ?? t('statusBar.untitled')}
         </span>
         {isDirty && (
-          <span className="statusbar__dirty" title="Unsaved changes" aria-label="Unsaved changes">●</span>
+          <span className="statusbar__dirty" title={t('statusBar.unsavedChangesTitle')} aria-label={t('common.unsavedChanges')}>●</span>
         )}
       </div>
       {statsLabel ? (

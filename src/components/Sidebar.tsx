@@ -1,5 +1,6 @@
 import { ChevronRight, Hash, List } from 'lucide-react';
 import { useNavItems } from '../viewers/shared/useViewerContext';
+import { useTranslate } from '../i18n';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -7,6 +8,7 @@ interface SidebarProps {
 
 export function Sidebar({ isOpen }: SidebarProps) {
   const items = useNavItems();
+  const t = useTranslate();
 
   if (!isOpen) return null;
 
@@ -14,11 +16,11 @@ export function Sidebar({ isOpen }: SidebarProps) {
     <aside className="sidebar">
       <div className="sidebar__header">
         <List size={16} />
-        <span>Table of Contents</span>
+        <span>{t('sidebar.title')}</span>
       </div>
       <nav className="sidebar__nav">
         {items.length === 0 ? (
-          <p className="sidebar__empty">No outline available</p>
+          <p className="sidebar__empty">{t('sidebar.empty')}</p>
         ) : (
           <ul className="sidebar__list">
             {items.map((item, idx) => (

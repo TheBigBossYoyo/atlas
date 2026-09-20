@@ -1,4 +1,5 @@
 import { FileX2 } from 'lucide-react';
+import { useTranslate } from '../i18n';
 
 interface EmptyFileNoticeProps {
   readonly fileName: string;
@@ -18,13 +19,13 @@ interface EmptyFileNoticeProps {
  * `substituteBlankTemplateIfEmpty`).
  */
 export function EmptyFileNotice({ fileName }: EmptyFileNoticeProps) {
+  const t = useTranslate();
   return (
     <div className="viewer-fallback empty-file-notice">
       <FileX2 size={48} strokeWidth={1.5} className="viewer-fallback__icon" aria-hidden="true" />
-      <h2 className="viewer-fallback__title">This file is empty</h2>
+      <h2 className="viewer-fallback__title">{t('emptyFile.title')}</h2>
       <p className="viewer-fallback__detail">
-        {fileName} has no content yet, and Atlas doesn&apos;t have a blank template for this format. Open it in
-        another app to create content first.
+        {t('emptyFile.detail', { fileName })}
       </p>
     </div>
   );

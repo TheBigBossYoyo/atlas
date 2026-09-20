@@ -71,6 +71,8 @@ import {
 } from './viewers/shared/useViewerContext';
 import type { ExportableContent } from './viewers/shared/viewerContextValue';
 import { ToastProvider } from './components/ToastProvider';
+import { LocaleProvider, useTranslate } from './i18n';
+import { translateWriteError } from './i18n/translateWriteError';
 import { useToast } from './hooks/useToast';
 
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
@@ -174,6 +176,7 @@ function ViewerSessionBridge({
  * cannot consume the context it itself creates in its own returned JSX.
  */
 function AppShell() {
+  const t = useTranslate();
   const { theme, setTheme, cycleTheme } = useTheme();
   const { recent, addRecent, removeRecent } = useRecentFiles();
   const { increase, decrease, reset } = useFontSize();
@@ -417,13 +420,13 @@ function AppShell() {
         // error already uses (a second, redundant toast for the identical
         // event would leave two `role="alert"` regions on screen for one
         // failure — worse accessibility, not better).
-        setSaveError(result.error);
+        setSaveError(translateWriteError(t, result));
       } else if (hadExistingPath) {
-        setSaveError('Failed to save the file. Please try again.');
+        setSaveError(t('errors.write.saveFailed'));
       }
     }
     return false;
-  }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, filePath, followSavedPath, isMarkdownDocument, localMarkdown]);
+  }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, filePath, followSavedPath, isMarkdownDocument, localMarkdown, t]);
 
   const saveFileAs = useCallback(async (): Promise<boolean> => {
     if (!isMarkdownDocument) {
@@ -457,10 +460,10 @@ function AppShell() {
     // A dialog-based save with no specific `error` is an ordinary user
     // Cancel — only a specifically-reported reason is worth surfacing here.
     if (stillShowing && result.error) {
-      setSaveError(result.error);
+      setSaveError(translateWriteError(t, result));
     }
     return false;
-  }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, followSavedPath, isMarkdownDocument, localMarkdown]);
+  }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, followSavedPath, isMarkdownDocument, localMarkdown, t]);
   // (viewerSaveAsRef is a stable ref identity, so it's intentionally left
   // out of the dependency array above, matching viewerSaveRef's usage in
   // saveFile.)
@@ -803,17 +806,18 @@ function AppShell() {
         // Mirrors useFileHandler's own BROWSER_MODE_ERROR messaging — "New"
         // needs the desktop app's native Save dialog + main-owned write
         // path, same as Open/Save already do.
-        showToast('This feature requires the Atlas desktop app — file access is unavailable in a plain browser tab.', 'error');
+        showToast(t('errors.browserModeUnavailable'), 'error');
         return;
       }
       const result = await window.electronAPI.newDocument(format);
       if (result.created) {
         await openFileFromPath(result.path);
       } else if (result.error) {
-        showToast(result.error, 'error');
+        const message = translateWriteError(t, result);
+        if (message) showToast(message, 'error');
       }
     },
-    [openFileFromPath, showToast]
+    [openFileFromPath, showToast, t]
   );
 
   const handleNonMarkdownExport = useCallback(
@@ -1194,11 +1198,13 @@ function AppShell() {
  */
 function App() {
   return (
-    <ToastProvider>
-      <ShortcutManagerProvider>
-        <AppShell />
-      </ShortcutManagerProvider>
-    </ToastProvider>
+    <LocaleProvider>
+      <ToastProvider>
+        <ShortcutManagerProvider>
+          <AppShell />
+        </ShortcutManagerProvider>
+      </ToastProvider>
+    </LocaleProvider>
   );
 }
 

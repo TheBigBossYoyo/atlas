@@ -5,6 +5,7 @@
  * to be executed — only the path of the file the user already opened.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { t } from '../../i18n'
 
 export type RunChunk = { readonly stream: 'stdout' | 'stderr' | 'system'; readonly text: string }
 
@@ -28,10 +29,10 @@ function exitSummary(payload: {
   error?: string
 }): { summary: string; failed: boolean } {
   if (payload.error) return { summary: payload.error, failed: true }
-  if (payload.stopped) return { summary: 'Stopped.', failed: false }
-  if (payload.timedOut) return { summary: 'Stopped after the 60 second time limit.', failed: true }
-  if (payload.code === 0) return { summary: 'Finished (exit code 0).', failed: false }
-  return { summary: `Exited with code ${payload.code ?? 'unknown'}.`, failed: true }
+  if (payload.stopped) return { summary: t('codeRun.stopped'), failed: false }
+  if (payload.timedOut) return { summary: t('codeRun.timedOut'), failed: true }
+  if (payload.code === 0) return { summary: t('codeRun.finishedOk'), failed: false }
+  return { summary: t('codeRun.exitedWithCode', { code: payload.code ?? 'unknown' }), failed: true }
 }
 
 export function useCodeRun(filePath: string) {
@@ -82,7 +83,7 @@ export function useCodeRun(filePath: string) {
         setIsOpen(false)
         return
       }
-      setState({ status: 'finished', summary: result?.error ?? 'The program could not be started.', failed: true })
+      setState({ status: 'finished', summary: result?.error ?? t('codeRun.couldNotStart'), failed: true })
       return
     }
     runIdRef.current = result.runId

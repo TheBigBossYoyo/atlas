@@ -1,4 +1,5 @@
 import { FileDown } from 'lucide-react';
+import { useTranslate } from '../i18n';
 
 interface DropZoneProps {
   isVisible: boolean;
@@ -9,14 +10,15 @@ interface DropZoneProps {
 // (src/formats/detect.ts); kept short/representative rather than listing
 // all 13 extensions.
 export function DropZone({ isVisible }: DropZoneProps) {
+  const t = useTranslate();
   if (!isVisible) return null;
 
   return (
     <div className="dropzone">
       <div className="dropzone__content">
         <FileDown size={48} strokeWidth={1.5} />
-        <h3>Drop your document</h3>
-        <p>Word, Excel, PowerPoint, PDF, OpenDocument, Markdown, CSV, RTF, and code files</p>
+        <h3>{t('dropzone.title')}</h3>
+        <p>{t('dropzone.detail')}</p>
       </div>
     </div>
   );

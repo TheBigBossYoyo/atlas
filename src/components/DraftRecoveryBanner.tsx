@@ -1,5 +1,6 @@
 import { History } from 'lucide-react';
 import type { Draft } from '../hooks/useAutosave';
+import { useTranslate } from '../i18n';
 
 interface DraftRecoveryBannerProps {
   draft: Draft | null;
@@ -25,6 +26,7 @@ function formatSavedAt(savedAt: number): string {
  * was force-quit or crashed with unsaved markdown edits still pending).
  */
 export function DraftRecoveryBanner({ draft, onRestore, onDiscard }: DraftRecoveryBannerProps) {
+  const t = useTranslate();
   if (!draft) return null;
 
   return (
@@ -32,15 +34,15 @@ export function DraftRecoveryBanner({ draft, onRestore, onDiscard }: DraftRecove
       <History size={16} aria-hidden="true" />
       <span className="draft-recovery__message">
         {draft.fileName
-          ? `Unsaved changes to "${draft.fileName}" from ${formatSavedAt(draft.savedAt)} were found.`
-          : `An unsaved draft from ${formatSavedAt(draft.savedAt)} was found.`}
+          ? t('draftRecovery.foundNamed', { fileName: draft.fileName, savedAt: formatSavedAt(draft.savedAt) })
+          : t('draftRecovery.foundUnnamed', { savedAt: formatSavedAt(draft.savedAt) })}
       </span>
       <div className="draft-recovery__actions">
         <button className="draft-recovery__btn draft-recovery__btn--discard" onClick={onDiscard} type="button">
-          Discard
+          {t('draftRecovery.discard')}
         </button>
         <button className="draft-recovery__btn draft-recovery__btn--restore" onClick={onRestore} type="button">
-          Restore
+          {t('draftRecovery.restore')}
         </button>
       </div>
     </div>

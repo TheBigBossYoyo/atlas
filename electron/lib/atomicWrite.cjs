@@ -179,6 +179,39 @@ function classifyWriteError(err) {
 }
 
 /**
+ * i18n — the stable counterpart to `classifyWriteError`'s English text.
+ * `main.cjs`'s IPC handlers attach this as `errorCode` alongside the English
+ * `error` string so the renderer can look up a translated message (see
+ * `src/i18n`'s `errors.write.*` keys, one per code below) instead of
+ * displaying main's English text verbatim in a French UI. Kept as a
+ * SEPARATE function (rather than changing `classifyWriteError`'s return
+ * shape) so every existing caller/test of `classifyWriteError` keeps working
+ * unchanged.
+ * @param {unknown} err
+ * @returns {string | undefined}
+ */
+function classifyWriteErrorCode(err) {
+  if (err instanceof FileLockedError) return 'fileLocked';
+  const code = err && typeof err === 'object' ? /** @type {{code?: unknown}} */ (err).code : undefined;
+  switch (code) {
+    case 'EACCES':
+      return 'permissionDenied';
+    case 'ENOSPC':
+      return 'diskFull';
+    case 'EISDIR':
+      return 'isDirectory';
+    case 'ENOENT':
+      return 'destinationMissing';
+    case 'EROFS':
+      return 'readOnly';
+    case 'ENAMETOOLONG':
+      return 'nameTooLong';
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Atomically writes `data` to `targetPath`.
  * @param {string} targetPath
  * @param {string | Uint8Array} data
@@ -220,4 +253,4 @@ function atomicWriteFile(targetPath, data) {
   }
 }
 
-module.exports = { atomicWriteFile, FileLockedError, LOCK_ERROR_MESSAGE, classifyWriteError };
+module.exports = { atomicWriteFile, FileLockedError, LOCK_ERROR_MESSAGE, classifyWriteError, classifyWriteErrorCode };
