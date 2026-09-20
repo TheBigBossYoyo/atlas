@@ -11,6 +11,7 @@ import { useViewerIsDirty, useViewerSave } from '../../shared/useViewerContext'
 import { createDocument } from '../spreadsheetDocument'
 import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from '../useSpreadsheetEditor'
 import type { ParsedSheet } from '../../shared/spreadsheetGrid'
+import { translate } from '../../../i18n/translate'
 
 const WORKBOOK_TARGET: SpreadsheetSaveTarget = {
   kind: 'workbook',
@@ -55,26 +56,32 @@ function ViewerSaveProbe() {
   )
 }
 
-type HarnessProps = { readonly target: SpreadsheetSaveTarget; readonly onReady: (api: ReturnType<typeof useSpreadsheetEditor>) => void }
+type HarnessProps = {
+  readonly target: SpreadsheetSaveTarget
+  readonly onReady: (api: ReturnType<typeof useSpreadsheetEditor>) => void
+  /** SHEET-4 — the bytes the workbook was "opened" from, threaded straight through to `writeWorkbookThroughOriginal` (USR-17's save-through-original). */
+  readonly originalBuffer?: ArrayBuffer | null
+}
 
-function Harness({ target, onReady }: HarnessProps) {
+function Harness({ target, onReady, originalBuffer = null }: HarnessProps) {
   const doc = createDocument([sheetFixture([['a', 'b'], ['1', '2']])])
-  const editor = useSpreadsheetEditor(doc, '/tmp/sample.xlsx', target)
+  const editor = useSpreadsheetEditor(doc, '/tmp/sample.xlsx', target, true, originalBuffer)
   onReady(editor)
   return (
     <>
       <ViewerDirtyProbe />
       <ViewerSaveProbe />
       {editor.saveError && <span data-testid="save-error">{editor.saveError}</span>}
+      {editor.saveWarning && <span data-testid="save-warning">{editor.saveWarning}</span>}
     </>
   )
 }
 
-function renderHarness(target: SpreadsheetSaveTarget) {
+function renderHarness(target: SpreadsheetSaveTarget, originalBuffer?: ArrayBuffer | null) {
   let latest: ReturnType<typeof useSpreadsheetEditor> | null = null
   const utils = render(
     <ViewerProvider filePath="/tmp/sample.xlsx">
-      <Harness target={target} onReady={(api) => { latest = api }} />
+      <Harness target={target} originalBuffer={originalBuffer} onReady={(api) => { latest = api }} />
     </ViewerProvider>,
   )
   return { ...utils, getEditor: () => latest! }
@@ -205,6 +212,89 @@ describe('useSpreadsheetEditor — save (workbook target)', () => {
 
     expect(await screen.findByTestId('save-error')).toHaveTextContent('Disk full')
     expect(screen.getByTestId('dirty')).toHaveTextContent('true')
+  })
+})
+
+// SHEET-4 — an xlsx save silently fell back from the lossless
+// save-through-original writer to the lossy fresh-SheetJS one whenever
+// `writeWorkbookThroughOriginal` returned `null` (a non-OOXML/corrupt
+// buffer, missing relationships, ...), with no way for the user to tell:
+// `useSpreadsheetEditor.ts`'s `throughOriginal ?? writeWorkbookBytesWithTables(...)`
+// reported plain success either way. `saveWarning` now surfaces that.
+describe('useSpreadsheetEditor — save-through-original fallback warning (SHEET-4)', () => {
+  it('a forced passthrough failure (a buffer that is not a real xlsx zip) surfaces a save warning, but the save still succeeds', async () => {
+    const notAZip = new TextEncoder().encode('this is not a zip file').buffer as ArrayBuffer
+    const { getEditor } = renderHarness(WORKBOOK_TARGET, notAZip)
+    await waitFor(() => expect(getEditor()).toBeTruthy())
+
+    let ok = false
+    await act(async () => {
+      ok = await getEditor().handleSave()
+    })
+
+    // The save itself still succeeded (the fresh-SheetJS writer produced
+    // valid bytes and `saveBinaryFile` reported success) — a fallback is not
+    // a failure, so this must stay `true` and `saveError` must stay unset.
+    expect(ok).toBe(true)
+    expect(getEditor().saveError).toBeNull()
+
+    const expectedWarning = translate('en', 'spreadsheet.saveFallbackWarning')
+    expect(await screen.findByTestId('save-warning')).toHaveTextContent(expectedWarning)
+    expect(getEditor().saveWarning).toBe(expectedWarning)
+  })
+
+  it('a normal passthrough save (no original buffer at all) stays completely silent — no save warning', async () => {
+    const { getEditor } = renderHarness(WORKBOOK_TARGET)
+    await waitFor(() => expect(getEditor()).toBeTruthy())
+
+    await act(async () => {
+      await getEditor().handleSave()
+    })
+
+    expect(getEditor().saveWarning).toBeNull()
+    expect(screen.queryByTestId('save-warning')).toBeNull()
+  })
+
+  it('a save NOT eligible for passthrough (delimited target) never reports the fallback warning', async () => {
+    // A CSV/TSV save never goes through `writeWorkbookThroughOriginal` at
+    // all — `usedFallbackWriter` must stay `false` here, not conflate "this
+    // format was never a passthrough candidate" with "passthrough was
+    // attempted and failed".
+    const notAZip = new TextEncoder().encode('this is not a zip file').buffer as ArrayBuffer
+    const { getEditor } = renderHarness(DELIMITED_TARGET, notAZip)
+    await waitFor(() => expect(getEditor()).toBeTruthy())
+
+    await act(async () => {
+      await getEditor().handleSave()
+    })
+
+    expect(getEditor().saveWarning).toBeNull()
+  })
+
+  it('the warning clears on the next save once passthrough is no longer failing', async () => {
+    const notAZip = new TextEncoder().encode('this is not a zip file').buffer as ArrayBuffer
+    const { getEditor, rerender } = renderHarness(WORKBOOK_TARGET, notAZip)
+    await waitFor(() => expect(getEditor()).toBeTruthy())
+
+    await act(async () => {
+      await getEditor().handleSave()
+    })
+    expect(getEditor().saveWarning).not.toBeNull()
+
+    // Re-render with no `originalBuffer` at all (so this next save is no
+    // longer even eligible for passthrough) — a stale warning from the
+    // PREVIOUS save must not linger forever.
+    let latest: ReturnType<typeof useSpreadsheetEditor> | null = null
+    rerender(
+      <ViewerProvider filePath="/tmp/sample.xlsx">
+        <Harness target={WORKBOOK_TARGET} originalBuffer={null} onReady={(api) => { latest = api }} />
+      </ViewerProvider>,
+    )
+    await act(async () => {
+      await latest!.handleSave()
+    })
+
+    expect(latest!.saveWarning).toBeNull()
   })
 })
 

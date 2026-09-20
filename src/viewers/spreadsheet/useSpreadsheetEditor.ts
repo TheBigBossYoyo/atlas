@@ -45,6 +45,7 @@ import {
   useSetViewerDirty,
 } from '../shared/useViewerContext'
 import { useViewerShortcuts } from '../../hooks/useShortcutManager'
+import { useTranslate } from '../../i18n'
 
 export type SpreadsheetSaveTarget =
   | {
@@ -78,7 +79,7 @@ async function writeToDisk(
   suggestedName: string,
   existingPath: string | undefined,
   originalBuffer: ArrayBuffer | null,
-): Promise<{ readonly saved: boolean; readonly path?: string; readonly error?: string }> {
+): Promise<{ readonly saved: boolean; readonly path?: string; readonly error?: string; readonly usedFallbackWriter: boolean }> {
   const filters = [{ name: target.filterName, extensions: [target.extension] }]
 
   if (target.kind === 'workbook') {
@@ -86,10 +87,24 @@ async function writeToDisk(
     // and filter Atlas does not model) whenever that is possible; the
     // fresh-workbook writer is the fallback for other formats and for
     // structural changes it cannot express.
-    const throughOriginal =
-      originalBuffer && PASSTHROUGH_BOOK_TYPES.has(target.bookType)
-        ? await writeWorkbookThroughOriginal(originalBuffer, doc)
-        : null
+    //
+    // SHEET-4 — `writeWorkbookThroughOriginal` also returns `null` on
+    // several genuine internal failures on an eligible xlsx/xlsm (a
+    // non-OOXML/corrupt buffer, missing relationships, a sheet whose part
+    // isn't a plain worksheet, ...) — not just "not eligible at all". Both
+    // shapes used to fall through to the same fresh-workbook writer with no
+    // way for the caller to tell them apart, so a genuine downgrade (styles,
+    // charts, filters and tables NOT carried over — see
+    // `docs/KNOWN_LIMITATIONS.md`'s xlsx promise) silently reported success
+    // exactly like an unremarkable non-eligible save (CSV-origin document,
+    // legacy format) did. `attemptedThroughOriginal` distinguishes the two:
+    // only "eligible AND attempted AND still came back null" counts as a
+    // fallback worth telling the user about.
+    const attemptedThroughOriginal = Boolean(originalBuffer) && PASSTHROUGH_BOOK_TYPES.has(target.bookType)
+    const throughOriginal = attemptedThroughOriginal
+      ? await writeWorkbookThroughOriginal(originalBuffer!, doc)
+      : null
+    const usedFallbackWriter = attemptedThroughOriginal && throughOriginal === null
     const bytes = throughOriginal ?? (await writeWorkbookBytesWithTables(doc, target.bookType))
     const result = await window.electronAPI?.saveBinaryFile?.({
       content: bytes,
@@ -97,7 +112,7 @@ async function writeToDisk(
       filters,
       ...(existingPath ? { existingPath } : {}),
     })
-    return { saved: result?.saved ?? false, path: result?.path, error: result?.error }
+    return { saved: result?.saved ?? false, path: result?.path, error: result?.error, usedFallbackWriter }
   }
 
   const text = documentToDelimitedText(doc, target.delimiter)
@@ -107,7 +122,7 @@ async function writeToDisk(
     filters,
     ...(existingPath ? { existingPath } : {}),
   })
-  return { saved: result?.saved ?? false, path: result?.path, error: result?.error }
+  return { saved: result?.saved ?? false, path: result?.path, error: result?.error, usedFallbackWriter: false }
 }
 
 export type UseSpreadsheetEditorResult = {
@@ -126,6 +141,19 @@ export type UseSpreadsheetEditorResult = {
   readonly renameSheet: (sheetIndex: number, name: string) => void
   readonly deleteSheet: (sheetIndex: number) => void
   readonly saveError: string | null
+  /**
+   * SHEET-4 — set after a save that SUCCEEDED but had to fall back from the
+   * lossless save-through-original writer to the fresh-SheetJS one (styles,
+   * charts, filters and tables Atlas doesn't model are not carried over —
+   * see `docs/KNOWN_LIMITATIONS.md`'s xlsx promise). `null` on a normal
+   * passthrough save and on a genuine save failure alike — this is
+   * deliberately a separate field from `saveError`: a fallback save still
+   * succeeded, so it must not read as a failure (dirty-tracking, the "did
+   * this save succeed" return value, ...) the way `saveError` does. Mirrors
+   * DocxViewer's `fidelityWarningMessage` (`detectLossySaveWarnings`) — same
+   * idea, spreadsheet side.
+   */
+  readonly saveWarning: string | null
   readonly handleSave: () => Promise<boolean>
   readonly handleSaveAs: (overrideTarget?: SpreadsheetSaveTarget) => Promise<boolean>
 }
@@ -154,6 +182,9 @@ export function useSpreadsheetEditor(
   // the legacy-format case above, where that's the opposite of what's wanted.
   const [savePath, setSavePath] = useState<string | undefined>(seedExistingPath ? filePath : undefined)
   const [saveError, setSaveError] = useState<string | null>(null)
+  // SHEET-4 — see `UseSpreadsheetEditorResult.saveWarning`'s own doc comment.
+  const [saveWarning, setSaveWarning] = useState<string | null>(null)
+  const t = useTranslate()
   // The document reference at the last successful save (or at load) — a
   // plain reference compare against the current `history.present` is
   // "has this document changed since load/save", mirroring DocxViewer's own
@@ -241,6 +272,11 @@ export function useSpreadsheetEditor(
   const handleSaveWith = useCallback(
     async (saveTarget: SpreadsheetSaveTarget, forceDialog: boolean): Promise<boolean> => {
       setSaveError(null)
+      // Cleared up front, same as `saveError` above, so a save that DOESN'T
+      // fall back this time (e.g. the user's next save after a transient
+      // failure) silently drops a stale warning from an earlier save rather
+      // than leaving it displayed forever.
+      setSaveWarning(null)
       const docAtSaveStart = history.present
       try {
         const suggestedName = withExtension(baseName(filePath), saveTarget.extension)
@@ -255,6 +291,10 @@ export function useSpreadsheetEditor(
         if (!result.saved) {
           setSaveError(result.error ?? 'Save was cancelled or unavailable.')
           return false
+        }
+
+        if (result.usedFallbackWriter) {
+          setSaveWarning(t('spreadsheet.saveFallbackWarning'))
         }
 
         if (result.path) {
@@ -282,7 +322,7 @@ export function useSpreadsheetEditor(
         return false
       }
     },
-    [filePath, history.present, savePath, originalBuffer, reportSavedPath],
+    [filePath, history.present, savePath, originalBuffer, reportSavedPath, t],
   )
 
   const handleSave = useCallback(() => handleSaveWith(target, false), [handleSaveWith, target])
@@ -357,6 +397,7 @@ export function useSpreadsheetEditor(
     renameSheet,
     deleteSheet,
     saveError,
+    saveWarning,
     handleSave,
     handleSaveAs,
   }

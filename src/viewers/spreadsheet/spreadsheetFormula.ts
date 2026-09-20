@@ -9,15 +9,25 @@
  *
  * This module supports exactly the common subset spreadsheet users reach
  * for first: `+ - * / ^` arithmetic (with parens and unary minus), A1/`$A$1`
- * cell references, `A1:B3` ranges, and the handful of aggregate functions
- * listed in `FUNCTIONS` below. Anything outside that — an unknown function
- * name, a malformed range, a bare syntax error — resolves to `null`, and
- * callers (see `spreadsheetDocument.ts`) fall back to displaying the literal
- * formula text (`=<formula>`) instead of a fabricated number. A *runtime*
- * error within an otherwise-valid formula (division by zero, a text operand
- * in an arithmetic expression) still resolves to a real spreadsheet error
- * string (`#DIV/0!`, `#VALUE!`) — that IS a value a real spreadsheet would
- * show, unlike a fallback.
+ * cell references, `A1:B3` ranges, string literals (`"like this"`, with a
+ * doubled `""` for a literal quote), `&` text concatenation, and the handful
+ * of aggregate/text functions listed in `FUNCTIONS` below. Anything outside
+ * that — an unknown function name, a malformed range, a bare syntax error —
+ * resolves to `null`, and callers (see `spreadsheetDocument.ts`) fall back to
+ * displaying the literal formula text (`=<formula>`) instead of a fabricated
+ * number. A *runtime* error within an otherwise-valid formula (division by
+ * zero, a text operand in an arithmetic expression) still resolves to a real
+ * spreadsheet error string (`#DIV/0!`, `#VALUE!`) — that IS a value a real
+ * spreadsheet would show, unlike a fallback.
+ *
+ * SHEET-6 follow-up: `&` and text functions (`CONCATENATE`) used to be
+ * unreachable — the tokenizer had no string-literal rule at all (a bare `"`
+ * was an "unrecognized character" syntax error) and no `&` operator, so
+ * `=A1&"!"` fell all the way through to the unsupported-formula case above
+ * and displayed as literal formula text instead of an evaluated value. `&`
+ * sits at the lowest precedence (below `+ - * /  ^`, same as real Excel),
+ * parsed by `parseConcat` above `parseExpression` — `="1"&1+1` concatenates
+ * "1" with the ALREADY-COMPUTED `1+1`, not `("1"&1)+1`.
  */
 import { parseCellRef, type CellCoord } from './cellRef'
 
@@ -29,6 +39,7 @@ export type FormulaResult =
 
 type Token =
   | { readonly kind: 'number'; readonly value: number }
+  | { readonly kind: 'string'; readonly text: string }
   | { readonly kind: 'ref'; readonly text: string }
   | { readonly kind: 'ident'; readonly text: string }
   | { readonly kind: 'op'; readonly text: string }
@@ -37,7 +48,13 @@ type Token =
   | { readonly kind: 'comma' }
   | { readonly kind: 'colon' }
 
-const TOKEN_PATTERN = /\s*(?:(\d+(?:\.\d+)?)|(\$?[A-Za-z]+\$?\d+)|([A-Za-z_][A-Za-z0-9_]*)|(<=|>=|<>|[-+*/^()=<>,:])|(\S))/g
+// String literals are matched FIRST so a quoted `&`, digit or letter inside
+// one (`"A1 & B1"`) is never mistaken for a ref/op/ident token of its own —
+// `"(?:[^"]|"")*"` accepts a doubled `""` as an escaped literal quote inside
+// the string, the same convention Excel itself uses. `&` joins the operator
+// character class alongside the existing arithmetic/comparison operators.
+const TOKEN_PATTERN =
+  /\s*(?:("(?:[^"]|"")*")|(\d+(?:\.\d+)?)|(\$?[A-Za-z]+\$?\d+)|([A-Za-z_][A-Za-z0-9_]*)|(<=|>=|<>|[-+*/^()=<>,:&])|(\S))/g
 
 class FormulaSyntaxError extends Error {}
 
@@ -46,8 +63,11 @@ function tokenize(formula: string): Token[] {
   TOKEN_PATTERN.lastIndex = 0
   let match: RegExpExecArray | null
   while ((match = TOKEN_PATTERN.exec(formula)) !== null) {
-    const [, number, ref, ident, op, junk] = match
-    if (number !== undefined) {
+    const [, string, number, ref, ident, op, junk] = match
+    if (string !== undefined) {
+      // Strip the surrounding quotes, then unescape a doubled `""` to one `"`.
+      tokens.push({ kind: 'string', text: string.slice(1, -1).replace(/""/g, '"') })
+    } else if (number !== undefined) {
       tokens.push({ kind: 'number', value: Number.parseFloat(number) })
     } else if (ref !== undefined) {
       tokens.push({ kind: 'ref', text: ref })
@@ -86,6 +106,21 @@ function toNumeric(value: Value): number | { readonly code: string } {
   return Number.isNaN(parsed) ? { code: '#VALUE!' } : parsed
 }
 
+/**
+ * Renders a resolved value as the text `&`/`CONCATENATE` splice in: a number
+ * formatted the same way a numeric formula RESULT is displayed elsewhere
+ * (`formatNumericResult`, defined below — hoisted, so the forward reference
+ * here is fine), text passed through as-is, and an error code rendered as
+ * its own literal text (`#DIV/0!`) for the rare direct call — every actual
+ * call site here (`applyConcat`, `CONCATENATE`) already propagates an error
+ * operand instead of ever stringifying it, so this branch is defensive only.
+ */
+function valueToText(value: Value): string {
+  if (value.kind === 'number') return formatNumericResult(value.value)
+  if (value.kind === 'text') return value.value
+  return value.code
+}
+
 /** A minimal recursive-descent parser/evaluator over the token stream produced by `tokenize`. */
 class FormulaParser {
   private position = 0
@@ -113,11 +148,30 @@ class FormulaParser {
   }
 
   parseTopLevel(): Value {
-    const result = this.parseExpression()
+    const result = this.parseConcat()
     if (this.position !== this.tokens.length) {
       throw new FormulaSyntaxError('Unexpected trailing tokens')
     }
     return result
+  }
+
+  /** `&` text concatenation — the lowest-precedence operator this evaluator supports, matching real Excel (`="1"&1+1` concatenates "1" with the already-computed `1+1`, not `("1"&1)+1`). */
+  private parseConcat(): Value {
+    let left = this.parseExpression()
+    for (;;) {
+      const token = this.peek()
+      if (token?.kind !== 'op' || token.text !== '&') break
+      this.consume()
+      const right = this.parseExpression()
+      left = this.applyConcat(left, right)
+    }
+    return left
+  }
+
+  private applyConcat(left: Value, right: Value): Value {
+    if (left.kind === 'error') return left
+    if (right.kind === 'error') return right
+    return { kind: 'text', value: valueToText(left) + valueToText(right) }
   }
 
   private parseExpression(): Value {
@@ -187,6 +241,7 @@ class FormulaParser {
   private parsePrimary(): Value {
     const token = this.consume()
     if (token.kind === 'number') return { kind: 'number', value: token.value }
+    if (token.kind === 'string') return { kind: 'text', value: token.text }
     if (token.kind === 'lparen') {
       const inner = this.parseExpression()
       const close = this.consume()
@@ -216,11 +271,18 @@ class FormulaParser {
     if (open.kind !== 'lparen') throw new FormulaSyntaxError(`Expected "(" after function name ${name}`)
 
     const numbers: number[] = []
+    // Every argument's resolved value, in order — `SUM`-family functions
+    // only ever read `numbers`/`nonEmptyCount` below, but a text function
+    // (`CONCATENATE`) needs each argument's own text, numeric args included
+    // (`CONCATENATE(A1,1)` should splice in "1", not drop it).
+    const values: Value[] = []
     let nonEmptyCount = 0
 
     const collectArg = (): void => {
       const first = this.peek()
-      // A range only ever appears as a bare `A1:B3` function argument.
+      // A range only ever appears as a bare `A1:B3` function argument. Not
+      // fed into `values` — no function here takes a range as a text
+      // argument, only `SUM`/`AVERAGE`/etc.'s own numeric aggregation below.
       if (first?.kind === 'ref') {
         const next = this.tokens[this.position + 1]
         if (next?.kind === 'colon') {
@@ -242,8 +304,11 @@ class FormulaParser {
           return
         }
       }
-      const value = this.parseExpression()
+      // `parseConcat` (not the narrower `parseExpression`) so an argument can
+      // itself use `&`, e.g. `CONCATENATE(A1&"!", B1)`.
+      const value = this.parseConcat()
       if (value.kind === 'error') throw new FormulaSyntaxError(value.code)
+      values.push(value)
       if (value.kind === 'number') {
         numbers.push(value.value)
         nonEmptyCount += 1
@@ -263,7 +328,7 @@ class FormulaParser {
     const close = this.consume()
     if (close.kind !== 'rparen') throw new FormulaSyntaxError(`Expected ")" to close ${name}(`)
 
-    return applyFunction(name, numbers, nonEmptyCount)
+    return applyFunction(name, numbers, nonEmptyCount, values)
   }
 }
 
@@ -277,9 +342,9 @@ function parseRefToken(refText: string): CellCoord {
   return coord
 }
 
-const FUNCTIONS = new Set(['SUM', 'AVERAGE', 'MIN', 'MAX', 'COUNT', 'COUNTA'])
+const FUNCTIONS = new Set(['SUM', 'AVERAGE', 'MIN', 'MAX', 'COUNT', 'COUNTA', 'CONCATENATE'])
 
-function applyFunction(name: string, numbers: ReadonlyArray<number>, nonEmptyCount: number): Value {
+function applyFunction(name: string, numbers: ReadonlyArray<number>, nonEmptyCount: number, values: ReadonlyArray<Value>): Value {
   if (!FUNCTIONS.has(name)) {
     throw new FormulaSyntaxError(`Unsupported function: ${name}`)
   }
@@ -296,6 +361,13 @@ function applyFunction(name: string, numbers: ReadonlyArray<number>, nonEmptyCou
       return numberValue(numbers.length)
     case 'COUNTA':
       return numberValue(nonEmptyCount)
+    case 'CONCATENATE':
+      // Every element of `values` is already error-free by the time it gets
+      // here — `collectArg` throws a `FormulaSyntaxError` (falling the whole
+      // formula back to `{ok:false}`, the same as any other unsupported
+      // shape) the moment an argument itself evaluates to an error, before
+      // it's ever pushed onto this array.
+      return { kind: 'text', value: values.map(valueToText).join('') }
     default:
       throw new FormulaSyntaxError(`Unsupported function: ${name}`)
   }
