@@ -26,7 +26,13 @@ import {
 import { readSheetPartPaths, readSheetTables } from '../spreadsheetTables'
 import { writeWorkbookBytesWithTables } from '../spreadsheetWrite'
 import { writeWorkbookThroughOriginal } from '../xlsxPassthrough'
-import { buildMultiSheetWorkbook, buildStyledWorkbook } from './styledWorkbook'
+import {
+  buildCrossSheetFormulaWorkbook,
+  buildMultiSheetWorkbook,
+  buildSharedStringsWorkbook,
+  buildStyledWorkbook,
+  buildWorkbookWithOwnedParts,
+} from './styledWorkbook'
 
 import { validateOfficeFile } from '../../../../scripts/lib/officeValidator.mjs'
 
@@ -75,6 +81,48 @@ describe('spreadsheet saves pass spec-level OPC/ODF validation', () => {
 
     const result = validateOfficeFile(Buffer.from(bytes!))
     expect(errorsOnly(result.issues)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal after a cross-sheet formula rename, delete and row insert', async () => {
+    const original = await buildCrossSheetFormulaWorkbook()
+    let doc = await load(original)
+    doc = renameSheet(doc, 1, 'Info') // Notes -> Info: Budget!D2's "=Notes!A1" must follow
+    doc = insertRowAt(doc, 0, 1) // Budget's own row insert: Notes/Info!A2's "=Budget!C2" must follow
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
+    expect(errorsOnly(result.issues), JSON.stringify(result.issues, null, 2)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal after deleting a sheet a formula referenced (#REF!)', async () => {
+    const original = await buildCrossSheetFormulaWorkbook()
+    const doc = deleteSheet(await load(original), 1) // delete Notes — Budget!D2's formula becomes #REF!
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
+    expect(errorsOnly(result.issues), JSON.stringify(result.issues, null, 2)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal after deleting a sheet with its own table/comments/drawing/chart', async () => {
+    const original = await buildWorkbookWithOwnedParts()
+    const doc = deleteSheet(await load(original), 1) // delete "Extra" — sweeps its owned parts
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
+    expect(errorsOnly(result.issues), JSON.stringify(result.issues, null, 2)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal compacts sharedStrings.xml without corrupting the package', async () => {
+    const original = await buildSharedStringsWorkbook()
+    const doc = await load(original)
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
+    expect(errorsOnly(result.issues), JSON.stringify(result.issues, null, 2)).toEqual([])
   })
 
   it.for(['xlsx', 'xlsm', 'xlsb', 'ods'] as const)(

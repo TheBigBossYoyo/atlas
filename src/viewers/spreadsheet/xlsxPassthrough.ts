@@ -26,10 +26,31 @@
  *    one sheet's structure changed;
  *  - defined names are kept pointing at the right cells: a name scoped to a
  *    deleted sheet is dropped and every later sheet's `localSheetId` is
- *    renumbered; a name's own range is re-anchored the same way a
- *    conditional format's is; a rename updates the `Sheet!` prefix in a
- *    single-area name (see `rewriteDefinedNameFormula`'s own header for the
- *    exact — deliberately narrow — pattern this covers);
+ *    renumbered; every name's formula text — single-area, multi-area
+ *    (`Sheet1!$A$1,Sheet1!$C$3`), function-wrapped (`OFFSET(Sheet1!$A$1,...)`)
+ *    or a whole-row/whole-column range (a `Print_Titles` `$1:$1`) — is
+ *    rewritten through a sheet rename/delete and re-anchored through a
+ *    row/column insert or delete by the same engine a cell formula goes
+ *    through (`formulaRefs.ts`), not just the narrow single-area case;
+ *  - a CELL FORMULA referencing a renamed, reordered or deleted sheet
+ *    (`=Sheet2!A1`, `='My Sheet'!A1:B2`, a 3-D `=SUM(Sheet1:Sheet3!A1)`), or
+ *    one referencing cells moved by a row/column insert or delete — on its
+ *    own sheet or another one — is rewritten the way Excel itself rewrites
+ *    it (`formulaRefs.ts`); a reference to a deleted sheet, or a range fully
+ *    consumed by a delete, becomes `#REF!`, matching Excel's own documented
+ *    behavior. This applies fully to a formula CLONED byte-for-byte from the
+ *    original file; a formula the user actually typed in Atlas only has its
+ *    SHEET NAME fixed (never its coordinates, which are already expressed
+ *    against the current, saved layout) — see that module's header for why;
+ *  - a deleted sheet's own EXCLUSIVELY-owned parts — its table(s), comments
+ *    (legacy VML note shapes and modern threaded comments alike) and its own
+ *    drawing (one level further, any chart embedded in it) — are removed
+ *    from the package, not left as dead weight (`removeSheetOwnedParts`);
+ *  - `xl/sharedStrings.xml` is compacted after every save: an entry no cell
+ *    anywhere in the package references any more is dropped, the survivors'
+ *    indices renumbered contiguously (and every affected cell's `<v>`
+ *    updated to match), and `count`/`uniqueCount` recomputed
+ *    (`compactSharedStrings`);
  *  - `calcChain.xml` is dropped and the workbook is marked "recalculate on
  *    load", since cached formula values are only as good as this app's own
  *    formula engine;
@@ -37,13 +58,20 @@
  *
  * Everything else in the package is passed through untouched.
  *
- * Deliberate limits (see the findings register for the full list): a
- * non-OOXML target still falls back to the fresh-workbook writer; a cell
- * FORMULA referencing a renamed/reordered/deleted sheet (anywhere other than
- * inside a defined name) is not rewritten, nor is a multi-area or
- * function-wrapped defined name, or a whole-row/whole-column range (e.g. a
- * Print_Titles `$1:$1`); a deleted sheet's own table/drawing parts are
- * orphaned in the zip (unreferenced, but still present) rather than swept.
+ * Deliberate limits (see the findings register for the full list, and
+ * `formulaRefs.ts`'s own header for the formula-syntax engine's specific
+ * coverage): a non-OOXML target still falls back to the fresh-workbook
+ * writer; a 3-D formula reference's row/column shift is taken from its
+ * FIRST sheet only, on the assumption (implicit in a 3-D reference itself)
+ * that every sheet it spans is laid out the same way; a shared-formula
+ * group's `ref` SPAN attribute (`<f t="shared" ref="C3:C10" si="0">`) is not
+ * re-anchored when a row/column insert or delete moves some of its member
+ * cells — only the master cell's own formula TEXT is (a narrower,
+ * pre-existing gap, not one this fix closes); an `xl/media/*` image
+ * belonging to a deleted sheet's drawing is deliberately left orphaned
+ * rather than swept, since a differently-authored package could in
+ * principle have another, surviving sheet's drawing target the same image
+ * part.
  */
 import JSZip from 'jszip'
 
@@ -58,6 +86,7 @@ import {
 import { cellKey, type EditableSheet, type SpreadsheetDocument } from './spreadsheetDocument'
 import { encodeCol, rewriteTableXml, tableHeaderNames } from './spreadsheetTables'
 import { remapSqref, type IndexSources } from './spreadsheetRangeShift'
+import { rewriteFormulaReferences, type SheetChange } from './formulaRefs'
 import { loadWorkbookZip } from './spreadsheetZipBudget'
 
 /** Worksheet children that must come AFTER `<mergeCells>` (CT_Worksheet order). */
@@ -196,7 +225,36 @@ function buildCell(
   return cell
 }
 
-function rebuildSheetData(sheet: EditableSheet, original: OriginalSheet): void {
+/**
+ * Rewrites one cloned (untouched) cell's `<f>` text in place, when it has
+ * one, through this sheet's own row/column history and every sheet's
+ * rename/delete (USR-17 follow-up, see `formulaRefs.ts`). Byte-for-byte
+ * copied text is exactly what needs this: it is still expressed in the
+ * ORIGINAL file's numbering and sheet names.
+ */
+function rewriteClonedFormula(
+  clone: Element,
+  sheet: EditableSheet,
+  changesByOriginalName: ReadonlyMap<string, SheetChange>,
+): void {
+  const formulaElement = firstChildElement(clone, 'f')
+  const text = formulaElement?.textContent
+  if (!formulaElement || !text) return // no formula, or a shared/array-formula FOLLOWER with no text of its own to rewrite
+  formulaElement.textContent = xmlSafeText(
+    rewriteFormulaReferences(text, {
+      changesByOriginalName,
+      ownRowSources: sheet.rowSources,
+      ownColSources: sheet.colSources,
+      remapCoordinates: true,
+    }),
+  )
+}
+
+function rebuildSheetData(
+  sheet: EditableSheet,
+  original: OriginalSheet,
+  changesByOriginalName: ReadonlyMap<string, SheetChange>,
+): void {
   const { doc, sheetData } = original
   const namespace = sheetData.namespaceURI
   const fresh = doc.createElementNS(namespace, 'sheetData')
@@ -229,6 +287,7 @@ function rebuildSheetData(sheet: EditableSheet, original: OriginalSheet): void {
       if (originalCell && edited !== undefined && !edited.has(cellKey(row, col))) {
         const clone = originalCell.cloneNode(true) as Element
         clone.setAttribute('r', address)
+        rewriteClonedFormula(clone, sheet, changesByOriginalName)
         rowElement.appendChild(clone)
         continue
       }
@@ -239,7 +298,13 @@ function rebuildSheetData(sheet: EditableSheet, original: OriginalSheet): void {
         if (style !== null) rowElement.appendChild(buildCell(doc, namespace, address, '', undefined, style))
         continue
       }
-      rowElement.appendChild(buildCell(doc, namespace, address, text, formula, style))
+      // A formula the user typed (or a formula cell otherwise rebuilt from
+      // the live model) is already expressed against the CURRENT, saved
+      // layout — only a stale sheet NAME needs fixing here, never a
+      // coordinate (see `formulaRefs.ts`'s module header).
+      const rewrittenFormula =
+        formula === undefined ? undefined : rewriteFormulaReferences(formula, { changesByOriginalName, remapCoordinates: false })
+      rowElement.appendChild(buildCell(doc, namespace, address, text, rewrittenFormula, style))
     }
 
     if (rowElement.children.length > 0 || template) fresh.appendChild(rowElement)
@@ -399,6 +464,173 @@ function removeCalcChain(zip: JSZip, relsDoc: XMLDocument): boolean {
   return true
 }
 
+const SHARED_STRINGS_PATH = 'xl/sharedStrings.xml'
+
+/**
+ * Drops every `xl/sharedStrings.xml` entry no longer referenced by any cell
+ * in the saved package, compacting the remaining entries' indices and
+ * recomputing `count` (total `t="s"` cell references across the workbook)
+ * and `uniqueCount` (surviving `<si>` entries) — hygiene an edit or a
+ * row/column delete otherwise leaves behind. Atlas itself never ADDS a
+ * shared-string reference (every new or edited cell is written as an
+ * inline string instead — see `buildCell`), so across successive saves this
+ * table only ever accumulates stale entries, never grows for a reason.
+ *
+ * Every `<c t="s">` cell across every sheet being saved has its `<v>` index
+ * rewritten in place when its entry's position moved. A cell whose `<v>`
+ * is missing or not a plain integer is left alone entirely (a malformed
+ * shared-string reference is not this function's problem to fix) — its
+ * index still counts as "used" via whatever numeric value can be read, so a
+ * borderline case never causes a used entry to be dropped.
+ */
+async function compactSharedStrings(zip: JSZip, sheets: ReadonlyArray<OriginalSheet>): Promise<void> {
+  const xml = await zip.file(SHARED_STRINGS_PATH)?.async('string')
+  if (!xml) return
+  let doc: XMLDocument
+  try {
+    doc = parseXmlPart(xml)
+  } catch {
+    return
+  }
+  const root = doc.documentElement
+  const entries = childElements(root, 'si')
+  if (entries.length === 0) return
+
+  const cellsByIndex = new Map<number, Element[]>()
+  let totalReferences = 0
+  for (const sheet of sheets) {
+    for (const cell of descendantElements(sheet.root, 'c')) {
+      if (cell.getAttribute('t') !== 's') continue
+      const valueEl = firstChildElement(cell, 'v')
+      const index = valueEl?.textContent === undefined || valueEl.textContent === null ? NaN : Number(valueEl.textContent)
+      if (!Number.isInteger(index)) continue
+      totalReferences += 1
+      const list = cellsByIndex.get(index)
+      if (list) list.push(cell)
+      else cellsByIndex.set(index, [cell])
+    }
+  }
+
+  const usedOldIndices = Array.from(cellsByIndex.keys())
+    .filter((index) => index >= 0 && index < entries.length)
+    .sort((a, b) => a - b)
+
+  if (usedOldIndices.length === entries.length && usedOldIndices.every((value, i) => value === i)) {
+    // Every entry is still used and already contiguous — only `count` (a pure reference-count tally) can possibly be stale.
+    if (root.getAttribute('count') !== String(totalReferences)) root.setAttribute('count', String(totalReferences))
+    zip.file(SHARED_STRINGS_PATH, serializeXmlPart(doc))
+    return
+  }
+
+  const remap = new Map<number, number>()
+  usedOldIndices.forEach((oldIndex, newIndex) => remap.set(oldIndex, newIndex))
+  for (const [oldIndex, cells] of cellsByIndex) {
+    const newIndex = remap.get(oldIndex)
+    if (newIndex === undefined || newIndex === oldIndex) continue
+    for (const cell of cells) {
+      const valueEl = firstChildElement(cell, 'v')
+      if (valueEl) valueEl.textContent = String(newIndex)
+    }
+  }
+
+  // `<sst>` is `si*, extLst?` — reinsert the surviving entries (reordered to
+  // their new, compacted indices) before any `extLst`, not blindly appended,
+  // so a package that happens to have one keeps valid element order.
+  const extLst = firstChildElement(root, 'extLst')
+  for (const entry of entries) root.removeChild(entry)
+  for (const oldIndex of usedOldIndices) root.insertBefore(entries[oldIndex], extLst)
+
+  root.setAttribute('count', String(totalReferences))
+  root.setAttribute('uniqueCount', String(usedOldIndices.length))
+  zip.file(SHARED_STRINGS_PATH, serializeXmlPart(doc))
+}
+
+// ---------------------------------------------------------------------------
+// A deleted sheet's own exclusively-owned parts (USR-17 follow-up)
+// ---------------------------------------------------------------------------
+
+/** Resolves a relationship `Target` against the directory of the part that owns the relationship (NOT `xl/workbook.xml.rels`'s own `xl/`-relative convention — see `resolveWorkbookRelTarget` for that one). */
+function resolveRelativeTarget(baseDir: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1)
+  const segments = baseDir.split('/').filter(Boolean)
+  for (const part of target.split('/')) {
+    if (part === '..') segments.pop()
+    else if (part !== '.' && part !== '') segments.push(part)
+  }
+  return segments.join('/')
+}
+
+function relsPathForPart(partPath: string): string {
+  const slash = partPath.lastIndexOf('/')
+  return `${partPath.slice(0, slash)}/_rels/${partPath.slice(slash + 1)}.rels`
+}
+
+function removePart(zip: JSZip, contentTypesDoc: XMLDocument | null, path: string): void {
+  if (zip.file(path)) zip.remove(path)
+  if (contentTypesDoc) removeContentTypeOverrideForPart(contentTypesDoc, path)
+}
+
+/** Relationship-`Type` suffixes exclusively owned by ONE worksheet — never shared with a surviving sheet, so safe to delete outright along with it. */
+const SHEET_OWNED_REL_SUFFIXES = ['/table', '/comments', '/vmlDrawing', '/threadedComment', '/drawing']
+/** One level further: parts a swept DRAWING itself exclusively owns. Does NOT include `/image` — a drawing's image could in principle be a part another, surviving sheet's drawing also targets (Excel does not guarantee one image part per drawing), so `xl/media/*` is deliberately left orphaned rather than risk deleting a still-referenced part. */
+const DRAWING_OWNED_REL_SUFFIXES = ['/chart']
+
+/**
+ * Removes every part that exists ONLY to serve the worksheet being deleted:
+ * its table(s), its comments (legacy `<legacyDrawing>`/VML note shapes AND
+ * modern threaded comments), and its own drawing part — one level further,
+ * any chart THAT drawing embeds too. None of these can legitimately be
+ * referenced by any other, surviving part of the package (a table and a
+ * comments part belong to exactly one sheet by the OOXML schema itself; a
+ * drawing and the charts inside it are likewise 1:1 with the sheet/drawing
+ * that placed them). `xl/media/*` images are the one exception — see
+ * `DRAWING_OWNED_REL_SUFFIXES` — and stay orphaned, matching the module
+ * header's documented limit.
+ */
+async function removeSheetOwnedParts(
+  zip: JSZip,
+  contentTypesDoc: XMLDocument | null,
+  sheetDir: string,
+  sheetRelsXml: string,
+): Promise<void> {
+  let relsDoc: XMLDocument
+  try {
+    relsDoc = parseXmlPart(sheetRelsXml)
+  } catch {
+    return
+  }
+
+  for (const rel of descendantElements(relsDoc, 'Relationship')) {
+    const type = rel.getAttribute('Type') ?? ''
+    const target = rel.getAttribute('Target')
+    if (!target || !SHEET_OWNED_REL_SUFFIXES.some((suffix) => type.endsWith(suffix))) continue
+    const partPath = resolveRelativeTarget(sheetDir, target)
+
+    if (type.endsWith('/drawing')) {
+      const drawingRelsXml = await zip.file(relsPathForPart(partPath))?.async('string')
+      if (drawingRelsXml) {
+        try {
+          const drawingRelsDoc = parseXmlPart(drawingRelsXml)
+          const drawingDir = partPath.slice(0, partPath.lastIndexOf('/'))
+          for (const drawingRel of descendantElements(drawingRelsDoc, 'Relationship')) {
+            const drawingRelType = drawingRel.getAttribute('Type') ?? ''
+            const drawingTarget = drawingRel.getAttribute('Target')
+            if (!drawingTarget || !DRAWING_OWNED_REL_SUFFIXES.some((suffix) => drawingRelType.endsWith(suffix))) continue
+            const chartPath = resolveRelativeTarget(drawingDir, drawingTarget)
+            removePart(zip, contentTypesDoc, chartPath)
+            removePart(zip, contentTypesDoc, relsPathForPart(chartPath))
+          }
+        } catch {
+          // Malformed drawing rels — still remove the drawing part itself below.
+        }
+      }
+    }
+
+    removePart(zip, contentTypesDoc, partPath)
+    removePart(zip, contentTypesDoc, relsPathForPart(partPath))
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Relationship / workbook-structure helpers
 // ---------------------------------------------------------------------------
@@ -475,90 +707,33 @@ function removeContentTypeOverrideForPart(doc: XMLDocument, partPath: string): v
 // Defined names
 // ---------------------------------------------------------------------------
 
-type SheetChange = {
-  /** `undefined` when the sheet still exists but kept its name. */
-  readonly newName: string | undefined
-  readonly deleted: boolean
-  readonly rowSources: IndexSources
-  readonly colSources: IndexSources
-}
-
-function decodeDollarCell(ref: string): { readonly r: number; readonly c: number; readonly colAbs: boolean; readonly rowAbs: boolean } | null {
-  const match = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)$/.exec(ref.trim())
-  if (!match) return null
-  let c = 0
-  for (const character of match[2].toUpperCase()) c = c * 26 + (character.charCodeAt(0) - 64)
-  return { r: Number(match[4]) - 1, c: c - 1, colAbs: match[1] === '$', rowAbs: match[3] === '$' }
-}
-
-function encodeDollarCell(row: number, col: number, colAbs: boolean, rowAbs: boolean): string {
-  return `${colAbs ? '$' : ''}${encodeCol(col)}${rowAbs ? '$' : ''}${row + 1}`
-}
-
-const SINGLE_AREA_NAME = /^(?:'((?:[^']|'')*)'|([A-Za-z_][\w.]*))!(\$?[A-Za-z]{1,3}\$?\d+)(?::(\$?[A-Za-z]{1,3}\$?\d+))?$/
-
-/**
- * Rewrites one `<definedName>`'s formula text when — and only when — it is a
- * single-area reference into exactly one sheet (`Sheet1!$A$1:$B$2`, quoted
- * or not): the sheet name is swapped for its new one (rename) and the range
- * is re-anchored through that sheet's row/column inserts and deletes, the
- * same way a conditional format's `sqref` is. Anything else — a multi-area
- * reference, a name wrapping a function, a whole-row/whole-column range like
- * `$1:$1` (no column letter/row digit pair to parse), or a name that does
- * not reference a changed sheet at all — is returned unchanged. Returns
- * `null` when the referenced sheet was deleted, or the range was fully
- * consumed by a delete: the caller drops the whole `<definedName>` then.
- */
-function rewriteDefinedNameFormula(text: string, changesByOriginalName: ReadonlyMap<string, SheetChange>): string | null {
-  const match = SINGLE_AREA_NAME.exec(text.trim())
-  if (!match) return text
-
-  const sheetName = (match[1] ?? match[2]).replace(/''/g, "'")
-  const change = changesByOriginalName.get(sheetName)
-  if (!change) return text
-  if (change.deleted) return null
-
-  const start = decodeDollarCell(match[3])
-  const end = match[4] ? decodeDollarCell(match[4]) : start
-  if (!start || !end) return text
-
-  const range = {
-    r0: Math.min(start.r, end.r),
-    c0: Math.min(start.c, end.c),
-    r1: Math.max(start.r, end.r),
-    c1: Math.max(start.c, end.c),
-  }
-  const remapped = remapSqref(`${encodeCol(range.c0)}${range.r0 + 1}:${encodeCol(range.c1)}${range.r1 + 1}`, change.rowSources, change.colSources)
-  if (!remapped) return null
-
-  const [remappedStart, remappedEnd] = remapped.split(':')
-  const remappedStartCell = decodeDollarCell(remappedStart)!
-  const newName = change.newName ?? sheetName
-  const needsQuote = !/^[A-Za-z_][\w.]*$/.test(newName)
-  const prefix = needsQuote ? `'${newName.replace(/'/g, "''")}'` : newName
-  const startOut = encodeDollarCell(remappedStartCell.r, remappedStartCell.c, start.colAbs, start.rowAbs)
-  if (!match[4]) return `${prefix}!${startOut}`
-  const remappedEndCell = decodeDollarCell(remappedEnd ?? remappedStart)!
-  const endOut = encodeDollarCell(remappedEndCell.r, remappedEndCell.c, end.colAbs, end.rowAbs)
-  return `${prefix}!${startOut}:${endOut}`
-}
-
 /**
  * Applies every defined-name edit implied by the sheet structure change:
  * `localSheetId` renumbering (or removal, for a name scoped to a deleted
- * sheet) and, where the formula matches `rewriteDefinedNameFormula`'s narrow
- * pattern, a rename/re-anchor of the formula text itself.
+ * sheet), and a rename/delete/re-anchor of the formula text itself via the
+ * same reference-syntax engine a cell formula goes through
+ * (`formulaRefs.ts`) — this covers a multi-area name
+ * (`Sheet1!$A$1,Sheet1!$C$3`), a function-wrapped one
+ * (`OFFSET(Sheet1!$A$1,...)`) and a whole-row/whole-column range (a
+ * `Print_Titles` `$1:$1`), not just the single-area case. A name whose
+ * formula collapses entirely to `#REF!` (its one area's sheet was deleted,
+ * or its one range was fully consumed by a delete) is dropped outright, the
+ * same way Excel drops a name that no longer resolves to anything at all —
+ * a name with only SOME of its areas turned to `#REF!` is kept, `#REF!`
+ * spliced in for just that area, matching what Excel itself does.
  */
 function updateDefinedNames(
   workbookRoot: Element,
   changesByOriginalName: ReadonlyMap<string, SheetChange>,
   originalIndexToNewIndex: ReadonlyMap<number, number>,
+  originalSheets: ReadonlyArray<OriginalSheetEntry>,
 ): void {
   const definedNames = firstChildElement(workbookRoot, 'definedNames')
   if (!definedNames) return
 
   for (const nameEl of childElements(definedNames, 'definedName')) {
     const localSheetId = nameEl.getAttribute('localSheetId')
+    let ownChange: SheetChange | undefined
     if (localSheetId !== null) {
       const newIndex = originalIndexToNewIndex.get(Number(localSheetId))
       if (newIndex === undefined) {
@@ -566,14 +741,22 @@ function updateDefinedNames(
         continue
       }
       nameEl.setAttribute('localSheetId', String(newIndex))
+      // A scoped name's OWN sheet, for re-anchoring an unqualified reference within it.
+      ownChange = changesByOriginalName.get(originalSheets[Number(localSheetId)]?.name ?? '')
     }
 
-    const rewritten = rewriteDefinedNameFormula(nameEl.textContent ?? '', changesByOriginalName)
-    if (rewritten === null) {
+    const original = nameEl.textContent ?? ''
+    const rewritten = rewriteFormulaReferences(original, {
+      changesByOriginalName,
+      ownRowSources: ownChange?.rowSources,
+      ownColSources: ownChange?.colSources,
+      remapCoordinates: true, // a definedName's stored text is always in the ORIGINAL file's coordinate space — Atlas has no UI to edit one directly
+    })
+    if (rewritten === '#REF!') {
       nameEl.parentNode?.removeChild(nameEl)
       continue
     }
-    if (rewritten !== nameEl.textContent) nameEl.textContent = rewritten
+    if (rewritten !== original) nameEl.textContent = rewritten
   }
 
   if (definedNames.children.length === 0) definedNames.parentNode?.removeChild(definedNames)
@@ -798,12 +981,18 @@ export async function writeWorkbookThroughOriginal(
 
   // Sheets present in the original but not in the new document: remove
   // their part, their worksheet-level rels (if any), the workbook
-  // relationship, and their content-type override.
+  // relationship, their content-type override, and — one level further —
+  // every part exclusively owned by them (tables, comments, drawings/charts;
+  // see `removeSheetOwnedParts`).
   for (const original of originalSheets) {
     if (originalIndexToNewIndex.has(original.originalIndex) || !original.path) continue
-    zip.remove(original.path)
     const slash = original.path.lastIndexOf('/')
-    const sheetRelsPath = `${original.path.slice(0, slash)}/_rels/${original.path.slice(slash + 1)}.rels`
+    const sheetDir = original.path.slice(0, slash)
+    const sheetRelsPath = `${sheetDir}/_rels/${original.path.slice(slash + 1)}.rels`
+    const sheetRelsXml = await zip.file(sheetRelsPath)?.async('string')
+    if (sheetRelsXml) await removeSheetOwnedParts(zip, contentTypesDoc, sheetDir, sheetRelsXml)
+
+    zip.remove(original.path)
     if (zip.file(sheetRelsPath)) zip.remove(sheetRelsPath)
     for (const rel of descendantElements(relsDoc, 'Relationship')) {
       if (rel.getAttribute('Id') === original.rId) rel.parentNode?.removeChild(rel)
@@ -812,16 +1001,20 @@ export async function writeWorkbookThroughOriginal(
   }
 
   // ---- per-sheet content: cells, dimension, merges, columns, ranges, tables ----
+  // Serialization is deferred until after `compactSharedStrings` below, which
+  // needs every sheet's final `<c t="s">` cells still live as DOM nodes (not
+  // yet flattened to XML text) to know which shared-string entries survived.
+  const worksheetOutputs: { readonly partPath: string; readonly parsed: OriginalSheet }[] = []
   for (const [newIndex, sheet] of document.sheets.entries()) {
     const parsed = perSheetOriginal.get(newIndex)!
     const partPath = perSheetPartPath.get(newIndex)!
 
-    rebuildSheetData(sheet, parsed)
+    rebuildSheetData(sheet, parsed, changesByOriginalName)
     updateDimension(parsed.root, sheet)
     updateMergeCells(parsed.doc, parsed.root, sheet)
     updateColumns(parsed.doc, parsed.root, sheet)
     updateShiftedRanges(parsed.root, sheet)
-    zip.file(partPath, serializeXmlPart(parsed.doc))
+    worksheetOutputs.push({ partPath, parsed })
 
     for (const [tableIndex, table] of (sheet.tables ?? []).entries()) {
       if (table.partPath === undefined) continue
@@ -829,7 +1022,13 @@ export async function writeWorkbookThroughOriginal(
     }
   }
 
-  updateDefinedNames(workbookRoot, changesByOriginalName, originalIndexToNewIndex)
+  await compactSharedStrings(
+    zip,
+    worksheetOutputs.map((w) => w.parsed),
+  )
+  for (const { partPath, parsed } of worksheetOutputs) zip.file(partPath, serializeXmlPart(parsed.doc))
+
+  updateDefinedNames(workbookRoot, changesByOriginalName, originalIndexToNewIndex, originalSheets)
   markRecalculateOnLoad(workbookDoc, workbookRoot)
   if (removeCalcChain(zip, relsDoc) && contentTypesDoc) removeContentTypeOverrideForPart(contentTypesDoc, 'xl/calcChain.xml')
 
