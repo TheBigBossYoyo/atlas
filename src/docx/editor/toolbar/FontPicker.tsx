@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
+import { useTranslate } from '../../../i18n';
+
 /**
  * USR-10/USR-11 — searchable font combobox. The previous native <select>
  * offered 8 hardcoded fonts and rendered blank whenever the document's font
@@ -18,6 +20,7 @@ interface FontPickerProps {
 const MAX_VISIBLE = 200;
 
 export const FontPicker: React.FC<FontPickerProps> = ({ value, fonts, documentFonts = [], onSelect }) => {
+  const t = useTranslate();
   const listId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -82,12 +85,12 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, fonts, documentFo
     <div className="docx-font-picker" ref={containerRef}>
       <input
         className="docx-toolbar__font-select docx-font-picker__input"
-        aria-label="Font"
+        aria-label={t('docx.fontPicker.inputAria')}
         role="combobox"
         aria-expanded={open}
         aria-controls={listId}
         aria-autocomplete="list"
-        placeholder="Font"
+        placeholder={t('docx.fontPicker.placeholder')}
         spellCheck={false}
         value={query ?? value ?? ''}
         style={value !== null && query === null ? { fontFamily: `"${value}", system-ui, sans-serif` } : undefined}
@@ -103,7 +106,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, fonts, documentFo
         onKeyDown={handleKeyDown}
       />
       {open && options.length > 0 && (
-        <ul className="docx-font-picker__list" role="listbox" id={listId} aria-label="Fonts">
+        <ul className="docx-font-picker__list" role="listbox" id={listId} aria-label={t('docx.fontPicker.listAria')}>
           {options.map((option, index) => {
             const firstOfAll = option.group === 'all' && index > 0 && options[index - 1].group === 'document';
             return (

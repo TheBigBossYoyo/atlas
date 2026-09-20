@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { KeyRound } from 'lucide-react'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { useTranslate } from '../../i18n'
 
 export type PdfPasswordDialogProps = {
   readonly isOpen: boolean
@@ -19,6 +20,7 @@ export type PdfPasswordDialogProps = {
  * every open and is the pattern React's own hooks lint now flags.
  */
 export function PdfPasswordDialog({ isOpen, isIncorrect, onSubmit, onCancel }: PdfPasswordDialogProps) {
+  const t = useTranslate()
   const [password, setPassword] = useState('')
   const inputRef = useRef<HTMLInputElement | null>(null)
   const dialogRef = useRef<HTMLFormElement | null>(null)
@@ -47,26 +49,26 @@ export function PdfPasswordDialog({ isOpen, isIncorrect, onSubmit, onCancel }: P
   }
 
   return (
-    <div className="pdf-viewer__password-overlay" role="dialog" aria-modal="true" aria-label="Password required">
+    <div className="pdf-viewer__password-overlay" role="dialog" aria-modal="true" aria-label={t('pdf.password.dialogAria')}>
       <form ref={dialogRef} className="pdf-viewer__password-dialog" onSubmit={handleSubmit}>
         <KeyRound size={24} className="pdf-viewer__password-icon" aria-hidden="true" />
-        <p className="pdf-viewer__password-title">This PDF is password protected</p>
+        <p className="pdf-viewer__password-title">{t('pdf.password.title')}</p>
         <input
           ref={inputRef}
           type="password"
           className="pdf-viewer__password-input"
-          placeholder="Enter password"
+          placeholder={t('pdf.password.placeholder')}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          aria-label="PDF password"
+          aria-label={t('pdf.password.inputAria')}
         />
-        {isIncorrect && <p className="pdf-viewer__password-error">Incorrect password. Try again.</p>}
+        {isIncorrect && <p className="pdf-viewer__password-error">{t('pdf.password.incorrectError')}</p>}
         <div className="pdf-viewer__password-actions">
           <button type="button" className="pdf-viewer__password-cancel" onClick={onCancel}>
-            Cancel
+            {t('unsavedDialog.cancel')}
           </button>
           <button type="submit" className="pdf-viewer__password-submit" disabled={password.length === 0}>
-            Unlock
+            {t('pdf.password.unlock')}
           </button>
         </div>
       </form>

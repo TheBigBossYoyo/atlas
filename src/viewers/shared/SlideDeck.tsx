@@ -16,6 +16,7 @@ import { SlideCanvas } from './SlideCanvas'
 import type { SlideData } from './SlideDeck.types'
 import { SlideEditCanvas } from './SlideEditCanvas'
 import { SlideEditToolbar, type SlideDeckEditor } from './SlideEditToolbar'
+import { useTranslate } from '../../i18n'
 
 type SlideDeckProps = {
   readonly slides: ReadonlyArray<SlideData>
@@ -49,6 +50,7 @@ function ThumbnailRow({
   activeIndex,
   onSelect,
 }: RowComponentProps<ThumbnailRowProps>) {
+  const t = useTranslate()
   const slide = slides[index]
   if (!slide) {
     return null
@@ -63,7 +65,7 @@ function ThumbnailRow({
         type="button"
         className={isActive ? 'slide-deck__thumb slide-deck__thumb--active' : 'slide-deck__thumb'}
         aria-current={isActive ? 'true' : undefined}
-        title={slide.title || `Slide ${index + 1}`}
+        title={slide.title || t('slides.deck.slideTitle', { n: index + 1 })}
         onClick={() => {
           onSelect(index)
         }}
@@ -133,6 +135,7 @@ function useFullscreen(containerRef: RefObject<HTMLDivElement | null>) {
 }
 
 function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps) {
+  const t = useTranslate()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mainRef = useRef<HTMLDivElement | null>(null)
   const viewportSize = useViewportSize(mainRef)
@@ -217,14 +220,14 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
         {!isFullscreen && (
           <div className="slide-deck__toolbar">
             <div className="slide-deck__toolbar-group">
-              <button type="button" className="slide-deck__toolbar-button" onClick={zoomOut} title="Zoom out">
+              <button type="button" className="slide-deck__toolbar-button" onClick={zoomOut} title={t('slides.deck.zoomOut')}>
                 <ZoomOut size={16} />
               </button>
               <span className="slide-deck__zoom-value">{Math.round(zoom * 100)}%</span>
-              <button type="button" className="slide-deck__toolbar-button" onClick={zoomIn} title="Zoom in">
+              <button type="button" className="slide-deck__toolbar-button" onClick={zoomIn} title={t('slides.deck.zoomIn')}>
                 <ZoomIn size={16} />
               </button>
-              <button type="button" className="slide-deck__toolbar-button" onClick={zoomReset} title="Reset zoom">
+              <button type="button" className="slide-deck__toolbar-button" onClick={zoomReset} title={t('slides.deck.zoomReset')}>
                 <RotateCcw size={16} />
               </button>
             </div>
@@ -245,7 +248,7 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
                   type="button"
                   className="slide-deck__toolbar-button"
                   aria-pressed={notesOpen}
-                  title="Speaker notes"
+                  title={t('slides.deck.speakerNotes')}
                   onClick={() => {
                     setNotesOpen(open => !open)
                   }}
@@ -253,14 +256,14 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
                   <StickyNote size={16} />
                 </button>
               )}
-              <button type="button" className="slide-deck__toolbar-button" title="Present (fullscreen)" onClick={toggleFullscreen}>
+              <button type="button" className="slide-deck__toolbar-button" title={t('slides.deck.presentFullscreen')} onClick={toggleFullscreen}>
                 <Maximize2 size={16} />
               </button>
               <button
                 type="button"
                 className="slide-deck__toolbar-button"
-                title="Presenter view"
-                aria-label="Presenter view"
+                title={t('slides.deck.presenterView')}
+                aria-label={t('slides.deck.presenterView')}
                 onClick={() => setPresenterOpen(true)}
               >
                 <MonitorPlay size={16} />
@@ -285,14 +288,14 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
           ) : activeSlide ? (
             <SlideCanvas slide={activeSlide} scale={mainScale} interactive />
           ) : (
-            <div className="slide-deck__empty">No slides available.</div>
+            <div className="slide-deck__empty">{t('slides.deck.noSlidesAvailable')}</div>
           )}
 
           {isFullscreen && (
             <button
               type="button"
               className="slide-deck__exit-fullscreen"
-              title="Exit presentation (Esc)"
+              title={t('slides.deck.exitPresentation')}
               onClick={toggleFullscreen}
             >
               <Minimize2 size={18} />
@@ -305,11 +308,11 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
         {notesOpen && activeSlide && (activeSlide.notes || editor) && (
           <div className="slide-deck__notes">
             <div className="slide-deck__notes-header">
-              <span>Speaker notes</span>
+              <span>{t('slides.deck.speakerNotes')}</span>
               <button
                 type="button"
                 className="slide-deck__toolbar-button"
-                title="Close notes"
+                title={t('slides.deck.closeNotes')}
                 onClick={() => {
                   setNotesOpen(false)
                 }}
@@ -321,10 +324,10 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
               <textarea
                 key={activeSlide.id}
                 className="slide-deck__notes-editor"
-                aria-label="Speaker notes"
+                aria-label={t('slides.deck.speakerNotes')}
                 defaultValue={activeSlide.notes ?? ''}
                 disabled={!editor.canEditNotes}
-                placeholder="Click to add notes"
+                placeholder={t('slides.deck.notesPlaceholder')}
                 onBlur={(event) => {
                   if (event.currentTarget.value !== (activeSlide.notes ?? '')) editor.onNotesChange(event.currentTarget.value)
                 }}

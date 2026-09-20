@@ -16,6 +16,7 @@ import { flushSync } from 'react-dom'
 import { ListTree, PanelTop, Printer, RefreshCw, Save, SaveAll, X, ZoomIn, ZoomOut } from 'lucide-react'
 
 import type { NavItem, ViewerProps } from '../formats/types'
+import { useTranslate, type TranslateFn } from '../i18n'
 import { loadDocx, saveDocx, type DocxBundle } from '../docx'
 import { paginate, PaginationCancelledError } from '../docx/layout'
 import type { Page, PaginationProgress } from '../docx/layout'
@@ -138,7 +139,6 @@ const DEFAULT_FIND_OPTIONS: FindOptions = {
   useRegex: false,
 }
 
-const DOCX_SAVE_FILTERS = [{ name: 'Word Documents', extensions: ['docx'] }]
 // D24/DXL-19
 const MIN_ZOOM = 0.25
 const MAX_ZOOM = 3
@@ -715,7 +715,7 @@ function getReplaceValue(root: HTMLElement | null): string {
     return ''
   }
 
-  const input = root.querySelector<HTMLInputElement>('.docx-find__input[aria-label="Replace"]')
+  const input = root.querySelector<HTMLInputElement>('.docx-find__input--replace')
   return input?.value ?? ''
 }
 
@@ -755,6 +755,34 @@ function buildPageOfParagraph(
   return (sectionIndex, blockIndex) => pageByKey.get(`${sectionIndex}:${blockIndex}`)
 }
 
+// i18n — `docx/editor/headerFooter.ts` labels read-only header/footer
+// content with a handful of fixed `[Bracketed]` English tags (`[Image]`,
+// `[Table]`, `[Link: text]`, …). That module stays English-only and
+// untouched here (it's covered by exact-string tests shared with the DOCX
+// round-trip/serializer work) — this purely presentational helper swaps
+// each known tag for its translation right before render, so a reviewer
+// diffing headerFooter.ts sees no change while the panel still reads in
+// the active locale.
+function translateHeaderFooterLabel(label: string, t: TranslateFn): string {
+  const linked = label.replace(/\[Link: ([^\]]*)\]/g, (_match, text: string) => `[${t('docx.headerFooter.placeholderLinkPrefix')}: ${text}]`)
+  const TAG_TRANSLATIONS: ReadonlyArray<readonly [string, string]> = [
+    ['[Page number]', `[${t('docx.headerFooter.placeholderPageNumber')}]`],
+    ['[Total pages]', `[${t('docx.headerFooter.placeholderTotalPages')}]`],
+    ['[Date]', `[${t('docx.headerFooter.placeholderDate')}]`],
+    ['[Field]', `[${t('docx.headerFooter.placeholderField')}]`],
+    ['[Comment]', `[${t('docx.headerFooter.placeholderComment')}]`],
+    ['[Footnote]', `[${t('docx.headerFooter.placeholderFootnote')}]`],
+    ['[Endnote]', `[${t('docx.headerFooter.placeholderEndnote')}]`],
+    ['[Other content]', `[${t('docx.headerFooter.placeholderOtherContent')}]`],
+    ['[Table]', `[${t('docx.headerFooter.placeholderTable')}]`],
+    ['[Unknown content]', `[${t('docx.headerFooter.placeholderUnknownContent')}]`],
+    ['[Empty paragraph]', `[${t('docx.headerFooter.placeholderEmptyParagraph')}]`],
+    ['[Tracked change]', `[${t('docx.headerFooter.placeholderTrackedChange')}]`],
+    ['[Link]', `[${t('docx.headerFooter.placeholderLink')}]`],
+  ]
+  return TAG_TRANSLATIONS.reduce((current, [tag, translated]) => current.split(tag).join(translated), linked)
+}
+
 function DocxEditor({
   bundle,
   file,
@@ -768,6 +796,7 @@ function DocxEditor({
   onBundleChange: (next: DocxBundle) => void
   onPageCountChange?: (pageCount: number) => void
 }) {
+  const t = useTranslate()
   const editorRootRef = useRef<HTMLDivElement | null>(null)
   // USR-05 — pointer selection is driven from the model (see
   // handleSurfaceMouseDown): the anchor of an in-progress drag selection.
@@ -1267,13 +1296,13 @@ function DocxEditor({
     const electronApi = window.electronAPI
     const picker = electronApi?.image?.pick
     if (picker === undefined) {
-      setSaveError('Image picker is unavailable in this environment.')
+      setSaveError(t('docx.viewer.imagePickerUnavailable'))
       return
     }
 
     const focus = range?.focus ?? null
     if (focus === null) {
-      setSaveError('Place the cursor in the document before inserting an image.')
+      setSaveError(t('docx.viewer.placeCursorBeforeImage'))
       return
     }
 
@@ -1310,16 +1339,16 @@ function DocxEditor({
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
     }
-  }, [bundle, commitState, documentModel, onBundleChange, range])
+  }, [bundle, commitState, documentModel, onBundleChange, range, t])
 
   const handleInsertHyperlink = useCallback(() => {
     const selection = range
     if (selection === null) {
-      setSaveError('Select text or place the cursor before inserting a hyperlink.')
+      setSaveError(t('docx.viewer.selectBeforeHyperlink'))
       return
     }
 
-    const url = window.prompt('Enter a URL', 'https://')
+    const url = window.prompt(t('docx.viewer.enterUrlPrompt'), 'https://')
     if (url === null) {
       return
     }
@@ -1336,7 +1365,7 @@ function DocxEditor({
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
     }
-  }, [bundle, commitState, documentModel, onBundleChange, range])
+  }, [bundle, commitState, documentModel, onBundleChange, range, t])
 
   const handleToggleList = useCallback(
     (kind: 'bullet' | 'number') => {
@@ -1346,7 +1375,7 @@ function DocxEditor({
         documentModel,
       )
       if (command === null || command.kind !== 'insert-list') {
-        setSaveError('Select a paragraph before toggling a list.')
+        setSaveError(t('docx.viewer.selectParagraphBeforeList'))
         return
       }
 
@@ -1360,7 +1389,7 @@ function DocxEditor({
         setSaveError(error instanceof Error ? error.message : String(error))
       }
     },
-    [bundle, commitState, documentModel, onBundleChange, range],
+    [bundle, commitState, documentModel, onBundleChange, range, t],
   )
 
   // DXE-19 — rich HTML paste (tables/hyperlinks/images/colors/lists) is
@@ -1799,11 +1828,11 @@ function DocxEditor({
   const handleAddComment = useCallback(() => {
     const selection = range
     if (selection === null) {
-      setSaveError('Select text before adding a comment.')
+      setSaveError(t('docx.viewer.selectBeforeComment'))
       return
     }
 
-    const text = window.prompt('Add comment', '')
+    const text = window.prompt(t('docx.viewer.addCommentPrompt'), '')
     if (text === null) {
       return
     }
@@ -1820,11 +1849,11 @@ function DocxEditor({
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : String(error))
     }
-  }, [commitState, documentModel, range])
+  }, [commitState, documentModel, range, t])
 
   const handleReplyToComment = useCallback(
     (commentId: string) => {
-      const text = window.prompt('Reply', '')
+      const text = window.prompt(t('docx.viewer.replyPrompt'), '')
       if (text === null) {
         return
       }
@@ -1837,7 +1866,7 @@ function DocxEditor({
         return next
       })
     },
-    [commitState, documentModel, range],
+    [commitState, documentModel, range, t],
   )
 
   const handleResolveComment = useCallback((commentId: string) => {
@@ -2007,7 +2036,7 @@ function DocxEditor({
           // save dialog instead of silently overwriting `savePath`, which is
           // exactly "Save As".
           ...(options?.forceDialog ? {} : { existingPath: savePath }),
-          filters: DOCX_SAVE_FILTERS,
+          filters: [{ name: t('docx.viewer.saveAsWordFilter'), extensions: ['docx'] }],
         })
 
         if (result?.saved && result.path) {
@@ -2018,7 +2047,7 @@ function DocxEditor({
         }
 
         if (!result?.saved) {
-          setSaveError(result?.error ?? 'Save was cancelled or unavailable.')
+          setSaveError(result?.error ?? t('docx.viewer.saveCancelled'))
           return false
         }
 
@@ -2039,7 +2068,7 @@ function DocxEditor({
         return false
       }
     },
-    [bundle, flushHeaderFooterEdits, savePath, reportSavedPath],
+    [bundle, flushHeaderFooterEdits, savePath, reportSavedPath, t],
   )
 
   const handleSave = useCallback((): Promise<boolean> => handleSaveInternal(), [handleSaveInternal])
@@ -2212,13 +2241,13 @@ function DocxEditor({
 
     const { document: updated, updatedCount } = updateFields(documentModel, context)
     if (updatedCount === 0) {
-      setFieldUpdateMessage('No fields needed updating.')
+      setFieldUpdateMessage(t('docx.viewer.noFieldsToUpdate'))
       return
     }
 
     setDocumentModel(updated)
-    setFieldUpdateMessage(`Updated ${updatedCount} field${updatedCount === 1 ? '' : 's'}.`)
-  }, [bundle.rawArchive, documentModel, pages])
+    setFieldUpdateMessage(t('docx.viewer.fieldsUpdated', { count: updatedCount }))
+  }, [bundle.rawArchive, documentModel, pages, t])
 
   /**
    * DEFER-5 / DXS-20 — "Update table of contents": regenerates a
@@ -2232,13 +2261,13 @@ function DocxEditor({
     const { document: updated, updated: didUpdate } = updateTableOfContents(documentModel, pageOfParagraph)
 
     if (!didUpdate) {
-      setFieldUpdateMessage('No table of contents found to update.')
+      setFieldUpdateMessage(t('docx.viewer.noTocFound'))
       return
     }
 
     setDocumentModel(updated)
-    setFieldUpdateMessage('Table of contents updated.')
-  }, [documentModel, pages])
+    setFieldUpdateMessage(t('docx.viewer.tocUpdated'))
+  }, [documentModel, pages, t])
 
   // D29 — headers and footers are edited one plain-text paragraph at a time
   // (see docx/editor/headerFooter.ts for why: rewriting a whole part used to
@@ -2484,16 +2513,16 @@ function DocxEditor({
           documentFonts={documentFonts}
           trailing={
             <>
-              <span className="docx-toolbar__page-count docx-viewer__meta">Pages: {pageCount}</span>
+              <span className="docx-toolbar__page-count docx-viewer__meta">{t('docx.viewer.pagesCount', { count: pageCount })}</span>
               <span className="docx-toolbar__action-divider" aria-hidden="true" />
-              <div className="docx-viewer__zoom-controls" role="group" aria-label="Zoom">
-                <button className="docx-toolbar__action" type="button" onClick={handleZoomOut} disabled={zoom <= MIN_ZOOM} aria-label="Zoom out" title="Zoom out">
+              <div className="docx-viewer__zoom-controls" role="group" aria-label={t('docx.viewer.zoomGroupAria')}>
+                <button className="docx-toolbar__action" type="button" onClick={handleZoomOut} disabled={zoom <= MIN_ZOOM} aria-label={t('docx.viewer.zoomOut')} title={t('docx.viewer.zoomOut')}>
                   <ZoomOut aria-hidden="true" />
                 </button>
-                <button className="docx-toolbar__action docx-toolbar__zoom-level" type="button" onClick={handleZoomReset} aria-label="Reset zoom to 100%" title="Reset zoom">
+                <button className="docx-toolbar__action docx-toolbar__zoom-level" type="button" onClick={handleZoomReset} aria-label={t('docx.viewer.zoomReset')} title={t('docx.viewer.zoomResetTitle')}>
                   {Math.round(zoom * 100)}%
                 </button>
-                <button className="docx-toolbar__action" type="button" onClick={handleZoomIn} disabled={zoom >= MAX_ZOOM} aria-label="Zoom in" title="Zoom in">
+                <button className="docx-toolbar__action" type="button" onClick={handleZoomIn} disabled={zoom >= MAX_ZOOM} aria-label={t('docx.viewer.zoomIn')} title={t('docx.viewer.zoomIn')}>
                   <ZoomIn aria-hidden="true" />
                 </button>
               </div>
@@ -2502,8 +2531,8 @@ function DocxEditor({
                 className="docx-toolbar__action"
                 type="button"
                 onClick={handleUpdateFields}
-                aria-label="Update fields"
-                title="Update fields — recalculate DATE/TIME/AUTHOR/TITLE/REF/PAGEREF/SEQ/PAGE/NUMPAGES"
+                aria-label={t('docx.viewer.updateFields')}
+                title={t('docx.viewer.updateFieldsTitle')}
               >
                 <RefreshCw aria-hidden="true" />
               </button>
@@ -2511,8 +2540,8 @@ function DocxEditor({
                 className="docx-toolbar__action"
                 type="button"
                 onClick={handleUpdateTableOfContents}
-                aria-label="Update table of contents"
-                title="Update table of contents"
+                aria-label={t('docx.viewer.updateToc')}
+                title={t('docx.viewer.updateToc')}
               >
                 <ListTree aria-hidden="true" />
               </button>
@@ -2522,22 +2551,22 @@ function DocxEditor({
                   className="docx-toolbar__action"
                   type="button"
                   onClick={() => setHeaderFooterOpen((open) => !open)}
-                  aria-label="Header and footer"
+                  aria-label={t('docx.headerFooter.title')}
                   aria-pressed={headerFooterOpen}
-                  title="Edit header and footer"
+                  title={t('docx.headerFooter.editTitle')}
                 >
                   <PanelTop aria-hidden="true" />
                 </button>
               )}
-              <button className="docx-toolbar__action" type="button" onClick={handlePrint} aria-label="Print document" title="Print (Ctrl+P)">
+              <button className="docx-toolbar__action" type="button" onClick={handlePrint} aria-label={t('docx.viewer.printDocument')} title={t('docx.viewer.printTitle')}>
                 <Printer aria-hidden="true" />
               </button>
-              <button className="docx-toolbar__action" type="button" onClick={() => void handleSaveAs()} aria-label="Save As" title="Save as…">
+              <button className="docx-toolbar__action" type="button" onClick={() => void handleSaveAs()} aria-label={t('docx.viewer.saveAs')} title={t('docx.viewer.saveAsTitle')}>
                 <SaveAll aria-hidden="true" />
               </button>
-              <button className="docx-toolbar__action docx-toolbar__action--primary" type="button" onClick={() => void handleSave()} aria-label="Save" title="Save (Ctrl+S)">
+              <button className="docx-toolbar__action docx-toolbar__action--primary" type="button" onClick={() => void handleSave()} aria-label={t('docx.viewer.save')} title={t('docx.viewer.saveTitle')}>
                 <Save aria-hidden="true" />
-                <span>Save</span>
+                <span>{t('docx.viewer.save')}</span>
               </button>
             </>
           }
@@ -2559,7 +2588,7 @@ function DocxEditor({
           ref={headerFooterPanelRef}
           className="docx-viewer__header-footer"
           role="group"
-          aria-label="Header and footer"
+          aria-label={t('docx.headerFooter.title')}
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
               event.stopPropagation()
@@ -2568,18 +2597,25 @@ function DocxEditor({
           }}
         >
           <div className="docx-viewer__header-footer-title">
-            <span>Header and footer</span>
+            <span>{t('docx.headerFooter.title')}</span>
             <button
               type="button"
               className="docx-viewer__error-dismiss"
               onClick={() => setHeaderFooterOpen(false)}
-              aria-label="Close header and footer"
+              aria-label={t('docx.headerFooter.close')}
             >
               <X aria-hidden="true" />
             </button>
           </div>
           {headerFooterParts.map((part) => {
-            const base = `${part.kind === 'header' ? 'Header' : 'Footer'}${part.type === 'default' ? '' : ` (${part.type} page)`}`
+            const partLabel = part.kind === 'header' ? t('docx.headerFooter.header') : t('docx.headerFooter.footer')
+            const pageType =
+              part.type === 'first'
+                ? t('docx.headerFooter.pageTypeFirst')
+                : part.type === 'even'
+                  ? t('docx.headerFooter.pageTypeEven')
+                  : null
+            const base = pageType === null ? partLabel : t('docx.headerFooter.partWithType', { part: partLabel, type: pageType })
             // A single plain-text paragraph and nothing else keeps the plain
             // "Header"/"Footer" label; anything with more than one row (a
             // second paragraph, or a placeholder alongside the text) numbers
@@ -2595,17 +2631,17 @@ function DocxEditor({
                   if (row.kind === 'placeholder') {
                     return (
                       <div key={`${part.kind}-${part.id}-${row.blockIndex}`} className="docx-viewer__header-footer-placeholder">
-                        {numbered ? `Line ${rowIndex + 1}: ` : ''}
-                        {row.label}
+                        {numbered ? t('docx.headerFooter.lineNumberPrefix', { n: rowIndex + 1 }) : ''}
+                        {translateHeaderFooterLabel(row.label, t)}
                         <span className="docx-viewer__meta">
                           {' '}
-                          Not plain text — left exactly as it is.
+                          {t('docx.headerFooter.notPlainText')}
                         </span>
                       </div>
                     )
                   }
 
-                  const label = numbered ? `${base} line ${rowIndex + 1}` : base
+                  const label = numbered ? t('docx.headerFooter.lineLabel', { base, n: rowIndex + 1 }) : base
 
                   if (row.kind === 'mixed') {
                     // A paragraph mixing plain text with a drawing/field/
@@ -2619,14 +2655,14 @@ function DocxEditor({
                           {row.segments.map((segment, segmentPos) =>
                             segment.kind === 'atom' ? (
                               <span key={`atom-${segmentPos}`} className="docx-viewer__header-footer-atom">
-                                {segment.label}
+                                {translateHeaderFooterLabel(segment.label, t)}
                               </span>
                             ) : (
                               <input
                                 key={`text-${segment.segmentIndex}-${segment.text}`}
                                 type="text"
                                 defaultValue={segment.text}
-                                aria-label={`${label} — editable text`}
+                                aria-label={t('docx.headerFooter.editableTextAria', { label })}
                                 className="docx-viewer__header-footer-segment-input"
                                 onChange={(event) =>
                                   handleHeaderFooterFieldChange(
@@ -2654,14 +2690,14 @@ function DocxEditor({
                               type="button"
                               className="docx-viewer__error-dismiss"
                               onClick={() => handleRemoveHeaderFooterParagraph(part.kind, part.id, row.blockIndex)}
-                              aria-label={`Remove ${label}`}
-                              title="Remove this line"
+                              aria-label={t('docx.headerFooter.removeLabel', { label })}
+                              title={t('docx.headerFooter.removeLine')}
                             >
                               <X aria-hidden="true" />
                             </button>
                           )}
                         </span>
-                        <span className="docx-viewer__meta">Non-text parts (images, fields, links, …) are left exactly as they are.</span>
+                        <span className="docx-viewer__meta">{t('docx.headerFooter.nonTextParts')}</span>
                       </div>
                     )
                   }
@@ -2689,8 +2725,8 @@ function DocxEditor({
                             type="button"
                             className="docx-viewer__error-dismiss"
                             onClick={() => handleRemoveHeaderFooterParagraph(part.kind, part.id, row.blockIndex)}
-                            aria-label={`Remove ${label}`}
-                            title="Remove this line"
+                            aria-label={t('docx.headerFooter.removeLabel', { label })}
+                            title={t('docx.headerFooter.removeLine')}
                           >
                             <X aria-hidden="true" />
                           </button>
@@ -2704,7 +2740,7 @@ function DocxEditor({
                   className="docx-viewer__header-footer-add"
                   onClick={() => handleAddHeaderFooterParagraph(part.kind, part.id)}
                 >
-                  + Add line
+                  {t('docx.headerFooter.addLine')}
                 </button>
               </div>
             )
@@ -2717,7 +2753,7 @@ function DocxEditor({
           className="docx-viewer__surface"
           role="textbox"
           aria-multiline="true"
-          aria-label="Document editor"
+          aria-label={t('docx.viewer.editorAria')}
           contentEditable
           suppressContentEditableWarning
           spellCheck={spellCheckEnabled}
@@ -2767,13 +2803,13 @@ function DocxEditor({
             </MediaContext.Provider>
           ) : paginationError !== null ? (
             <div className="docx-viewer__loading docx-viewer__loading--error" role="alert">
-              <div className="docx-viewer__loading-title">Failed to lay out document</div>
+              <div className="docx-viewer__loading-title">{t('docx.viewer.layoutFailedTitle')}</div>
               <div className="docx-viewer__loading-detail">{paginationError}</div>
             </div>
           ) : (
             <div className="docx-viewer__loading" role="status" aria-live="polite">
               <div className="docx-viewer__loading-spinner" aria-hidden="true" />
-              <div className="docx-viewer__loading-title">Laying out document…</div>
+              <div className="docx-viewer__loading-title">{t('docx.viewer.layingOut')}</div>
               {paginationProgress !== null && paginationProgress.totalBlocks > 0 ? (
                 <>
                   <div
@@ -2796,7 +2832,7 @@ function DocxEditor({
                     />
                   </div>
                   <div className="docx-viewer__loading-detail">
-                    {paginationProgress.completedBlocks} / {paginationProgress.totalBlocks} blocks
+                    {t('docx.viewer.blocksProgress', { completed: paginationProgress.completedBlocks, total: paginationProgress.totalBlocks })}
                   </div>
                 </>
               ) : null}
@@ -2820,7 +2856,7 @@ function DocxEditor({
               className="docx-toolbar__popover docx-viewer__context-menu"
               style={{ position: 'fixed', top: tableContextMenuAt.y, left: tableContextMenuAt.x }}
               role="menu"
-              aria-label="Table editing"
+              aria-label={t('docx.viewer.tableEditingAria')}
             >
               <TableEditMenuItems
                 onCommand={handleToolbarCommand}
@@ -2847,7 +2883,7 @@ function DocxEditor({
             type="button"
             className="docx-viewer__error-dismiss"
             onClick={() => setSaveError(null)}
-            aria-label="Dismiss error"
+            aria-label={t('docx.viewer.dismissError')}
           >
             <X size={14} aria-hidden="true" />
           </button>
@@ -2860,7 +2896,7 @@ function DocxEditor({
             type="button"
             className="docx-viewer__error-dismiss"
             onClick={() => setFieldUpdateMessage(null)}
-            aria-label="Dismiss message"
+            aria-label={t('docx.viewer.dismissMessage')}
           >
             <X size={14} aria-hidden="true" />
           </button>
@@ -2882,6 +2918,7 @@ function DocxEditor({
 }
 
 function DocxViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [bundle, setBundle] = useState<DocxBundle | null>(null)
   // USR-13 — the status bar used the section count as the page count; the
@@ -2971,7 +3008,7 @@ function DocxViewerBase({ file }: ViewerProps) {
   }, [documentModel, layoutPageCount, metrics, setStats])
 
   if (file.kind === 'text') {
-    return <div className="docx-viewer docx-viewer--error">Unexpected text file routed to DocxViewer.</div>
+    return <div className="docx-viewer docx-viewer--error">{t('docx.viewer.unexpectedTextFile')}</div>
   }
 
   if (errorMessage !== null) {

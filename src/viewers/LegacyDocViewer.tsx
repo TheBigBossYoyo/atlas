@@ -1,6 +1,8 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 
 import type { ViewerProps } from '../formats/types'
+import { legacyOfficeLabelKey } from '../formats/legacyOffice'
+import { useTranslate } from '../i18n'
 import { LegacyFormatBanner } from './shared/LegacyFormatBanner'
 import { estimatePageCount } from './shared/pageEstimate'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
@@ -36,6 +38,7 @@ function toDisplayLines(paragraphs: ReadonlyArray<string>): ReadonlyArray<string
  * module's header for exactly what is and isn't covered).
  */
 function LegacyDocViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
   const [paragraphs, setParagraphs] = useState<ReadonlyArray<string>>([])
@@ -103,7 +106,7 @@ function LegacyDocViewerBase({ file }: ViewerProps) {
   if (file.kind !== 'binary') {
     return (
       <div className="legacy-doc-viewer legacy-doc-viewer--error">
-        LegacyDocViewer received a text file; expected binary.
+        {t('legacy.doc.unexpectedTextFile')}
       </div>
     )
   }
@@ -111,20 +114,20 @@ function LegacyDocViewerBase({ file }: ViewerProps) {
   if (error !== null) {
     return (
       <div className="legacy-doc-viewer legacy-doc-viewer--error">
-        Couldn't read this Word 97-2003 document: {error}
+        {t('legacy.doc.readError', { error })}
       </div>
     )
   }
 
   if (isLoading) {
-    return <div className="legacy-doc-viewer">Reading legacy Word document…</div>
+    return <div className="legacy-doc-viewer">{t('legacy.doc.reading')}</div>
   }
 
   return (
     <div className="legacy-doc-viewer">
-      <LegacyFormatBanner formatLabel="Word 97-2003 document (.doc)" modernExtension=".docx" />
+      <LegacyFormatBanner formatLabel={t(legacyOfficeLabelKey('doc'))} modernExtension=".docx" />
       {paragraphs.length === 0 ? (
-        <div className="legacy-doc-viewer__empty">This document has no readable text.</div>
+        <div className="legacy-doc-viewer__empty">{t('legacy.doc.emptyDocument')}</div>
       ) : (
         <VirtualizedPlainText lines={lines} className="legacy-doc-viewer__body" lineClassName="legacy-doc-viewer__line" />
       )}

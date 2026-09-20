@@ -27,20 +27,24 @@ export type TableEditActionKind = Extract<
 
 export type TableEditAction = {
   readonly kind: TableEditActionKind
-  readonly label: string
+  /** i18n key (see `src/i18n/messages.en.ts`'s `docx.tableEdit.*` section) —
+   * resolved to display text by `TableEditMenuItems.tsx`, the only renderer
+   * of this list, so this pure data module stays free of a React/`t()`
+   * dependency. */
+  readonly labelKey: string
   /** Renders a divider line above this item — groups insert/merge/delete
    * visually without needing a separate "section" data structure. */
   readonly dividerBefore?: boolean
 }
 
 export const TABLE_EDIT_ACTIONS: ReadonlyArray<TableEditAction> = [
-  { kind: 'insert-table-row-above', label: 'Insert Row Above' },
-  { kind: 'insert-table-row-below', label: 'Insert Row Below' },
-  { kind: 'insert-table-column-left', label: 'Insert Column Left' },
-  { kind: 'insert-table-column-right', label: 'Insert Column Right' },
-  { kind: 'merge-table-cell-right', label: 'Merge Right', dividerBefore: true },
-  { kind: 'split-table-cell', label: 'Split Cell' },
-  { kind: 'delete-table-row', label: 'Delete Row', dividerBefore: true },
-  { kind: 'delete-table-column', label: 'Delete Column' },
-  { kind: 'delete-table', label: 'Delete Table' },
+  { kind: 'insert-table-row-above', labelKey: 'docx.tableEdit.insertRowAbove' },
+  { kind: 'insert-table-row-below', labelKey: 'docx.tableEdit.insertRowBelow' },
+  { kind: 'insert-table-column-left', labelKey: 'docx.tableEdit.insertColumnLeft' },
+  { kind: 'insert-table-column-right', labelKey: 'docx.tableEdit.insertColumnRight' },
+  { kind: 'merge-table-cell-right', labelKey: 'docx.tableEdit.mergeRight', dividerBefore: true },
+  { kind: 'split-table-cell', labelKey: 'docx.tableEdit.splitCell' },
+  { kind: 'delete-table-row', labelKey: 'docx.tableEdit.deleteRow', dividerBefore: true },
+  { kind: 'delete-table-column', labelKey: 'docx.tableEdit.deleteColumn' },
+  { kind: 'delete-table', labelKey: 'docx.tableEdit.deleteTable' },
 ]

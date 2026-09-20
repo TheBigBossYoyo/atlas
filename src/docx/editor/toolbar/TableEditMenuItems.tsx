@@ -2,6 +2,7 @@ import { Fragment } from 'react';
 
 import type { ToolbarCommand } from './toolbarTypes';
 import { TABLE_EDIT_ACTIONS } from './tableEditActions';
+import { useTranslate } from '../../../i18n';
 
 /**
  * DXE-14 — the shared list of table-editing menu buttons, rendered inside
@@ -16,6 +17,7 @@ export const TableEditMenuItems = ({
   onCommand: (cmd: ToolbarCommand) => void;
   onAfterCommand?: () => void;
 }) => {
+  const t = useTranslate();
   return (
     <>
       {TABLE_EDIT_ACTIONS.map((action) => (
@@ -29,7 +31,7 @@ export const TableEditMenuItems = ({
               onAfterCommand?.();
             }}
           >
-            {action.label}
+            {t(action.labelKey)}
           </button>
         </Fragment>
       ))}

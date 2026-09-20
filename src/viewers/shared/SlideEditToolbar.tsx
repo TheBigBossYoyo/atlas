@@ -12,6 +12,7 @@ import {
   Type,
   Undo2,
 } from 'lucide-react'
+import { useTranslate } from '../../i18n'
 
 export type SlideDeckEditor = {
   readonly canUndo: boolean
@@ -59,33 +60,34 @@ function ToolButton({
 }
 
 function SlideEditToolbarBase({ editor, slideIndex, slideCount, onTextBoxInserted }: SlideEditToolbarProps) {
+  const t = useTranslate()
   return (
-    <div className="slide-deck__toolbar-group" role="group" aria-label="Edit presentation">
-      <ToolButton label="Undo" onClick={editor.onUndo} disabled={!editor.canUndo}>
+    <div className="slide-deck__toolbar-group" role="group" aria-label={t('slides.editToolbar.editPresentationAria')}>
+      <ToolButton label={t('slides.editToolbar.undo')} onClick={editor.onUndo} disabled={!editor.canUndo}>
         <Undo2 size={16} />
       </ToolButton>
-      <ToolButton label="Redo" onClick={editor.onRedo} disabled={!editor.canRedo}>
+      <ToolButton label={t('slides.editToolbar.redo')} onClick={editor.onRedo} disabled={!editor.canRedo}>
         <Redo2 size={16} />
       </ToolButton>
       <span className="slide-deck__toolbar-divider" aria-hidden="true" />
-      <ToolButton label="New slide" onClick={editor.onAddSlide}>
+      <ToolButton label={t('slides.editToolbar.newSlide')} onClick={editor.onAddSlide}>
         <Plus size={16} />
       </ToolButton>
-      <ToolButton label="Duplicate slide" onClick={editor.onDuplicateSlide}>
+      <ToolButton label={t('slides.editToolbar.duplicateSlide')} onClick={editor.onDuplicateSlide}>
         <Copy size={16} />
       </ToolButton>
-      <ToolButton label="Delete slide" onClick={editor.onDeleteSlide} disabled={slideCount <= 1}>
+      <ToolButton label={t('slides.editToolbar.deleteSlide')} onClick={editor.onDeleteSlide} disabled={slideCount <= 1}>
         <Trash2 size={16} />
       </ToolButton>
-      <ToolButton label="Move slide up" onClick={() => editor.onMoveSlide(-1)} disabled={slideIndex <= 0}>
+      <ToolButton label={t('slides.editToolbar.moveSlideUp')} onClick={() => editor.onMoveSlide(-1)} disabled={slideIndex <= 0}>
         <ArrowUp size={16} />
       </ToolButton>
-      <ToolButton label="Move slide down" onClick={() => editor.onMoveSlide(1)} disabled={slideIndex >= slideCount - 1}>
+      <ToolButton label={t('slides.editToolbar.moveSlideDown')} onClick={() => editor.onMoveSlide(1)} disabled={slideIndex >= slideCount - 1}>
         <ArrowDown size={16} />
       </ToolButton>
       <span className="slide-deck__toolbar-divider" aria-hidden="true" />
       <ToolButton
-        label="Insert text box"
+        label={t('slides.editToolbar.insertTextBox')}
         onClick={() => {
           void editor.onInsertTextBox().then((sourceId) => {
             if (sourceId) onTextBoxInserted(sourceId)
@@ -95,12 +97,12 @@ function SlideEditToolbarBase({ editor, slideIndex, slideCount, onTextBoxInserte
         <Type size={16} />
       </ToolButton>
       <span className="slide-deck__toolbar-divider" aria-hidden="true" />
-      <ToolButton label="Save As" onClick={editor.onSaveAs}>
+      <ToolButton label={t('slides.editToolbar.saveAs')} onClick={editor.onSaveAs}>
         <SaveAll size={16} />
       </ToolButton>
-      <button type="button" className="slide-deck__save-button" aria-label="Save" title="Save (Ctrl+S)" onClick={editor.onSave}>
+      <button type="button" className="slide-deck__save-button" aria-label={t('slides.editToolbar.save')} title={t('slides.editToolbar.saveTitle')} onClick={editor.onSave}>
         <Save size={14} />
-        Save
+        {t('slides.editToolbar.save')}
       </button>
     </div>
   )

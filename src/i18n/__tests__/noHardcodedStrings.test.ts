@@ -40,6 +40,28 @@ const CONVERTED_FILES = [
   'src/viewers/pdf/PdfToolbar.tsx',
   'src/viewers/shared/LegacyFormatBanner.tsx',
   'src/viewers/spreadsheet/SpreadsheetEditToolbar.tsx',
+  // Wave 2 — DOCX editor surface (see the final report for this wave).
+  'src/viewers/DocxViewer.tsx',
+  'src/docx/editor/FindReplace.tsx',
+  'src/docx/editor/CommentsPane.tsx',
+  'src/docx/editor/SpellCheckMenu.tsx',
+  'src/docx/editor/toolbar/Toolbar.tsx',
+  'src/docx/editor/toolbar/FontPicker.tsx',
+  'src/docx/editor/toolbar/TableEditMenuItems.tsx',
+  'src/docx/editor/toolbar/TablePropertiesDialog.tsx',
+  // Wave 2 — slide editor surface (see the final report for this wave).
+  'src/viewers/shared/SlideDeck.tsx',
+  'src/viewers/shared/SlideEditToolbar.tsx',
+  'src/viewers/shared/PresenterView.tsx',
+  'src/viewers/shared/SlideEditCanvas.tsx',
+  // Wave 2 — PDF internals beyond the toolbar.
+  'src/viewers/pdf/PdfFindBar.tsx',
+  'src/viewers/pdf/PdfPasswordDialog.tsx',
+  'src/viewers/pdf/PdfThumbnailRail.tsx',
+  // Wave 2 — legacy viewers, unknown-format screen, mismatched-extension prompt.
+  'src/viewers/LegacyDocViewer.tsx',
+  'src/viewers/LegacyPptViewer.tsx',
+  'src/viewers/UnknownViewer.tsx',
 ];
 
 // A literal (non-expression) value on one of these attributes — the pattern
