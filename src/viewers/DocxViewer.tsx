@@ -92,6 +92,7 @@ import {
   type TrackChangesContext,
   listHeaderFooterParts,
   buildHeaderFooterTextEdit,
+  buildHeaderFooterSegmentEdit,
   buildInsertHeaderFooterParagraph,
   buildRemoveHeaderFooterParagraph,
   type HeaderFooterKind,
@@ -1072,43 +1073,74 @@ function DocxEditor({
   // — a `useCallback` dependency array is evaluated immediately, unlike the
   // callback body, so a later `const` would still be in its temporal dead
   // zone at that point.
-  const pendingHeaderFooterEditsRef = useRef(
-    new Map<string, { readonly kind: HeaderFooterKind; readonly id: string; readonly blockIndex: number; readonly text: string }>(),
-  )
+  type PendingHeaderFooterEdit = {
+    readonly kind: HeaderFooterKind
+    readonly id: string
+    readonly blockIndex: number
+    /** Present only for a `'mixed'` row's text segment; absent for a plain `'text'` row's single field. */
+    readonly segmentIndex?: number
+    readonly text: string
+  }
 
-  // Commits every still-pending header/footer field edit as one command each
-  // (a no-op, returning `documentModel` unchanged, when nothing is pending)
-  // and returns the resulting document SYNCHRONOUSLY — `commitState`'s own
-  // `setDocumentModel` is async, and the save path below needs the
-  // just-committed text in hand immediately, not on the next render.
+  const pendingHeaderFooterEditsRef = useRef(new Map<string, PendingHeaderFooterEdit>())
+
+  /** Builds the right command for a pending edit — a whole-paragraph rewrite
+   * for a plain `'text'` row, or one text segment's rewrite for a `'mixed'`
+   * row — against whatever document is passed in (not necessarily the
+   * latest `documentModel`; see `flushHeaderFooterEdits`, which threads an
+   * up-to-date document through when more than one edit is pending). */
+  const buildPendingHeaderFooterCommand = useCallback((doc: DocxDocument, edit: PendingHeaderFooterEdit) => {
+    return edit.segmentIndex === undefined
+      ? buildHeaderFooterTextEdit(doc, edit.kind, edit.id, edit.blockIndex, edit.text)
+      : buildHeaderFooterSegmentEdit(doc, edit.kind, edit.id, edit.blockIndex, edit.segmentIndex, edit.text)
+  }, [])
+
+  // Commits every still-pending header/footer field edit as one combined
+  // undo step (a no-op, returning `documentModel` unchanged, when nothing is
+  // pending) and returns the resulting document SYNCHRONOUSLY —
+  // `commitState`'s own `setDocumentModel` is async, and the save path below
+  // needs the just-committed text in hand immediately, not on the next
+  // render. Edits are built and applied ONE AT A TIME, each against the
+  // document the previous one just produced (rather than batching every
+  // command's `blocks` payload pre-computed against the same stale
+  // snapshot) — needed now that two DIFFERENT pending edits can target text
+  // segments of the very SAME paragraph (a `'mixed'` row's two inputs):
+  // building both from one stale snapshot would have the second overwrite
+  // the first's change when the composite command replays them.
   const flushHeaderFooterEdits = useCallback((): DocxDocument => {
     const pending = pendingHeaderFooterEditsRef.current
     if (pending.size === 0) {
       return documentModel
     }
 
-    const commands: Command[] = []
-    for (const [key, edit] of pending) {
-      const command = buildHeaderFooterTextEdit(documentModel, edit.kind, edit.id, edit.blockIndex, edit.text)
-      if (command !== null) {
-        commands.push(command)
+    const edits = [...pending.values()]
+    pending.clear()
+
+    let workingDocument = documentModel
+    const inverses: Command[] = []
+    for (const edit of edits) {
+      const command = buildPendingHeaderFooterCommand(workingDocument, edit)
+      if (command === null) {
+        continue
       }
-      pending.delete(key)
+      try {
+        const result = applyCommand(workingDocument, command)
+        workingDocument = result.document
+        inverses.push(result.inverse)
+      } catch {
+        // Skip this one; keep committing the rest.
+      }
     }
-    if (commands.length === 0) {
+    if (inverses.length === 0) {
       return documentModel
     }
 
-    try {
-      const batch: Command = commands.length === 1 ? commands[0] : { kind: 'composite', commands }
-      const result = applyCommand(documentModel, batch)
-      historyRef.current.push(result.inverse)
-      commitState(result.document, result.range ?? range)
-      return result.document
-    } catch {
-      return documentModel
-    }
-  }, [commitState, documentModel, range])
+    inverses.reverse()
+    const inverse: Command = inverses.length === 1 ? inverses[0] : { kind: 'composite', commands: inverses }
+    historyRef.current.push(inverse)
+    commitState(workingDocument, range)
+    return workingDocument
+  }, [buildPendingHeaderFooterCommand, commitState, documentModel, range])
 
   const syncRangeFromDom = useCallback(() => {
     const root = editorRootRef.current
@@ -2228,22 +2260,36 @@ function DocxEditor({
     }
   }, [headerFooterOpen])
 
+  // `segmentIndex` is omitted for a plain `'text'` row's single field, and
+  // present for one text segment of a `'mixed'` row (see
+  // `PendingHeaderFooterEdit`/`buildPendingHeaderFooterCommand` above) — the
+  // pending-map key folds in `'text'` for the former so the two never
+  // collide with an actual segment 0.
+  const pendingHeaderFooterKey = (kind: HeaderFooterKind, id: string, blockIndex: number, segmentIndex?: number): string =>
+    `${kind}:${id}:${blockIndex}:${segmentIndex ?? 'text'}`
+
   const handleHeaderFooterFieldChange = useCallback(
-    (kind: HeaderFooterKind, id: string, blockIndex: number, text: string) => {
-      pendingHeaderFooterEditsRef.current.set(`${kind}:${id}:${blockIndex}`, { kind, id, blockIndex, text })
+    (kind: HeaderFooterKind, id: string, blockIndex: number, text: string, segmentIndex?: number) => {
+      pendingHeaderFooterEditsRef.current.set(pendingHeaderFooterKey(kind, id, blockIndex, segmentIndex), {
+        kind,
+        id,
+        blockIndex,
+        segmentIndex,
+        text,
+      })
     },
     [],
   )
 
   const handleHeaderFooterFieldBlur = useCallback(
-    (kind: HeaderFooterKind, id: string, blockIndex: number, text: string) => {
-      pendingHeaderFooterEditsRef.current.delete(`${kind}:${id}:${blockIndex}`)
-      const command = buildHeaderFooterTextEdit(documentModel, kind, id, blockIndex, text)
+    (kind: HeaderFooterKind, id: string, blockIndex: number, text: string, segmentIndex?: number) => {
+      pendingHeaderFooterEditsRef.current.delete(pendingHeaderFooterKey(kind, id, blockIndex, segmentIndex))
+      const command = buildPendingHeaderFooterCommand(documentModel, { kind, id, blockIndex, segmentIndex, text })
       if (command !== null) {
         applyEditorCommand(command)
       }
     },
-    [applyEditorCommand, documentModel],
+    [applyEditorCommand, buildPendingHeaderFooterCommand, documentModel],
   )
 
   const handleAddHeaderFooterParagraph = useCallback(
@@ -2258,7 +2304,15 @@ function DocxEditor({
 
   const handleRemoveHeaderFooterParagraph = useCallback(
     (kind: HeaderFooterKind, id: string, blockIndex: number) => {
-      pendingHeaderFooterEditsRef.current.delete(`${kind}:${id}:${blockIndex}`)
+      // Clears every pending edit for this paragraph — a `'mixed'` row can
+      // have more than one (one per text segment), unlike a plain `'text'`
+      // row's single field the old exact-key delete assumed.
+      const prefix = `${kind}:${id}:${blockIndex}:`
+      for (const key of pendingHeaderFooterEditsRef.current.keys()) {
+        if (key.startsWith(prefix)) {
+          pendingHeaderFooterEditsRef.current.delete(key)
+        }
+      }
       const command = buildRemoveHeaderFooterParagraph(documentModel, kind, id, blockIndex)
       if (command !== null) {
         applyEditorCommand(command)
@@ -2552,6 +2606,66 @@ function DocxEditor({
                   }
 
                   const label = numbered ? `${base} line ${rowIndex + 1}` : base
+
+                  if (row.kind === 'mixed') {
+                    // A paragraph mixing plain text with a drawing/field/
+                    // hyperlink/etc (D29 follow-up 2): one editable input per
+                    // text segment, interleaved with a read-only chip per
+                    // atom, all inside the same visual line.
+                    return (
+                      <div key={`${part.kind}-${part.id}-${row.blockIndex}`} className="docx-viewer__header-footer-field">
+                        <span>{label}</span>
+                        <span className="docx-viewer__header-footer-row docx-viewer__header-footer-mixed">
+                          {row.segments.map((segment, segmentPos) =>
+                            segment.kind === 'atom' ? (
+                              <span key={`atom-${segmentPos}`} className="docx-viewer__header-footer-atom">
+                                {segment.label}
+                              </span>
+                            ) : (
+                              <input
+                                key={`text-${segment.segmentIndex}-${segment.text}`}
+                                type="text"
+                                defaultValue={segment.text}
+                                aria-label={`${label} — editable text`}
+                                className="docx-viewer__header-footer-segment-input"
+                                onChange={(event) =>
+                                  handleHeaderFooterFieldChange(
+                                    part.kind,
+                                    part.id,
+                                    row.blockIndex,
+                                    event.currentTarget.value,
+                                    segment.segmentIndex,
+                                  )
+                                }
+                                onBlur={(event) =>
+                                  handleHeaderFooterFieldBlur(
+                                    part.kind,
+                                    part.id,
+                                    row.blockIndex,
+                                    event.currentTarget.value,
+                                    segment.segmentIndex,
+                                  )
+                                }
+                              />
+                            ),
+                          )}
+                          {canRemove && (
+                            <button
+                              type="button"
+                              className="docx-viewer__error-dismiss"
+                              onClick={() => handleRemoveHeaderFooterParagraph(part.kind, part.id, row.blockIndex)}
+                              aria-label={`Remove ${label}`}
+                              title="Remove this line"
+                            >
+                              <X aria-hidden="true" />
+                            </button>
+                          )}
+                        </span>
+                        <span className="docx-viewer__meta">Non-text parts (images, fields, links, …) are left exactly as they are.</span>
+                      </div>
+                    )
+                  }
+
                   return (
                     <label
                       key={`${part.kind}-${part.id}-${row.blockIndex}-${row.text}`}

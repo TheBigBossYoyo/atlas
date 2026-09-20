@@ -425,6 +425,38 @@
   font-size: 13px;
 }
 
+/* D29 follow-up 2 — a 'mixed' row: one editable input per text segment,
+ * interleaved with a read-only chip per atom (image/field/link/etc), all
+ * wrapping on the same visual line via `.docx-viewer__header-footer-row`'s
+ * flex layout. */
+.docx-viewer__header-footer-mixed {
+  flex-wrap: wrap;
+}
+
+.docx-viewer__header-footer-segment-input {
+  flex: 1 1 100px;
+  min-width: 60px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-primary, #1f2328);
+  font: inherit;
+  font-size: 13px;
+}
+
+.docx-viewer__header-footer-atom {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px dashed var(--border-primary, #d0d7de);
+  border-radius: 6px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-secondary, #57606a);
+  background: var(--bg-secondary, #f6f8fa);
+  white-space: nowrap;
+}
+
 .docx-viewer__header-footer-placeholder {
   padding: 6px 8px;
   border: 1px dashed var(--border-primary, #d0d7de);

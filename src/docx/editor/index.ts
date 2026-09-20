@@ -53,11 +53,14 @@ export type { RichPasteBundleContext, RichPasteBundlePatch, RichPasteResult } fr
 export {
   listHeaderFooterParts,
   buildHeaderFooterTextEdit,
+  buildHeaderFooterSegmentEdit,
   buildInsertHeaderFooterParagraph,
   buildRemoveHeaderFooterParagraph,
   setHeaderFooterBlockText,
+  setHeaderFooterSegmentText,
   replaceHeaderFooterBlocks,
   type HeaderFooterPart,
   type HeaderFooterRow,
+  type HeaderFooterSegment,
   type HeaderFooterKind,
 } from './headerFooter'

@@ -42,9 +42,10 @@ footnotes-endnotes; run formatting (bold/italic/underline/strike/sub-super/
 font/color/highlight/spacing/caps); paragraph formatting (alignment,
 spacing, indent, shading, borders, tab stops); ordered/unordered/multi-level
 lists; the paragraph/character/table style cascade including inheritance;
-insert-table, page breaks, section breaks; headers/footers (per-paragraph
-editing that keeps a paragraph's own images/fields/tabs/formatting intact —
-see the "Not supported" note below); find & replace;
+insert-table, page breaks, section breaks; headers/footers (per-text-segment
+editing — including the text parts of a paragraph that also holds an image/
+field/hyperlink/etc — that keeps every image/field/tab/formatting the edit
+didn't touch intact; see the "Not supported" note below); find & replace;
 track-changes accept/reject (single and all) with a `trackChanges` on/off
 setting; comments; undo/redo (command-pattern, bounded history); image
 insert; Save and Save As with an atomic, lock-aware write path.
@@ -65,16 +66,36 @@ rotation and flip (parsed, serialized, and rendered at the right spot with
 correct z-order).
 
 **Not supported:**
-- **Header/footer editing is per whole paragraph, not per run.** The header/
-  footer panel offers one editable field per paragraph that is entirely
-  plain text (runs holding only text/tabs/breaks); a paragraph that also
-  holds an image, a field (PAGE/NUMPAGES/etc), a hyperlink, a footnote/
-  comment reference, or any raw unrecognized XML is shown as a read-only,
-  labelled placeholder ("[Image]", "[Page number]", …) instead — editing it
-  here isn't offered at all, so it's never at risk of being flattened away.
-  A table block is likewise a placeholder. Within an editable paragraph, an
-  edit is spliced into the paragraph's own runs (a prefix/suffix diff, not a
-  full rebuild), so untouched runs keep their exact formatting.
+- **Header/footer editing is per text SEGMENT, not per character, and a
+  table block is still fully read-only.** A paragraph made entirely of
+  plain runs (text/tabs/breaks) gets one editable field, as before. A
+  paragraph that MIXES plain text with a drawing/field (PAGE/NUMPAGES/DATE/
+  etc)/hyperlink/footnote-or-comment-reference/existing tracked change/raw
+  unrecognized XML — the extremely common real-world case, e.g. "Chapter
+  title .......... Page X of Y" or a logo image followed by a title — now
+  gets one editable text input PER plain-text span, interleaved with a
+  read-only, labelled chip for each atom in between ("[Image]", "[Page
+  number]", "[Total pages]", "[Date]", "[Link: …]", …); the atom itself is
+  never rewritten, so it can never come apart from editing the text around
+  it. A `w:bookmarkStart`/`w:bookmarkEnd` or comment-range boundary sitting
+  mid-paragraph splits the text either side of it into two separate
+  editable inputs (so an edit can never accidentally merge across it) but
+  is never shown as its own chip, matching how it has always been invisible
+  to this editor's labels. A whole paragraph with NO editable text anywhere
+  (every child is an atom), and a table block, are still shown as a
+  read-only, labelled placeholder exactly as before. If every text segment
+  around an atom is emptied out, that paragraph is simply left holding only
+  the atom (no data loss — the atom itself is never touched) and
+  reclassifies as a plain read-only placeholder on the next read; removing
+  the line entirely is still available via the panel's own remove button.
+  Within any editable text span, an edit is spliced into that span's own
+  runs (a prefix/suffix diff, not a full rebuild), so untouched runs keep
+  their exact formatting, and a field's own runs (`w:fldSimple`, or the
+  `w:fldChar`/`w:instrText` triple) round-trip byte-identically since this
+  editor never reads or rewrites the field node at all. A run whose OWN
+  children mix plain content with a drawing/field in the same `<w:r>`
+  (legal per schema, not real Word/LibreOffice output) is treated as one
+  atom for the whole run rather than split further.
 - **Vertical table cell merge** (`w:vMerge` / row-span) — only horizontal
   merge (`gridSpan`) is supported for structural table editing. *(DEFER-1)*
 - **Paste fidelity** gaps: a nested table inside a pasted cell, vertical
