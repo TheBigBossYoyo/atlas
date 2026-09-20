@@ -48,7 +48,7 @@ exports[`exportHtml > snapshots the full generated HTML document (theme attribut
   --text:     #1f2328;
   --code-bg:  #eff1f3;
   --border:   #d0d7de;
-  --accent:   #0969da;
+  --accent:   #0967d7;
 }
 
 [data-theme="dark"] {
@@ -64,7 +64,7 @@ exports[`exportHtml > snapshots the full generated HTML document (theme attribut
   --text:     #5b4636;
   --code-bg:  #ebe2c8;
   --border:   #d4c9a8;
-  --accent:   #8b5a2b;
+  --accent:   #815428;
 }
 
 [data-theme="nord"] {
@@ -72,7 +72,7 @@ exports[`exportHtml > snapshots the full generated HTML document (theme attribut
   --text:     #eceff4;
   --code-bg:  #3b4252;
   --border:   #434c5e;
-  --accent:   #88c0d0;
+  --accent:   #90c5d3;
 }
 
 [data-theme="dracula"] {
@@ -80,7 +80,7 @@ exports[`exportHtml > snapshots the full generated HTML document (theme attribut
   --text:     #f8f8f2;
   --code-bg:  #44475a;
   --border:   #44475a;
-  --accent:   #bd93f9;
+  --accent:   #caa8fa;
 }
 
 /* ── Reset & base ─────────────────────────────────────────────────────── */
