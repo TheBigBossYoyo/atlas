@@ -42,9 +42,21 @@ export const messages = {
   'dropzone.title': 'Déposez votre document',
   'dropzone.detail': 'Word, Excel, PowerPoint, PDF, OpenDocument, Markdown, CSV, RTF et fichiers de code',
 
+  // ViewerErrorBoundary.tsx
+  'viewerError.title': 'La visionneuse a planté',
+  'viewerError.tryAgain': 'Réessayer',
+
+  // ViewerLoading.tsx
+  'viewerLoading.loading': 'Chargement de {format}…',
+  'viewerLoading.documentFallback': 'document',
+
   // Sidebar.tsx
   'sidebar.title': 'Table des matières',
   'sidebar.empty': 'Aucun plan disponible',
+
+  // RawEditor.tsx
+  'rawEditor.title': 'Source Markdown',
+  'rawEditor.placeholder': 'Saisissez ou collez du Markdown ici…',
 
   // Toolbar.tsx
   'toolbar.showSidebar': 'Afficher la barre latérale',
@@ -529,6 +541,9 @@ export const messages = {
   'docx.viewer.fidelityWarningContentControls': 'Ses contrôles de contenu (comme des listes déroulantes ou des champs de date) ont conservé leur texte, mais pas les contrôles eux-mêmes.',
   'docx.viewer.fidelityWarningShapeFallback': 'Le dessin de secours d’une forme ou d’une zone de texte n’a pas été préservé.',
   'docx.viewer.fidelityWarningOther': 'Certains autres éléments de mise en forme ou de contenu n’ont pas été entièrement préservés.',
+
+  // src/docx/render/PageView.tsx
+  'docx.render.resizeColumn': 'Redimensionner la colonne {n}',
 
   // src/docx/editor/friendlyDocxError.ts
   'docx.error.notOpenedDetail': 'Ce fichier n’a pas été ouvert : {detail}',

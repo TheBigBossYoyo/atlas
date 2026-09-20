@@ -11,6 +11,7 @@ import { MARKER_RUN_INDEX } from '../layout/listMarkers';
 import { borderToCss, revisionStyleToCss, runStyleToCss } from './style';
 import { AnchoredDrawing } from './AnchoredDrawing';
 import { DrawingAnchorMarker, InlineDrawing } from './InlineDrawing';
+import { useTranslate } from '../../i18n';
 import {
   BOOKMARK_ANCHOR_ID_PREFIX,
   collectBookmarkNamesByParagraph,
@@ -346,6 +347,7 @@ function TableColumnResizeHandle({
   scale: number;
   onResize: (tablePath: ReadonlyArray<number>, columnIndex: number, widthTwips: number) => void;
 }) {
+  const t = useTranslate();
   const [dragDeltaPt, setDragDeltaPt] = useState<number | null>(null);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -389,7 +391,7 @@ function TableColumnResizeHandle({
       onPointerDown={handlePointerDown}
       role="separator"
       aria-orientation="vertical"
-      aria-label={`Resize column ${columnIndex + 1}`}
+      aria-label={t('docx.render.resizeColumn', { n: columnIndex + 1 })}
     />
   );
 }
