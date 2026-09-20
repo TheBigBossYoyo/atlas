@@ -354,6 +354,66 @@ describe('electron/main.cjs IPC handlers', () => {
       expect(result.saved).toBe(false)
     })
 
+    // SEC-1 — the verified allowlist-bypass hole: a path registered only via
+    // `path:register-dropped` (drag-drop) must NOT be silently overwritable.
+    // It is readable (open-file-by-path works on it, see the
+    // `path:register-dropped` describe block below) but not write-eligible,
+    // so `save-file` must fall through to the native save dialog instead of
+    // treating it as `existingPath`.
+    it('falls back to the save dialog for a dropped-only existingPath instead of silently overwriting it', async () => {
+      const droppedPath = path.join(tempDir, 'dropped.md')
+      fs.writeFileSync(droppedPath, 'original on disk')
+      const registerResult = (await handler('path:register-dropped')(ALLOWED_EVENT, droppedPath)) as {
+        ok: boolean
+      }
+      expect(registerResult.ok).toBe(true)
+
+      const dialogChosenPath = path.join(tempDir, 'saved-elsewhere.md')
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dialogChosenPath })
+
+      const result = (await handler('save-file')(ALLOWED_EVENT, {
+        content: 'attacker-controlled content',
+        suggestedName: 'dropped.md',
+        existingPath: droppedPath,
+      })) as { saved: boolean; path?: string }
+
+      expect(mocks.dialog.showSaveDialog).toHaveBeenCalledTimes(1)
+      expect(result.saved).toBe(true)
+      expect(result.path).toBe(dialogChosenPath)
+      // The dropped file itself must be untouched — no silent overwrite.
+      expect(fs.readFileSync(droppedPath, 'utf-8')).toBe('original on disk')
+      expect(fs.readFileSync(dialogChosenPath, 'utf-8')).toBe('attacker-controlled content')
+    })
+
+    // Acceptance criterion: a real Save-As on a drag-dropped file must still
+    // upgrade that path to write-eligible, because the dialog result goes
+    // through `trustPath`.
+    it('a Save As through the dialog on a dropped path makes that path write-eligible afterward', async () => {
+      const droppedPath = path.join(tempDir, 'dropped2.md')
+      fs.writeFileSync(droppedPath, 'v1')
+      await handler('path:register-dropped')(ALLOWED_EVENT, droppedPath)
+
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: droppedPath })
+      const firstSave = (await handler('save-file')(ALLOWED_EVENT, {
+        content: 'v2 via dialog',
+        suggestedName: 'dropped2.md',
+        existingPath: droppedPath,
+      })) as { saved: boolean }
+      expect(firstSave.saved).toBe(true)
+      expect(mocks.dialog.showSaveDialog).toHaveBeenCalledTimes(1)
+
+      // Now a normal save to the SAME path must silently overwrite, with no
+      // second dialog — the Save As above trusted it.
+      const secondSave = (await handler('save-file')(ALLOWED_EVENT, {
+        content: 'v3 silent',
+        suggestedName: 'dropped2.md',
+        existingPath: droppedPath,
+      })) as { saved: boolean }
+      expect(secondSave.saved).toBe(true)
+      expect(mocks.dialog.showSaveDialog).toHaveBeenCalledTimes(1)
+      expect(fs.readFileSync(droppedPath, 'utf-8')).toBe('v3 silent')
+    })
+
     it('surfaces a friendly, specific error when the destination folder no longer exists (X5 — classifyWriteError/ENOENT)', async () => {
       const filePath = path.join(tempDir, 'gone-folder', 'a.md')
       mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath })
@@ -406,6 +466,33 @@ describe('electron/main.cjs IPC handlers', () => {
 
       expect(result.saved).toBe(true)
       expect([...fs.readFileSync(filePath)]).toEqual([1, 2, 3, 4])
+    })
+
+    // SEC-1 — same allowlist-bypass hole as save-file, on the binary-write
+    // path (the one the hole's writeup called out specifically, since it's
+    // what a docx/xlsx/etc. silent-overwrite attack would use).
+    it('falls back to the save dialog for a dropped-only existingPath instead of silently overwriting it', async () => {
+      const droppedPath = path.join(tempDir, 'dropped.docx')
+      fs.writeFileSync(droppedPath, 'original bytes')
+      const registerResult = (await handler('path:register-dropped')(ALLOWED_EVENT, droppedPath)) as {
+        ok: boolean
+      }
+      expect(registerResult.ok).toBe(true)
+
+      const dialogChosenPath = path.join(tempDir, 'saved-elsewhere.docx')
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath: dialogChosenPath })
+
+      const result = (await handler('save-binary-file')(ALLOWED_EVENT, {
+        content: new Uint8Array([9, 9, 9]),
+        suggestedName: 'dropped.docx',
+        existingPath: droppedPath,
+      })) as { saved: boolean; path?: string }
+
+      expect(mocks.dialog.showSaveDialog).toHaveBeenCalledTimes(1)
+      expect(result.saved).toBe(true)
+      expect(result.path).toBe(dialogChosenPath)
+      expect(fs.readFileSync(droppedPath, 'utf-8')).toBe('original bytes')
+      expect([...fs.readFileSync(dialogChosenPath)]).toEqual([9, 9, 9])
     })
 
     it('surfaces a friendly, specific error when the destination folder no longer exists (X5 — classifyWriteError/ENOENT)', async () => {
