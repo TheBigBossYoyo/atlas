@@ -92,8 +92,13 @@ export async function exportSpreadsheetCsvPerSheet(buffer: ArrayBuffer, fileName
       const csv = rowsToCsv(sheet.grid.rows);
       const suggested = single ? `${baseName}.csv` : `${baseName} - ${sheet.name}.csv`;
       // Deliberately sequential (not Promise.all): each sheet needs its own
-      // native save dialog, shown one at a time.
-      await saveTextOutput(csv, suggested, 'text/csv;charset=utf-8', csvFilters);
+      // native save dialog, shown one at a time. `saveTextOutput` resolves
+      // `false` (no error) when the user cancels that dialog — stop right
+      // there instead of ploughing on to the next sheet's dialog; the loop
+      // used to ignore the return value entirely and keep popping a dialog
+      // per remaining sheet even after the user backed out of the first one.
+      const saved = await saveTextOutput(csv, suggested, 'text/csv;charset=utf-8', csvFilters);
+      if (!saved) return;
     }
   } catch (err) {
     console.error('[export] exportSpreadsheetCsvPerSheet failed:', err);

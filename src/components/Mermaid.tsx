@@ -26,6 +26,19 @@ export function Mermaid({ code, id }: MermaidProps) {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      // Found by driving the real app on a broken diagram: mermaid's own
+      // `render()` builds its error SVG inside a temporary `div#d<id>` it
+      // appends directly to `document.body` (never inside this component's
+      // own tree — see node_modules/mermaid's `render()`: it serializes that
+      // div's contents into the string it resolves/rejects with, but only
+      // calls its own `removeTempElements()` cleanup on the SUCCESS path;
+      // the reject-with-parse-error path skips straight past it). Left
+      // alone, that visible, full-sized error graphic (mermaid's bomb icon +
+      // "Syntax error in text") stays attached below the entire app for the
+      // rest of the window's lifetime — outside React's tree, so no
+      // remount/unmount ever clears it — duplicating the inline
+      // `.mermaid--error` message this component already renders in place.
+      document.getElementById(`d${id}`)?.remove();
     }
   }, [code, id]);
 

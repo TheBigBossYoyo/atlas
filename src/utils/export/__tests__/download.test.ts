@@ -57,12 +57,12 @@ describe('saveTextOutput', () => {
     expect(createObjectURLMock).not.toHaveBeenCalled();
   });
 
-  it('resolves quietly when the user cancels the Electron dialog (no error, no fallback download)', async () => {
+  it('resolves false when the user cancels the Electron dialog (no error, no fallback download)', async () => {
     window.electronAPI = {
       saveFile: vi.fn().mockResolvedValue({ saved: false }),
     } as unknown as typeof window.electronAPI;
 
-    await expect(saveTextOutput('hello', 'notes.md', 'text/markdown')).resolves.toBeUndefined();
+    await expect(saveTextOutput('hello', 'notes.md', 'text/markdown')).resolves.toBe(false);
     expect(anchorClicks).toHaveLength(0);
   });
 

@@ -162,4 +162,24 @@ describe('exportSpreadsheetCsvPerSheet', () => {
     expect(saveFileMock).toHaveBeenCalledTimes(1);
     expect(saveFileMock.mock.calls[0]![0]).toMatchObject({ suggestedName: 'single.csv' });
   });
+
+  it('stops after the user cancels a sheet\'s dialog instead of showing one for every remaining sheet', async () => {
+    // Found by driving the real app: cancelling the FIRST of three sheets'
+    // save dialogs used to still pop dialogs for the second and third —
+    // `saveTextOutput`'s cancel signal (`saved: false`, no `error`) was
+    // never checked, only real errors were. A cancel isn't a failure, but it
+    // also isn't "keep going" — the user just said no to this export.
+    const saveFileMock = vi.fn().mockResolvedValueOnce({ saved: false }).mockResolvedValue({ saved: true });
+    window.electronAPI = { saveFile: saveFileMock } as unknown as typeof window.electronAPI;
+    const buffer = buildWorkbookBuffer(wb => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a']]), 'First');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['b']]), 'Second');
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['c']]), 'Third');
+    });
+
+    await exportSpreadsheetCsvPerSheet(buffer, 'wb.xlsx');
+
+    expect(saveFileMock).toHaveBeenCalledTimes(1);
+    expect(saveFileMock.mock.calls[0]![0]).toMatchObject({ suggestedName: 'wb - First.csv' });
+  });
 });

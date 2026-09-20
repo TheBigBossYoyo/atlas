@@ -66,6 +66,24 @@ function toContent(raw: unknown): Uint8Array | null {
     return raw instanceof Uint8Array ? raw : new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
   }
 
+  // Found by driving the real app on a document past a few KB: `XLSX.CFB`'s
+  // internal `__toBuffer` only concatenates a stream's sector chain with the
+  // fast `Buffer.concat` path when the FIRST underlying chunk is itself
+  // already a real Node `Buffer` — true for a stream small enough to live in
+  // the CFB ministream (read through a different code path), but never true
+  // for a regular FAT sector chain when this module's `XLSX.CFB.read` call
+  // below is given `{ type: 'array' }` input (a plain `Uint8Array`, not a
+  // `Buffer`). It falls back to a byte-by-byte plain-`Array<number>` builder
+  // instead. The OLE2 ministream cutoff is exactly 4096 bytes, so this hits
+  // EVERY stream at least that large — i.e. virtually any real-world
+  // .doc/.ppt's actual document story, not merely a pathological huge file.
+  // Before this branch, `ArrayBuffer.isView` correctly rejected the plain
+  // array and every such file was misreported as corrupt ("missing the
+  // WordDocument/PowerPoint Document stream") despite parsing successfully.
+  if (Array.isArray(raw)) {
+    return Uint8Array.from(raw as ReadonlyArray<number>)
+  }
+
   return null
 }
 
