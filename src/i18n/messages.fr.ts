@@ -197,8 +197,12 @@ export const messages = {
   // EmptyFileNotice.tsx
   // LargeMarkdownNotice.tsx
   'largeMarkdown.title': "Ce document est trop volumineux pour un aperçu rapide",
-  'largeMarkdown.detail': "Afficher ces {size} Mo de Markdown peut figer Atlas pendant plusieurs minutes. L’éditeur est ouvert et pleinement utilisable ; vous pouvez tout de même demander l’aperçu.",
+  'largeMarkdown.detail': "Afficher ces {size} Mo de Markdown peut prendre un certain temps. L’éditeur est ouvert et pleinement utilisable ; vous pouvez tout de même demander l’aperçu.",
   'largeMarkdown.renderAnyway': "Afficher l’aperçu quand même",
+
+  // MarkdownRenderer.tsx / useMarkdownHastTree.ts
+  'markdownWorker.parsing': 'Affichage du document volumineux…',
+  'markdownWorker.error': "Ce document n’a pas pu être affiché : {error}",
 
   'emptyFile.title': 'Ce fichier est vide',
   'emptyFile.detail': '{fileName} n’a pas encore de contenu, et Atlas ne dispose pas de modèle vierge pour ce format. Ouvrez-le dans une autre application pour y ajouter du contenu.',
