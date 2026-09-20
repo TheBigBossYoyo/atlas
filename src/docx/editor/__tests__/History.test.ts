@@ -131,6 +131,106 @@ describe('History', () => {
     expect(history.redo(undone!.document)).toBeNull()
   })
 
+  // ---------------------------------------------------------------------------
+  // DIRTY-1 — revision identity. DocxViewer's dirty check compares
+  // `getRevision()` against the revision recorded at save time instead of
+  // comparing documents by reference, specifically because `undo`/`redo`
+  // rebuild the document via `applyCommand` and so never hand back a
+  // previously-held object even when the content is back to exactly what it
+  // was. These assert the revision numbers directly — via `toBe`, since it's
+  // exact identity (of a revision, not a document reference) that the fix
+  // depends on, not mere structural equality — which is exactly the kind of
+  // assertion `toEqual`-only coverage of undo/redo had been missing.
+  // ---------------------------------------------------------------------------
+
+  it('DIRTY-1: undo restores the exact revision that was current before the edit', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const command = { kind: 'insert-text', at: position([0], 0, 5), text: '!' } as const
+    const applied = applyCommand(original, command)
+
+    const revisionBeforeEdit = history.getRevision()
+    history.push(applied.inverse)
+    const revisionAfterEdit = history.getRevision()
+    expect(revisionAfterEdit).not.toBe(revisionBeforeEdit)
+
+    const undone = history.undo(applied.document)
+    // Not merely equal in value (both happen to be the same number) — this
+    // is the literal identity the dirty check relies on: undoing all the
+    // way back must reproduce the exact revision recorded at save time.
+    expect(history.getRevision()).toBe(revisionBeforeEdit)
+    expect(undone?.document).toEqual(original)
+  })
+
+  it('DIRTY-1: redo restores the exact revision that was current before the undo', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const command = { kind: 'insert-text', at: position([0], 0, 5), text: '!' } as const
+    const applied = applyCommand(original, command)
+
+    history.push(applied.inverse)
+    const revisionAfterEdit = history.getRevision()
+
+    const undone = history.undo(applied.document)
+    history.redo(undone!.document)
+
+    expect(history.getRevision()).toBe(revisionAfterEdit)
+  })
+
+  it('DIRTY-1: a new edit made after an undo allocates a revision distinct from the discarded redo branch', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const command = { kind: 'insert-text', at: position([0], 0, 5), text: '!' } as const
+    const applied = applyCommand(original, command)
+
+    history.push(applied.inverse)
+    const revisionOfDiscardedEdit = history.getRevision()
+    history.undo(applied.document)
+
+    // A genuinely different edit taken from the same undo point, rather than
+    // a redo of the one above.
+    history.push({ kind: 'apply-style', paragraphPath: [0], styleId: 'Heading1' })
+
+    // Must not collide with the revision the discarded branch used to hold —
+    // otherwise saving here and later undoing back onto the OLD branch's
+    // content would be wrongly reported clean against this save.
+    expect(history.getRevision()).not.toBe(revisionOfDiscardedEdit)
+  })
+
+  it('DIRTY-1: a coalesced keystroke still advances the revision, but undo of the whole run restores the pre-run revision', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-15T12:00:00Z'))
+
+    const history = new History()
+    const original = createDocument('')
+    const revisionBeforeTyping = history.getRevision()
+
+    const firstCommand = { kind: 'insert-text', at: position([0], 0, 0), text: 'A' } as const
+    const first = applyCommand(original, firstCommand)
+    history.coalesceWithLast(firstCommand, first.inverse)
+    history.push(first.inverse)
+    const revisionAfterFirstChar = history.getRevision()
+
+    vi.advanceTimersByTime(300)
+
+    const secondCommand = { kind: 'insert-text', at: position([0], 0, 1), text: 't' } as const
+    const second = applyCommand(first.document, secondCommand)
+    const coalesced = history.coalesceWithLast(secondCommand, second.inverse)
+    expect(coalesced).toBe(true)
+
+    // The second keystroke merged into the SAME undo entry as the first, but
+    // the document still changed further, so identity must have moved again
+    // — otherwise saving between the two keystrokes would look clean forever.
+    expect(history.getRevision()).not.toBe(revisionAfterFirstChar)
+
+    const undone = history.undo(second.document)
+    // One Ctrl+Z undoes the whole coalesced "At" run in a single step, and
+    // must land exactly back on the revision from before either keystroke —
+    // not the mid-run revision after just the first character.
+    expect(history.getRevision()).toBe(revisionBeforeTyping)
+    expect(undone?.document).toEqual(original)
+  })
+
   it('coalesces adjacent InsertText commands within one second', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-15T12:00:00Z'))

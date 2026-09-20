@@ -515,6 +515,155 @@ describe('DocxViewer editor', () => {
     })
   })
 
+  // ---------------------------------------------------------------------------
+  // DIRTY-1 — undo/redo back to the saved content must clear/re-set dirty.
+  // Before the fix, dirty was `documentModel !== lastSavedDocument` by
+  // reference; `History.undo`/`redo` always rebuild the document via
+  // `applyCommand`, so even undoing back to byte-for-byte what was on disk
+  // produced a document that was never `===` to the saved snapshot, and the
+  // unsaved-changes dot (and close-prompt, driven by this same
+  // `useViewerIsDirty` flag) never cleared.
+  // ---------------------------------------------------------------------------
+
+  it('DIRTY-1: save, edit, then undo back to the saved content clears dirty', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <ViewerDirtyProbe />
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+
+    // Save the document as-is, establishing "Hello DOCX" as the on-disk
+    // baseline.
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+    expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+
+    // One more edit past the save point.
+    replaceFirstMatch('Hello', 'Howdy')
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    // Undo it — back to exactly "Hello DOCX", what's already on disk.
+    const ctrlZ = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true })
+    fireEvent(editor, ctrlZ)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+    })
+  })
+
+  it('DIRTY-1: save, edit, undo, then redo is dirty again', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <ViewerDirtyProbe />
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    replaceFirstMatch('Hello', 'Howdy')
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    const ctrlZ = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true })
+    fireEvent(editor, ctrlZ)
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+    })
+
+    // Redo the edit back in — content diverges from disk again.
+    const ctrlShiftZ = new KeyboardEvent('keydown', {
+      key: 'Z',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    fireEvent(editor, ctrlShiftZ)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+  })
+
+  it('DIRTY-1: edit, save, then undo past the save point is dirty (content no longer matches disk)', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <ViewerDirtyProbe />
+        <DocxViewer
+          file={{
+            kind: 'binary',
+            content: new Uint8Array([1, 2, 3]).buffer,
+            path: 'C:/docs/sample.docx',
+            format: 'docx',
+          }}
+        />
+      </ViewerProvider>,
+    )
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    // Edit, then save — "Howdy DOCX" is now the on-disk baseline.
+    replaceFirstMatch('Hello', 'Howdy')
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('false')
+    })
+
+    // Undo the edit that was just saved — back to "Hello DOCX", which no
+    // longer matches what's on disk ("Howdy DOCX").
+    const ctrlZ = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true })
+    fireEvent(editor, ctrlZ)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('viewer-dirty')).toHaveTextContent('true')
+    })
+  })
+
   it('P1.1/DXE-07/RUN-03: the shared context save() reaches this viewer\'s own save implementation', async () => {
     render(
       <ViewerProvider filePath="C:/docs/sample.docx">

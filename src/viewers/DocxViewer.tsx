@@ -878,6 +878,14 @@ function DocxEditor({
   const warnedAboutFidelityRef = useRef(false)
   const [fidelityWarningMessage, setFidelityWarningMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
+  // DIRTY-1 — `historyRef.current`'s revision counter (see History.ts's own
+  // doc comment on `getRevision`/`bumpRevision`) at the moment `documentModel`
+  // last changed. Mirrored into state alongside `documentModel` itself
+  // (rather than read straight off the ref where dirty is computed) for the
+  // same reason `lastSavedRevision` below is state and not a ref: the dirty
+  // effect must react to it changing on its own render, not just be able to
+  // read it. Starts at 0 to match `History`'s own initial `currentRevision`.
+  const [documentRevision, setDocumentRevision] = useState(0)
   // DOCX-17 — mirrors `documentModel` for the handful of callbacks below
   // (`syncRangeFromDom`, the drag-select `mousemove` listener) that are
   // deliberately kept identity-stable across renders (an empty `useCallback`/
@@ -971,18 +979,33 @@ function DocxEditor({
   const spellCheck = useSpellCheck()
 
   // P1.1/SHELL-03/DXE-09 — document-session capability contract: report dirty
-  // whenever documentModel diverges (by reference — every edit replaces it
-  // immutably) from the last-saved-or-loaded snapshot, and register our own
-  // save() so App.tsx's global Ctrl+S/Save can reach it when DOCX is active.
+  // whenever documentModel diverges from the last-saved-or-loaded snapshot,
+  // and register our own save() so App.tsx's global Ctrl+S/Save can reach it
+  // when DOCX is active.
   //
-  // `lastSavedDocument` is state, not a ref: dirty is derived from it and the
-  // *current* `documentModel` together in one effect below, so that if the
-  // user keeps typing while an async save() is still in flight, the edits
-  // made after the save started are correctly still reported dirty once the
-  // save resolves — the effect re-reads `documentModel` fresh on every
-  // render rather than trusting whatever value save()'s own closure captured
-  // when it started.
-  const [lastSavedDocument, setLastSavedDocument] = useState(bundle.document)
+  // DIRTY-1 — this used to compare `documentModel` against
+  // `lastSavedDocument` *by reference*, on the theory that every edit
+  // replaces `documentModel` immutably so reference-inequality is exactly
+  // "changed since load/save". That held for ordinary edits, but not for
+  // undo/redo: `History.undo`/`redo` (History.ts) rebuild the document by
+  // applying the stored inverse command, which produces a brand-new object
+  // graph every time — even when undoing lands back on content that is
+  // byte-for-byte what was last saved, it is never `===` to that saved
+  // snapshot, so the document stayed dirty forever. Comparing revision
+  // numbers instead of document references fixes that without ever walking
+  // the document: see History.ts's `getRevision`/`bumpRevision` doc comment
+  // for why a counter that undo/redo can wind backward and forward again is
+  // the right identity here, and for the alternatives (deep-equal every
+  // keystroke; content hashing) that were considered and rejected.
+  //
+  // `lastSavedRevision` is state, not a ref: dirty is derived from it and
+  // the *current* `documentRevision` together in one effect below, so that
+  // if the user keeps typing while an async save() is still in flight, the
+  // edits made after the save started are correctly still reported dirty
+  // once the save resolves — the effect re-reads `documentRevision` fresh on
+  // every render rather than trusting whatever value save()'s own closure
+  // captured when it started.
+  const [lastSavedRevision, setLastSavedRevision] = useState(0)
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
   const registerSaveAs = useRegisterViewerSaveAs()
@@ -1059,8 +1082,15 @@ function DocxEditor({
   // typed the next character rather than staying up until the user dismissed
   // it or a save actually succeeded. commitState no longer touches saveError
   // at all; handleSave (below) is the only place that sets or clears it.
+  // DIRTY-1 — reads `historyRef.current.getRevision()` synchronously rather
+  // than accepting it as a parameter: every caller below already mutated
+  // `historyRef.current` (push/coalesceWithLast, or Input.ts's own
+  // history.undo/redo) *before* calling commitState, so the ref already
+  // reflects this exact edit by the time we read it here — one call site to
+  // keep in sync instead of threading the revision through every caller.
   const commitState = useCallback((nextDocument: DocxDocument, nextRange: Range | null) => {
     setDocumentModel(nextDocument)
+    setDocumentRevision(historyRef.current.getRevision())
     setRange(nextRange)
   }, [])
 
@@ -1903,6 +1933,11 @@ function DocxEditor({
 
     try {
       const result = addCommentToDocument(documentModel, selection, text, 'Atlas')
+      // DIRTY-1 — comments are not undoable through `historyRef` (no
+      // push/coalesce call here), so `commitState`'s revision read would
+      // otherwise stay unchanged and this edit would be silently missed by
+      // the dirty check; `bumpRevision` allocates a fresh one for it.
+      historyRef.current.bumpRevision()
       commitState(result.document, selection)
       setCommentsPaneOpen(true)
       setResolvedCommentIds((current) => {
@@ -1922,6 +1957,9 @@ function DocxEditor({
         return
       }
 
+      // DIRTY-1 — see handleAddComment's comment: not undoable through
+      // History, so the revision must be bumped explicitly.
+      historyRef.current.bumpRevision()
       commitState(replyToComment(documentModel, commentId, text, 'Atlas'), range)
       setCommentsPaneOpen(true)
       setResolvedCommentIds((current) => {
@@ -1939,6 +1977,9 @@ function DocxEditor({
 
   const handleDeleteComment = useCallback(
     (commentId: string) => {
+      // DIRTY-1 — see handleAddComment's comment: not undoable through
+      // History, so the revision must be bumped explicitly.
+      historyRef.current.bumpRevision()
       commitState(deleteCommentFromDocument(documentModel, commentId), range)
       setResolvedCommentIds((current) => {
         const next = new Set(current)
@@ -2086,6 +2127,14 @@ function DocxEditor({
       // typing in (Ctrl+S never blurs it) before reading the document to
       // save; see `flushHeaderFooterEdits`'s own doc comment above.
       const documentToSave = flushHeaderFooterEdits()
+      // DIRTY-1 — read synchronously, right alongside `documentToSave`, not
+      // from the `documentRevision` state variable: `flushHeaderFooterEdits`
+      // may just have pushed one more command to `historyRef.current`
+      // (a pending field edit) via a `commitState` call whose `setState`s
+      // are still only scheduled, not yet reflected in this render's
+      // closure. `historyRef.current` itself, being a plain mutable ref, is
+      // already up to date the instant that call returns.
+      const revisionToSave = historyRef.current.getRevision()
 
       try {
         const nextBytes = await saveDocx({
@@ -2123,15 +2172,16 @@ function DocxEditor({
           return false
         }
 
-        // Record *what was actually written* (`documentToSave`, including any
-        // header/footer edit `flushHeaderFooterEdits` just committed above)
-        // as the new saved baseline. We deliberately do NOT also call
-        // `setDirty(false)` here: if the user kept editing while the
-        // `await`s above were in flight, `documentModel` may already have
+        // Record *the revision that was actually written*
+        // (`revisionToSave`, captured alongside `documentToSave` above,
+        // including any header/footer edit `flushHeaderFooterEdits` just
+        // committed) as the new saved baseline. We deliberately do NOT also
+        // call `setDirty(false)` here: if the user kept editing while the
+        // `await`s above were in flight, `documentRevision` may already have
         // moved on since this snapshot, and the effect below recomputes
-        // dirty from whatever the *current* render's `documentModel` is once
-        // this state update lands — never from this stale closure.
-        setLastSavedDocument(documentToSave)
+        // dirty from whatever the *current* render's `documentRevision` is
+        // once this state update lands — never from this stale closure.
+        setLastSavedRevision(revisionToSave)
 
         // Round-trip fidelity audit, DXS round 2 follow-up — tell the user,
         // once per document, when a save couldn't fully preserve something
@@ -2181,17 +2231,26 @@ function DocxEditor({
   }, [handleSave])
 
   // P1.1/SHELL-03/DXE-09 — publish dirty state and this viewer's save
-  // implementation to the shared document-session contract. Every commitState
-  // call replaces documentModel with a new object, so a plain reference
-  // compare against the last-saved-or-loaded snapshot is exactly "has this
-  // document changed since load/save". Deriving this from both pieces of
-  // state together (rather than reaching into a ref from inside handleSave)
-  // is what makes it correct even when an edit lands while a save is still
-  // in flight: this effect always compares against the render's *current*
-  // documentModel, never a snapshot captured before the save resolved.
+  // implementation to the shared document-session contract.
+  //
+  // DIRTY-1 — compares `documentRevision` (History's own revision counter —
+  // see its doc comment) against `lastSavedRevision`, an O(1) integer
+  // compare, rather than `documentModel !== lastSavedDocument` by reference:
+  // that reference compare used to go wrong specifically after undo/redo,
+  // which rebuild the document from the stored inverse command and so never
+  // hand back the same object twice even when the content is identical to
+  // what was last saved. The revision counter is exactly "how many forward
+  // edits away from the last save/load am I", and undo/redo wind it back and
+  // forward again instead of always incrementing, so it reads 0 whenever the
+  // content is genuinely back to what's on disk. Deriving this from both
+  // pieces of state together (rather than reaching into a ref from inside
+  // handleSave) is what makes it correct even when an edit lands while a
+  // save is still in flight: this effect always compares against the
+  // render's *current* documentRevision, never a snapshot captured before
+  // the save resolved.
   useEffect(() => {
-    setDirty(documentModel !== lastSavedDocument)
-  }, [documentModel, lastSavedDocument, setDirty])
+    setDirty(documentRevision !== lastSavedRevision)
+  }, [documentRevision, lastSavedRevision, setDirty])
 
   useEffect(() => {
     registerSave(handleSave)
@@ -2344,7 +2403,11 @@ function DocxEditor({
       return
     }
 
+    // DIRTY-1 — bypasses History same as `setDocumentModel` above, so the
+    // revision must be bumped by hand for the dirty check to notice.
+    historyRef.current.bumpRevision()
     setDocumentModel(updated)
+    setDocumentRevision(historyRef.current.getRevision())
     setFieldUpdateMessage(t('docx.viewer.fieldsUpdated', { count: updatedCount }))
   }, [bundle.rawArchive, documentModel, pages, t])
 
@@ -2364,7 +2427,11 @@ function DocxEditor({
       return
     }
 
+    // DIRTY-1 — see handleUpdateFields's comment: bypasses History, so bump
+    // the revision by hand.
+    historyRef.current.bumpRevision()
     setDocumentModel(updated)
+    setDocumentRevision(historyRef.current.getRevision())
     setFieldUpdateMessage(t('docx.viewer.tocUpdated'))
   }, [documentModel, pages, t])
 
