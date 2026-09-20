@@ -192,6 +192,17 @@ describe('App dirty-state characterization', () => {
 
     // 1. Load sample --------------------------------------------------------
     fireEvent.click(screen.getByRole('button', { name: 'Load Sample Document' }));
+    // PERF-01 — `MarkdownRenderer` (the `.markdown-body` element
+    // `captureState`'s `activeFormat` reads) is now `React.lazy()`-loaded,
+    // same as every other per-format viewer already was — its first-ever
+    // mount in this test file briefly shows a loading fallback instead
+    // before the dynamic import resolves. Waiting for it here (matching how
+    // every other lazy viewer's test already waits for its own mount)
+    // captures the same settled state this characterization suite always
+    // has; every later `captureState` call in this test reuses the same
+    // now-resolved `lazy()` module promise, so it stays synchronous same as
+    // before.
+    await waitFor(() => expect(document.querySelector('.markdown-body')).not.toBeNull());
     transitions.push(captureState('1. load sample'));
 
     // 2. Edit -----------------------------------------------------------------

@@ -1,5 +1,6 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } from 'react';
 import { ViewerRouter } from './components/ViewerRouter';
+import { ViewerLoading } from './components/ViewerLoading';
 import { useTheme } from './hooks/useTheme';
 import { useFileHandler } from './hooks/useFileHandler';
 import { useShellShortcut } from './hooks/useShortcutManager';
@@ -27,7 +28,6 @@ import { ShortcutManagerProvider } from './hooks/ShortcutManagerProvider';
 import { DraftRecoveryBanner } from './components/DraftRecoveryBanner';
 import { Toolbar } from './components/Toolbar';
 import { Sidebar } from './components/Sidebar';
-import { MarkdownRenderer } from './components/MarkdownRenderer';
 import { RawEditor } from './components/RawEditor';
 import { SearchOverlay } from './components/SearchOverlay';
 import { DropZone } from './components/DropZone';
@@ -38,24 +38,6 @@ import { StatusBar } from './components/StatusBar';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { SAMPLE_MARKDOWN } from './constants';
 import { THEMES, type ViewMode, type ExportFormat, type RecentFile } from './types';
-import {
-  exportMarkdown,
-  exportHtml,
-  exportDocx,
-  exportCsv,
-  exportMarkdownPdf,
-  exportDocxPdf,
-  exportRtfPdf,
-  exportOdtPdf,
-  exportPdfCopy,
-  exportSpreadsheetPdf,
-  exportWorkbookCopy,
-  exportSpreadsheetCsvPerSheet,
-  exportDelimitedTablePdf,
-  exportSlidesPdf,
-  exportTextPdf,
-  exportTextHtml,
-} from './utils/export';
 import { assertNever, type FormatId, type LoadedFile, type NavItem } from './formats/types';
 import type { NewDocumentFormat } from './electron';
 import { resolveDroppedFilePath } from './utils/dragDropPath';
@@ -76,6 +58,39 @@ import { translateWriteError } from './i18n/translateWriteError';
 import { useToast } from './hooks/useToast';
 
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+
+// PERF-01 — react-markdown's rehype/remark pipeline (rehype-katex ->
+// katex, rehype-highlight -> highlight.js + its bundled languages,
+// rehype-raw -> parse5/hast-util-raw, dompurify, marked's own runtime
+// weight, etc.) previously sat behind a plain top-level `import` here, so
+// it was pulled into the SAME eagerly-loaded entry chunk as `main.tsx`
+// itself, on cold start, for every format Atlas opens (measured: this
+// dependency graph alone was >1MB of the ~2.55MB entry chunk). Every other
+// per-format viewer is already code-split through `formats/registry.ts`'s
+// `lazy()` loaders — this gives the markdown editor/preview split the same
+// treatment instead of special-casing it as the one eager exception. The
+// `<Suspense>` fallback below reuses `ViewerLoading`, the same "Loading
+// markdown…" spinner every other viewer already shows while its own chunk
+// fetches, so this is not a new UI state, just the existing one applied
+// consistently.
+const MarkdownRenderer = lazy(() =>
+  import('./components/MarkdownRenderer').then((m) => ({ default: m.MarkdownRenderer }))
+);
+
+// PERF-01 — `./utils/export` transitively pulls in `docx` (real export
+// build, not just its types), `xlsx` (via spreadsheetPdf's shared parser),
+// `html2canvas-pro`, and `react-dom/server` (slidesPdf's
+// `renderToStaticMarkup`) — together over 1.5MB of the entry chunk this
+// used to sit in via a plain top-level `import { exportXxx, ... }`, even
+// though every one of these functions only ever runs from inside the
+// user-triggered Export menu handlers below. Loaded on demand instead;
+// the browser/ESM module cache means the dynamic import only actually
+// fetches once, so repeat exports pay no extra cost after the first. (In
+// Vitest specifically, that first call is transformed on demand rather than
+// pre-bundled — see App.export.test.tsx's own comment on why its `waitFor`s
+// use a longer timeout, not a shorter one from some new slowness in the app
+// itself.)
+const loadExportUtils = () => import('./utils/export');
 
 // P2.1/X4/DAT-15/RUN-08 — non-markdown formats whose viewer renders into the
 // DOM as real text (not a canvas or a virtualized grid), so the existing
@@ -834,14 +849,16 @@ function AppShell() {
     async (format: ExportFormat, baseName: string): Promise<void> => {
       if (!file) return;
 
+      const exportUtils = await loadExportUtils();
+
       if (format === 'copy') {
         // X1/UX-11 — a "Save a copy" passthrough of the file's own original
         // bytes, always through the native save dialog (never a raw browser
         // download — see `exportPdfCopy`/`exportWorkbookCopy`).
         if (file.kind === 'binary' && file.format === 'pdf') {
-          await exportPdfCopy(file.content, baseName);
+          await exportUtils.exportPdfCopy(file.content, baseName);
         } else if (file.kind === 'binary' && (file.format === 'xlsx' || file.format === 'ods')) {
-          await exportWorkbookCopy(file.content, baseName, file.format);
+          await exportUtils.exportWorkbookCopy(file.content, baseName, file.format);
         }
         return;
       }
@@ -852,19 +869,19 @@ function AppShell() {
         // viewerContextValue.ts).
         const exportable = exportContentRef.current();
         if (exportable && exportable.format === 'csv' && typeof exportable.data === 'string') {
-          await exportCsv(exportable.data, exportable.suggestedName || baseName, 'csv');
+          await exportUtils.exportCsv(exportable.data, exportable.suggestedName || baseName, 'csv');
           return;
         }
         // csv/tsv files already carry their own real delimited-text content
         // directly, with no viewer needed.
         if (file.kind === 'text' && (file.format === 'csv' || file.format === 'tsv')) {
-          await exportCsv(file.content, baseName, file.format);
+          await exportUtils.exportCsv(file.content, baseName, file.format);
           return;
         }
         // X1 — xlsx/ods are parsed directly from their own bytes (the exact
         // same shared parser the viewer uses), one CSV per visible sheet.
         if (file.kind === 'binary' && (file.format === 'xlsx' || file.format === 'ods')) {
-          await exportSpreadsheetCsvPerSheet(file.content, baseName);
+          await exportUtils.exportSpreadsheetCsvPerSheet(file.content, baseName);
         }
         return;
       }
@@ -873,7 +890,7 @@ function AppShell() {
         // X1 — text/code only; every other non-markdown format's ExportMenu
         // never offers 'html'.
         if (file.kind === 'text' && (file.format === 'text' || file.format === 'code')) {
-          await exportTextHtml(file.content, baseName);
+          await exportUtils.exportTextHtml(file.content, baseName);
         }
         return;
       }
@@ -885,34 +902,34 @@ function AppShell() {
       // module's header comment in `src/utils/export/` for why.
       switch (file.format) {
         case 'docx':
-          await exportDocxPdf('viewer-content', baseName);
+          await exportUtils.exportDocxPdf('viewer-content', baseName);
           break;
         case 'rtf':
-          await exportRtfPdf('viewer-content', baseName);
+          await exportUtils.exportRtfPdf('viewer-content', baseName);
           break;
         case 'odt':
-          await exportOdtPdf('viewer-content', baseName);
+          await exportUtils.exportOdtPdf('viewer-content', baseName);
           break;
         case 'pptx':
-          if (file.kind === 'binary') await exportSlidesPdf(file.content, baseName, 'pptx');
+          if (file.kind === 'binary') await exportUtils.exportSlidesPdf(file.content, baseName, 'pptx');
           break;
         case 'odp':
-          if (file.kind === 'binary') await exportSlidesPdf(file.content, baseName, 'odp');
+          if (file.kind === 'binary') await exportUtils.exportSlidesPdf(file.content, baseName, 'odp');
           break;
         case 'xlsx':
         case 'ods':
-          if (file.kind === 'binary') await exportSpreadsheetPdf(file.content, baseName);
+          if (file.kind === 'binary') await exportUtils.exportSpreadsheetPdf(file.content, baseName);
           break;
         case 'csv':
         case 'tsv':
-          if (file.kind === 'text') await exportDelimitedTablePdf(file.content, baseName, file.format);
+          if (file.kind === 'text') await exportUtils.exportDelimitedTablePdf(file.content, baseName, file.format);
           break;
         case 'text':
         case 'code':
-          if (file.kind === 'text') await exportTextPdf(file.content, baseName);
+          if (file.kind === 'text') await exportUtils.exportTextPdf(file.content, baseName);
           break;
         case 'pdf':
-          if (file.kind === 'binary') await exportPdfCopy(file.content, baseName);
+          if (file.kind === 'binary') await exportUtils.exportPdfCopy(file.content, baseName);
           break;
         case 'doc':
         case 'ppt':
@@ -946,23 +963,25 @@ function AppShell() {
           return;
         }
 
+        const exportUtils = await loadExportUtils();
+
         switch (format) {
           case 'md':
-            await exportMarkdown(localMarkdown, baseName);
+            await exportUtils.exportMarkdown(localMarkdown, baseName);
             break;
           case 'html':
             // X2 — serializes the live-rendered #markdown-content DOM
             // (KaTeX/Mermaid/highlighted code) instead of re-parsing the raw
             // markdown source.
-            await exportHtml('markdown-content', baseName, theme);
+            await exportUtils.exportHtml('markdown-content', baseName, theme);
             break;
           case 'pdf':
             // X1 — vector printToPDF of the live DOM (selectable text)
             // instead of the old html2canvas-pro raster screenshot.
-            await exportMarkdownPdf('markdown-content', baseName, theme);
+            await exportUtils.exportMarkdownPdf('markdown-content', baseName, theme);
             break;
           case 'docx':
-            await exportDocx(localMarkdown, baseName);
+            await exportUtils.exportDocx(localMarkdown, baseName);
             break;
           case 'csv':
           case 'copy':
@@ -1147,11 +1166,13 @@ function AppShell() {
                 )}
                 {(viewMode === 'preview' || viewMode === 'split') && (
                   <div className="preview-panel" data-viewer={file?.format === 'markdown' ? 'markdown' : undefined}>
-                    <MarkdownRenderer
-                      ref={contentRef}
-                      markdown={localMarkdown}
-                      searchQuery={searchOpen ? searchQuery : undefined}
-                    />
+                    <Suspense fallback={<ViewerLoading format="markdown" />}>
+                      <MarkdownRenderer
+                        ref={contentRef}
+                        markdown={localMarkdown}
+                        searchQuery={searchOpen ? searchQuery : undefined}
+                      />
+                    </Suspense>
                   </div>
                 )}
               </main>
