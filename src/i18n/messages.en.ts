@@ -192,8 +192,12 @@ export const messages = {
   // EmptyFileNotice.tsx
   // LargeMarkdownNotice.tsx
   'largeMarkdown.title': "This document is too large to preview quickly",
-  'largeMarkdown.detail': "Rendering these {size} MB of Markdown can freeze Atlas for minutes. The editor is open and fully usable; you can render the preview anyway if you need it.",
+  'largeMarkdown.detail': "Rendering these {size} MB of Markdown can take a while. The editor is open and fully usable; you can render the preview anyway if you need it.",
   'largeMarkdown.renderAnyway': "Render the preview anyway",
+
+  // MarkdownRenderer.tsx / useMarkdownHastTree.ts
+  'markdownWorker.parsing': 'Rendering large document…',
+  'markdownWorker.error': "This document couldn't be rendered: {error}",
 
   'emptyFile.title': 'This file is empty',
   'emptyFile.detail': "{fileName} has no content yet, and Atlas doesn't have a blank template for this format. Open it in another app to create content first.",

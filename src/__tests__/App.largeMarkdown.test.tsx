@@ -1,12 +1,20 @@
 /**
- * Markdown parsing (micromark, under react-markdown) degrades superlinearly on
- * the main thread — measured on this project's corpus: 0.5 MB ~2 s, 1 MB ~9 s,
- * 2 MB ~44 s, and a 5 MB document froze the app for over two minutes at 2.6 GB.
- * Past `LARGE_MARKDOWN_PREVIEW_BYTES` the preview therefore waits to be asked
- * for, while the editor pane — which is unaffected — opens normally.
+ * Markdown parsing (micromark, under react-markdown) degrades superlinearly:
+ * measured on this project's corpus, 0.5 MB ~2 s, 1 MB ~9 s, 2 MB ~44 s, and
+ * a 5 MB document takes minutes at a ~2.6 GB peak. `MarkdownRenderer` now
+ * parses documents past `components/markdown/sizeThresholds.ts`'s (much
+ * lower) `MARKDOWN_WORKER_BYTE_THRESHOLD` in a Worker, so that cost no
+ * longer blocks the main thread — but it doesn't go away, and a document
+ * large enough can still take minutes or exhaust a Worker's heap. Past
+ * `LARGE_MARKDOWN_PREVIEW_BYTES` (this file's own threshold, well above the
+ * Worker one) the preview therefore still waits to be asked for, while the
+ * editor pane — unaffected either way — opens normally.
  *
  * Mirrors App.emptyFile.test.tsx's harness (mocked `formats/registry`: this
- * suite cares about the shell's branching, not how a viewer renders).
+ * suite cares about the shell's branching, not how a viewer renders). Also
+ * mocks `MarkdownRenderer` itself wholesale, so it never actually reaches
+ * `MARKDOWN_WORKER_BYTE_THRESHOLD` or a Worker — that combination is
+ * `MarkdownRenderer.worker.test.tsx`'s job.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';

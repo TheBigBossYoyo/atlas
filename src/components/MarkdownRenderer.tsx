@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useMemo, useId } from 'react';
+import { forwardRef, lazy, Suspense, useMemo, useId } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -6,52 +6,29 @@ import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeSlug from 'rehype-slug';
 import rehypeRaw from 'rehype-raw';
-import type { Components } from 'react-markdown';
-import { Mermaid } from './Mermaid';
+import { MARKDOWN_WORKER_BYTE_THRESHOLD } from './markdown/sizeThresholds';
+import { buildMarkdownComponents } from './markdown/markdownComponents';
 
 interface MarkdownRendererProps {
   markdown: string;
   searchQuery?: string;
 }
 
-function HighlightedText({ text, query }: { text: string; query: string }) {
-  if (!query) return <>{text}</>;
-
-  const parts: { text: string; highlighted: boolean }[] = [];
-  const lowerText = text.toLowerCase();
-  const lowerQuery = query.toLowerCase();
-  let lastEnd = 0;
-
-  let startIdx = 0;
-  while (true) {
-    const idx = lowerText.indexOf(lowerQuery, startIdx);
-    if (idx === -1) break;
-    if (idx > lastEnd) {
-      parts.push({ text: text.slice(lastEnd, idx), highlighted: false });
-    }
-    parts.push({ text: text.slice(idx, idx + query.length), highlighted: true });
-    lastEnd = idx + query.length;
-    startIdx = idx + 1;
-  }
-
-  if (lastEnd < text.length) {
-    parts.push({ text: text.slice(lastEnd), highlighted: false });
-  }
-
-  if (parts.length === 0) return <>{text}</>;
-
-  return (
-    <>
-      {parts.map((part, i) =>
-        part.highlighted ? (
-          <mark key={i} className="search-highlight">{part.text}</mark>
-        ) : (
-          <span key={i}>{part.text}</span>
-        )
-      )}
-    </>
-  );
-}
+// PERF — `WorkerMarkdownBody` (and everything it pulls in: `renderHastTree`,
+// `hast-util-to-jsx-runtime`, `html-url-attributes`, `unist-util-visit`,
+// `useMarkdownHastTree`) is real weight that only the Worker branch below
+// ever needs. `lazy()`-loading it, the same way `App.tsx` already
+// `lazy()`-loads this whole module out of the entry chunk (see that file's
+// own PERF-01 comment), keeps every small document's import graph exactly
+// as light as it was before this file gained a Worker path at all — an
+// eager import here measurably slowed `MarkdownRenderer`'s own dynamic
+// import (caught by `App.dirtyState.characterization.test.tsx`'s
+// `waitFor(...)` timing out under the *default* 1s `waitFor` budget; it is
+// not this suite's job to grow a longer timeout to accommodate a heavier
+// common path).
+const WorkerMarkdownBody = lazy(() =>
+  import('./markdown/WorkerMarkdownBody').then((m) => ({ default: m.WorkerMarkdownBody }))
+);
 
 export const MarkdownRenderer = forwardRef<HTMLDivElement, MarkdownRendererProps>(
   function MarkdownRenderer({ markdown, searchQuery }, ref) {
@@ -59,56 +36,34 @@ export const MarkdownRenderer = forwardRef<HTMLDivElement, MarkdownRendererProps
     const remarkPlugins = useMemo(() => [remarkGfm, remarkMath], []);
     const rehypePlugins = useMemo(() => [rehypeKatex, rehypeHighlight, rehypeSlug, rehypeRaw], []);
 
-    const createComponents = useCallback((): Partial<Components> => {
-      const wrapText = (children: React.ReactNode): React.ReactNode => {
-        if (!searchQuery) return children;
-        if (typeof children === 'string') {
-          return <HighlightedText text={children} query={searchQuery} />;
-        }
-        if (Array.isArray(children)) {
-          return children.map((child, i) => (
-            <span key={i}>{wrapText(child)}</span>
-          ));
-        }
-        return children;
-      };
+    const components = useMemo(
+      () => buildMarkdownComponents(searchQuery, baseId),
+      [searchQuery, baseId],
+    );
 
-      const components: Partial<Components> = {
-        code({ className, children, ...props }) {
-          const match = /language-(\w+)/.exec(className ?? '');
-          const lang = match?.[1];
-          const raw = String(children ?? '').replace(/\n$/, '');
-          if (lang === 'mermaid') {
-            // Stable id per mermaid block based on content hash & baseId
-            const hashed = `mermaid-${baseId.replace(/[^a-zA-Z0-9]/g, '')}-${Math.abs(
-              raw.split('').reduce((acc, ch) => ((acc << 5) - acc + ch.charCodeAt(0)) | 0, 0)
-            )}`;
-            return <Mermaid code={raw} id={hashed} />;
-          }
-          return (
-            <code className={className} {...props}>
-              {children}
-            </code>
-          );
-        },
-      };
-
-      if (searchQuery) {
-        components.p = ({ children, ...props }) => <p {...props}>{wrapText(children)}</p>;
-        components.li = ({ children, ...props }) => <li {...props}>{wrapText(children)}</li>;
-        components.td = ({ children, ...props }) => <td {...props}>{wrapText(children)}</td>;
-        components.th = ({ children, ...props }) => <th {...props}>{wrapText(children)}</th>;
-      }
-
-      return components;
-    }, [searchQuery, baseId]);
+    // T2-equivalent for markdown (see markdownParse.worker.ts's header):
+    // above this size, parsing off the main thread is what keeps the app
+    // responsive instead of freezing on micromark's superlinear cost.
+    // `typeof Worker !== 'undefined'` mirrors useSpreadsheetWorkbook's own
+    // guard — jsdom (this project's test environment) has no `Worker`
+    // global, so tests below the threshold exercise this exact branch, and
+    // every characterization fixture is far below it, so none of them ever
+    // take the Worker path (see renderHastTree.parity.test.tsx for proof
+    // that branch renders identically when it does run).
+    if (markdown.length >= MARKDOWN_WORKER_BYTE_THRESHOLD && typeof Worker !== 'undefined') {
+      return (
+        <Suspense fallback={<div ref={ref} className="markdown-body" id="markdown-content" />}>
+          <WorkerMarkdownBody ref={ref} markdown={markdown} components={components} />
+        </Suspense>
+      );
+    }
 
     return (
       <div ref={ref} className="markdown-body" id="markdown-content">
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
-          components={createComponents()}
+          components={components}
         >
           {markdown}
         </ReactMarkdown>
