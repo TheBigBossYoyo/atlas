@@ -144,4 +144,30 @@ describe('CodeViewer — run (USR-19)', () => {
     listeners.exit?.({ runId: 3, code: 0, timedOut: false, stopped: false })
     await screen.findByText('Finished (exit code 0).')
   })
+
+  // Found by driving the real app: switching to another tab (or closing this
+  // one) while a program was running unmounted CodeViewer along with the
+  // only Stop button that could ever reach that run. Main allows exactly one
+  // run at a time, so the child kept running orphaned with no way to stop it
+  // short of its 60s timeout or quitting the whole app, and every other
+  // file's Run just failed with "a program is already running".
+  it('stops the run when the viewer is closed mid-run, instead of leaving it orphaned', async () => {
+    const stop = vi.fn()
+    const start = vi.fn().mockResolvedValue({ ok: true, runId: 9 })
+    window.electronAPI = {
+      saveFile: vi.fn().mockResolvedValue({ saved: true, path: '/tmp/a.js' }),
+      codeRun: { start, stop, onOutput: () => () => {}, onExit: () => () => {} },
+    } as unknown as typeof window.electronAPI
+
+    const { container, unmount } = renderViewer(codeFile('console.log(1)\n', '/tmp/a.js'))
+    await waitFor(() => expect(container.querySelector('.cm-content')).not.toBeNull())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+    await waitFor(() => expect(start).toHaveBeenCalledWith('/tmp/a.js'))
+    await screen.findByRole('button', { name: 'Stop' })
+
+    expect(stop).not.toHaveBeenCalled()
+    unmount()
+    expect(stop).toHaveBeenCalledWith(9)
+  })
 })

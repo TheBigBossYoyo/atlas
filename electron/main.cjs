@@ -169,6 +169,15 @@ const SENDER_FRAME_ERROR_MESSAGE = 'This request could not be verified and was b
 // like Atlas itself had done something wrong rather than telling the user
 // what happened and that it isn't recoverable from here.
 const FILE_NOT_FOUND_MESSAGE = 'This file could not be found — it may have been moved, renamed, or deleted.';
+// UX — dropping (or otherwise pointing Atlas at) a folder instead of a file.
+// `registerDroppedPath` allowlists it (it does exist on disk — only
+// `fs.existsSync` is checked there), and a folder has no recognized
+// extension, so `useFileHandler`'s loader falls through to
+// `file:readBinaryByPath`'s "unknown extension" path. Without this check,
+// `fs.promises.readFile` throws the raw `EISDIR: illegal operation on a
+// directory, read`, which used to reach the UI's error banner verbatim —
+// the same class of bug FILE_NOT_FOUND_MESSAGE fixed for a missing file.
+const IS_A_FOLDER_MESSAGE = "That's a folder, not a file — choose a file instead.";
 
 /**
  * @param {Electron.IpcMainInvokeEvent} event
@@ -805,6 +814,9 @@ ipcMain.handle('file:readBinaryByPath', async (event, filePath) => {
   }
   if (!fs.existsSync(filePath)) {
     throw new Error(FILE_NOT_FOUND_MESSAGE);
+  }
+  if (fs.statSync(filePath).isDirectory()) {
+    throw new Error(IS_A_FOLDER_MESSAGE);
   }
   assertFileSizeAllowed(filePath);
   const buf = substituteBlankTemplateIfEmpty(filePath, await fs.promises.readFile(filePath));

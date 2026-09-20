@@ -98,3 +98,60 @@ test('USR-19: a long-running program can be stopped', async () => {
     kill(app)
   }
 })
+
+test('USR-19: switching away from a running file stops it instead of orphaning it', async () => {
+  // Found by driving the real app: leaving (or closing) a running file's tab
+  // unmounted the only Stop button that could ever reach that run. Main
+  // allows exactly one run at a time, so the child kept running with no way
+  // to stop it short of its 60s timeout or quitting the app, and every other
+  // file's Run just failed with "a program is already running".
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-code-orphan-'))
+  const marker = path.join(dir, 'marker.txt')
+  const loop = path.join(dir, 'loop.js')
+  const other = path.join(dir, 'other.js')
+  fs.writeFileSync(
+    loop,
+    `const fs=require('fs');const p=${JSON.stringify(marker)};` +
+      `setInterval(()=>fs.writeFileSync(p,String(process.pid)),100);\n`,
+  )
+  fs.writeFileSync(other, 'console.log("other-ran")\n')
+
+  const { app, page } = await launch(loop)
+  try {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = (() => Promise.resolve({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox
+    })
+    await page.getByRole('button', { name: 'Run' }).click()
+    await expect(page.getByRole('region', { name: 'Program output' })).toBeVisible()
+    await expect.poll(() => fs.existsSync(marker), { timeout: 10_000 }).toBe(true)
+    const pid = fs.readFileSync(marker, 'utf8').trim()
+
+    // Switch to a different file — the running one's tab (and its Stop
+    // button) goes away, but the child must go with it.
+    await app.evaluate(async ({ dialog }, filePath) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [filePath] })) as typeof dialog.showOpenDialog
+    }, other)
+    await page.getByRole('button', { name: 'Open', exact: true }).click()
+    await expect(page.getByRole('tab', { name: 'other.js' })).toBeVisible({ timeout: 10_000 })
+
+    await expect
+      .poll(
+        () => {
+          try {
+            execSync(`tasklist /FI "PID eq ${pid}"`).toString()
+            return execSync(`tasklist /FI "PID eq ${pid}"`).toString().includes(pid)
+          } catch {
+            return false
+          }
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(false)
+
+    // The global "one run at a time" slot is free again.
+    await page.getByRole('button', { name: 'Run' }).click()
+    await expect(page.getByRole('region', { name: 'Program output' })).toContainText('other-ran', { timeout: 20_000 })
+  } finally {
+    kill(app)
+  }
+})
