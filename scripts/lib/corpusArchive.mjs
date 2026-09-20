@@ -262,3 +262,79 @@ export function replaceRunContaining(xml, marker, replacementXml) {
   }
   return result
 }
+
+// ---------------------------------------------------------------------------
+// OPC package surgery: relationships + content types
+//
+// The handful of real-world OOXML features `docx` has no API for at all
+// (custom XML parts, VBA/macro projects, embedded-font parts with an actual
+// font binary, EMF/WMF media) need a brand-new part plus its own
+// relationship and content-type entry, not just a text patch inside an
+// existing part. These three helpers do that generically so each corpus
+// fixture only has to say *what* part/relationship/content-type it wants,
+// not *how* to splice OPC XML.
+// ---------------------------------------------------------------------------
+
+/**
+ * Adds a `<Relationship>` entry to an already-existing `.rels` part (e.g.
+ * `word/_rels/document.xml.rels`). `id` must be unique within that part
+ * (relationship ids are opaque strings per the OPC schema — they need not
+ * match the conventional `rIdN` shape `docx` itself generates).
+ *
+ * @param {Map<string, string | Buffer>} files
+ * @param {string} relsPath
+ * @param {string} id
+ * @param {string} type
+ * @param {string} target
+ * @param {string} [targetMode]
+ */
+export function addRelationshipEntry(files, relsPath, id, type, target, targetMode) {
+  const xml = files.get(relsPath)
+  if (typeof xml !== 'string' || !xml.includes('</Relationships>')) {
+    throw new Error(`addRelationshipEntry: expected ${relsPath} to contain a closing </Relationships> tag`)
+  }
+  const modeAttr = targetMode ? ` TargetMode="${targetMode}"` : ''
+  const entry = `<Relationship Id="${id}" Type="${type}" Target="${target}"${modeAttr}/>`
+  files.set(relsPath, xml.replace('</Relationships>', `${entry}</Relationships>`))
+}
+
+/**
+ * Adds a `<Default>` extension mapping to `[Content_Types].xml`, unless that
+ * extension already has one (real Word packages never declare the same
+ * extension twice — `docx` itself already registers `png`/`jpeg`/`xml`/etc.).
+ *
+ * @param {Map<string, string | Buffer>} files
+ * @param {string} extension
+ * @param {string} contentType
+ */
+export function addContentTypeDefault(files, extension, contentType) {
+  const path = '[Content_Types].xml'
+  const xml = files.get(path)
+  if (typeof xml !== 'string' || !xml.includes('</Types>')) {
+    throw new Error(`addContentTypeDefault: expected ${path} to contain a closing </Types> tag`)
+  }
+  if (new RegExp(`<Default\\b[^>]*Extension="${extension}"`, 'i').test(xml)) {
+    return
+  }
+  const entry = `<Default Extension="${extension}" ContentType="${contentType}"/>`
+  files.set(path, xml.replace('</Types>', `${entry}</Types>`))
+}
+
+/**
+ * Adds an `<Override>` part-specific content-type entry to
+ * `[Content_Types].xml` (used for a part whose content type can't be
+ * inferred from its extension alone, e.g. `customXml/itemProps1.xml`).
+ *
+ * @param {Map<string, string | Buffer>} files
+ * @param {string} partName - Package-absolute part name, e.g. `/customXml/itemProps1.xml`.
+ * @param {string} contentType
+ */
+export function addContentTypeOverride(files, partName, contentType) {
+  const path = '[Content_Types].xml'
+  const xml = files.get(path)
+  if (typeof xml !== 'string' || !xml.includes('</Types>')) {
+    throw new Error(`addContentTypeOverride: expected ${path} to contain a closing </Types> tag`)
+  }
+  const entry = `<Override PartName="${partName}" ContentType="${contentType}"/>`
+  files.set(path, xml.replace('</Types>', `${entry}</Types>`))
+}

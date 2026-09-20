@@ -306,6 +306,9 @@ export interface RunProps {
   readonly rStyle?: string
   readonly bold?: OnOff
   readonly italic?: OnOff
+  /** `w:bCs`/`w:iCs` — bold/italic for complex-script text (round-trip fidelity audit, DXS round 2; RTL-adjacent, like `szCs`). */
+  readonly boldCs?: OnOff
+  readonly italicCs?: OnOff
   readonly underline?: Underline
   readonly strike?: OnOff
   readonly dstrike?: OnOff

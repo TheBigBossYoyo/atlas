@@ -99,7 +99,9 @@ export function buildRunPropertiesXml(
   const node: XmlNode = {
     ...buildValElement('w:rStyle', props.rStyle),
     ...withElement('w:b', buildOnOffElement(props.bold)),
+    ...withElement('w:bCs', buildOnOffElement(props.boldCs)),
     ...withElement('w:i', buildOnOffElement(props.italic)),
+    ...withElement('w:iCs', buildOnOffElement(props.italicCs)),
     ...withElement('w:u', buildUnderlineXml(props.underline)),
     ...withElement('w:strike', buildOnOffElement(props.strike)),
     ...withElement('w:dstrike', buildOnOffElement(props.dstrike)),

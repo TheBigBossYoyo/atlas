@@ -497,6 +497,44 @@ export interface SectionProps {
   readonly footerReference?: ReadonlyArray<FooterReference>
   readonly lnNumType?: LineNumberType
   readonly vAlign?: SectionVerticalAlign
+  /**
+   * `w:pgBorders` (round-trip fidelity audit, DXS round 2) — a page border
+   * (Word's "Page Borders", including watermark-adjacent "art"/picture
+   * frame use) was previously unmodeled entirely: not parsed, not passed
+   * through, silently dropped on every save. Reuses `BorderSet` since
+   * `w:pgBorders`'s `w:top`/`w:left`/`w:bottom`/`w:right` children share
+   * `w:pBdr`'s border shape exactly (it just never has `between`/`bar`/
+   * `insideH`/`insideV`).
+   */
+  readonly pgBorders?: BorderSet
+  readonly pgBorderDisplay?: 'allPages' | 'firstPage' | 'notFirstPage'
+  readonly pgBorderOffsetFrom?: 'page' | 'text'
+  readonly pgBorderZOrder?: 'front' | 'back'
+  /** `w:bidi` on `w:sectPr` — the section itself reads right-to-left (distinct from a paragraph's own `w:bidi`). */
+  readonly bidi?: OnOff
+  /**
+   * The rest of `CT_SectPrBase` found unmodeled during the round-trip
+   * fidelity audit (DXS round 2) — each silently dropped on every save
+   * before this. Kept as open strings (not closed enums) where OOXML's own
+   * value set is large/extensible, matching how `pStyle`/font names are
+   * already handled elsewhere in this model, so an unusual-but-valid value
+   * round-trips instead of being silently normalized away.
+   */
+  readonly docGrid?: DocGrid
+  /** `w:textDirection` — text flow direction (vertical text, e.g. East Asian layouts). */
+  readonly textDirection?: string
+  /** `w:rtlGutter` — the gutter margin is on the right (RTL-friendly binding). */
+  readonly rtlGutter?: OnOff
+  /** `w:formProt` — the section is protected except for form fields. */
+  readonly formProt?: OnOff
+  /** `w:noEndnote` — endnotes for this section print as document-final footnotes instead. */
+  readonly noEndnote?: OnOff
+}
+
+export interface DocGrid {
+  readonly type?: string
+  readonly linePitch?: number
+  readonly charSpace?: number
 }
 
 // ---------------------------------------------------------------------------

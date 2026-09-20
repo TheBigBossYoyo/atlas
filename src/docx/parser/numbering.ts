@@ -24,6 +24,15 @@ interface RawNumberingDocument {
 
 export interface AbstractNum {
   readonly abstractNumId: string
+  /**
+   * `w:multiLevelType` (round-trip fidelity audit, DXS round 2) — whether
+   * this is a single-level list, an independently-numbered multilevel
+   * list, or a "hybrid" multilevel list (Word's modern default for any
+   * list with more than one level). Real Word documents include this on
+   * essentially every `w:abstractNum`; it was previously unmodeled and
+   * silently dropped on every save.
+   */
+  readonly multiLevelType?: string
   readonly styleLink?: string
   readonly numberStyleLink?: string
   readonly levels: ReadonlyMap<number, LvlDef>
@@ -85,6 +94,7 @@ function parseAbstractNumNode(node: XmlNode): AbstractNum | undefined {
 
   return {
     abstractNumId,
+    ...(withValue('multiLevelType', getValAttr(getNode(node, 'w:multiLevelType')))),
     ...(withValue('styleLink', getValAttr(getNode(node, 'w:styleLink')))),
     ...(withValue('numberStyleLink', getValAttr(getNode(node, 'w:numStyleLink')))),
     levels,

@@ -57,6 +57,7 @@ import {
   type HeaderReference,
   type HighlightColor,
   type Hyperlink,
+  type DocGrid,
   type HyperlinkChild,
   type Indent,
   type InsRevision,
@@ -1389,6 +1390,8 @@ function parseRunProps(element: OrderedXmlNode | undefined): RunProps | undefine
   const rStyle = attr(child(element, 'w:rStyle'), 'w:val')
   const bold = parseToggleElement(child(element, 'w:b'))
   const italic = parseToggleElement(child(element, 'w:i'))
+  const boldCs = parseToggleElement(child(element, 'w:bCs'))
+  const italicCs = parseToggleElement(child(element, 'w:iCs'))
   const underline = parseUnderline(child(element, 'w:u'))
   const strike = parseToggleElement(child(element, 'w:strike'))
   const dstrike = parseToggleElement(child(element, 'w:dstrike'))
@@ -1412,6 +1415,8 @@ function parseRunProps(element: OrderedXmlNode | undefined): RunProps | undefine
   if (rStyle !== undefined) props.rStyle = rStyle
   if (bold !== undefined) props.bold = bold
   if (italic !== undefined) props.italic = italic
+  if (boldCs !== undefined) props.boldCs = boldCs
+  if (italicCs !== undefined) props.italicCs = italicCs
   if (underline !== undefined) props.underline = underline
   if (strike !== undefined) props.strike = strike
   if (dstrike !== undefined) props.dstrike = dstrike
@@ -1587,6 +1592,22 @@ function parseSectionProps(element: OrderedXmlNode | undefined): SectionProps | 
     .filter(isDefined)
   const lnNumType = parseLineNumberType(child(element, 'w:lnNumType'))
   const vAlign = parseSectionVerticalAlign(attr(child(element, 'w:vAlign'), 'w:val'))
+  // Round-trip fidelity audit (DXS round 2): `w:pgBorders` (a whole-page
+  // border, or Word's watermark-adjacent "art" page frame) and `w:bidi`
+  // (section reads right-to-left) were both previously unmodeled — parsed
+  // nowhere, so silently dropped by a save that always rewrites
+  // `word/document.xml` from this model.
+  const pgBordersElement = child(element, 'w:pgBorders')
+  const pgBorders = parseBorderSet(pgBordersElement)
+  const pgBorderDisplay = parsePageBorderDisplay(attr(pgBordersElement, 'w:display'))
+  const pgBorderOffsetFrom = parsePageBorderOffsetFrom(attr(pgBordersElement, 'w:offsetFrom'))
+  const pgBorderZOrder = parsePageBorderZOrder(attr(pgBordersElement, 'w:zOrder'))
+  const bidi = parseToggleElement(child(element, 'w:bidi'))
+  const docGrid = parseDocGrid(child(element, 'w:docGrid'))
+  const textDirection = attr(child(element, 'w:textDirection'), 'w:val')
+  const rtlGutter = parseToggleElement(child(element, 'w:rtlGutter'))
+  const formProt = parseToggleElement(child(element, 'w:formProt'))
+  const noEndnote = parseToggleElement(child(element, 'w:noEndnote'))
 
   if (pgSz !== undefined) props.pgSz = pgSz
   if (pgMar !== undefined) props.pgMar = pgMar
@@ -1598,8 +1619,35 @@ function parseSectionProps(element: OrderedXmlNode | undefined): SectionProps | 
   if (footerReference.length > 0) props.footerReference = footerReference
   if (lnNumType !== undefined) props.lnNumType = lnNumType
   if (vAlign !== undefined) props.vAlign = vAlign
+  if (pgBorders !== undefined) props.pgBorders = pgBorders
+  if (pgBorderDisplay !== undefined) props.pgBorderDisplay = pgBorderDisplay
+  if (pgBorderOffsetFrom !== undefined) props.pgBorderOffsetFrom = pgBorderOffsetFrom
+  if (pgBorderZOrder !== undefined) props.pgBorderZOrder = pgBorderZOrder
+  if (bidi !== undefined) props.bidi = bidi
+  if (docGrid !== undefined) props.docGrid = docGrid
+  if (textDirection !== undefined) props.textDirection = textDirection
+  if (rtlGutter !== undefined) props.rtlGutter = rtlGutter
+  if (formProt !== undefined) props.formProt = formProt
+  if (noEndnote !== undefined) props.noEndnote = noEndnote
 
   return hasProps(props) ? props : undefined
+}
+
+function parseDocGrid(element: OrderedXmlNode | undefined): DocGrid | undefined {
+  if (element === undefined) {
+    return undefined
+  }
+
+  const type = attr(element, 'w:type')
+  const linePitch = parseInteger(attr(element, 'w:linePitch'))
+  const charSpace = parseInteger(attr(element, 'w:charSpace'))
+
+  const docGrid: Mutable<DocGrid> = {}
+  if (type !== undefined) docGrid.type = type
+  if (linePitch !== undefined) docGrid.linePitch = linePitch
+  if (charSpace !== undefined) docGrid.charSpace = charSpace
+
+  return hasProps(docGrid) ? docGrid : undefined
 }
 
 function parseUnderline(element: OrderedXmlNode | undefined): Underline | undefined {
@@ -3026,6 +3074,37 @@ function parseSectionVerticalAlign(
     case 'center':
     case 'both':
     case 'bottom':
+      return value
+    default:
+      return undefined
+  }
+}
+
+function parsePageBorderDisplay(value: string | undefined): SectionProps['pgBorderDisplay'] | undefined {
+  switch (value) {
+    case 'allPages':
+    case 'firstPage':
+    case 'notFirstPage':
+      return value
+    default:
+      return undefined
+  }
+}
+
+function parsePageBorderOffsetFrom(value: string | undefined): SectionProps['pgBorderOffsetFrom'] | undefined {
+  switch (value) {
+    case 'page':
+    case 'text':
+      return value
+    default:
+      return undefined
+  }
+}
+
+function parsePageBorderZOrder(value: string | undefined): SectionProps['pgBorderZOrder'] | undefined {
+  switch (value) {
+    case 'front':
+    case 'back':
       return value
     default:
       return undefined

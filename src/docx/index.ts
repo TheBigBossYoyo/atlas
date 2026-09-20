@@ -495,3 +495,6 @@ function applyResolvedState(
 }
 
 export { DocxRenderer } from './render';
+
+export { detectLossySaveWarnings, describeLossySaveWarnings } from './fidelity/lossySaveWarnings';
+export type { LossySaveWarning } from './fidelity/lossySaveWarnings';

@@ -373,6 +373,14 @@ function parseRunPropsElement(node: XmlNode | undefined): RunProps | undefined {
   const italic = parseOnOffElement(node['w:i'])
   if (italic !== undefined) props.italic = italic
 
+  // Round-trip fidelity audit (DXS round 2): complex-script bold/italic,
+  // mirroring `document.ts`'s direct-formatting `w:bCs`/`w:iCs` handling.
+  const boldCs = parseOnOffElement(node['w:bCs'])
+  if (boldCs !== undefined) props.boldCs = boldCs
+
+  const italicCs = parseOnOffElement(node['w:iCs'])
+  if (italicCs !== undefined) props.italicCs = italicCs
+
   const underline = parseUnderline(getNode(node, 'w:u'))
   if (underline !== undefined) props.underline = underline
 

@@ -49,18 +49,26 @@ const FIRST_PARAGRAPH_START: Position = {
 const FIXTURE_IDS = [
   'comments-with-reply',
   'content-control-alternate-content',
+  'custom-xml-part',
+  'embedded-fonts',
   'footnotes-endnotes',
   'header-footer-page-numbers',
   'hyperlinks-bookmarks',
   'image-anchored-floating',
   'image-crop-rotation-flip',
+  'image-emf-wmf',
   'image-inline',
   'lists-bullets-numbered',
+  'macro-enabled-vba-project',
+  'math-omml',
+  'page-borders-columns',
   'plain-paragraphs-styles',
+  'rtl-text',
   'section-breaks',
   'table-fixed-grid-merged-cells',
   'table-styled-banded',
   'tracked-changes-insert-delete',
+  'watermark-header',
 ] as const
 
 type FixtureId = (typeof FIXTURE_IDS)[number]

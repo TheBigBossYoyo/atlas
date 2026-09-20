@@ -17,8 +17,8 @@ import {
   type DrawingExtent,
   type DrawingPositionH,
   type DrawingPositionV,
-  type DrawingTransform,
   type DrawingWrap,
+  type DocGrid,
   type EndnoteReference,
   type Field,
   type FooterReference,
@@ -526,6 +526,19 @@ function buildInlineDrawingChildren(drawing: Drawing): OrderedXmlNode[] {
   }
 
   children.push(buildDocPrNode(drawing))
+  // Round-trip fidelity audit (DXS round 2): `wp:cNvGraphicFramePr`'s
+  // `a:graphicFrameLocks noChangeAspect="1"` (the same aspect-ratio-lock
+  // hint every picture-inserting tool sets) was previously dropped for
+  // every `wp:inline` drawing on every save — `wp:anchor`'s equivalent
+  // survives via `anchorChildren`'s raw passthrough (see
+  // `buildAnchorChildrenNodes`'s doc comment), but `wp:inline` has no such
+  // passthrough slot, so this is emitted as the same universal boilerplate
+  // `buildGraphicNode`'s `pic:cNvPicPr/a:picLocks` now is. No local
+  // `xmlns:a` needed — `w:document`'s root already declares it (see the
+  // baseline namespace map this module builds the root element from).
+  children.push(
+    createElement('wp:cNvGraphicFramePr', [createElement('a:graphicFrameLocks', [], { '@_noChangeAspect': '1' })]),
+  )
 
   if (drawing.relationshipId !== undefined) {
     children.push(buildGraphicNode(drawing))
@@ -690,18 +703,65 @@ function buildGraphicNode(drawing: Drawing): OrderedXmlNode {
   if (drawing.crop !== undefined) {
     blipFillChildren.push(buildSrcRectNode(drawing.crop))
   }
+  // Round-trip fidelity audit (DXS round 2): every real `pic:blipFill`
+  // (Word's own output, and `docx`-generated fixtures alike) fills the
+  // frame by stretching the source rect — `<a:stretch><a:fillRect/></a:
+  // stretch>` — but this was previously omitted unconditionally, on every
+  // picture, every save.
+  blipFillChildren.push(createElement('a:stretch', [createElement('a:fillRect', [])]))
 
-  const picChildren: OrderedXmlNode[] = [createElement('pic:blipFill', blipFillChildren)]
-  if (drawing.transform !== undefined) {
-    picChildren.push(
-      createElement('pic:spPr', [buildXfrmNode(drawing.transform)]),
-    )
-  }
+  const picChildren: OrderedXmlNode[] = [
+    // `pic:nvPicPr` (non-visual picture properties) carries no rendering-
+    // relevant data of its own — the real accessibility name/description
+    // live on `wp:docPr` (see `buildDocPrNode`, built from `drawing.name`/
+    // `title`/`description`) — but `pic:cNvPicPr/a:picLocks` is the
+    // "lock aspect ratio" editing hint every picture-inserting tool sets.
+    // Previously the whole element was dropped on every save.
+    createElement('pic:nvPicPr', [
+      createElement('pic:cNvPr', [], { '@_id': '0', '@_name': '', '@_descr': '' }),
+      createElement('pic:cNvPicPr', [
+        createElement('a:picLocks', [], { '@_noChangeAspect': '1', '@_noChangeArrowheads': '1' }),
+      ]),
+    ]),
+    createElement('pic:blipFill', blipFillChildren),
+    buildPictureShapePropertiesNode(drawing),
+  ]
 
   return createElement('a:graphic', [
     createElement('a:graphicData', [createElement('pic:pic', picChildren)], {
       '@_uri': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
     }),
+  ])
+}
+
+/**
+ * `pic:spPr` — previously emitted only when a rotation/flip transform was
+ * present (and even then, missing the shape geometry every picture needs).
+ * A plain rectangular picture's `a:xfrm` always carries the frame's own
+ * off/ext (redundant with, but not identical in kind to, the wrapper
+ * `wp:extent`/`wp:anchor` position — Word regenerates it either way, but
+ * omitting it entirely was previously flagged as a difference from every
+ * real-world `.docx`), and `a:prstGeom prst="rect"` is universal for an
+ * unshaped picture.
+ */
+function buildPictureShapePropertiesNode(drawing: Drawing): OrderedXmlNode {
+  const xfrmAttributes = createAttributes()
+  appendAttribute(xfrmAttributes, '@_rot', stringifyNumber(drawing.transform?.rotation))
+  appendAttribute(xfrmAttributes, '@_flipH', buildOnOffAttribute(drawing.transform?.flipH))
+  appendAttribute(xfrmAttributes, '@_flipV', buildOnOffAttribute(drawing.transform?.flipV))
+
+  const xfrmChildren: OrderedXmlNode[] = [
+    createElement('a:off', [], { '@_x': '0', '@_y': '0' }),
+  ]
+  if (drawing.extent !== undefined) {
+    xfrmChildren.push(
+      createElement('a:ext', [], { '@_cx': String(drawing.extent.cx), '@_cy': String(drawing.extent.cy) }),
+    )
+  }
+
+  return createElement('pic:spPr', [
+    createElement('a:xfrm', xfrmChildren, xfrmAttributes),
+    createElement('a:prstGeom', [createElement('a:avLst', [])], { '@_prst': 'rect' }),
   ])
 }
 
@@ -712,14 +772,6 @@ function buildSrcRectNode(crop: DrawingCrop): OrderedXmlNode {
   appendAttribute(attributes, '@_r', stringifyNumber(crop.r))
   appendAttribute(attributes, '@_b', stringifyNumber(crop.b))
   return createElement('a:srcRect', [], attributes)
-}
-
-function buildXfrmNode(transform: DrawingTransform): OrderedXmlNode {
-  const attributes = createAttributes()
-  appendAttribute(attributes, '@_rot', stringifyNumber(transform.rotation))
-  appendAttribute(attributes, '@_flipH', buildOnOffAttribute(transform.flipH))
-  appendAttribute(attributes, '@_flipV', buildOnOffAttribute(transform.flipV))
-  return createElement('a:xfrm', [], attributes)
 }
 
 function buildAnchorAttributes(drawing: Drawing): XmlAttributes {
@@ -973,7 +1025,9 @@ function buildRunPropertiesNode(runProps: RunProps | undefined): OrderedXmlNode 
 
   pushIfDefined(children, buildValueElement('w:rStyle', runProps.rStyle))
   pushIfDefined(children, buildToggleElement('w:b', runProps.bold))
+  pushIfDefined(children, buildToggleElement('w:bCs', runProps.boldCs))
   pushIfDefined(children, buildToggleElement('w:i', runProps.italic))
+  pushIfDefined(children, buildToggleElement('w:iCs', runProps.italicCs))
   pushIfDefined(children, buildUnderlineElement(runProps.underline))
   pushIfDefined(children, buildToggleElement('w:strike', runProps.strike))
   pushIfDefined(children, buildToggleElement('w:dstrike', runProps.dstrike))
@@ -1024,6 +1078,12 @@ function buildParagraphPropertiesNode(paraProps: ParaProps | undefined): Ordered
   pushIfDefined(children, buildShadingElement('w:shd', paraProps.shd))
   pushIfDefined(children, buildFramePropsElement(paraProps.framePr))
   pushIfDefined(children, buildValueElement('w:divId', paraProps.divId))
+  // Round-trip fidelity audit (DXS round 2): `w:bidi` was parsed onto
+  // `ParaProps.bidi` (see parser/document.ts) but never written back here —
+  // every right-to-left paragraph silently reverted to left-to-right on
+  // save. `w:bidi` immediately precedes `w:sectPr` in `CT_PPrBase`'s child
+  // sequence, which the position below matches.
+  pushIfDefined(children, buildToggleElement('w:bidi', paraProps.bidi))
 
   if (paraProps.sectPr !== undefined) {
     children.push(buildSectionPropertiesNode(paraProps.sectPr))
@@ -1037,6 +1097,10 @@ function buildSectionPropertiesNode(sectionProps: SectionProps): OrderedXmlNode 
 
   pushIfDefined(children, buildPageSizeElement(sectionProps.pgSz))
   pushIfDefined(children, buildPageMarginsElement(sectionProps.pgMar))
+  // Round-trip fidelity audit (DXS round 2): `w:pgBorders` was previously
+  // unmodeled entirely (not parsed, not passed through) — silently dropped
+  // on every save. See `SectionProps.pgBorders`'s doc comment.
+  pushIfDefined(children, buildPageBordersElement(sectionProps))
   pushIfDefined(children, buildSectionColumnsElement(sectionProps.cols))
   pushIfDefined(children, buildPageNumberTypeElement(sectionProps.pgNumType))
   pushIfDefined(children, buildToggleElement('w:titlePg', sectionProps.titlePg))
@@ -1052,8 +1116,50 @@ function buildSectionPropertiesNode(sectionProps: SectionProps): OrderedXmlNode 
 
   pushIfDefined(children, buildLineNumberTypeElement(sectionProps.lnNumType))
   pushIfDefined(children, buildValueElement('w:vAlign', sectionProps.vAlign))
+  // The rest of `CT_SectPrBase` found unmodeled during the round-trip
+  // fidelity audit (DXS round 2) — see `SectionProps`'s doc comments.
+  pushIfDefined(children, buildToggleElement('w:formProt', sectionProps.formProt))
+  pushIfDefined(children, buildToggleElement('w:noEndnote', sectionProps.noEndnote))
+  pushIfDefined(children, buildValueElement('w:textDirection', sectionProps.textDirection))
+  // `w:bidi` on `w:sectPr` itself (section reads right-to-left) — distinct
+  // from a paragraph's own `w:bidi` (see buildParagraphPropertiesNode).
+  pushIfDefined(children, buildToggleElement('w:bidi', sectionProps.bidi))
+  pushIfDefined(children, buildToggleElement('w:rtlGutter', sectionProps.rtlGutter))
+  pushIfDefined(children, buildDocGridElement(sectionProps.docGrid))
 
   return createElement('w:sectPr', children)
+}
+
+function buildDocGridElement(docGrid: DocGrid | undefined): OrderedXmlNode | undefined {
+  if (docGrid === undefined) {
+    return undefined
+  }
+
+  const attributes = createAttributes()
+  appendAttribute(attributes, '@_w:type', docGrid.type)
+  appendAttribute(attributes, '@_w:linePitch', stringifyNumber(docGrid.linePitch))
+  appendAttribute(attributes, '@_w:charSpace', stringifyNumber(docGrid.charSpace))
+
+  return hasAttributes(attributes) ? createElement('w:docGrid', [], attributes) : undefined
+}
+
+function buildPageBordersElement(sectionProps: SectionProps): OrderedXmlNode | undefined {
+  if (sectionProps.pgBorders === undefined) {
+    return undefined
+  }
+
+  const children: OrderedXmlNode[] = []
+  pushIfDefined(children, buildBorderElement('w:top', sectionProps.pgBorders.top))
+  pushIfDefined(children, buildBorderElement('w:left', sectionProps.pgBorders.left))
+  pushIfDefined(children, buildBorderElement('w:bottom', sectionProps.pgBorders.bottom))
+  pushIfDefined(children, buildBorderElement('w:right', sectionProps.pgBorders.right))
+
+  const attributes = createAttributes()
+  appendAttribute(attributes, '@_w:display', sectionProps.pgBorderDisplay)
+  appendAttribute(attributes, '@_w:offsetFrom', sectionProps.pgBorderOffsetFrom)
+  appendAttribute(attributes, '@_w:zOrder', sectionProps.pgBorderZOrder)
+
+  return createElement('w:pgBorders', children, hasAttributes(attributes) ? attributes : undefined)
 }
 
 function buildUnderlineElement(underline: RunProps['underline']): OrderedXmlNode | undefined {
