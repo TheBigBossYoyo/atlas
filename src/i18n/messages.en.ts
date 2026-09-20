@@ -527,11 +527,8 @@ export const messages = {
   'docx.viewer.imagePickerUnavailable': 'Image picker is unavailable in this environment.',
   'docx.viewer.placeCursorBeforeImage': 'Place the cursor in the document before inserting an image.',
   'docx.viewer.selectBeforeHyperlink': 'Select text or place the cursor before inserting a hyperlink.',
-  'docx.viewer.enterUrlPrompt': 'Enter a URL',
   'docx.viewer.selectParagraphBeforeList': 'Select a paragraph before toggling a list.',
   'docx.viewer.selectBeforeComment': 'Select text before adding a comment.',
-  'docx.viewer.addCommentPrompt': 'Add comment',
-  'docx.viewer.replyPrompt': 'Reply',
   'docx.viewer.saveCancelled': 'Save was cancelled or unavailable.',
   'docx.viewer.noFieldsToUpdate': 'No fields needed updating.',
   'docx.viewer.fieldsUpdated': { one: 'Updated {count} field.', other: 'Updated {count} fields.' },
@@ -546,6 +543,20 @@ export const messages = {
   'docx.viewer.fidelityWarningContentControls': 'Its content controls (such as dropdowns or date fields) kept their text, but not the controls themselves.',
   'docx.viewer.fidelityWarningShapeFallback': "A shape or text box's fallback drawing was not preserved.",
   'docx.viewer.fidelityWarningOther': 'Some other formatting or content was not fully preserved.',
+
+  // DocxPromptDialog.tsx — F1: the shared single-line text-input modal
+  // behind Insert Hyperlink (toolbar + Ctrl+K), Add Comment, and Reply to
+  // Comment, replacing the three `window.prompt` calls that silently did
+  // nothing in the packaged app (Electron doesn't implement `window.prompt`).
+  'docx.promptDialog.hyperlinkTitle': 'Insert hyperlink',
+  'docx.promptDialog.hyperlinkLabel': 'URL',
+  'docx.promptDialog.hyperlinkConfirm': 'Insert',
+  'docx.promptDialog.commentTitle': 'Add comment',
+  'docx.promptDialog.commentLabel': 'Comment',
+  'docx.promptDialog.commentConfirm': 'Add comment',
+  'docx.promptDialog.replyTitle': 'Reply to comment',
+  'docx.promptDialog.replyLabel': 'Reply',
+  'docx.promptDialog.replyConfirm': 'Reply',
 
   // src/docx/render/PageView.tsx
   'docx.render.resizeColumn': 'Resize column {n}',

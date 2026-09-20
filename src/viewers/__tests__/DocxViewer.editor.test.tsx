@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Document as DocxDocument, RunChild } from '../../docx/model'
+import { extractCommentText } from '../../docx/editor/comments'
 import { ShortcutManagerProvider } from '../../hooks/ShortcutManagerProvider'
 import { ViewerProvider } from '../shared/ViewerContext'
 import { useViewerIsDirty, useViewerSave } from '../shared/useViewerContext'
@@ -970,8 +971,15 @@ describe('DocxViewer editor', () => {
   // D18 — hyperlink insertion and list toggling
   // ---------------------------------------------------------------------------
 
-  it('inserts a hyperlink with an External relationship and persists it on save', async () => {
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('https://example.com')
+  // F1 — Electron doesn't implement `window.prompt` (it throws "prompt() is
+  // not supported"), so Insert Hyperlink used to do nothing at all in the
+  // packaged app even though these tests previously passed: they mocked
+  // `window.prompt` directly, which jsdom is happy to let a test stub out,
+  // masking the real-Electron failure entirely. These now drive the actual
+  // DocxPromptDialog (see DocxPromptDialog.tsx) instead, and assert
+  // `window.prompt` is never called — the regression this batch fixes.
+  it('inserts a hyperlink via the dialog, prefilled with https://, and persists it on save', async () => {
+    const promptSpy = vi.spyOn(window, 'prompt')
 
     render(
       <ViewerProvider filePath="C:/docs/sample.docx">
@@ -990,7 +998,16 @@ describe('DocxViewer editor', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
     fireEvent.click(screen.getByLabelText('Hyperlink'))
 
-    expect(promptSpy).toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog', { name: 'Insert hyperlink' })
+    const urlInput = within(dialog).getByLabelText('URL')
+    expect(urlInput).toHaveValue('https://')
+    expect(urlInput).toHaveFocus()
+
+    fireEvent.change(urlInput, { target: { value: 'https://example.com' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Insert' }))
+
+    expect(dialog).not.toBeInTheDocument()
+    expect(promptSpy).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => {
@@ -1003,9 +1020,7 @@ describe('DocxViewer editor', () => {
     promptSpy.mockRestore()
   })
 
-  it('does not insert a hyperlink when the URL prompt is cancelled', async () => {
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue(null)
-
+  it('does not insert a hyperlink when the dialog is cancelled', async () => {
     render(
       <ViewerProvider filePath="C:/docs/sample.docx">
         <DocxViewer
@@ -1022,6 +1037,12 @@ describe('DocxViewer editor', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
     fireEvent.click(screen.getByLabelText('Hyperlink'))
 
+    const dialog = screen.getByRole('dialog', { name: 'Insert hyperlink' })
+    fireEvent.change(within(dialog).getByLabelText('URL'), { target: { value: 'https://example.com' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Insert hyperlink' })).not.toBeInTheDocument()
+
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => {
       expect(saveDocxMock).toHaveBeenCalledTimes(1)
@@ -1029,8 +1050,186 @@ describe('DocxViewer editor', () => {
 
     const savedBundle = saveDocxMock.mock.calls[0][0] as { relationships?: ReadonlyArray<unknown> }
     expect(savedBundle.relationships ?? []).toHaveLength(0)
+  })
 
-    promptSpy.mockRestore()
+  it('does not insert a hyperlink when the dialog is closed with Escape', async () => {
+    // DocxPromptDialog's Escape-close registers through the shared shortcut
+    // dispatcher (matching UnsavedChangesDialog), which needs a real
+    // <ShortcutManagerProvider> ancestor to exercise for real — App.tsx
+    // always provides one in production (every other test above renders
+    // without it and only exercises the direct onKeyDown-driven document
+    // commands, which don't go through the dispatcher).
+    render(
+      <ShortcutManagerProvider>
+        <ViewerProvider filePath="C:/docs/sample.docx">
+          <DocxViewer
+            file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+          />
+        </ViewerProvider>
+      </ShortcutManagerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello', 'Howdy')
+    fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
+    fireEvent.click(screen.getByLabelText('Hyperlink'))
+
+    const dialog = screen.getByRole('dialog', { name: 'Insert hyperlink' })
+    const urlInput = within(dialog).getByLabelText('URL')
+    fireEvent.change(urlInput, { target: { value: 'https://example.com' } })
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: 'Insert hyperlink' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedBundle = saveDocxMock.mock.calls[0][0] as { relationships?: ReadonlyArray<unknown> }
+    expect(savedBundle.relationships ?? []).toHaveLength(0)
+  })
+
+  // ---------------------------------------------------------------------------
+  // F1 — Add Comment / Reply, also previously silent no-ops via
+  // `window.prompt` (see the hyperlink block above for the full context).
+  // ---------------------------------------------------------------------------
+
+  it('adds a comment via the dialog and replies to it via the dialog; both persist on save', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello', 'Howdy')
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
+    fireEvent.click(screen.getByLabelText('Comment'))
+
+    const commentDialog = screen.getByRole('dialog', { name: 'Add comment' })
+    const commentInput = within(commentDialog).getByLabelText('Comment')
+    expect(commentInput).toHaveFocus()
+    fireEvent.change(commentInput, { target: { value: 'First comment' } })
+    fireEvent.click(within(commentDialog).getByRole('button', { name: 'Add comment' }))
+    expect(commentDialog).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByText('First comment')).toBeInTheDocument()
+    })
+
+    // The comments pane's own "Reply" trigger — unambiguous here since the
+    // reply dialog isn't open yet.
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+
+    const replyDialog = screen.getByRole('dialog', { name: 'Reply to comment' })
+    const replyInput = within(replyDialog).getByLabelText('Reply')
+    expect(replyInput).toHaveFocus()
+    fireEvent.change(replyInput, { target: { value: 'A reply' } })
+    // Scoped to the dialog: the pane's own "Reply" trigger button is still
+    // in the DOM behind it with the same accessible name.
+    fireEvent.click(within(replyDialog).getByRole('button', { name: 'Reply' }))
+    expect(replyDialog).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.getByText('A reply')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedBundle = saveDocxMock.mock.calls[0][0] as { document: DocxDocument }
+    expect(savedBundle.document.comments.size).toBe(2)
+    const texts = Array.from(savedBundle.document.comments.values()).map(extractCommentText)
+    expect(texts).toContain('First comment')
+    expect(texts).toContain('A reply')
+  })
+
+  it('does not add a comment when the dialog is cancelled', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello', 'Howdy')
+    fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
+    fireEvent.click(screen.getByLabelText('Comment'))
+
+    const commentDialog = screen.getByRole('dialog', { name: 'Add comment' })
+    fireEvent.change(within(commentDialog).getByLabelText('Comment'), { target: { value: 'Should not be saved' } })
+    fireEvent.click(within(commentDialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Add comment' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Should not be saved')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    const savedBundle = saveDocxMock.mock.calls[0][0] as { document: DocxDocument }
+    expect(savedBundle.document.comments.size).toBe(0)
+  })
+
+  it('does not add a reply when the reply dialog is cancelled', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    replaceFirstMatch('Hello', 'Howdy')
+    fireEvent.click(screen.getByRole('tab', { name: 'Insert' }))
+    fireEvent.click(screen.getByLabelText('Comment'))
+
+    const commentDialog = screen.getByRole('dialog', { name: 'Add comment' })
+    fireEvent.change(within(commentDialog).getByLabelText('Comment'), { target: { value: 'Root comment' } })
+    fireEvent.click(within(commentDialog).getByRole('button', { name: 'Add comment' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Root comment')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    const replyDialog = screen.getByRole('dialog', { name: 'Reply to comment' })
+    fireEvent.change(within(replyDialog).getByLabelText('Reply'), { target: { value: 'Should not be saved' } })
+    fireEvent.click(within(replyDialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('dialog', { name: 'Reply to comment' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Should not be saved')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => {
+      expect(saveDocxMock).toHaveBeenCalledTimes(1)
+    })
+
+    // Only the root comment — no reply was added.
+    const savedBundle = saveDocxMock.mock.calls[0][0] as { document: DocxDocument }
+    expect(savedBundle.document.comments.size).toBe(1)
   })
 
   it('toggling a bulleted list sets numPr and creates a numbering definition that survives save', async () => {

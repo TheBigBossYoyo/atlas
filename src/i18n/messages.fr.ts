@@ -523,11 +523,8 @@ export const messages = {
   'docx.viewer.imagePickerUnavailable': 'Le sélecteur d’images n’est pas disponible dans cet environnement.',
   'docx.viewer.placeCursorBeforeImage': 'Placez le curseur dans le document avant d’insérer une image.',
   'docx.viewer.selectBeforeHyperlink': 'Sélectionnez du texte ou placez le curseur avant d’insérer un lien hypertexte.',
-  'docx.viewer.enterUrlPrompt': 'Saisissez une URL',
   'docx.viewer.selectParagraphBeforeList': 'Sélectionnez un paragraphe avant d’activer une liste.',
   'docx.viewer.selectBeforeComment': 'Sélectionnez du texte avant d’ajouter un commentaire.',
-  'docx.viewer.addCommentPrompt': 'Ajouter un commentaire',
-  'docx.viewer.replyPrompt': 'Répondre',
   'docx.viewer.saveCancelled': 'L’enregistrement a été annulé ou n’est pas disponible.',
   'docx.viewer.noFieldsToUpdate': 'Aucun champ n’avait besoin d’être mis à jour.',
   'docx.viewer.fieldsUpdated': { one: '{count} champ mis à jour.', other: '{count} champs mis à jour.' },
@@ -543,6 +540,21 @@ export const messages = {
   'docx.viewer.fidelityWarningContentControls': 'Ses contrôles de contenu (comme des listes déroulantes ou des champs de date) ont conservé leur texte, mais pas les contrôles eux-mêmes.',
   'docx.viewer.fidelityWarningShapeFallback': 'Le dessin de secours d’une forme ou d’une zone de texte n’a pas été préservé.',
   'docx.viewer.fidelityWarningOther': 'Certains autres éléments de mise en forme ou de contenu n’ont pas été entièrement préservés.',
+
+  // DocxPromptDialog.tsx — F1 : la boîte de dialogue modale à saisie sur une
+  // ligne partagée par Insérer un lien hypertexte (barre d’outils + Ctrl+K),
+  // Ajouter un commentaire et Répondre à un commentaire, qui remplace les
+  // trois appels à `window.prompt` restés silencieusement sans effet dans
+  // l’application empaquetée (Electron n’implémente pas `window.prompt`).
+  'docx.promptDialog.hyperlinkTitle': 'Insérer un lien hypertexte',
+  'docx.promptDialog.hyperlinkLabel': 'URL',
+  'docx.promptDialog.hyperlinkConfirm': 'Insérer',
+  'docx.promptDialog.commentTitle': 'Ajouter un commentaire',
+  'docx.promptDialog.commentLabel': 'Commentaire',
+  'docx.promptDialog.commentConfirm': 'Ajouter un commentaire',
+  'docx.promptDialog.replyTitle': 'Répondre au commentaire',
+  'docx.promptDialog.replyLabel': 'Réponse',
+  'docx.promptDialog.replyConfirm': 'Répondre',
 
   // src/docx/render/PageView.tsx
   'docx.render.resizeColumn': 'Redimensionner la colonne {n}',
