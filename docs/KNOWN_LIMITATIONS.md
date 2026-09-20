@@ -4,11 +4,16 @@ An honest, per-format list of what Atlas does **not** do today, so a user
 (or a future contributor) doesn't have to discover a gap by hitting it. This
 is a living document — update it whenever a limitation below is closed or a
 new one is found, per Task P4.9/QA-18's "documentation must track reality"
-fix. Written against `main` after wave 2 (commit `03b2e2a`); updated again
-once all wave 3 branches (docx-fields-fonts, docx-drawings, docx-pagination,
-docx-editing, sheets, export, shell-polish, docs-quality) merged to `main`
-— items below reflect that merged state, not the wave-3-in-progress snapshot
-this document originally shipped with.
+fix. Originally written against `main` after wave 2 (commit `03b2e2a`);
+updated again once all wave 3 branches (docx-fields-fonts, docx-drawings,
+docx-pagination, docx-editing, sheets, export, shell-polish, docs-quality)
+merged; updated again against wave 4 (owner-reported editor defects — slide
+editing, code editor/Run, tabs, legacy `.doc`/`.ppt` viewers) and most
+recently against waves 5 through 8 (new documents, 0-byte-file handling,
+DOCX page virtualization, spreadsheet formula/defined-name re-anchoring
+through structural edits, the OPC/OOXML/ODF package validator, WCAG AA
+contrast + focus-trap accessibility work, and the English/French i18n
+layer) — items below reflect that merged state.
 
 For the reasoning behind *why* something below is deferred rather than
 fixed, see `.sisyphus/plans/atlas-phase3-improvement.md` Section 8
@@ -25,15 +30,18 @@ save. PDF, plain text (`.txt`/`.log`), RTF, ODT and the legacy `.doc`/`.ppt`
 viewers are **view-only**: you can open, read, search, and (per-format, see
 below) export or print, but not edit the source file in place.
 
-Spreadsheet/CSV editing (wave3/sheets): cell edit, formulas (a small
-in-house evaluator — no full spreadsheet formula engine — with unsupported
-formulas falling back to their cached literal value), insert/delete rows
-and columns, add/rename/delete sheets, undo/redo, and copy/paste. Saves to
-`.xlsx`/`.xlsm`/`.xlsb`/`.xls`/`.ods`/`.fods` (via SheetJS; per-cell styling
-is not preserved) and `.csv`/`.tsv`. No fill-handle drag-fill. Editing a
-cell inside a visually merged range other than its anchor cell silently
-diverges that one cell's text from its merge-mates (the merge itself still
-saves/loads correctly) — a real, narrow gap, not data loss.
+Spreadsheet/CSV editing (wave3/sheets, extended in waves 5/8 — see
+"Spreadsheets" below for the full save-path/formula-rewriting detail): cell
+edit, formulas (a small in-house evaluator — no full spreadsheet formula
+engine — with unsupported formulas falling back to their cached literal
+value), insert/delete rows and columns, add/rename/delete sheets, undo/redo,
+and copy/paste. `.xlsx`/`.xlsm` save through the *original* package (styles,
+number formats, charts, filters and tables survive); `.xlsb`/`.xls`/`.ods`/
+`.fods` and `.csv`/`.tsv` save via a fresh SheetJS write, where per-cell
+styling is not preserved. No fill-handle drag-fill. Editing a cell inside a
+visually merged range other than its anchor cell silently diverges that one
+cell's text from its merge-mates (the merge itself still saves/loads
+correctly) — a real, narrow gap, not data loss.
 
 ## DOCX
 
@@ -200,9 +208,25 @@ above the main grid rather than a native frozen-row primitive (the grid
 library only supports frozen columns and trailing rows, not leading rows);
 it's disabled while a row-search filter is active.
 
+An `.xlsx`/`.xlsm` save goes through the *original* package
+(`xlsxPassthrough.ts`) rather than a fresh SheetJS workbook, so styles,
+number formats, charts, tables and filters survive edits that a from-
+scratch rewrite would drop. Every structural edit that can move or remove
+cells — insert/delete rows and columns, add/delete/rename/reorder sheets —
+re-anchors formula references and defined names through
+`formulaRefs.ts`'s own reference-syntax scanner, the same way Excel itself
+keeps them aligned: a sheet-qualified, 3-D, or plain cell/range/whole-row/
+whole-column reference is rewritten in place, a reference to a deleted
+sheet (or a range fully consumed by a delete) becomes `#REF!` matching
+Excel's documented behavior, and a deleted sheet's own exclusively-owned
+parts (its tables, comments, drawing) are swept from the package. A
+structured table reference (`Table1[Column]`), a bare defined name, and an
+external-workbook reference (`[1]Sheet1!A1`) are deliberately left
+untouched (not a gap — they're either sheet-independent or out of scope for
+this reference syntax). String literals inside formulas are never touched.
+
 Number/date/currency formatting follows the workbook's own stored format,
-not an explicit user-chosen locale; no UI localization exists elsewhere in
-Atlas either (see the improvement plan's DEFER-6).
+not an explicit user-chosen locale.
 
 ## Text / Code
 
@@ -249,6 +273,66 @@ normal Save fills it in for real. A 0-byte file of any other format
 (PDF/RTF/ODT/legacy `.doc`/`.ppt`/unrecognized) shows a plain "this file is
 empty" message instead of a parser error, but still can't be edited in
 place (see "Editing scope, overall" above for why).
+
+## Verification against real Office/LibreOffice
+
+Every format Atlas writes (DOCX, XLSX/XLSM, PPTX, ODP, ODS) is checked by
+`scripts/validate-office-file.mjs` / `scripts/lib/officeValidator.mjs` — an
+independent structural validator (its own from-scratch PKZIP reader, not
+JSZip) that checks the actual OPC/OOXML/ODF package specs: zip-container
+rules, `[Content_Types].xml` coverage, relationship/r:id resolution, XML
+1.0 character legality, namespace declarations, and schema-mandated element
+order. This runs as part of the unit suite against every save path
+(`loadDocx`/`saveDocx`, the spreadsheet passthrough, PPTX/ODP editing) and
+is available standalone (`node scripts/validate-office-file.mjs <file>`).
+
+**What this does not replace**: nothing Atlas writes has been opened in a
+real, installed copy of Microsoft Office or LibreOffice (neither is
+available in this development environment) — spec conformance is a strong
+signal that a file will open cleanly, but the validator cannot catch a bug
+where Atlas writes spec-valid XML that these two specific applications
+still render or interpret differently than Atlas's own reader does. Treat
+"passes the validator" as necessary, not sufficient, evidence of real-world
+fidelity.
+
+## Internationalization (i18n)
+
+The app shell has an English/French UI (a language menu next to the theme
+picker, or "System" to follow the OS locale via Electron's `app.getLocale()`
+— English is otherwise always the literal default, never derived from the
+OS, so a fresh profile and the Playwright suite both stay English). This
+covers the toolbar, tabs, menus, status bar, welcome screen, shortcuts
+modal, unsaved-changes dialog, draft recovery, the file-status banner,
+toasts, the search overlay, and the code/PDF/spreadsheet/CSV viewer chrome;
+translated error messages come from a stable `errorCode` returned alongside
+the English fallback text (`electron/lib/atomicWrite.cjs`) or translated
+directly in the renderer (`friendlyLibraryError.ts`, `useCodeRun.ts`).
+
+**Not translated:** `DocxViewer` (the toolbar, dialogs and panels around
+DOCX editing), the PPTX/ODP slide editor, and PDF's find/thumbnail-rail
+internals stay English-only regardless of the selected language — this was
+an explicit scope cut for the first i18n pass, not an oversight. Number/
+date/currency formatting (see "Spreadsheets" above) follows the workbook's
+own stored format rather than the UI language either way.
+
+## Accessibility
+
+Every theme's foreground/background token pairs pass WCAG 2.1 AA contrast
+(`src/__tests__/contrastTokens.test.ts` parses the real hex/rgba values out
+of `index.css` and computes the ratios itself, so a future token edit that
+regresses contrast in any theme fails immediately) — `--border-primary` and
+`:disabled` controls are deliberately exempt, per WCAG 1.4.11/1.4.3's own
+carve-out for decorative boundaries and inactive components.
+
+Every modal/overlay (`ShortcutsModal`, the unsaved-changes dialog,
+`SearchOverlay`, `PdfPasswordDialog`, and slide `PresenterView`) traps
+`Tab`/`Shift+Tab` inside itself while open and restores focus to whatever
+triggered it once closed, via a shared `useFocusTrap` hook. A toolbar
+dropdown restores focus to its own trigger button on close the same way.
+Beyond these two passes (contrast and focus), no dedicated screen-reader
+testing has been done — ARIA roles/labels exist where a component already
+needed them (e.g. dialog roles, icon-only button labels) but haven't been
+audited end-to-end with an actual screen reader.
 
 ## Export
 

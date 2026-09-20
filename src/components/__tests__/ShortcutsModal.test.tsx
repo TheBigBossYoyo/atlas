@@ -97,4 +97,13 @@ describe('ShortcutsModal (UX-13)', () => {
     expect(screen.getByText('New document menu')).toBeInTheDocument();
     expect(screen.getByText('Reopen last closed document')).toBeInTheDocument();
   });
+
+  // Same class of gap, found again: App.tsx registers Ctrl+Tab/Ctrl+Shift+Tab
+  // directly (SHELL-17's tab-cycling shortcut, not routed through
+  // useUniversalShortcuts.ts), and this modal omitted it too — nothing here
+  // is discoverable by a keyboard user unless it's actually listed.
+  it('documents the Ctrl+Tab / Ctrl+Shift+Tab tab-cycling shortcut App.tsx implements', () => {
+    render(<ShortcutsModal isOpen onClose={() => {}} />);
+    expect(screen.getByText('Next / previous tab')).toBeInTheDocument();
+  });
 });

@@ -7,6 +7,178 @@ find them. Written after Task P5.1/P5.2 (release hardening — metadata and
 Electron polish); the code-signing decision below is explicitly the owner's
 to make, not something this task implemented.
 
+## Release checklist
+
+This is the repeatable version of what actually happened for the `3.2.0`
+(`4244bdd`) and `3.3.0` (`09cbc9c`) releases — both were a single `chore(release):
+<version>` commit on `main` after every wave targeted for that release had
+already merged, built by the lead (not a worktree agent) directly on their
+machine. Atlas does not use git tags for releases today — `main` at the
+release commit *is* the release; "which commit shipped 3.3.0" is answered
+by `git log --oneline -S'"version": "3.3.0"' -- package.json`.
+
+### 1. Confirm everything targeted for this release is on `main`
+
+- `git log --oneline -20` and cross-check against
+  `.sisyphus/plans/atlas-phase3-improvement.md`'s Execution Status section
+  (§13) and `.sisyphus/plans/atlas-phase3-findings-register.md` — every wave
+  branch that's supposed to be in this release should already show as
+  merged (`git rev-list --count main..<branch>` = 0).
+- Nothing on a worktree agent's branch that hasn't been reviewed/merged.
+
+### 2. Full verification, in order (never run these three concurrently — see `CONTRIBUTING.md`)
+
+This is CI's own job order (`.github/workflows/ci.yml`), run locally first
+so a failure is caught before it's someone else's problem on a shared
+runner:
+
+```bash
+npx eslint src electron tests scripts   # 1. lint
+npx tsc -b                               # 2. type-check (all 5 projects — see STRICT_MODE_TODO.md)
+npm run coverage                         # 3. unit + characterization + corpus suites, with coverage
+npx vite build                           # 4. renderer bundle
+node scripts/check-bundle.mjs            # 5. bundle-regression gate (already run as `build`'s postbuild if
+                                          #    you used `npm run build` instead of the two lines above)
+npx playwright test                      # 6. Electron e2e — build first (see above); workers: 1
+```
+
+After step 6, **revert the e2e fixture corpus it rewrote** before
+committing anything: `git checkout -- tests/e2e/fixtures/`.
+
+CI also runs `e2e-windows` on every push to `main`; treat a red run there
+as blocking even if everything passed locally — it's the only Windows-native
+run of the real packaged-shape app path.
+
+### 3. Bump the version
+
+```bash
+npm version <new-version> --no-git-tag-version
+```
+
+This updates `package.json` and `package-lock.json`'s top-level `version`
+field only (no commit, no git tag — `--no-git-tag-version` is required
+since Atlas doesn't tag releases). Follow semver by feel: a wave of new
+user-facing features (new document types, editing surfaces) is a minor bump
+(`3.2.0` → `3.3.0`); a wave of fixes/hardening with no new capability is a
+patch bump.
+
+### 4. Move `[Unreleased]` to a dated version in `CHANGELOG.md`
+
+```diff
+-## [Unreleased]
++## [<version>] — <YYYY-MM-DD> (<one-line summary of the wave(s) it closes>)
+```
+
+Everything already written under `[Unreleased]` becomes that version's
+notes — don't rewrite it, the wave's own commits already documented what
+shipped in detail. Start a fresh, empty `[Unreleased]` heading above it only
+once something new lands after this release.
+
+### 5. Update the planning docs
+
+- `.sisyphus/plans/atlas-phase3-improvement.md`'s Execution Status (§13) —
+  mark the phase/task rows this release closes as **DONE** with the
+  version/commit, per its own "update it at each future phase gate" rule.
+- `.sisyphus/plans/atlas-phase3-findings-register.md` — record the wave(s)
+  in its per-wave resolution table (§14c-style) with commit SHAs.
+- Commit all of the above (`package.json`, `package-lock.json`,
+  `CHANGELOG.md`, the two plan docs) together as `chore(release): <version>`.
+
+### 6. Build the installer
+
+```bash
+npm run electron:build   # = npm run build && electron-builder --win
+```
+
+This is a full, un-interruptible build — don't run it alongside Vitest or
+Playwright (see `CONTRIBUTING.md`). Output lands at
+`release/Atlas-Setup-<version>.exe` (the `artifactName` pattern in
+`electron-builder.yml`'s `nsis` block). The installer is
+**`perMachine: true` with `allowElevation: true`** (every install/update
+needs a UAC prompt — see `DEFER-7` in the improvement plan for the
+per-user-install alternative that hasn't been decided on) and **unsigned**
+today (see "Code signing" below) — expect a Windows SmartScreen warning on
+first run of a freshly built installer.
+
+### 7. Compute and record the SHA256
+
+```powershell
+Get-FileHash release\Atlas-Setup-<version>.exe -Algorithm SHA256
+```
+
+Record the hash next to the release (today: `.sisyphus/HANDOFF.md`'s
+"Current state" line is where this has been kept — there is no other
+release-artifact ledger yet). This is the only integrity check available
+for an unsigned installer: anyone who wants to confirm they received an
+unmodified build has nothing else to check it against.
+
+### 8. Smoke-test the packaged installer
+
+Run the actual installer, not just `npm run electron:preview` (which skips
+NSIS entirely) — this is the one step that catches an installer-specific
+regression (a missing packaged asset, a broken file association, an icon
+that didn't embed):
+
+1. Install it (accept the UAC prompt / SmartScreen "Run anyway").
+2. Launch Atlas from the Start Menu shortcut the installer created.
+3. Open one file of each of a few representative formats (a `.docx`, an
+   `.xlsx`, a `.pdf`) via `Ctrl+O` and via a Windows Explorer double-click
+   (confirms the file association the installer registered actually routes
+   to Atlas).
+4. Make an edit and save it (confirms the packaged app's write path works
+   outside a dev environment — different working directory, different user
+   permissions than a worktree checkout).
+5. Check **Properties → Details** on the installed `Atlas.exe` (default
+   install path is `%ProgramFiles%\Atlas\` — `perMachine: true` in
+   `electron-builder.yml`'s `nsis` block, which is why installing it needs
+   the UAC elevation prompt from step 1 above; `allowToChangeInstallationDirectory:
+   true` means the actual path may differ if it was changed during install)
+   and confirm:
+   - **File description**: `Atlas`
+   - **File version** / **Product version**: matches the release (e.g. `3.3.0.0`)
+   - **Product name**: `Atlas`
+   - **Copyright**: `Copyright (c) 2026 Atlas`
+   - **Icon**: the Atlas icon, not Electron's default
+   (`src/__tests__/electron-lib/releaseMetadata.test.ts` asserts the
+   *config* that produces these; this step confirms the packaged binary
+   actually reflects it — see that file's own history for why the two can
+   disagree: `signAndEditExecutable: false` used to silently skip this
+   embedding entirely.)
+6. Uninstall via **Settings → Apps** and confirm it removes cleanly (no
+   leftover Start Menu entry, no orphaned registry `appId` entry beyond
+   what Windows itself retains for "recently uninstalled").
+
+### 9. Push
+
+```bash
+git push origin main
+```
+
+No tag to push — `main` at this commit is the release, per the note above.
+
+### 10. Rolling back
+
+Since there's no tag and no separate release branch, "rolling back" means
+one of:
+
+- **The release commit hasn't been used yet** (bad build, wrong version
+  bumped): `git revert` the `chore(release): <version>` commit, or, if nothing
+  has been pushed/shared yet, amend it — this repo's own git-safety rules
+  still apply (never force-push `main`; never `git reset --hard` without
+  confirming nothing valuable is on the discarded side).
+- **A shipped release has a serious bug found after the fact**: there is no
+  installed-base auto-updater (see `DEFER-7`/code-signing below), so
+  "rolling back" for a user who already installed it means telling them to
+  uninstall and reinstall the previous version's `.exe` — which means the
+  previous release's installer must still be available somewhere (it is
+  not currently archived anywhere outside whoever built it; consider
+  keeping `release/Atlas-Setup-<version>.exe` for at least the last two
+  versions until a proper artifact store exists). On `main`, the fix ships
+  as a normal new patch release rather than editing history — reverting the
+  bad commit(s) and cutting `<version>+1` is safer than trying to
+  un-release something that may already be installed on the owner's
+  machine.
+
 ## Executable / installer metadata
 
 The packaged `.exe` and its NSIS installer pick up the following from
@@ -17,9 +189,9 @@ The packaged `.exe` and its NSIS installer pick up the following from
 | ProductName / FileDescription | `electron-builder.yml`'s `productName` | `Atlas` |
 | CompanyName | `package.json`'s `author.name` | `Atlas` |
 | LegalCopyright | `electron-builder.yml`'s `copyright` | `Copyright (c) 2026 Atlas` |
-| FileVersion / ProductVersion | `package.json`'s `version` | `3.2.0` |
+| FileVersion / ProductVersion | `package.json`'s `version` | `3.3.0` |
 | Icon | `electron-builder.yml`'s `win.icon` | `build/icon.ico` (7 sizes: 16–256px, generated by `scripts/build-icon.mjs`) |
-| Uninstaller entry name (Control Panel) | `nsis.uninstallDisplayName` | `Atlas 3.2.0` |
+| Uninstaller entry name (Control Panel) | `nsis.uninstallDisplayName` | `Atlas 3.3.0` |
 | App id | `electron-builder.yml`'s `appId` | `com.mdreader.app` (legacy value, tracked as ELEC-22 — not changed here to avoid orphaning existing installs' registry/updater identity) |
 
 **Verifying this without running `electron-builder`:** contributor worktrees
@@ -128,6 +300,14 @@ if/when that changes.
 
 ## Not covered by this document
 
-Full manual regression pass, the signed-build checklist, and the installer
-upgrade-path verification are Task P5.3 in the phase plan and require an
-actual signed build on real hardware — out of scope here.
+The "Release checklist" section above covers the unsigned-build path Atlas
+actually ships today (steps 1–10). Still out of scope, per Task P5.3 in the
+phase plan, and requiring a signed build on real hardware once code signing
+(see above) is set up: a full manual regression pass beyond the smoke test
+in step 8, a dedicated signed-build checklist, and installer *upgrade-path*
+verification (installing `<version>` over an existing `<version-1>` install
+— `differentialPackage: false` in `electron-builder.yml` means this is
+currently a full reinstall over the old location, not a binary diff, but
+the actual upgrade UX — Start Menu shortcut survives, settings/recent-files
+persist, no duplicate entry in Control Panel — has not been verified against
+a real prior install).

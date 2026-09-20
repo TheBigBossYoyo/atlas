@@ -9,10 +9,12 @@ gaps live in [`KNOWN_LIMITATIONS.md`](./KNOWN_LIMITATIONS.md), and the task
 history that produced this architecture lives in
 `.sisyphus/plans/atlas-phase3-improvement.md`.
 
-Written against `main` after wave 2 (commit `03b2e2a`) plus this wave's own
-changes. Code is the ground truth if this drifts — update this file whenever
-a change described below stops being accurate, the same discipline QA-18
-exists to enforce for the older plan documents.
+Originally written against `main` after wave 2 (commit `03b2e2a`); updated
+again against waves 3–8 (DOCX page virtualization, the shared PPTX/ODP
+slide-editor core, the i18n layer, and the OPC/OOXML/ODF package validator
+below are all wave 6–8 additions). Code is the ground truth if this drifts —
+update this file whenever a change described below stops being accurate,
+the same discipline QA-18 exists to enforce for the older plan documents.
 
 ---
 
@@ -264,7 +266,18 @@ flowchart LR
   markers, tab stops, and section/page breaks — i.e. everything needed to
   know where a run of text actually falls on a page before it's rendered.
 - **Render** (`src/docx/render/`) turns the laid-out AST into the actual
-  React tree `DocxViewer` mounts.
+  React tree `DocxViewer` mounts. `PageStack` virtualizes this: only pages
+  near the scroll container's viewport (plus a small buffer, plus whichever
+  page holds the caret/selection) mount a real `PageView`; the rest render
+  as a placeholder that reserves the same box, so scroll height and the
+  page-count status bar are unaffected. Printing and PDF export force every
+  page to mount first, since both read the live DOM. This exists because
+  `paginate()` hands back a brand-new `Page` object per page on every call —
+  without virtualization, every on-screen page remounts its full DOM
+  subtree on every keystroke regardless of whether it's actually visible
+  (measured on a 35-page document: React commit dropped from ~40-50ms to
+  ~4-10ms and browser paint from ~50-60ms to ~10-20ms per keystroke once
+  this landed).
 - **Editor** (`src/docx/editor/`) implements editing as a command pattern
   with bounded undo/redo history, plus the spellcheck bridge
   (`useSpellCheck.ts` — see Section 6's `atlas-phase2-docx.md` note on why
@@ -289,6 +302,7 @@ serializer bug can silently corrupt a file that still opens.
 | **Unit** | Individual functions/hooks/components in isolation (parsers, layout math, format detection, hooks). The large majority of the suite. | `src/**/__tests__/*.test.{ts,tsx}` |
 | **Characterization** | Frozen snapshots of *live* behavior that must not silently regress: markdown's rendered DOM (`MarkdownRenderer`, `useToc`) across headings/GFM tables/task lists/code fences/KaTeX/Mermaid/nested lists/links; the exact dirty-state/save/active-file transition sequence through App.tsx's shared shell logic. This is the enforcement mechanism behind the "markdown is perfect, don't change its behavior" constraint (improvement plan Section 7) — a snapshot diff here is treated as a regression by default, not an improvement, unless explicitly reviewed and approved. | `src/__tests__/App.dirtyState.characterization.test.tsx`, `src/components/__tests__/MarkdownRenderer*.test.tsx`, `src/hooks/__tests__/useToc*.test.ts` |
 | **Corpus (round-trip)** | A fixed set of real-shaped `.docx` fixtures parsed → serialized → re-parsed, diffed for structural/content drift. Gates every change touching the DOCX parser/model/serializer. | `src/docx/__fixtures__/`, corpus harness under `src/docx/__tests__/` |
+| **Spec-level package validation** | An independent structural validator — its own from-scratch PKZIP reader (not JSZip), checked against the actual OPC/OOXML/ODF specs rather than Atlas's own parsers — runs against every save path's output (DOCX, the spreadsheet passthrough, PPTX/ODP editing). Catches what a round-trip diff can't: a byte-valid-but-spec-invalid package that Atlas's own lenient reader would still parse but real Office/LibreOffice would flag for repair. See `docs/KNOWN_LIMITATIONS.md`'s "Verification against real Office/LibreOffice" for what this does and doesn't substitute for. | `scripts/lib/officeValidator.mjs`, `scripts/lib/zipReader.mjs`, `scripts/validate-office-file.mjs` (standalone CLI), `src/office/__tests__/officeValidator.unit.test.ts` |
 | **E2E (Electron/Playwright)** | Launches the *real* packaged-shape app (`_electron.launch()`) and opens one fixture per supported format, asserting the right viewer mounted, the status bar shows the right filename, and zero console errors were logged. `workers: 1` — Electron holds a single-instance lock, so parallel workers would race each other. | `tests/e2e/smoke.spec.ts`, `tests/e2e/perf.spec.ts` (200ms-budget task-perf spec) |
 | **Coverage ratchet** | `npm run coverage` (v8 provider, text+html reporters, `reportOnFailure: true` so a failing run still shows what it covered) enforces a measured-floor threshold per global metric — see `vitest.config.ts`'s `coverage.thresholds` comment for the current numbers and how to raise them. | `vitest.config.ts` |
 | **Shared test doubles** | `createMockElectronAPI()` (`src/__tests__/mocks/electronAPI.ts`) is the one typed `window.electronAPI` fixture; import and override rather than hand-rolling a new literal per test file (P4.8/QA-25). | `src/__tests__/mocks/electronAPI.ts` |
@@ -300,3 +314,46 @@ code also includes a manual smoke pass on markdown specifically (open the
 sample document, edit, save, export all formats, toggle all three view
 modes, exercise every documented shortcut) — see the improvement plan's
 Section 7.5 for the full rationale.
+
+## 7. The shared slide-editor core (PPTX/ODP)
+
+PPTX and ODP editing (`src/viewers/slides/pptx/editing/`,
+`src/viewers/slides/odp/editing/`) share one session hook,
+`useSlideEditorCore` (`src/viewers/slides/shared/useSlideEditorCore.ts`),
+covering everything that has nothing to do with either format specifically:
+the in-memory package (`OfficePackage` — a path → part-bytes map, from
+`src/office/officePackage.ts`), undo/redo, a queue that serializes edits so
+each one sees the previous one's re-parsed result even while that re-parse
+is still running, the `ViewerContext` dirty/save/save-as contract, and the
+editor's own undo/redo shortcuts. Each format supplies only two things: how
+to parse its package into `SlideData` (`parseDeck`) and its own edit
+functions operating directly on OPC/ODF XML (`pptxEdits.ts`/`odpEdits.ts` —
+no PptxGenJS or similar SDK, the same "hand-write the package format"
+approach DOCX uses). This is why a PPTX-only feature (e.g. `opcXml.ts`'s
+relationship/content-types helpers) never needs an ODP equivalent to reach
+`main` — the shared core doesn't know or care which format it's holding.
+
+## 8. Internationalization (`src/i18n/`)
+
+A small, dependency-free module — no `i18next`/`react-intl` — built around
+a stable-id message catalogue per locale (`messages.en.ts`, `messages.fr.ts`).
+English is the source of truth: `messages.fr.ts` is typed
+`satisfies Record<MessageKey, MessageValue>` against English's own derived
+key union, so a key added to one file without the other is a compile error;
+`catalogueParity.test.ts` re-checks the same thing at runtime by comparing
+the two actual key sets, so a mismatch fails with the exact offending
+key(s) rather than a generic type error. `LocaleProvider` +
+`useTranslate()`/`useLocale()`
+(`context.ts`, `useLocale.ts`) expose the current locale and a `t(key,
+params)` function with `Intl.PluralRules`-backed plural handling. The
+preference (`en`/`fr`/`system`) persists the same way the theme does;
+`system` is the only path that ever consults the OS locale (via a
+`preload.cjs` IPC round trip to `app.getLocale()`) — the default is always
+the literal `en`, deliberately never derived from the OS, so a fresh
+profile and the `PLAYWRIGHT=1` e2e environment both stay English
+regardless of the host machine's locale. `src/i18n/__tests__/
+noHardcodedStrings.test.ts` greps converted components for literal
+user-facing English strings that should have gone through `t()` instead,
+so a new string added to an already-converted surface can't silently skip
+translation. See `docs/KNOWN_LIMITATIONS.md`'s "Internationalization"
+section for which surfaces are and aren't converted yet.

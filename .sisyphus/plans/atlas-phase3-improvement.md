@@ -957,7 +957,7 @@ Electron/Chromium's native spellchecker, not the originally-locked
 ### Phase 4 — mixed; see per-task below
 | Task | Status | Note |
 |---|---|---|
-| P4.1 (strict-mode ratchet) | **DONE** (2026-09-19, `6410eef`) | TypeScript 6 turns `strict` on by default and `src/` compiles clean under it; `strict: true` is now explicit, `tests/e2e` is type-checked too, and `STRICT_MODE_TODO.md` tracks the remaining `electron/*.cjs` work. |
+| P4.1 (strict-mode ratchet) | **DONE, fully closed** (2026-09-19 `6410eef` src/e2e; 2026-09-19 electron/*.cjs; 2026-09-20 scripts/*.mjs + tests/e2e/fixtures/*.mjs) | TypeScript 6 turns `strict` on by default. All five `tsc -b` projects (`src/`, `vite.config.ts`, `tests/e2e/**/*.ts`, `electron/**/*.cjs`, `scripts/**/*.mjs` + `tests/e2e/fixtures/*.mjs`) are `strict: true` with 0 errors; `electron/` and `scripts/` are plain JS brought in via `allowJs`/`checkJs`. `STRICT_MODE_TODO.md` records the ratchet as complete — nothing left. |
 | P4.2 (coverage thresholds) | **DONE** (this wave) | v8 provider, `reportOnFailure`, `npm run coverage`, measured-floor thresholds in `vitest.config.ts`. |
 | P4.3 (bundle gate + rtf.js) | **DONE** (this wave) | Per-chunk `postbuild` gate wired with a fresh baseline; `rtf.js` investigated and, per its documented findings (`docs/KNOWN_LIMITATIONS.md`), kept rather than replaced. |
 | P4.4 (dependency hygiene) | **DONE** (2026-09-19 re-verification) | `html2canvas-pro` confirmed still genuinely needed post-X1 (`docxMedia.ts`'s math-image rendering; see the `pdf.ts`/`index.ts` comments already explaining why) — not removed, as the task instructs. The bare `html2canvas`, `html-to-image`, `react-pdf` and direct `highlight.js` entries (QA-15/UX-22's "four dead dependencies") were already gone from `package.json` by this point — confirmed via grep, no live import sites anywhere. Added `overrides` pinning `@glideapps/glide-data-grid`'s violated `react`/`react-dom`/`marked` peer deps to the root versions (QA-14) — package.json only; a lead-run `npm install` is needed to regenerate `package-lock.json` against it (not run here — no writable node_modules of this worktree's own). `npm audit` today reports **0 vulnerabilities** (37 advisories as of 2026-09-13 are fully resolved, confirmed by P4.5's Electron/electron-builder/sharp bump). QA-16's extraneous `@emnapi/runtime` is **still present** in the shared `node_modules` (`npm ls @emnapi/runtime` shows `extraneous`) — needs the lead to run `npm ci` to clear; not done here per the no-install constraint. |
@@ -970,9 +970,17 @@ Electron/Chromium's native spellchecker, not the originally-locked
 | P4.11 (tech-debt sweep) | **DONE** (2026-09-19 re-verification) | Previously confirmed fixed (unchanged): ELEC-16/17/18, SHELL-25. Fixed this pass: dead `ENABLE_VIEWER_ROUTER` flag and the dead hidden-`<span>` `filePath` hack removed, ternary collapsed (SHELL-21/22); `theme as never` cast removed in `useTheme.ts` — `setTheme`'s `Theme` param already matched (SHELL-23/UX-23); ELEC-22 (legacy `appId`) documented in `electron-builder.yml` as a deliberate upgrade-continuity choice, not an oversight; ELEC-23 (`build-icon.mjs` unwired) fixed via a new `"icon"` npm script plus `"preelectron:build": "npm run icon"`; UX-20 (markdown export CSS drift from the live preview) fixed — `h4`/`h5`/`h6` sizes, task-list checkboxes and `<details>`/`<summary>` styling now match `index.css`, guarded by a new `markdownExportCss.crossref.test.ts` (same pattern as the existing `exportThemeTokens.crossref.test.ts`); this is a markdown *export*-output change, in scope per the owner's X2/X5 approval, and doesn't touch any no-touch live-render file or snapshot. Re-confirmed already done (no code change needed): SHELL-24 (drag enter/leave counter already present), ELEC-20 (file-association `role: Viewer`/`Editor` already differentiated per-format, with its own test), ELEC-21 (`saveBinaryOutput` in `download.ts` is already the format-agnostic callback, used by DocxViewer/spreadsheet/slides — no longer DocxViewer-only), UX-19 (`.docx-wrapper` dead CSS no longer exists anywhere in `index.css`), UX-21 (`prefers-reduced-motion` media guard already present, app-wide). |
 | P4.12 (toolchain pinning) | **DONE** | `.nvmrc` (`24.14.0`) and `package.json`'s `engines.node` both present and CI (`.nvmrc`-keyed `setup-node`) already depends on it. |
 
-### Phase 5 (Release) — PENDING
-Not started; correctly gated on every prior phase's exit criteria per the
-plan's own Gate P5.
+### Phase 5 (Release) — PARTIAL (2026-09-20 update)
+`3.2.0` (`4244bdd`) and `3.3.0` (`09cbc9c`) have both shipped — see "Wave
+5-8" below for what each covered — with `docs/RELEASE.md` now carrying a
+repeatable release checklist (version bump → verification order →
+changelog → planning-doc update → installer build → SHA256 → packaged smoke
+test → push) written against how those two releases actually happened.
+**Still pending, per P5.1**: code signing — the owner has no certificate
+today; `docs/RELEASE.md`'s "Code signing" section is the reference for what
+that would take and cost. **Still pending, per P5.3**: a signed-build
+checklist and installer upgrade-path verification (both require an actual
+signed build on real hardware, which doesn't exist yet).
 
 ---
 
@@ -1006,6 +1014,111 @@ Follow-ups merged straight into `main` afterwards (2026-09-17 → 2026-09-19): r
 Per-item status, evidence and what is still open: see section 14c of `atlas-phase3-findings-register.md`.
 
 **Process lesson, repeated:** two of the three worst defects (DOCX typing, spreadsheet editing) were invisible to the unit suite because it mocks the very surface that was broken (contentEditable input, the canvas grid's editor overlay). Every editor change now ships with a Playwright scenario that drives the real app.
+
+---
+
+## Wave 5-8 (2026-09-19 → 2026-09-20)
+
+Continued directly on `main` after wave 4, one worktree-per-area per wave
+rather than the earlier "one session, sequential" or "8 parallel worktrees"
+patterns — see `.sisyphus/HANDOFF.md` for the running session-handoff notes
+this period was tracked against.
+
+**Wave 5-6 — released as 3.2.0 → 3.3.0** (`chore(release)` commits
+`4244bdd`, `09cbc9c`):
+- `wave5/new-documents` (NEW-01): toolbar **New** menu / `Ctrl+N`, blank
+  templates for Markdown/DOCX/XLSX/ODS/PPTX/ODP generated by
+  `scripts/generate-templates.mjs`; a genuinely 0-byte file of one of those
+  formats opens that format's blank template instead of a parse error.
+- `wave5/sheets-fidelity`: spreadsheet save-through-original fidelity —
+  `spreadsheetRangeShift.ts` (formula-reference row/column shifting, an
+  earlier pass than wave 8's fuller `formulaRefs.ts` rewrite below),
+  `spreadsheetZipBudget.ts` (zip-bomb size guard, closing the same gap
+  already fixed for DOCX/PPTX).
+- `wave5/header-footer-rich` (79649ee, D29 follow-up): fixed header/footer
+  editing corrupting a paragraph that mixed plain text with an image/field/
+  table — such a paragraph now correctly becomes a read-only placeholder
+  instead of losing content. Wave 8's `header-footer-mixed` (below) then
+  built on this fix to make the text INSIDE such a paragraph editable too.
+- `wave5/review-leftovers`: shell-session review fixes in `App.tsx` plus a
+  slides-PDF-export fix.
+- `wave5/docx-typing-perf`, then a follow-up (D23-PERF-2): two back-to-back
+  DOCX typing-performance fixes — a wasted-render fix (`PageStack`
+  memoization + hoisting per-document metadata out of the per-page walk)
+  and then `PageStack` virtualization itself (see `docs/ARCHITECTURE.md`
+  Section 5) — the second alone cut a 35-page document's per-keystroke
+  React-commit + paint time roughly in half again.
+- `wave6/release-polish` (ELEC-09/ELEC-10): fixed
+  `signAndEditExecutable: false` silently disabling icon/version-metadata
+  embedding, not just code signing — see `docs/RELEASE.md`.
+- `wave6/electron-types` (P4.1): `electron/**/*.cjs` brought under
+  `tsc -b` (`checkJs` + `strict`), closing the gap this same task's earlier
+  pass had left open.
+- `wave6/dependency-hygiene` (P4.4/P4.11): dead-dependency/tech-debt
+  sweep re-verification.
+- `wave6/pdf-coverage` (P4.7): closed the lowest-covered PDF sub-components.
+- `wave6/docx-virtualization`: `PageStack` virtualization, above.
+
+**Wave 7:**
+- `wave7/save-as-shortcut`: `Ctrl+Shift+S` (Save As) was a silent no-op for
+  every non-markdown format — `ViewerContext` gained a
+  `registerSaveAs`/`saveAs` contract mirroring the existing `save` one.
+- `wave7/office-validation`: added the independent OPC/OOXML/ODF
+  structural package validator (`scripts/lib/officeValidator.mjs`,
+  `scripts/lib/zipReader.mjs`, `scripts/validate-office-file.mjs` — see
+  `docs/ARCHITECTURE.md` Section 6 and `docs/KNOWN_LIMITATIONS.md`
+  "Verification against real Office/LibreOffice"). Found and fixed real
+  bugs while building it: every `.ods` Atlas saved had `mimetype` neither
+  first nor stored; `.xlsx` save-through-original left a dangling
+  relationship after removing `calcChain.xml`; a corpus fixture's XML used
+  an undeclared namespace prefix.
+- `wave7/ux-accessibility` (a11y, part 1): focus traps for
+  `UnsavedChangesDialog`/`ShortcutsModal`, toolbar-dropdown focus
+  restoration, friendlier deleted/moved-file error messages, and a docs
+  fix for two shortcuts (`Ctrl+N`, `Ctrl+Shift+T`) missing from README's
+  "mirrors the Shortcuts modal exactly" table.
+
+**Wave 8:**
+- `wave8/contrast-focus` (a11y, part 2 — DEFER, WCAG AA): fixed WCAG 2.1 AA
+  contrast failures across all 5 themes (several token pairs as low as
+  2.0-3.8:1), added `contrastTokens.test.ts` to gate future regressions,
+  and extended `useFocusTrap` to `SearchOverlay`/`PdfPasswordDialog`/
+  `PresenterView`, the three surfaces `wave7/ux-accessibility` didn't reach.
+- `wave8/header-footer-mixed` (D29 follow-up 2): header/footer editing
+  moved from per-PARAGRAPH to per-SEGMENT — a paragraph mixing plain text
+  with a field/image/hyperlink/etc (the common "Chapter title ... Page X of
+  Y" shape) now gets one editable input per text span instead of being
+  fully read-only. See `docs/KNOWN_LIMITATIONS.md`'s DOCX section for the
+  full behavior.
+- `wave8/bug-hunt-2`: four defects found by driving the real app — an
+  orphaned code-Run process outliving its closed tab, a read-only file's
+  `EPERM` misreported as a file lock, a dropped folder's raw `EISDIR`
+  reaching the UI, and multi-file drag-drop only opening the first file.
+- `wave8/spreadsheet-formulas` (USR-17, closing `xlsxPassthrough.ts`'s own
+  documented gaps): a new pure reference-syntax scanner
+  (`formulaRefs.ts`) rewrites sheet-qualified/3-D/whole-row/whole-column
+  formula references and defined names through every structural edit
+  (insert/delete row/column, add/delete/rename/reorder sheet), matching
+  Excel's own `#REF!` behavior for a reference into a deleted range; a
+  deleted sheet's exclusively-owned parts are swept, and
+  `sharedStrings.xml` is compacted on every save.
+- `wave8/i18n-french` (DEFER-6, resolved): a dependency-free English/French
+  i18n layer for the app shell (see `docs/ARCHITECTURE.md` Section 8) —
+  DEFER-6's "worth a direct question to the owner" flag from the Section 11
+  critic review turned out correct (the owner writes in French; see
+  `.sisyphus/HANDOFF.md`). `DocxViewer`, the slide editor, and PDF find/
+  thumbnail internals are explicitly out of scope for this first pass —
+  see `docs/KNOWN_LIMITATIONS.md`.
+- Follow-up fixes on `main` after `wave8/i18n-french` merged: a
+  mistranslated French menu item (`'Split'` → `'Fractionné'`, not
+  `'Partagé'`) and carrying the wave 8 contrast-fix accent colors into
+  exported documents (HTML/PDF export had its own separate copy of the
+  accent color that `wave8/contrast-focus` didn't touch).
+
+**Process note:** waves 5-8 relied more heavily on "drive the real app and
+look for bugs" sessions (`wave8/bug-hunt-2`, the office-validation and a11y
+passes) than on responding to further owner reports — the owner-reported
+backlog from wave 4 is fully closed as of this point.
 
 ---
 
