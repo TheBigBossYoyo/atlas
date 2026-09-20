@@ -1,6 +1,6 @@
 import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 
-import { assertNever, type Block, type Paragraph, type Table } from '../model'
+import { assertNever, type Block, type Paragraph, type Table, type WrapperPassthrough } from '../model'
 import {
   buildNamespaceDeclarationAttributes,
   buildParagraphWithState,
@@ -75,9 +75,90 @@ const orderedXmlParser = new XMLParser({
  * `buildTableWithState` emit for such content get substituted back to the
  * real raw XML — omitting that step leaves the literal placeholder tag in
  * the saved part, an XML well-formedness violation.
+ *
+ * DOCX-2 (round-trip fidelity audit follow-up): also splices in an
+ * unedited `w:sdt`/`mc:AlternateContent` wrapper's exact source bytes in
+ * place of the whole block(s) it covers — a content control or shape
+ * wrapping an entire footnote/endnote/comment paragraph or table, not just
+ * some run inside one — wherever `state.wrapperRegions` (now threaded
+ * through from `partBody.ts`'s parse of that same fragment; see
+ * `getWrapperRegionsForFragmentBlocks`'s doc comment there) proves none of
+ * them were touched since parse. This mirrors `documentWriter.ts`'s own
+ * private `buildBlockNodes`/`findWrapperRegionAt` for the main body
+ * byte-for-byte (deliberately duplicated rather than imported: those are
+ * not exported, and `buildParagraphWithState`/`buildTableWithState` below
+ * already independently re-check `state.wrapperRegions` for a wrapper
+ * sitting at the paragraph-child/run-child level, exactly as they do for
+ * the main body — only the block-level check was missing here before).
+ * Falls back to the plain per-block build for everything else.
  */
 export function buildBlockNodes(blocks: ReadonlyArray<Block>, state: SerializeState): ReadonlyArray<OrderedXmlNode> {
-  return blocks.map((block) => normalizeBlockNode(block, state))
+  const nodes: OrderedXmlNode[] = []
+  let index = 0
+  while (index < blocks.length) {
+    const region = findWrapperRegionAt(state.wrapperRegions, blocks, index)
+    if (region !== undefined) {
+      nodes.push(buildWrapperPassthroughPlaceholder(region.raw, state))
+      index += region.content.length
+      continue
+    }
+
+    const block = blocks[index]
+    if (block !== undefined) {
+      nodes.push(normalizeBlockNode(block, state))
+    }
+    index += 1
+  }
+  return nodes
+}
+
+/**
+ * Local duplicate of `documentWriter.ts`'s private `findWrapperRegionAt` —
+ * see `buildBlockNodes`'s doc comment above for why this isn't imported.
+ * Reference equality only: every one of the region's captured objects must
+ * still be the SAME object, in the same position, as when it was captured
+ * at parse time — proof nothing inside the wrapper (or its position among
+ * siblings) has changed since.
+ */
+function findWrapperRegionAt(
+  regions: ReadonlyArray<WrapperPassthrough>,
+  items: ReadonlyArray<unknown>,
+  index: number,
+): WrapperPassthrough | undefined {
+  for (const region of regions) {
+    const content = region.content as ReadonlyArray<unknown>
+    const length = content.length
+    if (length === 0 || index + length > items.length) {
+      continue
+    }
+
+    let matches = true
+    for (let offset = 0; offset < length; offset += 1) {
+      if (items[index + offset] !== content[offset]) {
+        matches = false
+        break
+      }
+    }
+    if (matches) {
+      return region
+    }
+  }
+  return undefined
+}
+
+/**
+ * Local duplicate of `documentWriter.ts`'s private `buildRawPassthroughPlaceholder`
+ * — see `buildBlockNodes`'s doc comment above for why this isn't imported.
+ * Writes the exact same `atlas-raw-unknown` placeholder shape
+ * `restoreUnknownXml` (imported below, unchanged) already knows how to
+ * substitute back — `state.unknownXml`/`state.nextUnknownId` are the
+ * actual shared contract between the two, not this function's shape.
+ */
+function buildWrapperPassthroughPlaceholder(xml: string, state: SerializeState): OrderedXmlNode {
+  const id = `unknown-${state.nextUnknownId}`
+  state.nextUnknownId += 1
+  state.unknownXml.set(id, xml)
+  return { 'atlas-raw-unknown': [], ':@': { '@_data-id': id } }
 }
 
 function normalizeBlockNode(block: Block, state: SerializeState): OrderedXmlNode {

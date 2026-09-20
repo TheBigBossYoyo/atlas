@@ -5,10 +5,11 @@
  * uses that the parser has no field for is invisible to the in-memory
  * document, and a save that regenerates a part *from the model* — as
  * `saveDocx` always does for `word/document.xml`/`word/styles.xml`/
- * `word/numbering.xml` and every header/footer part — emits that part
- * without it. That is silent data loss, indistinguishable from "the user
- * meant to delete this" unless something flags it before the file on disk
- * is overwritten.
+ * `word/numbering.xml` and every header/footer part, and does whenever the
+ * model's collection is non-empty for `word/comments.xml`/`footnotes.xml`/
+ * `endnotes.xml` — emits that part without it. That is silent data loss,
+ * indistinguishable from "the user meant to delete this" unless something
+ * flags it before the file on disk is overwritten.
  *
  * Rather than maintain a hand-written blocklist of "elements Atlas doesn't
  * support" (which rots the instant a parser gains a new field, in either
@@ -55,15 +56,50 @@ export interface LossySaveWarning {
 
 // Parts `saveDocx` always regenerates from the in-memory model (never a raw
 // passthrough) for which "no user edit happened, so nothing should
-// disappear" holds unconditionally. `word/comments.xml`/`footnotes.xml`/
-// `endnotes.xml` are deliberately excluded: `saveDocx` removes them outright
-// when the model has zero comments/notes (an intentional cleanup — see
-// `docx/index.ts`'s "Wave 1 follow-up" comments), which would read as false
-// positives here.
+// disappear" holds unconditionally.
 const ALWAYS_REWRITTEN_PARTS: ReadonlyArray<string> = [
   'word/document.xml',
   'word/styles.xml',
   'word/numbering.xml',
+]
+
+/**
+ * `word/comments.xml`/`word/footnotes.xml`/`word/endnotes.xml` — checked
+ * separately from `ALWAYS_REWRITTEN_PARTS` because, unlike those three,
+ * `saveDocx` does NOT unconditionally regenerate these from the model: it
+ * only does so when the corresponding model collection is non-empty (see
+ * `docx/index.ts`'s "Wave 1 follow-up" / "5. Comments" / "6. Footnotes /
+ * endnotes" steps), and for comments specifically, an emptied model
+ * actively *removes* the part (`removePartRegistration`) rather than
+ * leaving it as a raw-archive passthrough.
+ *
+ * That asymmetry is exactly why these three were left out of this
+ * detector entirely at first: naively diffing "original part" against
+ * "saved part" reads as a false positive the moment the part legitimately
+ * disappears — a document with zero footnotes has no `footnotes.xml` to
+ * begin with, and a user who deletes every comment should never be told
+ * their comments were "lost".
+ *
+ * It turns out both of those "legitimately absent" shapes are already
+ * covered by this module's two existing guards below, with no part-type-
+ * specific logic needed:
+ *   - No original part at all (the overwhelmingly common "never had one"
+ *     case: `bundle.rawArchive.get(partPath) === undefined`) — the loop
+ *     `continue`s before ever comparing anything.
+ *   - An original part that legitimately vanishes from the saved output
+ *     (comments.xml removed because the model went to zero comments;
+ *     footnotes.xml/endnotes.xml left as an untouched raw-archive
+ *     passthrough — byte-identical, hence tag-identical — because the
+ *     model's collection was already empty) — `readPart(savedZip, ...)`
+ *     returns `undefined` and the loop `continue`s there instead.
+ * Verified empirically against the full fixture corpus (see this module's
+ * own test file) and with dedicated regression tests for both shapes
+ * before adding these three part paths here.
+ */
+const NOTES_AND_COMMENTS_PARTS: ReadonlyArray<string> = [
+  'word/comments.xml',
+  'word/footnotes.xml',
+  'word/endnotes.xml',
 ]
 
 /**
@@ -165,7 +201,11 @@ export async function detectLossySaveWarnings(
   }
 
   const savedZip = await JSZip.loadAsync(savedBytes)
-  const partsToCheck = [...ALWAYS_REWRITTEN_PARTS, ...headerFooterPartPaths(bundle)]
+  const partsToCheck = [
+    ...ALWAYS_REWRITTEN_PARTS,
+    ...NOTES_AND_COMMENTS_PARTS,
+    ...headerFooterPartPaths(bundle),
+  ]
 
   const warnings: LossySaveWarning[] = []
   for (const partPath of partsToCheck) {
