@@ -263,6 +263,12 @@ function CsvViewerBase({ file }: ViewerProps) {
         onSaveAs={handleSaveAs}
       />
       {editor.saveError && <div className="csv-viewer__error">{editor.saveError}</div>}
+      {/* SHEET-4 — see SpreadsheetViewer for why this is a status, not an alert. */}
+      {editor.saveWarning && (
+        <div className="csv-viewer__save-warning" role="status">
+          {editor.saveWarning}
+        </div>
+      )}
       <div
         className="csv-viewer__grid"
         role="group"

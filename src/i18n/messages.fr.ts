@@ -288,6 +288,8 @@ export const messages = {
   'spreadsheet.addSheetAria': 'Ajouter une feuille',
   'spreadsheet.addSheetTitle': 'Ajouter une feuille',
   'spreadsheet.gridAria': 'Grille de la feuille {sheet}, {dimensions}',
+  'spreadsheet.saveFallbackWarning':
+    "Ce fichier a été enregistré, mais Atlas n'a pas pu réutiliser sa mise en page d'origine ; certains styles, graphiques, filtres ou tableaux peuvent ne pas avoir été préservés.",
   'csv.gridAria': 'Grille de données, {dimensions}',
   'grid.cellAnnouncement': '{ref} : {value}',
   'grid.cellAnnouncementEmpty': '{ref}, vide',

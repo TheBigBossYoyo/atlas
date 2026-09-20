@@ -289,6 +289,10 @@ export const messages = {
   // region announcing the currently-selected cell; shared by SpreadsheetViewer
   // and CsvViewer via useGridCellAnnouncement.ts.
   'spreadsheet.gridAria': '{sheet} sheet grid, {dimensions}',
+  // SHEET-4 -- shown when a save succeeded but had to fall back from the
+  // save-through-the-original-package writer to the lossy one.
+  'spreadsheet.saveFallbackWarning':
+    "This file was saved, but Atlas couldn't reuse its original layout, so some styles, charts, filters or tables may not have been preserved.",
   'csv.gridAria': 'Data grid, {dimensions}',
   'grid.cellAnnouncement': '{ref}: {value}',
   'grid.cellAnnouncementEmpty': '{ref}, blank',

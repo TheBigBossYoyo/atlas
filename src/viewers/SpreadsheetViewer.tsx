@@ -432,6 +432,14 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         onSaveAs={handleSaveAs}
       />
       {editor.saveError && <div className="spreadsheet-viewer__save-error">{editor.saveError}</div>}
+      {/* SHEET-4 — the save succeeded but fell back to the lossy writer.
+          `role="status"` rather than `alert`: nothing failed, and it must not
+          interrupt what the user is doing. */}
+      {editor.saveWarning && (
+        <div className="spreadsheet-viewer__save-warning" role="status">
+          {editor.saveWarning}
+        </div>
+      )}
       {frozenRowCount > 0 && (
         <FrozenRowsStrip
           rows={frozenRowsData}

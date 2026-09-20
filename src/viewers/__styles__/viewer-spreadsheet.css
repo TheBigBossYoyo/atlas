@@ -240,6 +240,25 @@
   flex-shrink: 0;
 }
 
+/* SHEET-4 — the save SUCCEEDED but fell back to the lossy writer, so this is
+   deliberately not styled as an error: same layout as the error strip, but in
+   an attention colour distinct from `--hl-keyword`, which the error strip uses.
+   `--hl-class` is warm/amber in light, dark and sepia and cool in nord and
+   dracula — it is not one hue across themes, it is simply the token that is
+   distinct from the error colour in each. Measured against `--bg-secondary`
+   in all five (WCAG AA needs 4.5:1):
+     light 6.94 · dark 8.93 · sepia 4.60 · nord 4.83 · dracula 11.41
+   Sepia is the tightest; re-measure it if either token is ever retuned. */
+.spreadsheet-viewer__save-warning,
+.csv-viewer__save-warning {
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--hl-class);
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-primary);
+  flex-shrink: 0;
+}
+
 /* Frozen-rows fallback (T4/DAT-10 remainder): glide-data-grid v6 has no
    frozen-TOP-rows concept, only freezeColumns — see SpreadsheetViewer's own
    comment for the full rationale. This renders the frozen row(s) as a
