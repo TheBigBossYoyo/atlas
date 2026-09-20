@@ -138,6 +138,61 @@ describe('navigating and reordering', () => {
     expect(state.sessions.map((session) => session.name)).toEqual(['a.md', 'renamed.md'])
     expect(activeSession(state)?.id).toBe('/renamed.md')
   })
+
+  describe('renameSession — collisions (SESS-1)', () => {
+    it('does nothing when the id being renamed is not open', () => {
+      const state = openAll('/a.md', '/b.md')
+      expect(renameSession(state, '/missing.md', file('/renamed.md'))).toBe(state)
+    })
+
+    it('renaming the active document onto an already-open background path drops the background tab, and the renamed one stays active', () => {
+      // /a.md is active (Save As onto /b.md's path while looking at /a.md).
+      const state = openAll('/b.md', '/a.md')
+      const result = renameSession(state, '/a.md', file('/b.md', 'a-content'))
+
+      expect(result.sessions.map((session) => session.id)).toEqual(['/b.md'])
+      expect(result.sessions).toHaveLength(1)
+      // No two sessions share an id.
+      expect(new Set(result.sessions.map((session) => session.id)).size).toBe(result.sessions.length)
+      expect(activeSession(result)?.id).toBe('/b.md')
+      expect(activeSession(result)?.file.kind === 'text' && activeSession(result)?.file.content).toBe('a-content')
+    })
+
+    it('renaming a background document onto another background document\'s path drops the collision and leaves the actually-active tab untouched', () => {
+      const state = openAll('/a.md', '/b.md', '/c.md') // /c.md active
+      const result = renameSession(state, '/a.md', file('/b.md', 'a-content'))
+
+      expect(result.sessions.map((session) => session.id)).toEqual(['/b.md', '/c.md'])
+      expect(new Set(result.sessions.map((session) => session.id)).size).toBe(result.sessions.length)
+      // The active tab never moved or changed identity.
+      expect(activeSession(result)?.id).toBe('/c.md')
+    })
+
+    it('renaming a background document onto the currently-active document\'s path leaves the active tab alone and drops the renamed (background) one instead', () => {
+      // /a.md is a background save that resolves after the user switched to
+      // /b.md, which happens to already be open at the path /a.md is being
+      // saved to.
+      const state = openAll('/a.md', '/b.md') // /b.md active
+      const result = renameSession(state, '/a.md', file('/b.md', 'a-content'))
+
+      expect(result.sessions.map((session) => session.id)).toEqual(['/b.md'])
+      expect(new Set(result.sessions.map((session) => session.id)).size).toBe(result.sessions.length)
+      // Still active, and — critically — its content was NOT silently
+      // replaced by the background save (no desync between the highlighted
+      // tab and whatever `file`/`filePath` App.tsx is actually rendering).
+      expect(activeSession(result)?.id).toBe('/b.md')
+      expect(activeSession(result)?.file.kind === 'text' && activeSession(result)?.file.content).toBe('x')
+    })
+
+    it('a no-op rename (path unchanged) updates just that session\'s content, without touching which tab is active', () => {
+      const state = openAll('/a.md', '/b.md') // /b.md active
+      const result = renameSession(state, '/a.md', file('/a.md', 'still a'))
+      expect(result.sessions.map((session) => session.id)).toEqual(['/a.md', '/b.md'])
+      expect(activeSession(result)?.id).toBe('/b.md')
+      const aSession = result.sessions.find((session) => session.id === '/a.md')
+      expect(aSession?.file.kind === 'text' && aSession?.file.content).toBe('still a')
+    })
+  })
 })
 
 describe('reloadSessionFile', () => {

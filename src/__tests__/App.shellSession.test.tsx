@@ -335,6 +335,133 @@ describe('App — draft recovery (P2.6/SHELL-11/LOAD-20)', () => {
   });
 });
 
+describe('App — discarding a markdown draft actually clears it (DRAFT-1)', () => {
+  // Types into the editor and waits for the REAL 800ms autosave debounce to
+  // actually persist a draft — a hand-seeded `localStorage` entry wouldn't
+  // prove the live wiring works, just that the assertion can read the key.
+  async function dirtyAndAutosave(text: string) {
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: text },
+    });
+    await waitFor(() => expect(toolbarIsDirty()).toBe(true));
+    await waitFor(() => expect(localStorage.getItem('atlas-draft')).not.toBeNull(), { timeout: 2000 });
+    expect(localStorage.getItem('atlas-draft')).toContain(text);
+  }
+
+  it('Ctrl+W (closing the active tab) clears the draft on Discard', async () => {
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    await dirtyAndAutosave('# A (edited, about to be discarded)');
+
+    fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Load Sample Document' })).toBeInTheDocument();
+    });
+    expect(localStorage.getItem('atlas-draft')).toBeNull();
+  });
+
+  it('the toolbar close-file button clears the draft on Discard', async () => {
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    await dirtyAndAutosave('# A (edited)');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close file' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Load Sample Document' })).toBeInTheDocument();
+    });
+    expect(localStorage.getItem('atlas-draft')).toBeNull();
+  });
+
+  it('switching tabs away from a dirty markdown document clears the draft on Discard', async () => {
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    mockOpenBinaryFile('/abs/notes.docx');
+    await openViaToolbar();
+    await screen.findByTestId('fake-viewer');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'a.md' }));
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    await dirtyAndAutosave('# A (edited before switching away)');
+
+    // Switch to the .docx tab — this is the exact repro from the bug report:
+    // discarding markdown changes by switching to a non-markdown tab, which
+    // then gates autosave off entirely and (before this fix) never cleared
+    // the draft it had already written.
+    fireEvent.click(screen.getByRole('tab', { name: 'notes.docx' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => expect(toolbarFilenameText()).toBe('notes.docx'));
+    expect(localStorage.getItem('atlas-draft')).toBeNull();
+  });
+
+  it('File > Open (Open toolbar button) while a markdown document is dirty clears the draft on Discard', async () => {
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    await dirtyAndAutosave('# A (edited)');
+
+    mockOpenMarkdownFile('/abs/other.md', '# Other');
+    await openViaToolbar();
+
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+
+    await waitFor(() => expect(toolbarFilenameText()).toBe('other.md'));
+    expect(localStorage.getItem('atlas-draft')).toBeNull();
+  });
+
+  it('Cancelling the unsaved-changes dialog leaves the draft intact (only Discard clears it)', async () => {
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    await dirtyAndAutosave('# A (edited)');
+
+    fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(toolbarFilenameText()).toBe('a.md');
+    expect(localStorage.getItem('atlas-draft')).not.toBeNull();
+  });
+
+  it('the crash-recovery banner\'s own Restore and Discard are unaffected by this fix', async () => {
+    localStorage.setItem(
+      'atlas-draft',
+      JSON.stringify({ markdown: '# Recovered', fileName: null, savedAt: Date.now() }),
+    );
+    render(<App />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/unsaved draft/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(localStorage.getItem('atlas-draft')).toBeNull();
+  });
+});
+
 describe('App — main-process close confirmation round-trip (P2.5/SHELL-02/ELEC-06)', () => {
   it('pushes the combined dirty state to main whenever it changes', async () => {
     render(<App />);
