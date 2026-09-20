@@ -768,14 +768,82 @@ describe('electron/main.cjs IPC handlers', () => {
       expect(mocks.dialog.showMessageBoxSync).toHaveBeenCalledTimes(1)
     })
 
-    it('Discard destroys the window immediately with no in-flight round trip', () => {
-      markDirty()
-      mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.DISCARD)
+    // QUIT-DRAFT-1 — Discard now round-trips through the renderer first (the
+    // symmetric counterpart to the Save branch above), so it can clear its
+    // autosave draft before the window is torn down. See
+    // `App.shellSession.test.tsx`'s "main-process discard-before-close round
+    // trip" suite for the renderer side of this; these three tests cover
+    // main's half: it waits for the acknowledgement, it destroys anyway on a
+    // bounded timeout, and it notifies before doing either.
+    describe('Discard round trip (QUIT-DRAFT-1)', () => {
+      it('notifies the renderer and does NOT destroy until it acknowledges', () => {
+        markDirty()
+        mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.DISCARD)
 
-      triggerClose()
+        triggerClose()
 
-      expect(mocks.fakeWindow.destroy).toHaveBeenCalledTimes(1)
-      expect(mocks.onceHandlers.get('save-before-close-result')?.length ?? 0).toBe(0)
+        expect(mocks.fakeWindow.webContents.send).toHaveBeenCalledWith('request-discard-before-close')
+        expect(mocks.fakeWindow.destroy).not.toHaveBeenCalled()
+        expect(mocks.onceHandlers.get('discard-before-close-result')?.length ?? 0).toBe(1)
+        // No stale Save-branch registration alongside it.
+        expect(mocks.onceHandlers.get('save-before-close-result')?.length ?? 0).toBe(0)
+      })
+
+      it('destroys the window once the renderer acknowledges, and releases the guard', () => {
+        markDirty()
+        mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.DISCARD)
+
+        triggerClose()
+        const [ackListener] = mocks.onceHandlers.get('discard-before-close-result') ?? []
+        expect(ackListener).toBeDefined()
+        ackListener?.(ALLOWED_EVENT)
+
+        expect(mocks.fakeWindow.destroy).toHaveBeenCalledTimes(1)
+
+        // The guard is released — a fresh close attempt shows its own dialog.
+        mocks.dialog.showMessageBoxSync.mockClear()
+        handler('renderer:dirty-state')(ALLOWED_EVENT, false)
+        triggerClose()
+        expect(mocks.dialog.showMessageBoxSync).not.toHaveBeenCalled()
+      })
+
+      it('destroys anyway once a bounded timeout elapses if the renderer never acknowledges (hung/crashed renderer)', () => {
+        vi.useFakeTimers()
+        try {
+          markDirty()
+          mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.DISCARD)
+
+          triggerClose()
+          expect(mocks.fakeWindow.destroy).not.toHaveBeenCalled()
+
+          // Bounded — Quit is never blocked indefinitely by an unresponsive
+          // renderer. Comfortably past main.cjs's own DISCARD_ACK_TIMEOUT_MS.
+          vi.advanceTimersByTime(5000)
+
+          expect(mocks.fakeWindow.destroy).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('a late acknowledgement after the timeout already fired is a harmless no-op (destroy still called exactly once)', () => {
+        vi.useFakeTimers()
+        try {
+          markDirty()
+          mocks.dialog.showMessageBoxSync.mockReturnValue(CLOSE_PROMPT_CHOICE.DISCARD)
+
+          triggerClose()
+          vi.advanceTimersByTime(5000)
+          expect(mocks.fakeWindow.destroy).toHaveBeenCalledTimes(1)
+
+          const [ackListener] = mocks.onceHandlers.get('discard-before-close-result') ?? []
+          ackListener?.(ALLOWED_EVENT)
+
+          expect(mocks.fakeWindow.destroy).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
     })
 
     it('Cancel releases the guard immediately, allowing a fresh close attempt', () => {

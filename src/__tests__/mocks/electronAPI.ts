@@ -48,6 +48,8 @@ export function createMockElectronAPI(overrides: Partial<MockElectronAPI> = {}):
     notifyDirtyState: vi.fn(),
     onRequestSaveBeforeClose: vi.fn().mockReturnValue(() => {}),
     reportSaveBeforeCloseResult: vi.fn(),
+    onRequestDiscardBeforeClose: vi.fn().mockReturnValue(() => {}),
+    reportDiscardBeforeCloseResult: vi.fn(),
     openFileBinary: vi.fn().mockResolvedValue({ canceled: true, path: '', buffer: new ArrayBuffer(0) }),
     newDocument: vi.fn().mockResolvedValue({ created: false }),
     readBinaryByPath: vi.fn().mockResolvedValue({ path: '', buffer: new ArrayBuffer(0) }),

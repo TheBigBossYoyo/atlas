@@ -1115,6 +1115,29 @@ function AppShell() {
     });
   }, []);
 
+  // QUIT-DRAFT-1 — main asks the renderer to clear its autosave draft (the
+  // user chose "Discard" in the native Quit close-confirmation prompt)
+  // before it destroys the window; without this round trip a draft for
+  // content the user just discarded survived in `localStorage` and could
+  // later be offered back as "recovered" content after an unrelated crash.
+  // Mirrors `handleUnsavedDialogDiscard`'s own check — only the ACTIVE
+  // document being discarded's draft is this document's to clear, so this
+  // reads `dirtyGuardStateRef.current.isMarkdownDocument` (a ref, always
+  // current) rather than `isMarkdownDocument` directly, the same mount-once-
+  // listener pattern as `onRequestSaveBeforeClose` above and for the same
+  // reason (see `saveFileRef`'s comment) — subscribed once for the app
+  // shell's whole lifetime, never re-registered as the document changes.
+  // Reports back unconditionally (even when there was no draft to clear) so
+  // main's bounded wait resolves immediately instead of via its timeout.
+  useEffect(() => {
+    return window.electronAPI?.onRequestDiscardBeforeClose?.(() => {
+      if (dirtyGuardStateRef.current.isMarkdownDocument) {
+        clearDraft();
+      }
+      window.electronAPI?.reportDiscardBeforeCloseResult?.();
+    });
+  }, []);
+
   // Warn before unloading with unsaved changes (browser-tab-mode fallback —
   // the packaged Electron app is guarded by the main-process `close` handler
   // above instead, since Chromium/Electron never surfaces a visible prompt

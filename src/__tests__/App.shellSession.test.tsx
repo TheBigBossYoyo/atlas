@@ -65,6 +65,8 @@ function buildElectronAPI(overrides: Partial<typeof window.electronAPI> = {}): t
     notifyDirtyState: vi.fn(),
     onRequestSaveBeforeClose: vi.fn().mockReturnValue(() => {}),
     reportSaveBeforeCloseResult: vi.fn(),
+    onRequestDiscardBeforeClose: vi.fn().mockReturnValue(() => {}),
+    reportDiscardBeforeCloseResult: vi.fn(),
     ...overrides,
   } as typeof window.electronAPI;
 }
@@ -530,6 +532,114 @@ describe('App — main-process close confirmation round-trip (P2.5/SHELL-02/ELEC
     // must be registered exactly once, for the app shell's whole lifetime,
     // no matter how much the document underneath it changes.
     expect(window.electronAPI!.onRequestSaveBeforeClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('App — main-process discard-before-close round trip (QUIT-DRAFT-1)', () => {
+  // Types into the editor and waits for the REAL 800ms autosave debounce to
+  // actually persist a draft — mirrors the DRAFT-1 suite above's own
+  // `dirtyAndAutosave`, so this proves the live autosave wiring is cleared,
+  // not just that the assertion can read the key.
+  async function dirtyAndAutosave(text: string) {
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: text },
+    });
+    await waitFor(() => expect(toolbarIsDirty()).toBe(true));
+    await waitFor(() => expect(localStorage.getItem('atlas-draft')).not.toBeNull(), { timeout: 2000 });
+    expect(localStorage.getItem('atlas-draft')).toContain(text);
+  }
+
+  it('clears the draft and acknowledges when main requests a discard-before-close (Quit + Discard)', async () => {
+    let requestDiscard: (() => void) | null = null;
+    window.electronAPI!.onRequestDiscardBeforeClose = vi.fn().mockImplementation((cb: () => void) => {
+      requestDiscard = cb;
+      return () => {};
+    });
+
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    await dirtyAndAutosave('# A (edited, about to be quit-discarded)');
+
+    act(() => {
+      requestDiscard?.();
+    });
+
+    expect(localStorage.getItem('atlas-draft')).toBeNull();
+    expect(window.electronAPI!.reportDiscardBeforeCloseResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('acknowledges even when there is no draft to clear, so main is never left waiting out its timeout needlessly', async () => {
+    let requestDiscard: (() => void) | null = null;
+    window.electronAPI!.onRequestDiscardBeforeClose = vi.fn().mockImplementation((cb: () => void) => {
+      requestDiscard = cb;
+      return () => {};
+    });
+
+    render(<App />);
+
+    act(() => {
+      requestDiscard?.();
+    });
+
+    expect(window.electronAPI!.reportDiscardBeforeCloseResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear an existing draft when the discard is for the active NON-markdown document (do-not-over-clear)', async () => {
+    // Mirrors handleUnsavedDialogDiscard's own same-shaped guard (see its
+    // comment in App.tsx): a genuine crash-recovery draft left over from an
+    // earlier markdown session must survive a Quit+Discard of an unrelated,
+    // currently-active non-markdown document.
+    localStorage.setItem(
+      'atlas-draft',
+      JSON.stringify({ markdown: '# Earlier crash, still unrecovered', fileName: null, savedAt: Date.now() }),
+    );
+
+    let requestDiscard: (() => void) | null = null;
+    window.electronAPI!.onRequestDiscardBeforeClose = vi.fn().mockImplementation((cb: () => void) => {
+      requestDiscard = cb;
+      return () => {};
+    });
+
+    render(<App />);
+    // Dismiss the crash-recovery banner's own offer without discarding it,
+    // so the draft is still sitting in storage when Quit fires below.
+    await screen.findByRole('alert');
+
+    mockOpenBinaryFile('/abs/notes.docx');
+    await openViaToolbar();
+    await screen.findByTestId('fake-viewer');
+
+    act(() => {
+      requestDiscard?.();
+    });
+
+    expect(localStorage.getItem('atlas-draft')).not.toBeNull();
+    expect(window.electronAPI!.reportDiscardBeforeCloseResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('subscribes onRequestDiscardBeforeClose exactly once, even as the document changes underneath it (mount-once, mirrors the Save listener)', async () => {
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (edited)' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (edited again)' },
+    });
+
+    await waitFor(() => {
+      expect(window.electronAPI!.notifyDirtyState).toHaveBeenCalledWith(true);
+    });
+
+    expect(window.electronAPI!.onRequestDiscardBeforeClose).toHaveBeenCalledTimes(1);
   });
 });
 

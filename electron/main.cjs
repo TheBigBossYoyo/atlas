@@ -555,6 +555,63 @@ function applyCrashHandlers(win) {
 /** @type {boolean} */
 let closeConfirmationInFlight = false;
 
+// QUIT-DRAFT-1 — symmetric counterpart to the Save round trip below, for
+// Discard. Before this, `destroy()` ran immediately on Discard with no
+// notice to the renderer at all, so the autosave draft in `localStorage`
+// (see `src/hooks/useAutosave.ts`) for the content just discarded was never
+// cleared — the App.tsx-side handlers (`handleUnsavedDialogDiscard`) only
+// cover discards that resolve through the renderer's OWN dialog (Ctrl+W,
+// Close, tab switches, File > Open); a Quit's native dialog lives entirely
+// in main and never round-trips through the renderer at all otherwise. A
+// stale draft is not itself data loss, but it corrupts the crash-recovery
+// feature's trust: the NEXT time Atlas crashes for an unrelated reason, it
+// would offer to "recover" content the user explicitly threw away.
+//
+// Bounded, not awaited indefinitely: a hung or crashed renderer must still
+// let Quit proceed, so this races the acknowledgement against a short
+// timeout and destroys the window on whichever settles first. A fire-and-
+// forget `send` immediately followed by `destroy()` was considered and
+// rejected — nothing then guarantees the renderer's IPC listener actually
+// gets a turn to run its `clearDraft()` (a `localStorage.removeItem`, itself
+// synchronous) before Electron tears the renderer down; racing an explicit
+// acknowledgement against a bounded timeout is the same shape the Save
+// branch already uses (and already ships, tested, below) to guarantee the
+// renderer got to act, just with a short ceiling instead of an open-ended
+// wait, since discard-before-close needs no interactive round trip (no
+// dialog, no I/O) beyond one synchronous localStorage write acknowledged
+// back over IPC.
+const DISCARD_ACK_TIMEOUT_MS = 500;
+
+/**
+ * @param {BrowserWindow} win the window to destroy once the renderer has
+ *   acknowledged (or the bounded wait above has elapsed)
+ */
+function notifyRendererDiscardThenClose(win) {
+  let settled = false;
+  /** @type {ReturnType<typeof setTimeout>} */
+  let timeoutId;
+
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeoutId);
+    closeConfirmationInFlight = false;
+    if (!win.isDestroyed()) win.destroy();
+  };
+
+  // `once` — this window is being destroyed either way, so there is at most
+  // one acknowledgement to ever expect for it.
+  ipcMain.once('discard-before-close-result', finish);
+  timeoutId = setTimeout(finish, DISCARD_ACK_TIMEOUT_MS);
+
+  try {
+    win.webContents.send('request-discard-before-close');
+  } catch {
+    // A send failure (e.g. webContents already gone) just falls through to
+    // the timeout above rather than hanging the close.
+  }
+}
+
 /**
  * P2.5/SHELL-02/ELEC-06 — blocks the native window close while the renderer
  * has reported unsaved changes (`rendererDirty`, kept current by the
@@ -564,7 +621,10 @@ let closeConfirmationInFlight = false;
  * whichever save the active document-session contract (P1.1) has
  * registered, exactly like Ctrl+S/the Save button would — and only actually
  * closes the window once that save reports success, so a failed save never
- * silently loses the user's only warning.
+ * silently loses the user's only warning. "Discard" round-trips too (see
+ * `notifyRendererDiscardThenClose` above, QUIT-DRAFT-1) so the renderer gets
+ * a bounded chance to clear its autosave draft before the window is torn
+ * down.
  *
  * @param {Electron.Event} event
  */
@@ -596,8 +656,10 @@ function handleWindowCloseRequest(event) {
 
   if (action === 'discard') {
     rendererDirty = false;
-    closeConfirmationInFlight = false;
-    mainWindow.destroy();
+    // The in-flight guard above ensures at most one of these round trips is
+    // ever pending at a time — same invariant the 'save' branch below relies
+    // on for its own `ipcMain.once` registration.
+    notifyRendererDiscardThenClose(mainWindow);
     return;
   }
 

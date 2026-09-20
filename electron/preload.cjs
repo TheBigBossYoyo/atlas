@@ -79,6 +79,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   /** @param {{ saved: boolean }} result */
   reportSaveBeforeCloseResult: (result) => ipcRenderer.send('save-before-close-result', result),
+  // QUIT-DRAFT-1 — symmetric counterpart to the pair above, for Discard: main
+  // asks the renderer to clear its autosave draft (see `src/hooks/
+  // useAutosave.ts`'s `clearDraft`) before it destroys the window, and waits
+  // (briefly — see `notifyRendererDiscardThenClose` in main.cjs) for this
+  // acknowledgement so a fire-and-forget `send` can't race the teardown.
+  /** @param {() => void} callback */
+  onRequestDiscardBeforeClose: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('request-discard-before-close', handler);
+    return () => ipcRenderer.removeListener('request-discard-before-close', handler);
+  },
+  reportDiscardBeforeCloseResult: () => ipcRenderer.send('discard-before-close-result'),
   openFileBinary: () => ipcRenderer.invoke('dialog:openFileBinary'),
   // NEW-01 — creates a brand-new document (native Save dialog + a blank
   // template written atomically) for the toolbar's "New" action / Ctrl+N.
