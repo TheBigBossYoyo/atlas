@@ -18,6 +18,7 @@ import type {
   TableRow,
   TextNode,
   Twip,
+  Width,
 } from '../model'
 import { twip } from '../model'
 import { replaceHeaderFooterBlocks } from './headerFooter'
@@ -393,23 +394,48 @@ function applyInsertHyperlink(
   }
 }
 
-/** DXE-19 — builds the default empty `rows` x `cols` grid `applyInsertTable`
+/**
+ * DXE-19 — builds the default empty `rows` x `cols` grid `applyInsertTable`
  * uses when the caller (the toolbar's table-size picker) doesn't supply a
  * fully-built `table` of its own (paste fidelity's own content-bearing
  * table, inserted verbatim instead — see `InsertTableCommand`'s doc
- * comment). */
+ * comment).
+ *
+ * DOCX-16 — every cell also gets an explicit `tcW` matching its `tblGrid`
+ * column, and the table gets a matching `tblW`. `tblGrid` alone is *not*
+ * enough: `layoutTable.ts`'s autofit column-width algorithm (the path taken
+ * whenever `tblLayout` isn't `"fixed"`, which a freshly inserted table never
+ * sets) measures each column's width from its cells' *content* — see
+ * `measureCellWidth`'s `preferredWidthPt` fallback to `cell.props?.tcW`, and
+ * `tableColumnCount`'s comment that `tblGrid` is only "consumed directly for
+ * `w:tblLayout=\"fixed\"` tables instead of measuring content". A brand new
+ * table's cells are empty (no measurable text), so without a `tcW` every
+ * column's min/max width comes out to exactly 0 and `distributeColumnWidths`
+ * renders the whole table at zero width — reproduced by driving the real
+ * app's Insert Table toolbar button, not merely inferred. Matches Word's own
+ * emitted markup for a freshly inserted table (explicit per-cell `tcW`
+ * alongside `tblGrid`), and keeps the table on the normal autofit path so it
+ * still grows a column as content is typed into it.
+ */
 function buildEmptyTable(rows: number, cols: number): Table {
   const TOTAL_WIDTH_TWIPS = 9000
   const columnWidth = twip(Math.max(1, Math.floor(TOTAL_WIDTH_TWIPS / cols)))
   const tblGrid = freezeArray(Array.from({ length: cols }, () => columnWidth))
+  const cellWidth: Width = { type: 'dxa', value: columnWidth }
+  const tableWidth: Width = { type: 'dxa', value: twip(TOTAL_WIDTH_TWIPS) }
 
   const makeCell = (): TableCell =>
-    Object.freeze({ kind: 'table-cell', blocks: freezeArray<Block>([emptyParagraph()]) })
+    Object.freeze({
+      kind: 'table-cell',
+      props: { tcW: cellWidth },
+      blocks: freezeArray<Block>([emptyParagraph()]),
+    })
   const makeRow = (): TableRow =>
     Object.freeze({ kind: 'table-row', cells: freezeArray(Array.from({ length: cols }, makeCell)) })
 
   return Object.freeze({
     kind: 'table',
+    props: { tblW: tableWidth },
     tblGrid,
     rows: freezeArray(Array.from({ length: rows }, makeRow)),
   })
@@ -462,8 +488,33 @@ function applyInsertTable(
   const nextDocument = setBlocksAtPrefix(doc, resolvedPath.sectionIndex, prefix, nextSiblingBlocks)
 
   const inverseAt = freezeArray([resolvedPath.sectionIndex, ...prefix, index])
-  const firstCellPath = freezeArray([resolvedPath.sectionIndex, ...prefix, index + 1, 0, 0, 0])
-  const cursor = createPosition(firstCellPath, 0, 0)
+  // DOCX-16 — this used to target the table's first cell
+  // ([...prefix, index + 1, 0, 0, 0]), which is a real, correctly-addressed
+  // *document-model* position (`findParagraph`/`updateBlocksAtPath` resolve
+  // it fine — table structural edits address cells exactly this way). But
+  // nothing under a `<table>` in the rendered DOM currently carries a
+  // `data-paragraph-path` (`PageView.tsx`'s `renderPageTableRow` replays
+  // each cell's lines through `renderLine` without ever passing it a
+  // `paragraphPath` — the same gap behind the sibling "caret can't be
+  // placed in any table cell" bug, pre-existing tables included, tracked
+  // separately). `Cursor.ts`'s `positionToDomRange` — what
+  // `DocxViewer.tsx`'s `syncSelectionToDom` uses to move the browser's
+  // actual selection after a command runs — can then never resolve that
+  // position, so `syncSelectionToDom` silently no-ops instead of moving
+  // focus, and the toolbar's now-unmounted popover button was the last
+  // focused element: focus is left on `<body>`, and every subsequent
+  // keystroke reaches nothing at all. Verified by driving the real app —
+  // this is the actual mechanism behind "text typed after inserting a table
+  // is silently discarded," not a bug in this command's document-model
+  // splice, which is correct on its own.
+  //
+  // Until table-cell content is addressable in the DOM, park the cursor on
+  // the empty paragraph this command already inserts right after the table
+  // instead — a plain top-level paragraph, addressable the same as any
+  // other, so `syncSelectionToDom` succeeds, focus lands back in the editor,
+  // and typed text goes somewhere real and predictable instead of vanishing.
+  const afterParagraphPath = freezeArray([resolvedPath.sectionIndex, ...prefix, index + 2])
+  const cursor = createPosition(afterParagraphPath, 0, 0)
 
   return {
     document: nextDocument,

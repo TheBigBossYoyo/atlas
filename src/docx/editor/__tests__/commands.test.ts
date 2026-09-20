@@ -18,6 +18,7 @@ import type {
   Section,
   Style,
   Table,
+  TableCell,
   TableRow,
 } from '../../model'
 import { twip } from '../../model'
@@ -669,6 +670,102 @@ describe('docx editor commands', () => {
 
     const reverted = applyCommand(result.document, result.inverse)
     expect(reverted.document).toEqual(original)
+  })
+
+  // DOCX-16 — a freshly inserted table used to render at zero width: every
+  // cell was built with no `tcW` and the table with no `tblW`/`tblLayout`,
+  // so `layoutTable.ts`'s autofit column-width algorithm (the path an
+  // un-styled `tblLayout` always takes) measured each empty cell's content
+  // as 0pt wide and rendered the whole table with no area at all — found by
+  // driving the real app's Insert Table toolbar button, not merely
+  // inferred. `buildEmptyTable` must give every cell an explicit `tcW`
+  // (and the table a `tblW`) matching its `tblGrid` column so autofit has a
+  // real preferred width to fall back on for empty content.
+  it('InsertTable gives every cell an explicit tcW and the table a tblW, matching tblGrid', () => {
+    const original = createDocument([createParagraph(['AtlasDoc'])])
+
+    const result = applyCommand(original, {
+      kind: 'insert-table',
+      at: position([0], 0, 5),
+      rows: 1,
+      cols: 3,
+    })
+
+    const table = result.document.sections[0].blocks[1] as Table
+    const grid = table.tblGrid ?? []
+    expect(grid.length).toBe(3)
+    expect(table.props?.tblW).toMatchObject({ type: 'dxa' })
+    expect(table.props?.tblW?.value).toBe(grid.reduce((sum, width) => sum + width, 0))
+
+    const row = table.rows[0] as TableRow
+    const cells = row.cells as ReadonlyArray<TableCell>
+    expect(cells).toHaveLength(3)
+    for (const [index, cell] of cells.entries()) {
+      expect(cell.props?.tcW).toEqual({ type: 'dxa', value: grid[index] })
+    }
+  })
+
+  // DOCX-16 — `layoutTable.ts` (the real layout engine, not a mock) must
+  // actually turn `buildEmptyTable`'s geometry into a non-zero rendered
+  // width; a `tblGrid`/`tcW` with the right numbers on paper doesn't
+  // guarantee that if the autofit algorithm ignores them.
+  it('InsertTable geometry lays out to a non-zero width through the real layoutTable engine', async () => {
+    const original = createDocument([createParagraph(['AtlasDoc'])])
+
+    const result = applyCommand(original, {
+      kind: 'insert-table',
+      at: position([0], 0, 5),
+      rows: 1,
+      cols: 3,
+    })
+
+    const table = result.document.sections[0].blocks[1] as Table
+    const { layoutTable } = await import('../../layout/layoutTable')
+    const fontResolver: Parameters<typeof layoutTable>[0]['fontResolver'] = async () =>
+      ({
+        unitsPerEm: 1000,
+        ascender: 800,
+        descender: -200,
+        lineGap: 0,
+        advanceWidth: 5,
+      }) as unknown as Awaited<ReturnType<Parameters<typeof layoutTable>[0]['fontResolver']>>
+    const laidOut = await layoutTable({
+      table,
+      availableWidthPt: 450,
+      fontResolver,
+    })
+
+    expect(laidOut.widthPt).toBeGreaterThan(0)
+    expect(laidOut.columnWidthsPt.every((widthPt) => widthPt > 0)).toBe(true)
+  })
+
+  // DOCX-16 — the returned cursor used to target the table's first cell.
+  // That's a valid *document-model* position, but nothing under a
+  // `<table>` is addressable in the rendered DOM yet (tracked separately —
+  // the same gap behind the "caret can't be placed in any table cell" bug),
+  // so the app's DOM-selection sync silently failed to find it, leaving
+  // focus stranded outside the editor and every subsequent keystroke
+  // discarded — verified by driving the real app. Parking the cursor on the
+  // empty paragraph this command already inserts right after the table (a
+  // plain, always-addressable paragraph) means typed text always lands
+  // somewhere real instead of vanishing.
+  it('InsertTable leaves the cursor on the addressable paragraph right after the table, not inside it', () => {
+    const original = createDocument([createParagraph(['AtlasDoc'])])
+
+    const result = applyCommand(original, {
+      kind: 'insert-table',
+      at: position([0], 0, 5),
+      rows: 2,
+      cols: 3,
+    })
+
+    expect(result.range).toEqual({
+      anchor: position([0, 2], 0, 0),
+      focus: position([0, 2], 0, 0),
+    })
+    // And that path really does resolve to the trailing "Doc" paragraph the
+    // split produced, not into the table.
+    expect(findParagraph(result.document, [2])).toBe(result.document.sections[0].blocks[2])
   })
 
   it("InsertTable inserts a caller-supplied table verbatim when `table` is given (DXE-19 paste fidelity)", () => {
