@@ -16,6 +16,7 @@ import { bookTypeForExtension } from './spreadsheet/spreadsheetWrite'
 import { SpreadsheetEditToolbar } from './spreadsheet/SpreadsheetEditToolbar'
 import { FrozenRowsStrip } from './spreadsheet/FrozenRowsStrip'
 import { isTableHeaderCell } from './spreadsheet/spreadsheetTables'
+import { useTranslate } from '../i18n'
 import './__styles__/viewer-spreadsheet.css'
 
 // Lazy load the grid (shared/SpreadsheetDataEditor pulls in glide-data-grid and its CSS)
@@ -29,19 +30,24 @@ const ROW_MARKER_WIDTH_PX = 44
 
 type WorkbookFormatOption = {
   readonly id: string
-  readonly label: string
+  readonly labelKey: string
   readonly extension: string
   readonly filterName: string
 }
 
-/** Save As format choices offered for the xlsx/ods family (the plan's "Save As with format choice"). */
+/**
+ * Save As format choices offered for the xlsx/ods family (the plan's "Save
+ * As with format choice"). `filterName` is the native OS Save dialog's
+ * filter description (an Electron/Windows-level string, not one of this
+ * array's own JSX) — left in English rather than plumbed through i18n.
+ */
 const WORKBOOK_SAVE_FORMATS: ReadonlyArray<WorkbookFormatOption> = [
-  { id: 'xlsx', label: 'Excel Workbook (.xlsx)', extension: 'xlsx', filterName: 'Excel Workbook' },
-  { id: 'xlsm', label: 'Excel Macro-Enabled Workbook (.xlsm)', extension: 'xlsm', filterName: 'Excel Macro-Enabled Workbook' },
-  { id: 'xlsb', label: 'Excel Binary Workbook (.xlsb)', extension: 'xlsb', filterName: 'Excel Binary Workbook' },
-  { id: 'xls', label: 'Excel 97-2003 Workbook (.xls)', extension: 'xls', filterName: 'Excel 97-2003 Workbook' },
-  { id: 'ods', label: 'OpenDocument Spreadsheet (.ods)', extension: 'ods', filterName: 'OpenDocument Spreadsheet' },
-  { id: 'fods', label: 'Flat OpenDocument Spreadsheet (.fods)', extension: 'fods', filterName: 'Flat OpenDocument Spreadsheet' },
+  { id: 'xlsx', labelKey: 'spreadsheet.format.xlsx', extension: 'xlsx', filterName: 'Excel Workbook' },
+  { id: 'xlsm', labelKey: 'spreadsheet.format.xlsm', extension: 'xlsm', filterName: 'Excel Macro-Enabled Workbook' },
+  { id: 'xlsb', labelKey: 'spreadsheet.format.xlsb', extension: 'xlsb', filterName: 'Excel Binary Workbook' },
+  { id: 'xls', labelKey: 'spreadsheet.format.xls', extension: 'xls', filterName: 'Excel 97-2003 Workbook' },
+  { id: 'ods', labelKey: 'spreadsheet.format.ods', extension: 'ods', filterName: 'OpenDocument Spreadsheet' },
+  { id: 'fods', labelKey: 'spreadsheet.format.fods', extension: 'fods', filterName: 'Flat OpenDocument Spreadsheet' },
 ]
 
 /** `useSpreadsheetGrid`'s own columns always set an explicit `width` (see that hook), but `GridColumn`'s library type also allows a width-less `AutoGridColumn` — narrow defensively rather than asserting. */
@@ -76,6 +82,7 @@ function workbookTargetFor(formatId: string): SpreadsheetSaveTarget {
 const LEGACY_SAVE_AS_XLSX_ONLY: ReadonlySet<string> = new Set(['xls', 'xlsb', 'fods'])
 
 function SpreadsheetViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
   const registerFind = useRegisterViewerFind()
@@ -333,8 +340,8 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   )
 
   const saveFormats = useMemo(
-    () => WORKBOOK_SAVE_FORMATS.map((f) => ({ id: f.id, label: f.label })),
-    [],
+    () => WORKBOOK_SAVE_FORMATS.map((f) => ({ id: f.id, label: t(f.labelKey) })),
+    [t],
   )
 
   const handleSaveAs = useCallback(
@@ -373,7 +380,12 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
       />
       <div className="spreadsheet-viewer__toolbar">
         <div className="spreadsheet-viewer__stats">
-          {activeSheet ? `${filteredRows.length} rows × ${activeSheet.colCount} columns` : ''}
+          {activeSheet
+            ? t('spreadsheet.dimensions', {
+                rows: t('spreadsheet.rowsCount', { count: filteredRows.length }),
+                cols: t('spreadsheet.colsCount', { count: activeSheet.colCount }),
+              })
+            : ''}
         </div>
         <div className="spreadsheet-viewer__toolbar-actions">
           {hasHiddenSheets && (
@@ -381,17 +393,17 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
               type="button"
               className="spreadsheet-viewer__hidden-toggle"
               onClick={() => setShowHiddenSheets((prev) => !prev)}
-              title={showHiddenSheets ? 'Hide hidden sheets' : 'Show hidden sheets'}
+              title={showHiddenSheets ? t('spreadsheet.hideHiddenSheets') : t('spreadsheet.showHiddenSheets')}
               aria-pressed={showHiddenSheets}
             >
               {showHiddenSheets ? <EyeOff size={14} /> : <Eye size={14} />}
-              {showHiddenSheets ? 'Hide hidden sheets' : 'Show hidden sheets'}
+              {showHiddenSheets ? t('spreadsheet.hideHiddenSheets') : t('spreadsheet.showHiddenSheets')}
             </button>
           )}
           <div className="spreadsheet-viewer__search">
             <input
               type="search"
-              placeholder="Search rows..."
+              placeholder={t('spreadsheet.searchRowsPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -428,7 +440,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         {isFiltering && filteredRows.length === 0 ? (
           <div className="spreadsheet-viewer__empty">
             <FileSpreadsheet size={48} />
-            <p>{search ? 'No rows match your search.' : 'This sheet is empty.'}</p>
+            <p>{search ? t('spreadsheet.noSearchResults') : t('spreadsheet.emptySheet')}</p>
           </div>
         ) : (
           <Suspense fallback={null}>
@@ -470,7 +482,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
                 className="spreadsheet-viewer__tab-rename"
                 defaultValue={sheet.name}
                 autoFocus
-                aria-label={`Rename sheet ${sheet.name}`}
+                aria-label={t('spreadsheet.renameSheetAria', { name: sheet.name })}
                 onBlur={(e) => {
                   commitRename(sheet.name, e.currentTarget.value)
                   setRenamingSheet(null)
@@ -489,7 +501,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
                   setSearch('')
                 }}
                 onDoubleClick={() => setRenamingSheet(sheet.name)}
-                title="Double-click to rename"
+                title={t('spreadsheet.renameSheetTitle')}
               >
                 <Table size={14} />
                 {sheet.name}
@@ -499,8 +511,8 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
               <button
                 type="button"
                 className="spreadsheet-viewer__tab-delete"
-                aria-label={`Delete sheet ${sheet.name}`}
-                title={`Delete sheet ${sheet.name}`}
+                aria-label={t('spreadsheet.deleteSheetAria', { name: sheet.name })}
+                title={t('spreadsheet.deleteSheetTitle', { name: sheet.name })}
                 onClick={() => {
                   const idx = sheets.findIndex((s) => s.name === sheet.name)
                   if (idx >= 0) editor.deleteSheet(idx)
@@ -515,8 +527,8 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
           type="button"
           className="spreadsheet-viewer__tab-add"
           onClick={() => editor.addSheet()}
-          aria-label="Add sheet"
-          title="Add sheet"
+          aria-label={t('spreadsheet.addSheetAria')}
+          title={t('spreadsheet.addSheetTitle')}
         >
           <Plus size={14} />
         </button>

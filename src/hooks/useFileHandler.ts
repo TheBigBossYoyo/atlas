@@ -3,6 +3,7 @@ import type { LoadedFile, FormatId } from '../formats/types';
 import { detectByExtension, detectByMagic, looksLikeText } from '../formats/detect';
 import { decodeTextBuffer } from '../utils/textDecoding';
 import type { RecentFile } from '../types';
+import { t } from '../i18n';
 
 // ---------------------------------------------------------------------------
 // Format class sets — single source of truth for routing decisions
@@ -16,8 +17,12 @@ const BINARY_CLASS_FORMATS = new Set<FormatId>([
   'pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'doc', 'ppt',
 ]);
 
-const BROWSER_MODE_ERROR =
-  'This feature requires the Atlas desktop app — file access is unavailable in a plain browser tab.';
+// i18n — functions (not string constants) so each call reflects whatever the
+// UI language is AT THE TIME the error actually occurs, not whatever it was
+// when this module first evaluated.
+function browserModeError(): string {
+  return t('errors.browserModeUnavailable');
+}
 
 // UX — `open-file-by-path` (main process) resolves to `null`, rather than
 // throwing, when the target no longer exists on disk (a stale "Recent"
@@ -26,8 +31,9 @@ const BROWSER_MODE_ERROR =
 // `file:readBinaryByPath` handler (the binary-class equivalent of this same
 // failure) instead of the old `Failed to read file: ${absPath}`, which read
 // as a raw dev-facing string and leaked the full filesystem path into the UI.
-const FILE_NOT_FOUND_ERROR =
-  'This file could not be found — it may have been moved, renamed, or deleted.';
+function fileNotFoundError(): string {
+  return t('errors.fileNotFound');
+}
 
 // P2.14/LOAD-04 — human-readable labels for the "extension vs. actual
 // contents disagree" confirm prompt below. Falls back to the bare FormatId
@@ -175,7 +181,7 @@ export function useFileHandler({
     // dev` in a plain browser tab) must fail with a friendly, surfaced error
     // instead of throwing on a non-null assertion.
     if (typeof window === 'undefined' || !window.electronAPI) {
-      setError(BROWSER_MODE_ERROR);
+      setError(browserModeError());
       return;
     }
     const electronAPI = window.electronAPI;
@@ -214,7 +220,7 @@ export function useFileHandler({
           };
         } else {
           const data = await electronAPI.openFileByPath(absPath);
-          if (!data) throw new Error(FILE_NOT_FOUND_ERROR);
+          if (!data) throw new Error(fileNotFoundError());
           loaded = {
             kind: 'text',
             content: data.content,
@@ -305,7 +311,7 @@ export function useFileHandler({
 
   const openDialog = useCallback(async (): Promise<void> => {
     if (typeof window === 'undefined' || !window.electronAPI) {
-      setError(BROWSER_MODE_ERROR);
+      setError(browserModeError());
       return;
     }
     const electronAPI = window.electronAPI;

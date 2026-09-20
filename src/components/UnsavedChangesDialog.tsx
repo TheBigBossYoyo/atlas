@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { useShellShortcut } from '../hooks/useShortcutManager';
+import { useTranslate } from '../i18n';
 
 interface UnsavedChangesDialogProps {
   isOpen: boolean;
@@ -27,6 +28,7 @@ export function UnsavedChangesDialog({
   onDiscard,
   onCancel,
 }: UnsavedChangesDialogProps) {
+  const t = useTranslate();
   const dialogRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
@@ -96,9 +98,9 @@ export function UnsavedChangesDialog({
         <div className="confirm-dialog__icon">
           <AlertTriangle size={22} aria-hidden="true" />
         </div>
-        <h2 id="unsaved-changes-title" className="modal__title">Unsaved changes</h2>
+        <h2 id="unsaved-changes-title" className="modal__title">{t('unsavedDialog.title')}</h2>
         <p className="confirm-dialog__body">
-          This document has unsaved changes. Save them before continuing, discard them, or cancel.
+          {t('unsavedDialog.body')}
         </p>
         {errorMessage && (
           <p className="confirm-dialog__error" role="alert">{errorMessage}</p>
@@ -109,21 +111,21 @@ export function UnsavedChangesDialog({
             onClick={onCancel}
             disabled={isSaving}
           >
-            Cancel
+            {t('unsavedDialog.cancel')}
           </button>
           <button
             className="confirm-dialog__btn confirm-dialog__btn--danger"
             onClick={onDiscard}
             disabled={isSaving}
           >
-            Discard
+            {t('unsavedDialog.discard')}
           </button>
           <button
             className="confirm-dialog__btn confirm-dialog__btn--primary"
             onClick={onSave}
             disabled={isSaving}
           >
-            {isSaving ? 'Saving…' : 'Save'}
+            {isSaving ? t('unsavedDialog.saving') : t('unsavedDialog.save')}
           </button>
         </div>
       </div>

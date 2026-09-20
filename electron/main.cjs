@@ -7,7 +7,7 @@ const { createPathAllowlist } = require('./lib/pathAllowlist.cjs');
 const { createRecentFilesStore } = require('./lib/recentFilesStore.cjs');
 const { listSystemFontFamilies } = require('./lib/systemFonts.cjs');
 const { createCodeRunner, runtimeFor: runCodeRuntimeFor } = require('./lib/codeRunner.cjs');
-const { atomicWriteFile, FileLockedError, classifyWriteError } = require('./lib/atomicWrite.cjs');
+const { atomicWriteFile, FileLockedError, classifyWriteError, classifyWriteErrorCode } = require('./lib/atomicWrite.cjs');
 const { printHtmlToPdfBuffer, PrintToPdfError } = require('./lib/printToPdf.cjs');
 const { decodeTextBuffer } = require('./lib/textDecoding.cjs');
 const { buildContentSecurityPolicy } = require('./lib/csp.cjs');
@@ -892,6 +892,7 @@ ipcMain.handle('save-file', async (event, req) => {
     return {
       saved: false,
       error: err instanceof FileLockedError ? err.message : classifyWriteError(err),
+      errorCode: classifyWriteErrorCode(err),
     };
   }
 });
@@ -927,6 +928,7 @@ ipcMain.handle('save-binary-file', async (event, req) => {
     return {
       saved: false,
       error: err instanceof FileLockedError ? err.message : classifyWriteError(err),
+      errorCode: classifyWriteErrorCode(err),
     };
   }
 });
@@ -973,6 +975,7 @@ ipcMain.handle('document:new', async (event, formatId) => {
     return {
       created: false,
       error: err instanceof FileLockedError ? err.message : (classifyWriteError(err) ?? 'Could not create the new document.'),
+      errorCode: err instanceof FileLockedError ? 'fileLocked' : (classifyWriteErrorCode(err) ?? 'unknownNewDocument'),
     };
   }
 });
@@ -1232,6 +1235,10 @@ ipcMain.on('set-theme', (_event, theme) => {
     });
   }
 });
+
+// i18n — backs the renderer's "System" language option (`src/i18n`), which
+// has no web-platform equivalent of `app.getLocale()`.
+ipcMain.handle('app:get-locale', () => app.getLocale());
 
 // ---- App lifecycle ---- //
 

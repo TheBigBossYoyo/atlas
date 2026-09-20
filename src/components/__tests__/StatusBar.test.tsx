@@ -6,7 +6,15 @@ import { ViewerProvider } from '../../viewers/shared/ViewerContext';
 import { useSetViewerStats } from '../../viewers/shared/useViewerContext';
 import { StatusBar } from '../StatusBar';
 
-const formatNumber = (value: number) => new Intl.NumberFormat().format(value);
+// i18n — StatusBar's counts now go through `src/i18n`'s translate/interpolate
+// pipeline, which formats numbers with an explicit `Intl.NumberFormat('en-US')`
+// for the English locale (see `translate.ts`'s `numberFormatterFor`) rather
+// than the environment's own unspecified default locale (previously
+// `new Intl.NumberFormat()` with no locale argument, at either call site —
+// this environment's own ICU default isn't `en-US`, e.g. it renders 1200 as
+// "1 200"). Matching that explicit locale here keeps this test verifying the
+// same thing regardless of the machine it runs on.
+const formatNumber = (value: number) => new Intl.NumberFormat('en-US').format(value);
 const expectStatusText = (value: string) => {
   expect(
     screen.getByText((_, element) => {

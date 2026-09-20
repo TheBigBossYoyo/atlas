@@ -1,5 +1,6 @@
 import { History } from 'lucide-react'
 
+import { useTranslate } from '../../i18n'
 import '../__styles__/viewer-legacy-banner.css'
 
 export type LegacyFormatBannerProps = {
@@ -17,12 +18,12 @@ export type LegacyFormatBannerProps = {
  * reader assume what's shown is the whole document.
  */
 export function LegacyFormatBanner({ formatLabel, modernExtension }: LegacyFormatBannerProps) {
+  const t = useTranslate()
   return (
     <div className="legacy-format-banner" role="note">
       <History size={16} aria-hidden="true" className="legacy-format-banner__icon" />
       <span>
-        {formatLabel} — legacy format, shown as read-only text. Re-save it as {modernExtension} in Word, PowerPoint,
-        or a compatible app for full fidelity editing.
+        {t('legacyFormat.notice', { formatLabel, modernExtension })}
       </span>
     </div>
   )

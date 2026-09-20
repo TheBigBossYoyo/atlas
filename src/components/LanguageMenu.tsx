@@ -1,17 +1,26 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Palette, Check } from 'lucide-react';
-import type { Theme, ThemeMeta } from '../types';
+import { Languages, Check } from 'lucide-react';
+import type { LocalePreference } from '../i18n';
+import { useLocale, useTranslate } from '../i18n';
 import { useShellShortcut } from '../hooks/useShortcutManager';
 import { useRestoreFocusOnClose } from '../hooks/useRestoreFocusOnClose';
-import { useTranslate } from '../i18n';
 
-interface ThemeMenuProps {
-  current: Theme;
-  themes: readonly ThemeMeta[];
-  onSelect: (t: Theme) => void;
-}
+const OPTIONS: readonly LocalePreference[] = ['en', 'fr', 'system'];
 
-export function ThemeMenu({ current, themes, onSelect }: ThemeMenuProps) {
+const OPTION_LABEL_KEY: Readonly<Record<LocalePreference, string>> = {
+  en: 'language.english',
+  fr: 'language.french',
+  system: 'language.system',
+};
+
+/**
+ * The language picker, styled and behaving exactly like `ThemeMenu` (same
+ * dropdown, outside-click/Escape-to-close, plain labeled buttons rather than
+ * the `role="menu"` ARIA pattern — see that component's UX-14 note). Placed
+ * next to `ThemeMenu` in the toolbar per the i18n plan.
+ */
+export function LanguageMenu() {
+  const { preference, setPreference } = useLocale();
   const t = useTranslate();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -32,8 +41,6 @@ export function ThemeMenu({ current, themes, onSelect }: ThemeMenuProps) {
     };
   }, [open]);
 
-  // P2.1 — Escape-close registered with the shared dispatcher instead of its
-  // own ad hoc `window` listener; only listens while the menu is open.
   useShellShortcut(
     useCallback(
       (e) => {
@@ -51,33 +58,28 @@ export function ThemeMenu({ current, themes, onSelect }: ThemeMenuProps) {
       <button
         ref={triggerRef}
         className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
-        title={t('theme.triggerTitle')}
-        aria-label={t('theme.triggerAria')}
+        title={t('language.triggerTitle')}
+        aria-label={t('language.triggerAria')}
         aria-haspopup="true"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <Palette size={18} />
+        <Languages size={18} />
       </button>
       {open && (
-        // UX-14 — plain labeled list instead of the `role="menu"`/
-        // `menuitemradio` ARIA pattern (no arrow-key navigation was ever
-        // implemented for it); the selected theme is still conveyed to AT
-        // via `aria-current` instead of `aria-checked`.
-        <ul className="dropdown__menu" aria-label={t('theme.menuLabel')}>
-          {themes.map(t => (
-            <li key={t.id}>
+        <ul className="dropdown__menu" aria-label={t('language.menuLabel')}>
+          {OPTIONS.map((option) => (
+            <li key={option}>
               <button
-                className={`dropdown__item ${current === t.id ? 'dropdown__item--active' : ''}`}
-                aria-current={current === t.id ? 'true' : undefined}
+                className={`dropdown__item ${preference === option ? 'dropdown__item--active' : ''}`}
+                aria-current={preference === option ? 'true' : undefined}
                 onClick={() => {
-                  onSelect(t.id);
+                  setPreference(option);
                   setOpen(false);
                 }}
               >
-                <span className="dropdown__item-swatch" style={{ backgroundColor: t.overlayBg }} />
-                <span className="dropdown__item-label">{t.label}</span>
-                {current === t.id && <Check size={14} />}
+                <span className="dropdown__item-label">{t(OPTION_LABEL_KEY[option])}</span>
+                {preference === option && <Check size={14} />}
               </button>
             </li>
           ))}

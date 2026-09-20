@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { useShellShortcut } from '../hooks/useShortcutManager';
+import { useTranslate } from '../i18n';
 
 interface ShortcutsModalProps {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface ShortcutsModalProps {
 const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
+  const t = useTranslate();
   const modalRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
@@ -76,58 +78,58 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
     <div className="modal-backdrop" onClick={onClose}>
       <div ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" onClick={e => e.stopPropagation()}>
         <div className="modal__header">
-          <h2 id="shortcuts-title" className="modal__title">Keyboard Shortcuts</h2>
-          <button className="modal__close" aria-label="Close" onClick={onClose}>
+          <h2 id="shortcuts-title" className="modal__title">{t('shortcuts.title')}</h2>
+          <button className="modal__close" aria-label={t('shortcuts.closeAria')} onClick={onClose}>
             <X size={18} />
           </button>
         </div>
-        
+
         <section className="modal__section">
-          <h3 className="modal__section-title">File</h3>
+          <h3 className="modal__section-title">{t('shortcuts.sectionFile')}</h3>
           <dl className="modal__shortcuts">
-            <dt>{renderKeys('Ctrl+N')}</dt><dd>New document menu</dd>
-            <dt>{renderKeys('Ctrl+O')}</dt><dd>Open file</dd>
-            <dt>{renderKeys('Ctrl+S')}</dt><dd>Save</dd>
-            <dt>{renderKeys('Ctrl+Shift+S')}</dt><dd>Save As</dd>
-            <dt>{renderKeys('Ctrl+W')}</dt><dd>Close file</dd>
-            <dt>{renderKeys('Ctrl+Shift+T')}</dt><dd>Reopen last closed document</dd>
-            <dt>{renderKeys('Ctrl+P')}</dt><dd>Print / export</dd>
-            <dt>{renderKeys('Ctrl+E')}</dt><dd>Export menu</dd>
+            <dt>{renderKeys('Ctrl+N')}</dt><dd>{t('shortcuts.newDocumentMenu')}</dd>
+            <dt>{renderKeys('Ctrl+O')}</dt><dd>{t('shortcuts.openFile')}</dd>
+            <dt>{renderKeys('Ctrl+S')}</dt><dd>{t('shortcuts.save')}</dd>
+            <dt>{renderKeys('Ctrl+Shift+S')}</dt><dd>{t('shortcuts.saveAs')}</dd>
+            <dt>{renderKeys('Ctrl+W')}</dt><dd>{t('shortcuts.closeFile')}</dd>
+            <dt>{renderKeys('Ctrl+Shift+T')}</dt><dd>{t('shortcuts.reopenClosed')}</dd>
+            <dt>{renderKeys('Ctrl+P')}</dt><dd>{t('shortcuts.printExport')}</dd>
+            <dt>{renderKeys('Ctrl+E')}</dt><dd>{t('shortcuts.exportMenu')}</dd>
           </dl>
         </section>
 
         <section className="modal__section">
-          <h3 className="modal__section-title">View</h3>
+          <h3 className="modal__section-title">{t('shortcuts.sectionView')}</h3>
           <dl className="modal__shortcuts">
-            <dt>{renderKeys('Ctrl+1')}</dt><dd>Preview</dd>
-            <dt>{renderKeys('Ctrl+2')}</dt><dd>Split</dd>
-            <dt>{renderKeys('Ctrl+3')}</dt><dd>Editor</dd>
-            <dt>{renderKeys('Ctrl+B')}</dt><dd>Toggle sidebar</dd>
-            <dt>{renderKeys('Ctrl+T')}</dt><dd>Cycle theme</dd>
+            <dt>{renderKeys('Ctrl+1')}</dt><dd>{t('shortcuts.preview')}</dd>
+            <dt>{renderKeys('Ctrl+2')}</dt><dd>{t('shortcuts.split')}</dd>
+            <dt>{renderKeys('Ctrl+3')}</dt><dd>{t('shortcuts.editor')}</dd>
+            <dt>{renderKeys('Ctrl+B')}</dt><dd>{t('shortcuts.toggleSidebar')}</dd>
+            <dt>{renderKeys('Ctrl+T')}</dt><dd>{t('shortcuts.cycleTheme')}</dd>
           </dl>
         </section>
 
         <section className="modal__section">
-          <h3 className="modal__section-title">Edit</h3>
+          <h3 className="modal__section-title">{t('shortcuts.sectionEdit')}</h3>
           <dl className="modal__shortcuts">
-            <dt>{renderKeys('Ctrl+=')}</dt><dd>Increase font</dd>
-            <dt>{renderKeys('Ctrl+-')}</dt><dd>Decrease font</dd>
-            <dt>{renderKeys('Ctrl+0')}</dt><dd>Reset font</dd>
+            <dt>{renderKeys('Ctrl+=')}</dt><dd>{t('shortcuts.increaseFont')}</dd>
+            <dt>{renderKeys('Ctrl+-')}</dt><dd>{t('shortcuts.decreaseFont')}</dd>
+            <dt>{renderKeys('Ctrl+0')}</dt><dd>{t('shortcuts.resetFont')}</dd>
           </dl>
         </section>
 
         <section className="modal__section">
-          <h3 className="modal__section-title">Search & Help</h3>
+          <h3 className="modal__section-title">{t('shortcuts.sectionSearchHelp')}</h3>
           <dl className="modal__shortcuts">
-            <dt>{renderKeys('Ctrl+F')}</dt><dd>Find (Markdown, Text, Code, RTF, ODT)</dd>
-            <dt>{renderKeys('Enter')} / {renderKeys('Shift+Enter')}</dt><dd>Next/prev</dd>
-            <dt>{renderKeys('Esc')}</dt><dd>Close</dd>
-            <dt>{renderKeys('Ctrl+/')}</dt><dd>Toggle this dialog</dd>
+            <dt>{renderKeys('Ctrl+F')}</dt><dd>{t('shortcuts.find')}</dd>
+            <dt>{renderKeys('Enter')} / {renderKeys('Shift+Enter')}</dt><dd>{t('shortcuts.nextPrev')}</dd>
+            <dt>{renderKeys('Esc')}</dt><dd>{t('shortcuts.closeDialog')}</dd>
+            <dt>{renderKeys('Ctrl+/')}</dt><dd>{t('shortcuts.toggleDialog')}</dd>
           </dl>
         </section>
 
         <p className="modal__note">
-          While editing a DOCX, its own editor shortcuts (bold/italic/underline, alignment, find/replace, line spacing, undo/redo, save, print) take priority over the shortcuts above.
+          {t('shortcuts.note')}
         </p>
       </div>
     </div>

@@ -61,6 +61,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   /** @param {Theme} theme */
   setTheme: (theme) => ipcRenderer.send('set-theme', theme),
+  // i18n — the renderer's "System" language option resolves against
+  // `app.getLocale()` (main-process-only); the renderer has no equivalent
+  // web API, so this is a thin IPC round trip.
+  getLocale: () => ipcRenderer.invoke('app:get-locale'),
   // P2.5/SHELL-02/ELEC-06 — pushes the renderer's combined dirty state to
   // main so its window `close` handler knows whether to block the close
   // behind a Save/Discard/Cancel prompt (Electron surfaces no visible

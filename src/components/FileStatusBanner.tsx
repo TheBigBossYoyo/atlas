@@ -1,4 +1,5 @@
 import { AlertCircle, X } from 'lucide-react';
+import { useTranslate } from '../i18n';
 
 interface FileStatusBannerProps {
   loading: boolean;
@@ -14,6 +15,7 @@ interface FileStatusBannerProps {
  * is in flight and a dismissible error banner when one fails.
  */
 export function FileStatusBanner({ loading, error, onDismissError }: FileStatusBannerProps) {
+  const t = useTranslate();
   if (!loading && !error) return null;
 
   return (
@@ -21,7 +23,7 @@ export function FileStatusBanner({ loading, error, onDismissError }: FileStatusB
       {loading && (
         <div className="file-status__loading" role="status" aria-live="polite">
           <span className="file-status__loading-bar" aria-hidden="true" />
-          <span className="file-status__loading-label">Opening file…</span>
+          <span className="file-status__loading-label">{t('fileStatus.opening')}</span>
         </div>
       )}
       {error && (
@@ -31,8 +33,8 @@ export function FileStatusBanner({ loading, error, onDismissError }: FileStatusB
           <button
             className="file-status__error-dismiss"
             onClick={onDismissError}
-            aria-label="Dismiss error"
-            title="Dismiss"
+            aria-label={t('fileStatus.dismissErrorAria')}
+            title={t('fileStatus.dismissErrorTitle')}
           >
             <X size={14} />
           </button>

@@ -1,6 +1,7 @@
 import { useRef, useEffect } from 'react';
 import { Search, ChevronUp, ChevronDown, X } from 'lucide-react';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useTranslate } from '../i18n';
 
 interface SearchOverlayProps {
   isOpen: boolean;
@@ -23,6 +24,7 @@ export function SearchOverlay({
   onPrev,
   onClose,
 }: SearchOverlayProps) {
+  const t = useTranslate();
   const inputRef = useRef<HTMLInputElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -60,7 +62,7 @@ export function SearchOverlay({
           ref={inputRef}
           type="text"
           className="search-overlay__input"
-          placeholder="Search in document..."
+          placeholder={t('search.placeholder')}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -69,7 +71,7 @@ export function SearchOverlay({
           // UX-15 — announced to screen readers as the match count changes
           // (was silent: sighted-only feedback).
           <span className="search-overlay__count" role="status" aria-live="polite">
-            {matchCount > 0 ? `${currentMatch + 1} of ${matchCount}` : 'No results'}
+            {matchCount > 0 ? t('search.resultCount', { current: currentMatch + 1, total: matchCount }) : t('search.noResults')}
           </span>
         )}
         <div className="search-overlay__nav">
@@ -77,8 +79,8 @@ export function SearchOverlay({
             className="search-overlay__btn"
             onClick={onPrev}
             disabled={matchCount === 0}
-            title="Previous (Shift+Enter)"
-            aria-label="Previous match"
+            title={t('search.previousTitle')}
+            aria-label={t('search.previousAria')}
           >
             <ChevronUp size={16} />
           </button>
@@ -86,13 +88,13 @@ export function SearchOverlay({
             className="search-overlay__btn"
             onClick={onNext}
             disabled={matchCount === 0}
-            title="Next (Enter)"
-            aria-label="Next match"
+            title={t('search.nextTitle')}
+            aria-label={t('search.nextAria')}
           >
             <ChevronDown size={16} />
           </button>
         </div>
-        <button className="search-overlay__btn search-overlay__close" onClick={onClose} title="Close (Esc)" aria-label="Close search">
+        <button className="search-overlay__btn search-overlay__close" onClick={onClose} title={t('search.closeTitle')} aria-label={t('search.closeAria')}>
           <X size={16} />
         </button>
       </div>

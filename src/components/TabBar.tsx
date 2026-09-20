@@ -9,6 +9,7 @@ import { memo, useState, type DragEvent } from 'react'
 import { X } from 'lucide-react'
 
 import type { DocumentSession } from '../session/documentSessions'
+import { useTranslate } from '../i18n'
 
 export type TabBarProps = {
   readonly sessions: ReadonlyArray<DocumentSession>
@@ -20,6 +21,7 @@ export type TabBarProps = {
 }
 
 function TabBarBase({ sessions, activeId, isActiveDirty, onSelect, onClose, onReorder }: TabBarProps) {
+  const t = useTranslate()
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
 
   if (sessions.length === 0) return null
@@ -31,7 +33,7 @@ function TabBarBase({ sessions, activeId, isActiveDirty, onSelect, onClose, onRe
   }
 
   return (
-    <div className="tab-bar" role="tablist" aria-label="Open documents">
+    <div className="tab-bar" role="tablist" aria-label={t('tabBar.label')}>
       {sessions.map((session, index) => {
         const isActive = session.id === activeId
         const showsDirtyDot = isActive && isActiveDirty
@@ -61,14 +63,14 @@ function TabBarBase({ sessions, activeId, isActiveDirty, onSelect, onClose, onRe
               title={session.id}
               onClick={() => onSelect(session.id)}
             >
-              {showsDirtyDot && <span className="tab-bar__dirty" aria-label="Unsaved changes" />}
+              {showsDirtyDot && <span className="tab-bar__dirty" aria-label={t('common.unsavedChanges')} />}
               <span className="tab-bar__name">{session.name}</span>
             </button>
             <button
               type="button"
               className="tab-bar__close"
-              aria-label={`Close ${session.name}`}
-              title={`Close ${session.name}`}
+              aria-label={t('tabBar.closeAria', { name: session.name })}
+              title={t('tabBar.closeTitle', { name: session.name })}
               onClick={() => onClose(session.id)}
             >
               <X size={13} />
