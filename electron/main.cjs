@@ -31,6 +31,48 @@ if (process.env.PLAYWRIGHT === '1' && !app.isPackaged) {
   app.setPath('userData', fs.mkdtempSync(path.join(e2eRoot, 'profile-')));
 }
 
+/**
+ * Test-only invisible-window mode (`ATLAS_HIDDEN_WINDOW=1`). Electron has no
+ * real headless mode on Windows, so an automated sweep of the UI normally
+ * steals focus and covers the screen for as long as it runs. This is NOT
+ * headless and must never be described as such: the window is created, shown
+ * and composited exactly as usual, then made
+ *
+ *   - fully transparent (`setOpacity(0)`), so nothing appears on screen;
+ *   - shown with `showInactive()`, so it never takes focus from the user;
+ *   - click-through (`setIgnoreMouseEvents`), so a stray desktop click lands
+ *     on whatever is really underneath it.
+ *
+ * Leaving it *shown* is the whole point. A `show: false` window is marked
+ * hidden by Chromium, which stops compositing and `requestAnimationFrame`;
+ * layout still resolves, but Playwright's actionability checks -- which wait
+ * for an element's box to be stable across two animation frames -- then hang
+ * forever, so every `click()` in a UI sweep times out. Verified: `show:false`
+ * timed out on the first click; this mode drives the full UI normally.
+ *
+ * Deliberately refused in a packaged build: there is no legitimate reason for
+ * a shipped Atlas to start invisible, and an env var that makes the app appear
+ * not to launch would be a support nightmare.
+ */
+const HIDDEN_WINDOW = process.env.ATLAS_HIDDEN_WINDOW === '1' && !app.isPackaged;
+
+/**
+ * Shows the window -- invisibly, without stealing focus, in the test-only
+ * mode above.
+ */
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return;
+  if (HIDDEN_WINDOW) {
+    mainWindow.setOpacity(0);
+    mainWindow.setIgnoreMouseEvents(true);
+    // Playwright synthesises its input through CDP, straight into the
+    // renderer, so it is unaffected by the click-through above.
+    mainWindow.showInactive();
+    return;
+  }
+  mainWindow.show();
+}
+
 // Single instance lock
 const gotLock = app.requestSingleInstanceLock();
 
@@ -700,18 +742,12 @@ function createWindow() {
   }
 
   // Fallback: show window after 5s even if ready-to-show never fires (e.g. loadFile failure)
-  const showTimeout = setTimeout(() => {
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-      mainWindow.show();
-    }
-  }, 5000);
+  const showTimeout = setTimeout(showMainWindow, 5000);
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
     console.error(`Failed to load: ${errorCode} - ${errorDescription}`);
     // Show the window so user sees something rather than a phantom process
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-      mainWindow.show();
-    }
+    showMainWindow();
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -723,7 +759,7 @@ function createWindow() {
     // Same defensive check the sibling `did-fail-load`/fallback-show
     // handlers above already use.
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.show();
+    showMainWindow();
     // Send pending file after window is ready
     if (pendingFilePath) {
       // Small delay to ensure renderer is fully initialized
