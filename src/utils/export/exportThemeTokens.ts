@@ -23,11 +23,11 @@ export interface ExportThemeTokens {
 }
 
 export const EXPORT_THEME_TOKENS: Record<ExportThemeId, ExportThemeTokens> = {
-  light: { bg: '#ffffff', text: '#1f2328', codeBg: '#eff1f3', border: '#d0d7de', accent: '#0969da' },
+  light: { bg: '#ffffff', text: '#1f2328', codeBg: '#eff1f3', border: '#d0d7de', accent: '#0967d7' },
   dark: { bg: '#0d1117', text: '#e6edf3', codeBg: '#262c36', border: '#30363d', accent: '#58a6ff' },
-  sepia: { bg: '#f4ecd8', text: '#5b4636', codeBg: '#ebe2c8', border: '#d4c9a8', accent: '#8b5a2b' },
-  nord: { bg: '#2e3440', text: '#eceff4', codeBg: '#3b4252', border: '#434c5e', accent: '#88c0d0' },
-  dracula: { bg: '#282a36', text: '#f8f8f2', codeBg: '#44475a', border: '#44475a', accent: '#bd93f9' },
+  sepia: { bg: '#f4ecd8', text: '#5b4636', codeBg: '#ebe2c8', border: '#d4c9a8', accent: '#815428' },
+  nord: { bg: '#2e3440', text: '#eceff4', codeBg: '#3b4252', border: '#434c5e', accent: '#90c5d3' },
+  dracula: { bg: '#282a36', text: '#f8f8f2', codeBg: '#44475a', border: '#44475a', accent: '#caa8fa' },
 };
 
 export const EXPORT_THEME_ORDER: readonly ExportThemeId[] = ['light', 'dark', 'sepia', 'nord', 'dracula'];
