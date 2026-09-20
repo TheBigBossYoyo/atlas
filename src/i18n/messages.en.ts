@@ -37,9 +37,23 @@ export const messages = {
   'dropzone.title': 'Drop your document',
   'dropzone.detail': 'Word, Excel, PowerPoint, PDF, OpenDocument, Markdown, CSV, RTF, and code files',
 
+  // ViewerErrorBoundary.tsx
+  'viewerError.title': 'Viewer crashed',
+  'viewerError.tryAgain': 'Try again',
+
+  // ViewerLoading.tsx
+  'viewerLoading.loading': 'Loading {format}…',
+  'viewerLoading.documentFallback': 'document',
+
   // Sidebar.tsx
   'sidebar.title': 'Table of Contents',
   'sidebar.empty': 'No outline available',
+
+  // RawEditor.tsx — I18N-1. The header label doubles as the textarea's
+  // aria-label so the accessible name survives once the placeholder
+  // disappears (WCAG 3.3.2).
+  'rawEditor.title': 'Markdown Source',
+  'rawEditor.placeholder': 'Type or paste markdown here...',
 
   // Toolbar.tsx
   'toolbar.showSidebar': 'Show sidebar',
@@ -528,6 +542,9 @@ export const messages = {
   'docx.viewer.fidelityWarningContentControls': 'Its content controls (such as dropdowns or date fields) kept their text, but not the controls themselves.',
   'docx.viewer.fidelityWarningShapeFallback': "A shape or text box's fallback drawing was not preserved.",
   'docx.viewer.fidelityWarningOther': 'Some other formatting or content was not fully preserved.',
+
+  // src/docx/render/PageView.tsx
+  'docx.render.resizeColumn': 'Resize column {n}',
 
   // src/docx/editor/friendlyDocxError.ts
   'docx.error.notOpenedDetail': 'This file was not opened: {detail}',
