@@ -104,7 +104,9 @@
 
 .docx-find__button:hover {
   background: var(--accent, #0066cc);
-  color: #ffffff;
+  /* On --accent, white fails AA in the dark/nord/dracula themes; --bg-primary
+     is the pattern the rest of the app uses for text on an accent fill. */
+  color: var(--bg-primary, #ffffff);
   border-color: var(--accent, #0066cc);
 }
 
