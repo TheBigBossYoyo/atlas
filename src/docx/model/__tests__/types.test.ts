@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   assertNever,
   BlockKind,
+  hexColor,
   InlineKind,
   halfPoint,
   pct,
@@ -155,5 +156,44 @@ describe('docx model types', () => {
       spacing: twip(20),
     })
     expectTypeOf(merged).toMatchTypeOf<RunProps>()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// DOCX-14 — hexColor() is ST_HexColor's single validation/normalization
+// choke point (parser and editor/UI call sites alike). See its doc comment
+// in ../styles.ts for the full reasoning behind each of these cases.
+// ---------------------------------------------------------------------------
+describe('hexColor', () => {
+  it('strips a leading "#" from a browser <input type="color"> value', () => {
+    expect(hexColor('#ff0000')).toBe('ff0000')
+  })
+
+  it('preserves an already-valid six-digit value byte-for-byte, case included', () => {
+    // This is what the parser passes in from a file's raw w:val — a color
+    // that was already correct must round-trip completely unchanged, not
+    // have its case rewritten.
+    expect(hexColor('FF0000')).toBe('FF0000')
+    expect(hexColor('AaBbCc')).toBe('AaBbCc')
+  })
+
+  it('expands a 3-digit hex short form only when explicitly asked to, otherwise treats it as malformed', () => {
+    // hexColor() itself has no notion of the CSS 3-digit shorthand — that
+    // expansion is parseCssColor's job (colorMapping.ts) before a value
+    // ever reaches hexColor(). A bare 3-digit value handed directly to
+    // hexColor() is therefore not a valid ST_HexColor and falls back.
+    expect(hexColor('#f00')).toBe('000000')
+  })
+
+  it('falls back to "000000" for a malformed value rather than throwing', () => {
+    // hexColor() is also the parser's own entry point (parseColor in
+    // parser/document.ts and parser/styles.ts call it directly on a raw
+    // w:val), so it must never throw on a corrupt/hand-edited file — a bad
+    // color must not crash the app on open.
+    expect(() => hexColor('not-a-color')).not.toThrow()
+    expect(hexColor('not-a-color')).toBe('000000')
+    expect(hexColor('')).toBe('000000')
+    expect(hexColor('#12345')).toBe('000000')
+    expect(hexColor('1234567')).toBe('000000')
   })
 })

@@ -450,10 +450,10 @@ class PasteResourceAllocator {
     const numId = pickListNumId(this.numbering, kind)
     const numIdStr = String(numId)
     if (!this.numbering.has(numIdStr)) {
-      const entry = createListNumberingEntry(numId, kind)
+      const previousPart = this.numberingPart ?? { abstractNums: new Map(), nums: new Map() }
+      const entry = createListNumberingEntry(numId, kind, previousPart.abstractNums.keys())
       this.numbering.set(numIdStr, entry.numberingDef)
 
-      const previousPart = this.numberingPart ?? { abstractNums: new Map(), nums: new Map() }
       this.numberingPart = {
         abstractNums: new Map(previousPart.abstractNums).set(entry.abstractNum.abstractNumId, entry.abstractNum),
         nums: new Map(previousPart.nums).set(entry.numInstance.numId, entry.numInstance),

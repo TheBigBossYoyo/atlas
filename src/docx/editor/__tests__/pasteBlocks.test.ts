@@ -53,7 +53,8 @@ describe('htmlToPasteBlocks — paragraphs and inline formatting', () => {
 describe('htmlToPasteBlocks — DXE-19 color/highlight fidelity', () => {
   it('parses an inline style color into a hex run format', () => {
     const [p] = paragraphsOf('<p><span style="color: rgb(255, 0, 0)">red text</span></p>')
-    expect(p.runs[0]).toMatchObject({ format: { color: '#ff0000' } })
+    // DOCX-14 — ST_HexColor never carries a leading '#'; hexColor() strips it.
+    expect(p.runs[0]).toMatchObject({ format: { color: 'ff0000' } })
   })
 
   it('maps a background-color matching a Word highlight swatch to `highlight`', () => {
@@ -63,12 +64,12 @@ describe('htmlToPasteBlocks — DXE-19 color/highlight fidelity', () => {
 
   it('falls back to shading for a background-color outside the highlight palette', () => {
     const [p] = paragraphsOf('<p><span style="background-color: #123456">hi</span></p>')
-    expect(p.runs[0]).toMatchObject({ format: { shd: { fill: '#123456' } } })
+    expect(p.runs[0]).toMatchObject({ format: { shd: { fill: '123456' } } })
   })
 
   it('reads a legacy <font color> attribute', () => {
     const [p] = paragraphsOf('<p><font color="#00ff00">green</font></p>')
-    expect(p.runs[0]).toMatchObject({ format: { color: '#00ff00' } })
+    expect(p.runs[0]).toMatchObject({ format: { color: '00ff00' } })
   })
 
   it('ignores an unparseable color value', () => {

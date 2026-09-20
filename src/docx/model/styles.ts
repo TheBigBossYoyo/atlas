@@ -19,7 +19,47 @@ export type HalfPoint = number & { readonly __brand: 'HalfPoint' }
 export type EighthPoint = number & { readonly __brand: 'EighthPoint' }
 export type Pct = number & { readonly __brand: 'Pct' }
 
-export const hexColor = (value: string): HexColor => value as HexColor
+const HEX_COLOR_DIGITS = /^[0-9a-fA-F]{6}$/
+
+/**
+ * DOCX-14 fix — `ST_HexColor` (§17.18.41) is either the keyword `"auto"` or
+ * *exactly* six hex digits, with no `#`. This used to be a bare `value as
+ * HexColor` cast — type-safety theatre that promised a validated value
+ * without ever checking one — so every caller that handed it a browser
+ * `<input type="color">` value (always `#rrggbb`) produced an invalid
+ * `w:val="#rrggbb"` that Word rejects wholesale via its "unreadable
+ * content" repair path.
+ *
+ * This is the single choke point every call site funnels through — both the
+ * editor/UI side (`toolbarAdapter.ts`'s color picker and hardcoded table
+ * border, `pasteBlocks.ts`'s CSS-derived colors) *and* the parser
+ * (`parser/document.ts`'s and `parser/styles.ts`'s `parseColor`, reading a
+ * `w:val`/`w:color`/`w:fill` straight out of a `.docx` on disk) — so no call
+ * site, current or future, can push a `#`-prefixed or otherwise malformed
+ * value through to the writer.
+ *
+ * Behaviour is deliberately split by how "wrong" the input is:
+ *   - A leading `#` (what every color `<input>` and CSS color produces) is
+ *     stripped; the remaining six digits are otherwise preserved
+ *     byte-for-byte, including case, so a color that came from a file and is
+ *     already valid round-trips completely unchanged — normalizing case
+ *     here would silently rewrite a file's bytes for a value that was never
+ *     wrong.
+ *   - Anything that still isn't exactly six hex digits after that strip is
+ *     genuinely malformed. This function is also the parser's entry point
+ *     (it cannot be given a separate one without touching the off-limits
+ *     `src/docx/parser/` files), and a parser must never let a corrupt or
+ *     hand-edited `w:val` crash the app on open — so rather than throwing,
+ *     this falls back to `'000000'` (black), the same as Word's own repair
+ *     behavior for an unreadable color. Every current editor/UI call site
+ *     only ever passes already-well-formed input (a color `<input>`'s
+ *     value, a hardcoded constant, or `parseCssColor`'s output), so this
+ *     fallback is not expected to be reachable from the UI in practice.
+ */
+export const hexColor = (value: string): HexColor => {
+  const stripped = value.startsWith('#') ? value.slice(1) : value
+  return (HEX_COLOR_DIGITS.test(stripped) ? stripped : '000000') as HexColor
+}
 export const twip = (value: number): Twip => value as Twip
 export const halfPoint = (value: number): HalfPoint => value as HalfPoint
 export const eighthPoint = (value: number): EighthPoint => value as EighthPoint
@@ -393,6 +433,20 @@ export interface NumberingDef {
   readonly numberStyleLink?: string
   readonly levels: ReadonlyMap<number, LvlDef>
   readonly levelOverrides?: ReadonlyMap<number, LvlOverride>
+  /**
+   * DOCX-15 fix — marks a `NumberingDef` that Atlas itself minted for a
+   * bullet/numbered-list toggle or paste (`insertList.ts`'s
+   * `createListNumberingEntry`), as opposed to one that came from the
+   * source document. `abstractNumId` is now a real `ST_DecimalNumber`
+   * integer (see that file's doc comment for why), so it can no longer
+   * double as this marker the way the old `"atlas-list-"`-prefixed string
+   * value used to; `pickListNumId` checks this instead to recognize its own
+   * prior list definitions and reuse them, without ever mistaking a real
+   * document's own numbering (which might coincidentally match the wanted
+   * level-0 format) for one of its own. Always `undefined` for a
+   * `NumberingDef` the parser built from a file.
+   */
+  readonly atlasManaged?: boolean
 }
 
 export interface TableStyleProps {

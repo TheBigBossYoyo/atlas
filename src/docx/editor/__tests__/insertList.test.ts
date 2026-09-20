@@ -78,4 +78,45 @@ describe('ensureListNumbering', () => {
     expect(next.numberingPart!.nums.has('9')).toBe(true)
     expect(next.numberingPart!.nums.has('1')).toBe(true)
   })
+
+  // ---------------------------------------------------------------------------
+  // DOCX-15 — w:abstractNumId is ST_DecimalNumber (an integer); a new list
+  // used to mint the string "atlas-list-<numId>", which Word rejects.
+  // ---------------------------------------------------------------------------
+  it('mints an integer abstractNumId, not an "atlas-list-" tagged string', () => {
+    const bundle = makeBundle()
+    const next = ensureListNumbering(bundle, 1, 'bullet')
+
+    const abstractNumId = next.numberingPart!.nums.get('1')!.abstractNumId!
+    expect(abstractNumId).toMatch(/^\d+$/)
+    expect(next.numberingPart!.abstractNums.get(abstractNumId)!.abstractNumId).toBe(abstractNumId)
+    expect(next.document.numbering.get('1')!.abstractNumId).toBe(abstractNumId)
+  })
+
+  it('never collides the minted abstractNumId with one already present in the document', () => {
+    const bundle: DocxBundle = {
+      ...makeBundle(),
+      numberingPart: {
+        abstractNums: new Map([
+          ['0', { abstractNumId: '0', levels: new Map() }],
+          ['5', { abstractNumId: '5', levels: new Map() }],
+        ]),
+        nums: new Map(),
+      },
+    }
+
+    const next = ensureListNumbering(bundle, 1, 'bullet')
+
+    const abstractNumId = next.numberingPart!.nums.get('1')!.abstractNumId!
+    expect(abstractNumId).not.toBe('0')
+    expect(abstractNumId).not.toBe('5')
+    expect(next.numberingPart!.abstractNums.has(abstractNumId)).toBe(true)
+  })
+
+  it('marks a minted NumberingDef as atlasManaged so pickListNumId can recognize and reuse it', () => {
+    const bundle = makeBundle()
+    const next = ensureListNumbering(bundle, 1, 'bullet')
+
+    expect(next.document.numbering.get('1')!.atlasManaged).toBe(true)
+  })
 })
