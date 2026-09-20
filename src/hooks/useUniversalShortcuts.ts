@@ -22,12 +22,28 @@ interface UseUniversalShortcutsOptions {
 /**
  * The app-chrome shell-global shortcuts (P2.1) — the lowest-precedence tier
  * of the centralized dispatcher (`useShortcutManager.ts`). Ctrl+S/Ctrl+Shift+S
- * (save) and Ctrl+P (print/export) intentionally fire even while a plain
- * text field has focus (mirroring the pre-dispatcher behavior — a user
- * mid-edit in RawEditor should still be able to save/print), everything else
- * is skipped while `ctx.inPlainField` is true so typing a shortcut's letter
- * into a text field doesn't also trigger the shell action (SHELL-08/09's
- * root cause, now handled structurally instead of per-viewer).
+ * (save), Ctrl+P (print/export) and Ctrl+W (close file) intentionally fire
+ * even while a plain text field has focus (mirroring the pre-dispatcher
+ * behavior — a user mid-edit in RawEditor should still be able to
+ * save/print/close), everything else is skipped while `ctx.inPlainField` is
+ * true so a modifier combo a *field itself* gives meaning to (e.g. Ctrl+B
+ * toggling bold in a contentEditable rich-text surface) doesn't also trigger
+ * the shell action (SHELL-08/09's root cause, now handled structurally
+ * instead of per-viewer).
+ *
+ * FIELD-01 — Ctrl+W was missing from that carve-out list even though it has
+ * the same shape as Ctrl+S/Ctrl+P: it's a shell/window-level convention (in
+ * a real browser tab, Ctrl+W closes the tab regardless of focus) with no
+ * competing in-field meaning, not a per-field editing command. Gating it
+ * behind `inPlainField` meant typing in the markdown editor's textarea and
+ * pressing Ctrl+W did nothing at all — no close, no unsaved-changes prompt —
+ * since `closeFile` was never reached. The other entries below the gate
+ * (`o`/`n`/`e`/`t`/`b`/`1`/`2`/`3`/`/`) were checked against the same
+ * question and don't share this bug: none of them guards a safety-critical
+ * action a field-focused user can otherwise never trigger, and `b` in
+ * particular *must* stay gated — Ctrl+B is the exact combo a contentEditable
+ * rich-text surface (e.g. DocxViewer) natively treats as "toggle bold",
+ * which is precisely what this gate exists to protect.
  */
 export function useUniversalShortcuts({
   openFile,
@@ -66,6 +82,15 @@ export function useUniversalShortcuts({
         return true;
       }
 
+      // FIELD-01 — see the file-header comment: Ctrl+W closes the document
+      // (or raises the unsaved-changes prompt) the same way Ctrl+S/Ctrl+P
+      // already do, even with a plain field/contentEditable focused.
+      if (lowerKey === 'w') {
+        event.preventDefault();
+        closeFile();
+        return true;
+      }
+
       if (ctx.inPlainField) return false;
 
       switch (lowerKey) {
@@ -76,10 +101,6 @@ export function useUniversalShortcuts({
         case 'n':
           event.preventDefault();
           openNewMenu();
-          return true;
-        case 'w':
-          event.preventDefault();
-          closeFile();
           return true;
         case 'e':
           event.preventDefault();

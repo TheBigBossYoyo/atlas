@@ -54,7 +54,7 @@ function copyFixtureToTemp(fileName: string): string {
   return dest
 }
 
-test('DOCX editor: Ctrl+B/Ctrl+E/Ctrl+S do not leak to the shell (sidebar/export menu), Ctrl+F opens the document find bar, and Ctrl+W does not close the file mid-edit', async () => {
+test('DOCX editor: Ctrl+B/Ctrl+E/Ctrl+S do not leak to the shell (sidebar/export menu), Ctrl+F opens the document find bar, and Ctrl+W (once the document is clean) closes it', async () => {
   const tempPath = copyFixtureToTemp('sample.docx')
   const { app, page } = await launch(tempPath)
   try {
@@ -97,17 +97,19 @@ test('DOCX editor: Ctrl+B/Ctrl+E/Ctrl+S do not leak to the shell (sidebar/export
     await expect(page.locator('.docx-find__input[aria-label="Find"]')).not.toBeVisible()
 
     // Ctrl+W (close file) is NOT one of DocxViewer's reserved combos, so it
-    // falls through to the shell — but the shell itself skips it while
-    // focus is in any plain-text/contentEditable field, so a document
-    // containing the letter "w" is never at risk of an accidental close
-    // mid-edit.
+    // falls through to the shell. FIELD-01 — the shell no longer skips Ctrl+W
+    // while focus is in a plain-text/contentEditable field (it's carved out
+    // of `ctx.inPlainField` the same way Ctrl+S/Ctrl+P already were: a
+    // shell/window-level convention, not a field-editing command), so the
+    // contentEditable document surface being focused here does not block it.
+    // The document was just saved via Ctrl+S above, so it's clean — closeFile
+    // finds nothing to confirm and closes straight through to the Welcome
+    // screen with no unsaved-changes prompt.
     await editor.click()
     await page.keyboard.press('Control+w')
-    await expect(editor).toBeVisible()
-    await expect(page.locator('[data-viewer="docx"]')).toHaveCount(1)
-    // Not merely blocked behind an unsaved-changes prompt — genuinely never
-    // dispatched to `closeFile` at all.
     await expect(page.locator('.confirm-dialog')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Load Sample Document' })).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator('[data-viewer="docx"]')).toHaveCount(0)
   } finally {
     await app.close()
     fs.rmSync(path.dirname(tempPath), { recursive: true, force: true })
