@@ -60,7 +60,11 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/__tests__/setup.ts'],
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // `scripts/**` is included so `scripts/lib/officeValidator.mjs`'s own
+    // datatype tests actually run in CI. They were first added under a
+    // separate scoped config, which nothing invoked -- a test suite that
+    // cannot fail is worse than no suite, because it reads as coverage.
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'scripts/**/*.{test,spec}.mjs'],
     // `css: false` would disable Vitest's CSS pipeline for ordinary
     // side-effect `.css` imports (component styles the tests don't need
     // real values for) — but Vitest's own css-disable plugin matches on
