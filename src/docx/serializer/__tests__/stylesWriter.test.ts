@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { halfPoint, hexColor, twip, type Style } from '../../model'
-import type { StylesPart } from '../../parser/styles'
+import { eighthPoint, halfPoint, hexColor, twip, type Style } from '../../model'
+import { parseStyles, type StylesPart } from '../../parser/styles'
 import { writeStylesXml } from '../stylesWriter'
 
 function makeStylesPart(styles: ReadonlyArray<Style>): StylesPart {
@@ -217,6 +217,122 @@ describe('writeStylesXml', () => {
     it('omits w:latentStyles when the part has none', () => {
       const xml = writeStylesXml(makeStylesPart([]))
       expect(xml).not.toContain('w:latentStyles')
+    })
+  })
+
+  // DOCX-1 — same theme-font gap as `documentWriter.ts`'s `buildFontSetElement`,
+  // for the styles.xml-side builder (`w:docDefaults`/named-style `w:rFonts`).
+  describe('w:rFonts theme references (DOCX-1)', () => {
+    it('emits a theme-only rFonts (no literal font name) instead of dropping it', () => {
+      const xml = writeStylesXml(
+        makeStylesPart([
+          {
+            id: 'Heading1',
+            type: 'paragraph',
+            run: {
+              rFonts: {
+                asciiTheme: 'majorHAnsi',
+                hAnsiTheme: 'majorHAnsi',
+                csTheme: 'majorBidi',
+                eastAsiaTheme: 'majorEastAsia',
+              },
+            },
+          },
+        ]),
+      )
+
+      expect(xml).toContain(
+        '<w:rFonts w:asciiTheme="majorHAnsi" w:hAnsiTheme="majorHAnsi" w:cstheme="majorBidi" w:eastAsiaTheme="majorEastAsia"/>',
+      )
+    })
+
+    it('emits a literal-only rFonts unchanged', () => {
+      const xml = writeStylesXml(
+        makeStylesPart([
+          { id: 'Heading1', type: 'paragraph', run: { rFonts: { ascii: 'Calibri', hAnsi: 'Calibri' } } },
+        ]),
+      )
+
+      expect(xml).toContain('<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>')
+    })
+
+    it('emits a mixed literal + theme rFonts', () => {
+      const xml = writeStylesXml(
+        makeStylesPart([
+          {
+            id: 'Heading1',
+            type: 'paragraph',
+            run: { rFonts: { ascii: 'Calibri', hAnsiTheme: 'minorHAnsi' } },
+          },
+        ]),
+      )
+
+      expect(xml).toContain('<w:rFonts w:ascii="Calibri" w:hAnsiTheme="minorHAnsi"/>')
+    })
+
+    it('round-trips a docDefaults theme-only rFonts through parseStyles + writeStylesXml', () => {
+      const xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        + '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi"/></w:rPr></w:rPrDefault></w:docDefaults>'
+        + '</w:styles>'
+
+      const written = writeStylesXml(parseStyles(xml))
+
+      expect(written).toContain('<w:rFonts w:asciiTheme="minorHAnsi"/>')
+    })
+  })
+
+  // DOCX-12 — the six newly-modeled character effects/scaling, mirrored from
+  // `documentWriter.ts`'s `buildRunPropertiesNode` into this styles.xml-side
+  // builder so a named style (not just direct run formatting) round-trips
+  // them too.
+  describe('w:rPr character effects (DOCX-12)', () => {
+    it('emits outline, emboss, imprint, bdr, em, and w (character scale)', () => {
+      const xml = writeStylesXml(
+        makeStylesPart([
+          {
+            id: 'Effects',
+            type: 'character',
+            run: {
+              outline: true,
+              emboss: true,
+              imprint: true,
+              em: 'dot',
+              charScale: 150,
+              bdr: {
+                style: 'single',
+                size: eighthPoint(4),
+                space: twip(1),
+                color: hexColor('FF0000'),
+              },
+            },
+          },
+        ]),
+      )
+
+      expect(xml).toContain('<w:outline/>')
+      expect(xml).toContain('<w:emboss/>')
+      expect(xml).toContain('<w:imprint/>')
+      expect(xml).toContain('<w:bdr w:val="single" w:color="FF0000" w:sz="4" w:space="1"/>')
+      expect(xml).toContain('<w:em w:val="dot"/>')
+      expect(xml).toContain('<w:w w:val="150"/>')
+    })
+
+    it('round-trips a named style carrying these effects through parseStyles + writeStylesXml', () => {
+      const xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        + '<w:style w:type="character" w:styleId="Effects">'
+        + '<w:rPr><w:outline/><w:emboss/><w:imprint/><w:em w:val="comma"/><w:w w:val="80"/></w:rPr>'
+        + '</w:style>'
+        + '</w:styles>'
+
+      const written = writeStylesXml(parseStyles(xml))
+
+      expect(written).toContain('<w:outline/>')
+      expect(written).toContain('<w:emboss/>')
+      expect(written).toContain('<w:imprint/>')
+      expect(written).toContain('<w:em w:val="comma"/>')
+      expect(written).toContain('<w:w w:val="80"/>')
     })
   })
 })

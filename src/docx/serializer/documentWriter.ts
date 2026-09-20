@@ -147,7 +147,7 @@ export function buildSectionProperties(section: Section | SectionProps): unknown
 }
 
 export function buildRunProperties(runProps: RunProps | undefined): unknown {
-  return buildRunPropertiesNode(runProps)
+  return buildRunPropertiesNode(runProps, createSerializeState())
 }
 
 export function buildParagraphProperties(paraProps: ParaProps | undefined): unknown {
@@ -387,7 +387,7 @@ function buildParagraphChildNode(child: ParagraphChild, state: SerializeState): 
 
 function buildRunWithState(run: Run, state: SerializeState, asDel = false): OrderedXmlNode {
   const children: OrderedXmlNode[] = []
-  const props = buildRunPropertiesNode(run.props)
+  const props = buildRunPropertiesNode(run.props, state)
 
   if (props !== undefined) {
     children.push(props)
@@ -1122,7 +1122,16 @@ function buildTableRowHeightElement(height: TableRowHeight | undefined): Ordered
 // e.g. `rFonts` last instead of second, `u`/`vertAlign` far too early, `caps`/
 // `smallCaps`/`vanish`/`webHidden` far too late, and `lang` before `rtl`
 // instead of after.
-function buildRunPropertiesNode(runProps: RunProps | undefined): OrderedXmlNode | undefined {
+//
+// DOCX-12 — `outline`/`emboss`/`imprint` (right after `dstrike`), `w`/
+// `charScale` (right after `spacing`), `bdr` (right after `u`, before
+// `shd`), and `em` (right after `rtl`, before `lang`) fill in gaps this
+// same sequence had never modeled; `runProps.rPrUnknown` (any further
+// sequence member — or genuinely unrecognized element — this model still
+// doesn't carry a field for) is spliced into the finished list by
+// `insertRPrUnknownChildren`, positioned relative to whichever of the
+// above it sat next to in the source, rather than appended at the end.
+function buildRunPropertiesNode(runProps: RunProps | undefined, state: SerializeState): OrderedXmlNode | undefined {
   if (runProps === undefined) {
     return undefined
   }
@@ -1139,22 +1148,74 @@ function buildRunPropertiesNode(runProps: RunProps | undefined): OrderedXmlNode 
   pushIfDefined(children, buildToggleElement('w:smallCaps', runProps.smallCaps))
   pushIfDefined(children, buildToggleElement('w:strike', runProps.strike))
   pushIfDefined(children, buildToggleElement('w:dstrike', runProps.dstrike))
+  pushIfDefined(children, buildToggleElement('w:outline', runProps.outline))
+  pushIfDefined(children, buildToggleElement('w:emboss', runProps.emboss))
+  pushIfDefined(children, buildToggleElement('w:imprint', runProps.imprint))
   pushIfDefined(children, buildToggleElement('w:vanish', runProps.vanish))
   pushIfDefined(children, buildToggleElement('w:webHidden', runProps.webHidden))
   pushIfDefined(children, buildValueElement('w:color', runProps.color))
   pushIfDefined(children, buildValueElement('w:spacing', runProps.spacing))
+  pushIfDefined(children, buildValueElement('w:w', runProps.charScale))
   pushIfDefined(children, buildValueElement('w:kern', runProps.kern))
   pushIfDefined(children, buildValueElement('w:position', runProps.position))
   pushIfDefined(children, buildValueElement('w:sz', runProps.sz))
   pushIfDefined(children, buildValueElement('w:szCs', runProps.szCs))
   pushIfDefined(children, buildValueElement('w:highlight', runProps.highlight))
   pushIfDefined(children, buildUnderlineElement(runProps.underline))
+  pushIfDefined(children, buildBorderElement('w:bdr', runProps.bdr))
   pushIfDefined(children, buildShadingElement('w:shd', runProps.shd))
   pushIfDefined(children, buildValueElement('w:vertAlign', runProps.vertAlign))
   pushIfDefined(children, buildToggleElement('w:rtl', runProps.rtl))
+  pushIfDefined(children, buildValueElement('w:em', runProps.em))
   pushIfDefined(children, buildLanguageSetElement(runProps.lang))
 
+  insertRPrUnknownChildren(children, runProps.rPrUnknown, state)
+
   return children.length > 0 ? createElement('w:rPr', children) : undefined
+}
+
+/**
+ * DOCX-12 — splices each captured `RPrUnknownChild` (see its doc comment on
+ * `model/styles.ts`) into `children` — the `w:rPr` children
+ * `buildRunPropertiesNode` has already built in schema order — immediately
+ * ahead of the modeled sibling named by `before`, so the rebuilt sequence
+ * stays schema-ordered instead of dumping every unmodeled child at the end.
+ * Falls back to appending when `before` is `undefined` (this child was last
+ * in the source) or when that sibling isn't actually present in `children`
+ * (it was parsed but the value driving it has since gone missing — not
+ * reachable via this file's own read-then-write round trip, but a graceful
+ * fallback rather than a thrown/lost node either way).
+ */
+function insertRPrUnknownChildren(
+  children: OrderedXmlNode[],
+  unknownChildren: RunProps['rPrUnknown'],
+  state: SerializeState,
+): void {
+  if (unknownChildren === undefined) {
+    return
+  }
+
+  for (const entry of unknownChildren) {
+    const placeholder = buildRawPassthroughPlaceholder(entry.xml, state)
+    const anchorIndex =
+      entry.before === undefined ? -1 : children.findIndex((node) => elementTagName(node) === entry.before)
+
+    if (anchorIndex === -1) {
+      children.push(placeholder)
+    } else {
+      children.splice(anchorIndex, 0, placeholder)
+    }
+  }
+}
+
+function elementTagName(node: OrderedXmlNode): string | undefined {
+  for (const key of Object.keys(node)) {
+    if (key !== ':@') {
+      return key
+    }
+  }
+
+  return undefined
 }
 
 // Child order follows ECMA-376 `CT_PPrBase`/`CT_PPr` (§17.3.1.26), restricted
@@ -1299,6 +1360,15 @@ function buildUnderlineElement(underline: RunProps['underline']): OrderedXmlNode
   return createElement('w:u', [], attributes)
 }
 
+// DOCX-1 — Word has specified a style/run's font by theme reference (rather
+// than a literal name) since Office 2007, Normal's default font most
+// commonly of all. `parseFontSet` (parser/document.ts) has always read
+// `w:asciiTheme`/`w:hAnsiTheme`/`w:cstheme`/`w:eastAsiaTheme` onto `FontSet`,
+// but this builder only ever emitted the literal attributes — so the theme
+// reference silently vanished on every save, and where no literal
+// `w:ascii`/etc. accompanied it (the common case for a style that only sets
+// a theme font), `hasAttributes` saw nothing at all and dropped the whole
+// `w:rFonts` element.
 function buildFontSetElement(fonts: FontSet | undefined): OrderedXmlNode | undefined {
   if (fonts === undefined) {
     return undefined
@@ -1310,6 +1380,10 @@ function buildFontSetElement(fonts: FontSet | undefined): OrderedXmlNode | undef
   appendAttribute(attributes, '@_w:cs', fonts.cs)
   appendAttribute(attributes, '@_w:eastAsia', fonts.eastAsia)
   appendAttribute(attributes, '@_w:hint', fonts.hint)
+  appendAttribute(attributes, '@_w:asciiTheme', fonts.asciiTheme)
+  appendAttribute(attributes, '@_w:hAnsiTheme', fonts.hAnsiTheme)
+  appendAttribute(attributes, '@_w:cstheme', fonts.csTheme)
+  appendAttribute(attributes, '@_w:eastAsiaTheme', fonts.eastAsiaTheme)
 
   return hasAttributes(attributes) ? createElement('w:rFonts', [], attributes) : undefined
 }

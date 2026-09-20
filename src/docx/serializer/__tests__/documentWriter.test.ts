@@ -896,3 +896,139 @@ describe('writeDocumentXml — wrapper-passthrough regions', () => {
     expect(written).toContain('<w:drawing/>')
   })
 })
+
+// DOCX-1 / DOCX-12 — theme fonts and the general `w:rPr` unknown-child
+// passthrough. Each of these fails before the corresponding fix (the
+// theme-only `w:rFonts` vanished entirely; the named effects/unknown child
+// were parsed then silently dropped on save) and passes after.
+describe('writeDocumentXml — DOCX-1 theme fonts / DOCX-12 rPr fidelity', () => {
+  it('round-trips a run rFonts using only theme references (no literal font name)', () => {
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi" w:eastAsiaTheme="minorEastAsia"/></w:rPr>'
+        + '<w:t>Themed</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain(
+      '<w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi" w:eastAsiaTheme="minorEastAsia"/>',
+    )
+    expectRoundTrip(xml)
+  })
+
+  it('round-trips a run rFonts using only literal font names', () => {
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Arial" w:eastAsia="MS Mincho"/></w:rPr>'
+        + '<w:t>Literal</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Arial" w:eastAsia="MS Mincho"/>')
+    expectRoundTrip(xml)
+  })
+
+  it('round-trips a run rFonts mixing literal names with theme references', () => {
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/></w:rPr>'
+        + '<w:t>Mixed</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('<w:rFonts w:ascii="Calibri" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/>')
+    expectRoundTrip(xml)
+  })
+
+  it('round-trips a style-referencing run (no literal rFonts) whose style itself carries a theme font', () => {
+    // Guards against a regression where `w:rFonts` disappears specifically
+    // when it carries *only* theme attributes and no literal ones at all —
+    // the exact shape Normal's own default run formatting uses in the
+    // overwhelming majority of real Word documents.
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr><w:rFonts w:asciiTheme="majorHAnsi"/></w:rPr><w:t>x</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('<w:rPr><w:rFonts w:asciiTheme="majorHAnsi"/></w:rPr>')
+  })
+
+  it('round-trips each newly-modeled character effect', () => {
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr>'
+        + '<w:outline/><w:emboss/><w:imprint/>'
+        + '<w:bdr w:val="single" w:sz="4" w:space="1" w:color="FF0000"/>'
+        + '<w:em w:val="dot"/>'
+        + '<w:w w:val="150"/>'
+        + '</w:rPr><w:t>Effects</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('<w:outline/>')
+    expect(written).toContain('<w:emboss/>')
+    expect(written).toContain('<w:imprint/>')
+    expect(written).toContain('<w:bdr w:val="single" w:sz="4" w:space="1" w:color="FF0000"/>')
+    expect(written).toContain('<w:em w:val="dot"/>')
+    expect(written).toContain('<w:w w:val="150"/>')
+    expectRoundTrip(xml)
+  })
+
+  it('round-trips w:effect, w:eastAsianLayout, and w:fitText via the general unknown-child passthrough', () => {
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr>'
+        + '<w:effect w:val="sparkle"/>'
+        + '<w:eastAsianLayout w:id="1" w:combine="1"/>'
+        + '<w:fitText w:val="2880" w:id="2"/>'
+        + '</w:rPr><w:t>x</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('<w:effect w:val="sparkle"/>')
+    expect(written).toContain('<w:eastAsianLayout w:id="1" w:combine="1"/>')
+    expect(written).toContain('<w:fitText w:val="2880" w:id="2"/>')
+    expectRoundTrip(xml)
+  })
+
+  it('reinserts a deliberately invented, wholly unknown w:rPr child at its correct schema position', () => {
+    // `w:atlasTestUnknown` is not a real OOXML element — invented so this
+    // test can only pass via the *general* passthrough (not a longer fixed
+    // list of specifically-recognized names). Placed between `w:b` and
+    // `w:i` in the source: per CT_RPr's sequence both are modeled and
+    // adjacent, so a correct implementation must reproduce that exact
+    // position, not merely "somewhere in rPr".
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr><w:b/><w:atlasTestUnknown w:foo="bar"><w:child/></w:atlasTestUnknown><w:i/></w:rPr>'
+        + '<w:t>x</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('<w:b/><w:atlasTestUnknown w:foo="bar"><w:child/></w:atlasTestUnknown><w:i/>')
+    expectRoundTrip(xml)
+  })
+
+  it('appends a trailing unknown w:rPr child (no following modeled sibling) at the end', () => {
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr><w:b/><w:atlasTrailingUnknown/></w:rPr><w:t>x</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('<w:rPr><w:b/><w:atlasTrailingUnknown/></w:rPr>')
+    expectRoundTrip(xml)
+  })
+
+  it('preserves relative order of two invented unknown children anchored to the same modeled sibling', () => {
+    const xml = documentXml(
+      '<w:p><w:r><w:rPr><w:atlasFirstUnknown/><w:atlasSecondUnknown/><w:i/></w:rPr><w:t>x</w:t></w:r></w:p><w:sectPr/>',
+    )
+
+    const written = writeDocumentXml(parseDocument(xml))
+
+    expect(written).toContain('<w:rPr><w:atlasFirstUnknown/><w:atlasSecondUnknown/><w:i/></w:rPr>')
+    expectRoundTrip(xml)
+  })
+})

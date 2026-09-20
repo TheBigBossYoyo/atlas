@@ -65,6 +65,56 @@ describe('runStyleToCss', () => {
   it('handles spacing (twips)', () => {
     expect(runStyleToCss({ spacing: twip(20) }).letterSpacing).toBe('1pt');
   });
+
+  // DOCX-12 — best-effort CSS for the newly-modeled character effects.
+  it('handles outline via text-stroke', () => {
+    const css = runStyleToCss({ outline: true }) as Record<string, unknown>;
+    expect(css.WebkitTextStroke).toBe('1px currentColor');
+    expect(css.WebkitTextFillColor).toBe('transparent');
+  });
+
+  it('handles emboss via text-shadow', () => {
+    expect(runStyleToCss({ emboss: true }).textShadow).toContain('rgba');
+  });
+
+  it('handles imprint via a different text-shadow direction than emboss', () => {
+    const embossShadow = runStyleToCss({ emboss: true }).textShadow;
+    const imprintShadow = runStyleToCss({ imprint: true }).textShadow;
+    expect(imprintShadow).toBeDefined();
+    expect(imprintShadow).not.toBe(embossShadow);
+  });
+
+  it('handles emphasis marks via text-emphasis', () => {
+    const css = runStyleToCss({ em: 'dot' }) as Record<string, unknown>;
+    expect(css.textEmphasis).toBe('filled dot');
+  });
+
+  it('handles underDot emphasis with under position', () => {
+    const css = runStyleToCss({ em: 'underDot' }) as Record<string, unknown>;
+    expect(css.textEmphasis).toBe('filled dot');
+    expect(css.textEmphasisPosition).toBe('under');
+  });
+
+  it('ignores em when none', () => {
+    const css = runStyleToCss({ em: 'none' }) as Record<string, unknown>;
+    expect(css.textEmphasis).toBeUndefined();
+  });
+
+  it('handles a run border', () => {
+    const css = runStyleToCss({ bdr: { style: 'single', color: hexColor('FF0000'), size: eighthPoint(4) } });
+    expect(css.border).toBe('0.5pt solid #FF0000');
+  });
+
+  it('handles character scale via a scaleX transform', () => {
+    const css = runStyleToCss({ charScale: 150 });
+    expect(css.transform).toBe('scaleX(1.5)');
+    expect(css.display).toBe('inline-block');
+  });
+
+  it('leaves charScale of 100 (no scaling) alone', () => {
+    const css = runStyleToCss({ charScale: 100 });
+    expect(css.transform).toBeUndefined();
+  });
 });
 
 describe('paraStyleToCss', () => {

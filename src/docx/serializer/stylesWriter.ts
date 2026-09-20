@@ -118,19 +118,27 @@ export function buildRunPropertiesXml(
     ...withElement('w:smallCaps', buildOnOffElement(props.smallCaps)),
     ...withElement('w:strike', buildOnOffElement(props.strike)),
     ...withElement('w:dstrike', buildOnOffElement(props.dstrike)),
+    // DOCX-12 — see `documentWriter.ts`'s `buildRunPropertiesNode` doc
+    // comment for the same gap in the run-level builder this mirrors.
+    ...withElement('w:outline', buildOnOffElement(props.outline)),
+    ...withElement('w:emboss', buildOnOffElement(props.emboss)),
+    ...withElement('w:imprint', buildOnOffElement(props.imprint)),
     ...withElement('w:vanish', buildOnOffElement(props.vanish)),
     ...withElement('w:webHidden', buildOnOffElement(props.webHidden)),
     ...buildValElement('w:color', props.color),
     ...buildValElement('w:spacing', props.spacing),
+    ...buildValElement('w:w', props.charScale),
     ...buildValElement('w:kern', props.kern),
     ...buildValElement('w:position', props.position),
     ...buildValElement('w:sz', props.sz),
     ...buildValElement('w:szCs', props.szCs),
     ...buildValElement('w:highlight', props.highlight),
     ...withElement('w:u', buildUnderlineXml(props.underline)),
+    ...withElement('w:bdr', buildBorderXml(props.bdr)),
     ...withElement('w:shd', buildShadingXml(props.shd)),
     ...buildValElement('w:vertAlign', props.vertAlign),
     ...withElement('w:rtl', buildOnOffElement(props.rtl)),
+    ...buildValElement('w:em', props.em),
     ...withElement('w:lang', buildLanguageSetXml(props.lang)),
   }
 
@@ -505,6 +513,13 @@ function buildUnderlineXml(underline: RunProps['underline']): XmlNode | undefine
   }
 }
 
+// DOCX-1 — same gap as `documentWriter.ts`'s `buildFontSetElement` (see its
+// doc comment): `parser/styles.ts`'s `parseFontSet` has always read the
+// theme-reference attributes onto `FontSet`, but this builder (used for
+// `w:docDefaults`/named-style/table-conditional-format `w:rFonts`) only ever
+// emitted the literal ones, silently dropping a style's theme font — often
+// Normal's own — on every save, and dropping `w:rFonts` entirely when it
+// carried nothing but a theme reference.
 function buildFontSetXml(fontSet: FontSet | undefined): XmlNode | undefined {
   if (fontSet === undefined) return undefined
 
@@ -514,6 +529,10 @@ function buildFontSetXml(fontSet: FontSet | undefined): XmlNode | undefined {
     ...withAttribute('@_w:cs', fontSet.cs),
     ...withAttribute('@_w:eastAsia', fontSet.eastAsia),
     ...withAttribute('@_w:hint', fontSet.hint),
+    ...withAttribute('@_w:asciiTheme', fontSet.asciiTheme),
+    ...withAttribute('@_w:hAnsiTheme', fontSet.hAnsiTheme),
+    ...withAttribute('@_w:cstheme', fontSet.csTheme),
+    ...withAttribute('@_w:eastAsiaTheme', fontSet.eastAsiaTheme),
   }
 
   return hasEntries(node) ? node : undefined
