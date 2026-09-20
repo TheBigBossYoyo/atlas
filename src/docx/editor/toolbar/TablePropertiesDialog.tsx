@@ -77,7 +77,20 @@ export const TablePropertiesDialog = ({
         <input
           type="number"
           min={0.1}
-          step={0.1}
+          // F2 — was `step={0.1}`. `twipsToInches` rounds to the nearest
+          // 0.01in, so a perfectly ordinary width like 9000 twips (6.25in,
+          // Word's own default single-column table width) landed between
+          // the 0.1-grid's "6.2" and "6.3" and failed the input's native
+          // HTML5 step-mismatch validation. That validation failure blocks
+          // the browser from ever firing the form's `submit` event — no
+          // exception, no visible error in a hidden/automated window — so
+          // clicking Apply silently did nothing at all: not just the width,
+          // every field on the form (alignment, borders) was discarded,
+          // because a single invalid control blocks the whole form's
+          // submission. `"any"` (the value MDN recommends for a free-form
+          // decimal input) removes the step-grid check entirely; `min`
+          // alone still keeps the value from going to zero or negative.
+          step="any"
           disabled={!widthEnabled}
           value={widthInches}
           aria-label={t('docx.tableProperties.widthAria')}
