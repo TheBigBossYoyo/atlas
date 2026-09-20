@@ -41,6 +41,16 @@ describe('NewDocumentMenu', () => {
     }
   });
 
+  // Regression: the panel inherited the shared right-aligned `.dropdown__menu`
+  // geometry, but this trigger sits at the far left of the toolbar, so the
+  // panel grew off the left edge of the window (measured at x = -76px — 76px
+  // of it unreachable). jsdom has no layout, so the class is what is asserted
+  // here; `tests/e2e/new-document.spec.ts` asserts the real geometry.
+  it('left-aligns its panel, so it cannot grow off the left edge of the window', () => {
+    render(<NewDocumentMenu onCreate={() => {}} open={true} onOpenChange={() => {}} />);
+    expect(screen.getByRole('list')).toHaveClass('dropdown__menu', 'dropdown__menu--start');
+  });
+
   it('calls onCreate with the chosen format and closes the menu', () => {
     const onCreate = vi.fn();
     const onOpenChange = vi.fn();

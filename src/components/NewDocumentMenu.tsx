@@ -83,8 +83,10 @@ export function NewDocumentMenu({ onCreate, open, onOpenChange }: NewDocumentMen
         <FilePlus size={16} />
         <span>{t('newDocument.trigger')}</span>
       </button>
+      {/* `--start` because this trigger sits at the far left of the toolbar: the
+          shared right-aligned panel grew off the left edge of the window. */}
       {open && (
-        <ul className="dropdown__menu" aria-label={t('newDocument.menuLabel')}>
+        <ul className="dropdown__menu dropdown__menu--start" aria-label={t('newDocument.menuLabel')}>
           {NEW_DOCUMENT_ITEMS.map(({ value, labelKey, Icon }) => (
             <li key={value}>
               <button className="dropdown__item" onClick={() => handleCreate(value)}>

@@ -76,6 +76,52 @@ test('opening a 0-byte .docx shows a real blank editor, and Save writes a real d
   }
 })
 
+/**
+ * Regression — the "New" panel reused the shared `.dropdown__menu` geometry,
+ * which is right-aligned because every other toolbar dropdown (Export, Theme,
+ * Language) lives at the far RIGHT of the toolbar and grows leftwards into it.
+ * "New" is the second control from the LEFT, so right-aligning grew the panel
+ * off the left edge of the window: measured at x = -76px, i.e. 76px of the
+ * panel (its icons and the start of every label) was unreachable. Four of the
+ * six labels also wrapped onto two lines, because an absolutely-positioned box
+ * shrink-to-fits against its trigger's width and so never grew past its 200px
+ * `min-width`.
+ *
+ * Neither unit nor e2e coverage caught it: Playwright still clicks an item
+ * whose visible remainder is on-screen, and jsdom has no layout at all. This
+ * asserts the real rendered box instead.
+ */
+test('the New menu opens fully inside the window, with no wrapped labels', async () => {
+  const app = await electron.launch({
+    args: ['.'],
+    cwd: projectRoot,
+    env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
+  })
+  try {
+    const page: Page = await app.firstWindow()
+    await expect(page.getByRole('button', { name: 'Load Sample Document' })).toBeVisible({ timeout: 20_000 })
+
+    await page.getByRole('button', { name: 'New', exact: true }).click()
+    const menu = page.locator('.dropdown__menu')
+    await expect(menu).toBeVisible()
+
+    const viewportWidth = await page.evaluate(() => window.innerWidth)
+    const box = (await menu.boundingBox())!
+    expect(box).not.toBeNull()
+    expect(box.x).toBeGreaterThanOrEqual(0)
+    expect(box.x + box.width).toBeLessThanOrEqual(viewportWidth)
+
+    // Every label on a single line: a wrapped one is taller than one line box.
+    const labelHeights = await page.$$eval('.dropdown__menu .dropdown__item-label', (els) =>
+      els.map((el) => el.getBoundingClientRect().height),
+    )
+    expect(labelHeights).toHaveLength(6)
+    for (const height of labelHeights) expect(height).toBeLessThan(24)
+  } finally {
+    kill(app)
+  }
+})
+
 test('New → Word document creates a real file and opens it in a new tab', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-new-doc-'))
   const targetPath = path.join(dir, 'NewDoc.docx')

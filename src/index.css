@@ -1451,6 +1451,23 @@ mark.search-highlight--active {
   padding: 4px;
   box-shadow: var(--shadow-lg);
   animation: dropdownSlideIn 0.15s ease;
+  /* An absolutely-positioned box shrink-to-fits against the *trigger's* width,
+     so without this every label longer than the 200px min-width wrapped onto
+     two lines (4 of the 6 "New" entries did). `nowrap` makes the panel's
+     min-content its widest label, so it sizes to its content and grows inwards
+     from whichever edge it is anchored to. */
+  white-space: nowrap;
+}
+
+/* UX-NEWMENU — the base menu is right-aligned, which is correct for the
+   dropdowns living in `.toolbar__right` (Export, Theme, Language): they grow
+   leftwards, into the toolbar. "New" sits at the far LEFT of the toolbar, so
+   right-aligning it grew the panel off the left edge of the window (measured
+   at x = -76px, i.e. 76px of the panel unreachable). Left-align that one so
+   it grows inwards instead. */
+.dropdown__menu--start {
+  right: auto;
+  left: 0;
 }
 
 .dropdown__item {
