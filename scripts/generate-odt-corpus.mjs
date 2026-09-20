@@ -64,6 +64,11 @@ const CONTENT_XML_NS = `xmlns:office="urn:oasis:names:tc:opendocument:xmlns:offi
   xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0"
   office:version="1.2"`
 
+/**
+ * @param {string} automaticStyles
+ * @param {string} bodyXml
+ * @returns {string}
+ */
 function contentXml(automaticStyles, bodyXml) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <office:document-content ${CONTENT_XML_NS}>
@@ -79,6 +84,11 @@ ${bodyXml}
 `
 }
 
+/**
+ * @param {string} name
+ * @param {{ automaticStyles?: string, body: string }} fixture
+ * @returns {Promise<string>}
+ */
 async function writeOdtFixture(name, { automaticStyles = '', body }) {
   const zip = new JSZip()
   zip.file('mimetype', 'application/vnd.oasis.opendocument.text', { compression: 'STORE' })
@@ -140,6 +150,8 @@ function tablesAndListsFixture() {
  * when there's no `xlink:href` into a manifest-registered part — without
  * it, the parsed ImageNode has no `mediaType` and the HTML renderer omits
  * `src` entirely (see html-renderer.js's `renderImage`).
+ * @param {string} pngBase64
+ * @returns {{ automaticStyles: string, body: string }}
  */
 function embeddedImageFixture(pngBase64) {
   const body = `

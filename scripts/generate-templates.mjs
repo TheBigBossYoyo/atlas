@@ -55,6 +55,16 @@ const outDir = path.join(repoRoot, 'electron', 'templates')
 // project's own writers"), this loads that one module through Vite's own
 // SSR module graph — the exact same resolver `vite build`/Vitest already
 // use for the rest of the codebase — instead of Node's bare loader.
+/**
+ * @typedef {{
+ *   loadDocx: (buffer: ArrayBuffer) => Promise<unknown>,
+ *   saveDocx: (bundle: unknown) => Promise<Uint8Array>,
+ * }} DocxRoundTripModule
+ */
+
+/**
+ * @returns {Promise<DocxRoundTripModule>}
+ */
 async function loadDocxModule() {
   const server = await createServer({
     root: repoRoot,
@@ -64,7 +74,11 @@ async function loadDocxModule() {
     logLevel: 'warn',
   })
   try {
-    return await server.ssrLoadModule('/src/docx/index.ts')
+    // Vite's SSR module graph types this as `Record<string, any>` since it
+    // loads arbitrary modules; `src/docx/index.ts`'s actual exports are
+    // `loadDocx`/`saveDocx`, asserted here rather than threading Vite's
+    // generic module type through every caller below.
+    return /** @type {DocxRoundTripModule} */ (await server.ssrLoadModule('/src/docx/index.ts'))
   } finally {
     await server.close()
   }
@@ -129,6 +143,10 @@ const DOCX_CORE_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 const DOCX_APP_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Atlas</Application></Properties>`
 
+/**
+ * @param {DocxRoundTripModule} docxModule
+ * @returns {Promise<Uint8Array>}
+ */
 async function buildBlankDocx(docxModule) {
   const { loadDocx, saveDocx } = docxModule
   const bootstrap = new JSZip()
@@ -156,6 +174,10 @@ async function buildBlankDocx(docxModule) {
 // `spreadsheetWrite.ts` uses to save one.
 // ---------------------------------------------------------------------------
 
+/**
+ * @param {import('xlsx').BookType} bookType
+ * @returns {Buffer}
+ */
 function buildBlankWorkbookBytes(bookType) {
   const wb = XLSX.utils.book_new()
   const ws = { '!ref': 'A1' }
@@ -171,6 +193,9 @@ function buildBlankWorkbookBytes(bookType) {
  * `src/viewers/spreadsheet/spreadsheetWrite.ts`'s `fixOdsPackaging` (see
  * its header for the full explanation) so the committed template matches
  * what a real save now produces.
+ *
+ * @param {Buffer} bytes
+ * @returns {Promise<Buffer | Uint8Array>}
  */
 async function fixOdsPackaging(bytes) {
   const original = await JSZip.loadAsync(bytes)

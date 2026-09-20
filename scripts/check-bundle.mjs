@@ -23,17 +23,29 @@ const projectRoot = process.cwd()
 const baselinePath = path.join(projectRoot, '.sisyphus', 'baselines', 'atlas-phase3-bundle.json')
 const THRESHOLD_PERCENT = 25
 
+/**
+ * @param {number} bytes
+ * @returns {string}
+ */
 function formatKb(bytes) {
   return `${toKb(bytes).toFixed(2)} KB`
 }
 
+/**
+ * @param {number} percent
+ * @returns {string}
+ */
 function formatDelta(percent) {
   if (!Number.isFinite(percent)) return 'n/a'
   const sign = percent >= 0 ? '+' : ''
   return `${sign}${percent.toFixed(2)}%`
 }
 
-/** @returns {number} Percent change from `baseline` to `current`; `Infinity` when baseline was 0 and current isn't. */
+/**
+ * @param {number} current
+ * @param {number} baseline
+ * @returns {number} Percent change from `baseline` to `current`; `Infinity` when baseline was 0 and current isn't.
+ */
 function percentDelta(current, baseline) {
   if (baseline === 0) return current === 0 ? 0 : Infinity
   return ((current - baseline) / baseline) * 100
@@ -43,7 +55,7 @@ async function readBaseline() {
   try {
     return JSON.parse(await fs.readFile(baselinePath, 'utf8'))
   } catch (err) {
-    if (err && err.code === 'ENOENT') {
+    if (err instanceof Error && /** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') {
       throw new Error(
         `No bundle baseline found at ${path.relative(projectRoot, baselinePath)}. ` +
           'Run `node scripts/capture-bundle-baseline.mjs` once to create it.',

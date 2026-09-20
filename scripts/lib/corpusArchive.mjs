@@ -14,10 +14,18 @@ export const FIXED_DATE_ISO = FIXED_DATE.toISOString().replace(/\.\d{3}Z$/, 'Z')
 
 const TEXT_EXTENSIONS = new Set(['.xml', '.rels'])
 
+/**
+ * @param {string} path
+ * @returns {boolean}
+ */
 function isTextPath(path) {
   return TEXT_EXTENSIONS.has(path.slice(path.lastIndexOf('.')))
 }
 
+/**
+ * @param {string} value
+ * @returns {string}
+ */
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -55,10 +63,12 @@ export async function unzipToFiles(buffer) {
 export async function zipFromFiles(files) {
   const zip = new JSZip()
   for (const path of [...files.keys()].sort()) {
+    const content = files.get(path)
+    if (content === undefined) continue
     // `createFolders: false` matters for determinism: JSZip otherwise
     // auto-vivifies parent directory entries stamped with `new Date()`,
     // which real `.docx` zips don't have anyway.
-    zip.file(path, files.get(path), { date: FIXED_DATE, createFolders: false })
+    zip.file(path, content, { date: FIXED_DATE, createFolders: false })
   }
   return zip.generateAsync({
     type: 'nodebuffer',

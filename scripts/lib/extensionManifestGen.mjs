@@ -34,7 +34,11 @@ export function buildGeneratedCjsSource(manifest) {
 const YAML_ITEM_INDENT = '    '
 const YAML_FIELD_INDENT = '      '
 
-/** electron-builder's YAML config only needs plain-scalar quoting when a value isn't a bare word/sentence. */
+/**
+ * electron-builder's YAML config only needs plain-scalar quoting when a value isn't a bare word/sentence.
+ * @param {string} value
+ * @returns {string}
+ */
 function yamlScalar(value) {
   return /^[\w][\w .,()/-]*$/.test(value) ? value : JSON.stringify(value)
 }
