@@ -17,6 +17,7 @@ import {
   addSheet,
   createDocument,
   deleteColumnAt,
+  deleteRowAt,
   deleteSheet,
   insertRowAt,
   renameSheet,
@@ -29,9 +30,11 @@ import { writeWorkbookThroughOriginal } from '../xlsxPassthrough'
 import {
   buildCrossSheetFormulaWorkbook,
   buildMultiSheetWorkbook,
+  buildSharedFormulaWorkbook,
   buildSharedStringsWorkbook,
   buildStyledWorkbook,
   buildWorkbookWithOwnedParts,
+  buildWorkbookWithSharedImage,
 } from './styledWorkbook'
 
 import { validateOfficeFile } from '../../../../scripts/lib/officeValidator.mjs'
@@ -105,9 +108,41 @@ describe('spreadsheet saves pass spec-level OPC/ODF validation', () => {
     expect(errorsOnly(result.issues), JSON.stringify(result.issues, null, 2)).toEqual([])
   })
 
-  it('writeWorkbookThroughOriginal after deleting a sheet with its own table/comments/drawing/chart', async () => {
+  it('writeWorkbookThroughOriginal after deleting a sheet with its own table/comments/drawing/chart/image', async () => {
     const original = await buildWorkbookWithOwnedParts()
-    const doc = deleteSheet(await load(original), 1) // delete "Extra" — sweeps its owned parts
+    const doc = deleteSheet(await load(original), 1) // delete "Extra" — sweeps its owned parts, including its now-unreferenced image
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
+    expect(errorsOnly(result.issues), JSON.stringify(result.issues, null, 2)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal after deleting a sheet whose image is still referenced by a surviving sheet\'s drawing', async () => {
+    const original = await buildWorkbookWithSharedImage()
+    const doc = deleteSheet(await load(original), 1) // delete "Extra" — "Main" keeps its own drawing on the same image
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
+    expect(errorsOnly(result.issues), JSON.stringify(result.issues, null, 2)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal re-anchors a shared-formula group\'s ref span through a row insert', async () => {
+    const original = await buildSharedFormulaWorkbook()
+    let doc = await load(original)
+    doc = insertRowAt(doc, 0, 0)
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
+    expect(errorsOnly(result.issues), JSON.stringify(result.issues, null, 2)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal re-anchors a shared-formula group\'s ref span through a row delete inside the group', async () => {
+    const original = await buildSharedFormulaWorkbook()
+    let doc = await load(original)
+    doc = deleteRowAt(doc, 0, 2)
     const bytes = await writeWorkbookThroughOriginal(original, doc)
     expect(bytes).not.toBeNull()
 

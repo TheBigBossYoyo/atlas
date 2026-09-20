@@ -54,7 +54,19 @@
  *  - `calcChain.xml` is dropped and the workbook is marked "recalculate on
  *    load", since cached formula values are only as good as this app's own
  *    formula engine;
- *  - Excel tables are rewritten in place (range, column names).
+ *  - Excel tables are rewritten in place (range, column names);
+ *  - a shared-formula group's `ref` SPAN attribute
+ *    (`<f t="shared" ref="C3:C10" si="0">`) is re-anchored right alongside
+ *    the master cell's own formula TEXT when a row/column insert or delete
+ *    moves some of its member cells — leaving the span stale would make
+ *    Excel apply the (unrelated) old formula to the wrong range on open;
+ *  - a formula rewritten into (or partly into) `#REF!` by a structural edit
+ *    has its now-stale cached `<v>` cleared, not left showing a value that
+ *    visibly contradicts its own formula (see `rewriteClonedFormula`);
+ *  - an `xl/media/*` image is swept once it is PROVABLY unreferenced by
+ *    every remaining relationship in the package (not just the deleted
+ *    sheet's own drawing) after a sheet delete removes that sheet's own
+ *    drawing part (`sweepOrphanedMedia`).
  *
  * Everything else in the package is passed through untouched.
  *
@@ -63,15 +75,17 @@
  * coverage): a non-OOXML target still falls back to the fresh-workbook
  * writer; a 3-D formula reference's row/column shift is taken from its
  * FIRST sheet only, on the assumption (implicit in a 3-D reference itself)
- * that every sheet it spans is laid out the same way; a shared-formula
- * group's `ref` SPAN attribute (`<f t="shared" ref="C3:C10" si="0">`) is not
- * re-anchored when a row/column insert or delete moves some of its member
- * cells — only the master cell's own formula TEXT is (a narrower,
- * pre-existing gap, not one this fix closes); an `xl/media/*` image
- * belonging to a deleted sheet's drawing is deliberately left orphaned
- * rather than swept, since a differently-authored package could in
- * principle have another, surviving sheet's drawing target the same image
- * part.
+ * that every sheet it spans is laid out the same way — a row/column
+ * inserted or deleted on a sheet in the MIDDLE of the span (not its first
+ * sheet) never shifts the reference at all. This is left as-is rather than
+ * attempting a per-sheet shift a single A1-style reference cannot even
+ * represent (one reference, applied uniformly to every sheet in the span):
+ * real Excel has the same well-documented limitation (a 3-D reference is
+ * one of the cases Microsoft itself flags as unreliable across
+ * insert/delete/sort operations on the sheets it spans), so matching "leave
+ * it alone unless the first sheet moved" is the conservative, Excel-shaped
+ * choice, not an oversight — see `formulaRefs.ts`'s own header and
+ * `rewriteReference`'s `shiftSource` comment.
  */
 import JSZip from 'jszip'
 
@@ -238,16 +252,65 @@ function rewriteClonedFormula(
   changesByOriginalName: ReadonlyMap<string, SheetChange>,
 ): void {
   const formulaElement = firstChildElement(clone, 'f')
-  const text = formulaElement?.textContent
-  if (!formulaElement || !text) return // no formula, or a shared/array-formula FOLLOWER with no text of its own to rewrite
-  formulaElement.textContent = xmlSafeText(
-    rewriteFormulaReferences(text, {
-      changesByOriginalName,
-      ownRowSources: sheet.rowSources,
-      ownColSources: sheet.colSources,
-      remapCoordinates: true,
-    }),
-  )
+  if (!formulaElement) return // no formula on this cell at all
+
+  // A shared-formula MASTER cell also carries the group's `ref` SPAN
+  // attribute (`<f t="shared" ref="B2:B10" si="0">`), which is a plain
+  // sqref-style range on THIS sheet — a shared-formula group can never span
+  // more than one sheet — so it re-anchors through the sheet's own
+  // row/column history exactly like a conditional format's `sqref`
+  // (`updateShiftedRanges`/`remapSqref`), not through `formulaRefs.ts`
+  // (that engine only rewrites reference syntax INSIDE a formula's text).
+  // Previously only the master's own formula TEXT was rewritten, leaving
+  // the `ref` span pointing at the ORIGINAL rows/columns — a stale span
+  // makes Excel apply the (unrelated) old formula to the wrong range on
+  // open. The master cell being cloned here always still exists in the
+  // saved sheet, so its own row/column is always inside the remapped span
+  // and `remapSqref` is never asked to drop the whole thing (its `null`
+  // result — "fully consumed by a delete" — is therefore unreachable here;
+  // the attribute is simply left as-is in that theoretical case rather than
+  // ever emitting an invalid, empty `ref`).
+  if (formulaElement.getAttribute('t') === 'shared') {
+    const ref = formulaElement.getAttribute('ref')
+    if (ref) {
+      const nextRef = remapSqref(ref, sheet.rowSources, sheet.colSources)
+      if (nextRef) formulaElement.setAttribute('ref', nextRef)
+    }
+  }
+
+  const text = formulaElement.textContent
+  if (!text) return // a shared/array-formula FOLLOWER has no text of its own to rewrite
+
+  const rewritten = rewriteFormulaReferences(text, {
+    changesByOriginalName,
+    ownRowSources: sheet.rowSources,
+    ownColSources: sheet.colSources,
+    remapCoordinates: true,
+  })
+  formulaElement.textContent = xmlSafeText(rewritten)
+
+  // A structural edit (a sheet delete, or a row/column delete that fully
+  // consumed a referenced range) can turn part or all of this formula into
+  // `#REF!`. In Excel, a `#REF!` anywhere inside an expression propagates
+  // through the whole formula unless it is caught by IFERROR/IFNA — which
+  // this module has no way to detect from the outside — so a cached `<v>`
+  // computed before the edit is no longer trustworthy either way. A bug
+  // hunt found exactly this going wrong: a stale `99` still on display
+  // under a formula that now reads `#REF!`, which is worse than a blank
+  // cell because it looks like a real, current answer instead of an
+  // obviously broken one. Atlas's own formula evaluator has no cross-sheet
+  // support at all (a deliberate scope cut — see this module's header), so
+  // recomputing the correct value here is not an option; clearing the
+  // stale cache and relying on the "recalculate on load" flag this module
+  // already sets unconditionally (`markRecalculateOnLoad`) is the honest,
+  // conservative choice — Excel fills in the real value the moment the
+  // file is opened, so the emptied `<v>` is never actually shown to a user
+  // in Excel.
+  if (rewritten.includes('#REF!') && !text.includes('#REF!')) {
+    const staleValue = firstChildElement(clone, 'v')
+    if (staleValue) clone.removeChild(staleValue)
+    if (clone.hasAttribute('t')) clone.removeAttribute('t') // described the stale value's type (str/b/e/...), now meaningless without one
+  }
 }
 
 function rebuildSheetData(
@@ -572,7 +635,7 @@ function removePart(zip: JSZip, contentTypesDoc: XMLDocument | null, path: strin
 
 /** Relationship-`Type` suffixes exclusively owned by ONE worksheet — never shared with a surviving sheet, so safe to delete outright along with it. */
 const SHEET_OWNED_REL_SUFFIXES = ['/table', '/comments', '/vmlDrawing', '/threadedComment', '/drawing']
-/** One level further: parts a swept DRAWING itself exclusively owns. Does NOT include `/image` — a drawing's image could in principle be a part another, surviving sheet's drawing also targets (Excel does not guarantee one image part per drawing), so `xl/media/*` is deliberately left orphaned rather than risk deleting a still-referenced part. */
+/** One level further: parts a swept DRAWING itself exclusively owns. Does NOT include `/image` — a drawing's image could in principle be a part another, surviving sheet's drawing also targets (Excel does not guarantee one image part per drawing). An image is instead handled by `sweepOrphanedMedia`, which can PROVE exclusivity (or the lack of it) by reference-counting across the whole package, something this function's narrower one-drawing-at-a-time pass cannot do. */
 const DRAWING_OWNED_REL_SUFFIXES = ['/chart']
 
 /**
@@ -584,8 +647,9 @@ const DRAWING_OWNED_REL_SUFFIXES = ['/chart']
  * comments part belong to exactly one sheet by the OOXML schema itself; a
  * drawing and the charts inside it are likewise 1:1 with the sheet/drawing
  * that placed them). `xl/media/*` images are the one exception — see
- * `DRAWING_OWNED_REL_SUFFIXES` — and stay orphaned, matching the module
- * header's documented limit.
+ * `DRAWING_OWNED_REL_SUFFIXES` and `sweepOrphanedMedia`, which runs
+ * separately (after every sheet delete has already gone through here) once
+ * it can see the WHOLE package's surviving relationships.
  */
 async function removeSheetOwnedParts(
   zip: JSZip,
@@ -628,6 +692,62 @@ async function removeSheetOwnedParts(
 
     removePart(zip, contentTypesDoc, partPath)
     removePart(zip, contentTypesDoc, relsPathForPart(partPath))
+  }
+}
+
+/**
+ * Sweeps every `xl/media/*` part that is PROVABLY unreferenced by anything
+ * left in the package, after `removeSheetOwnedParts` has already removed a
+ * deleted sheet's own drawing (and that drawing's own rels file, which is
+ * what used to point at the image). The module's own header used to
+ * document leaving `xl/media/*` orphaned outright, because one drawing's
+ * own rels file can never prove ITS image isn't also targeted by another,
+ * surviving drawing — that reasoning is correct for a single drawing in
+ * isolation, but doesn't hold once every remaining relationship in the
+ * package is counted: OOXML has no part that is "provisionally" referenced,
+ * so an image no surviving `.rels` file anywhere points at can only be
+ * genuinely orphaned. This scans every `.rels` part still in the zip — a
+ * drawing's own, a worksheet's (a sheet can target a background image
+ * directly via `<picture r:id="...">`, with no drawing involved at all), a
+ * chart's, a legacy VML drawing's, ... — not just the deleted sheet's own,
+ * so an image still used by any of them is never touched. An external
+ * (`TargetMode="External"`) relationship is skipped: its `Target` is a URL
+ * or an out-of-package path, never an `xl/media/*` part.
+ *
+ * The caller only runs this when a sheet was actually deleted this save
+ * (`anySheetDeleted`): an image the ORIGINAL file already left unreferenced,
+ * with no sheet delete involved, is none of this save's business — this
+ * module otherwise keeps everything it did not itself change untouched, and
+ * a general "clean up anything unreferenced" pass would break that rule for
+ * no reason tied to the edit being made.
+ */
+async function sweepOrphanedMedia(zip: JSZip, contentTypesDoc: XMLDocument | null): Promise<void> {
+  const mediaPaths = Object.keys(zip.files).filter((path) => path.startsWith('xl/media/') && !zip.files[path].dir)
+  if (mediaPaths.length === 0) return
+
+  const referenced = new Set<string>()
+  const relsPaths = Object.keys(zip.files).filter((path) => path.endsWith('.rels') && !zip.files[path].dir)
+  for (const relsPath of relsPaths) {
+    const xml = await zip.file(relsPath)?.async('string')
+    if (!xml) continue
+    let relsDoc: XMLDocument
+    try {
+      relsDoc = parseXmlPart(xml)
+    } catch {
+      continue // malformed rels — cannot prove anything it points at is unreferenced, so nothing here counts as "used"; harmless, since a WELL-FORMED rels file elsewhere still protects any image genuinely still in use
+    }
+    // A `.rels` part lives at `<dir>/_rels/<file>.rels`; its own `Target`s resolve against `<dir>`, the directory ABOVE `_rels`.
+    const relsDir = relsPath.slice(0, relsPath.lastIndexOf('/_rels/'))
+    for (const rel of descendantElements(relsDoc, 'Relationship')) {
+      const target = rel.getAttribute('Target')
+      if (!target || rel.getAttribute('TargetMode') === 'External') continue
+      const resolved = resolveRelativeTarget(relsDir, target)
+      if (resolved.startsWith('xl/media/')) referenced.add(resolved)
+    }
+  }
+
+  for (const path of mediaPaths) {
+    if (!referenced.has(path)) removePart(zip, contentTypesDoc, path)
   }
 }
 
@@ -984,8 +1104,10 @@ export async function writeWorkbookThroughOriginal(
   // relationship, their content-type override, and — one level further —
   // every part exclusively owned by them (tables, comments, drawings/charts;
   // see `removeSheetOwnedParts`).
+  let anySheetDeleted = false
   for (const original of originalSheets) {
     if (originalIndexToNewIndex.has(original.originalIndex) || !original.path) continue
+    anySheetDeleted = true
     const slash = original.path.lastIndexOf('/')
     const sheetDir = original.path.slice(0, slash)
     const sheetRelsPath = `${sheetDir}/_rels/${original.path.slice(slash + 1)}.rels`
@@ -1031,6 +1153,18 @@ export async function writeWorkbookThroughOriginal(
   updateDefinedNames(workbookRoot, changesByOriginalName, originalIndexToNewIndex, originalSheets)
   markRecalculateOnLoad(workbookDoc, workbookRoot)
   if (removeCalcChain(zip, relsDoc) && contentTypesDoc) removeContentTypeOverrideForPart(contentTypesDoc, 'xl/calcChain.xml')
+
+  // Only relevant when a sheet delete just removed a drawing above — a
+  // package's own, pre-existing unreferenced media (nothing to do with
+  // THIS save) is left alone, matching this module's own "keeps the
+  // ORIGINAL package and rewrites only what changed" rule; sweeping it
+  // unconditionally would also punish an already-orphaned image that has
+  // nothing to do with a sheet delete. Runs last, after every deleted
+  // sheet's own drawing (and that drawing's rels) has already been removed
+  // above, so this sees the package's FINAL set of surviving
+  // relationships — anything in `xl/media/*` none of them still points at
+  // is genuinely orphaned (see `sweepOrphanedMedia`).
+  if (anySheetDeleted) await sweepOrphanedMedia(zip, contentTypesDoc)
 
   if (contentTypesDoc) zip.file(CONTENT_TYPES_PATH, serializeXmlPart(contentTypesDoc))
   zip.file(WORKBOOK_RELS_PATH, serializeXmlPart(relsDoc))
