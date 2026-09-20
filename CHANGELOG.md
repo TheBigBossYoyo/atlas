@@ -8,32 +8,6 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
-## [3.5.0] — 2026-09-20 (wave 10: fidelity warnings, responsive Markdown, memory)
-
-### Added
-- **Large Markdown documents render without freezing the app**: parsing now
-  runs off the main thread, so the window stays responsive while a big
-  document is being prepared, and documents up to 2 MB preview automatically
-  (the earlier limit was 750 KB). Rendering output is proven identical to
-  before by a parity test over every Markdown characterization fixture.
-
-### Fixed
-- **Sheet names with accents** (`Résumé`) were invisible to the formula
-  rewriter, so renaming or deleting such a sheet left every formula pointing
-  at the old name instead of being updated — a silent wrong-number bug.
-- **Closing a tab no longer keeps the document in memory**: up to five closed
-  documents' contents stayed reachable for nothing. Reopening a closed tab
-  (Ctrl+Shift+T) now re-reads the file, and a file deleted in the meantime
-  says so instead of reopening as an empty document.
-
-### Verification
-- New end-to-end scenarios: password-protected PDFs (with a genuinely
-  encrypted fixture built for the purpose), a 36-page image-heavy DOCX under
-  fast scrolling and editing, spreadsheet formulas through a rename + delete +
-  row insert in one save, closing a tab mid-load, and several dirty tabs at
-  once. A full hunt through the French UI, the New-document flow and those
-  races found no further defects.
-
 ## [3.6.0] — 2026-09-20 (wave 11: schema conformance, accessibility, memory)
 
 ### Fixed
@@ -61,9 +35,14 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   semantics, and smooth scrolling now respects the system "reduce motion"
   setting. A keyboard-only end-to-end journey (no mouse at all) guards it.
 
-## [Unreleased]
+## [3.5.0] — 2026-09-20 (wave 10: fidelity warnings, responsive Markdown, memory)
 
 ### Added
+- **Large Markdown documents render without freezing the app**: parsing now
+  runs off the main thread, so the window stays responsive while a big
+  document is being prepared, and documents up to 2 MB preview automatically
+  (the earlier limit was 750 KB). Rendering output is proven identical to
+  before by a parity test over every Markdown characterization fixture.
 - **DOCX Save now tells you when it couldn't preserve everything** —
   the lossy-save detector added in 3.4.0 was reporting into a void; it's
   now wired into the Save flow (`DocxViewer.tsx`). A dismissible,
@@ -72,6 +51,13 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   fallback drawing" — never an XML element name).
 
 ### Fixed
+- **Sheet names with accents** (`Résumé`) were invisible to the formula
+  rewriter, so renaming or deleting such a sheet left every formula pointing
+  at the old name instead of being updated — a silent wrong-number bug.
+- **Closing a tab no longer keeps the document in memory**: up to five closed
+  documents' contents stayed reachable for nothing. Reopening a closed tab
+  (Ctrl+Shift+T) now re-reads the file, and a file deleted in the meantime
+  says so instead of reopening as an empty document.
 - **An unedited content control (`w:sdt`) or a shape/text box's legacy
   fallback (`mc:AlternateContent`) now survives a save byte-for-byte** —
   including a content control's id/alias/tag/binding/lock/placeholder/
@@ -80,6 +66,14 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   Editing content inside one, or one sitting inside a table cell/header/
   footer, still falls back to the previous (reported) behavior. See
   `WrapperPassthrough` in `src/docx/model/document.ts`.
+
+### Verification
+- New end-to-end scenarios: password-protected PDFs (with a genuinely
+  encrypted fixture built for the purpose), a 36-page image-heavy DOCX under
+  fast scrolling and editing, spreadsheet formulas through a rename + delete +
+  row insert in one save, closing a tab mid-load, and several dirty tabs at
+  once. A full hunt through the French UI, the New-document flow and those
+  races found no further defects.
 
 ## [3.4.0] — 2026-09-20 (waves 7-9: data-loss fixes, French UI, document fidelity)
 
