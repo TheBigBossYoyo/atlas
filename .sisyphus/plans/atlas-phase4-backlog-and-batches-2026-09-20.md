@@ -423,6 +423,48 @@ actually means here. Teach it the common simple types (`ST_HexColor`, `ST_Decima
 **Batch 1** (`952a61e`) — DOCX-14, DOCX-15, DOCX-16, DOCX-17, TEST-8, SEC-1 all landed.
 Gate: tsc clean, eslint clean, 3363 unit tests, bundle gate passed, 86 e2e passed.
 
+**Batch 3** (`a0dcd2b`) — A11Y-1..4, I18N-1, TEST-6, DIRTY-1, DRAFT-1, SESS-1, SHEET-4 and
+SHEET-6 all landed. Gate: tsc clean, eslint clean, 3528 unit tests, bundle gate passed,
+91 e2e passed.
+
+### New items found while executing batch 3
+
+**QUIT-DRAFT-1 · medium** — a discard at *quit* still leaves the autosave draft behind.
+`electron/main.cjs`'s `handleWindowCloseRequest` shows its own native message box and, on
+Discard, calls `mainWindow.destroy()` with no IPC round-trip to the renderer — unlike the
+Save path, which does round-trip. So DRAFT-1's fix (clearing the draft in
+`handleUnsavedDialogDiscard`) covers Ctrl+W, the toolbar Close, tab switches and File >
+Open, but **not** Alt+F4 / the window X / File > Quit. Needs a symmetric discard
+notification in `electron/main.cjs` + `electron/preload.cjs`.
+
+**CTRLW-FOCUS-1 · low** — `src/App.tsx`'s global Ctrl+W calls `closeSessionById` directly,
+bypassing `TabBar`'s new `handleClose`, so that one route still does not move focus to the
+neighbouring tab. Fixable only from `App.tsx`.
+
+**I18N-TEXT-1 · medium** — the inverted i18n guard now scans 83 files for literal
+`title=` / `aria-label=` / `placeholder=` attributes, including the `{'...'}` and
+`` {`...`} `` forms. But raw JSX **text** is still only caught by a short exact-phrase
+list (`BANNED_LITERAL_TEXT`). `RawEditor`'s `<span>Markdown Source</span>` was caught via
+its sibling placeholder, not on its own merits — so an untranslated text node in a new
+component would still ship silently.
+
+**FROZENROWS-I18N-1 · low** — `src/viewers/spreadsheet/FrozenRowsStrip.tsx` has a hardcoded
+`Frozen row {r}, column {c}` aria-label. Opted out of the guard with a TODO during batch 3
+because a sibling agent owned the file. The **only** genuine i18n gap the inverted guard
+found across all 83 files.
+
+**REDO-REPLAY-1 · medium** — `History.redo` replays a stored command against whatever the
+*current* document is, not the document the command was computed against. A non-undoable
+external edit between an undo and a later redo can therefore apply the redo at a shifted
+position. Batch 3 closed the stale-redo-after-external-edit case as a side effect (via
+`bumpRevision` clearing the redo stack), but the general replay behaviour is untouched.
+
+**CHARTSHEET-1 · low** — one reason the xlsx passthrough writer bails to the lossy path is
+a chartsheet or dialogsheet (no `<sheetData>`). Supporting those is a feature, not a bug
+fix; the user is now warned instead. Recorded so the warning's cause is known.
+
+---
+
 **Batch 2** (`a947adc`) — DOCX-1, DOCX-12, DOCX-2, SAVE-1, SHEET-1, SHEET-2, SHEET-3,
 SHEET-5 all landed. Gate: tsc clean, eslint clean, 3434 unit tests, bundle gate passed,
 89 e2e passed.
