@@ -154,6 +154,117 @@ describe('recalculateSheet — perf fast path (T2/DAT-07)', () => {
     expect(result).not.toBe(sheet)
     expect(sheet.rows).toBe(originalRows)
   })
+
+  it('never clones a row that has no formula cell, even when another row in the same sheet does (no full-sheet copy on an unrelated edit)', () => {
+    const doc = createDocument([sheetFixture([['1', ''], ['', ''], ['', '']])])
+    const withFormula = setCellValue(doc, 0, 0, 1, '=A1+1').sheets[0]
+    const untouchedRow1 = withFormula.rows[1]
+    const untouchedRow2 = withFormula.rows[2]
+
+    const recalculated = recalculateSheet(withFormula)
+
+    // Row 0 (the formula's own row) is necessarily a fresh array; rows 1
+    // and 2 have no formula cell anywhere in them and must keep the EXACT
+    // SAME reference — recalculating must not degrade into an O(rows) (let
+    // alone O(rows x cols)) copy of every row just because SOME row,
+    // anywhere in the sheet, has a formula in it.
+    expect(recalculated.rows[1]).toBe(untouchedRow1)
+    expect(recalculated.rows[2]).toBe(untouchedRow2)
+  })
+})
+
+/** Builds a `ParsedSheet` with explicit `rows`/`formulas` grids, for dependency-ordering tests that need formula cells at specific coordinates. */
+function gridSheet(rows: string[][], formulas: ReadonlyArray<ReadonlyArray<string | undefined>>, colCount: number): ParsedSheet {
+  return {
+    name: 'Sheet1',
+    hidden: false,
+    grid: { rows, colCount, merges: [], colWidthsPx: [], rowHeightsPx: [], formulas },
+  }
+}
+
+describe('recalculateSheet — dependency ordering (SHEET-5)', () => {
+  it('computes a forward dependency (a cell references a LATER formula cell) fresh on the first pass', () => {
+    // 5 rows x 3 cols. A1 (row 0, col 0) = "=C5+1"; C5 (row 4, col 2) is
+    // ITSELF a formula ("=5+5"), not a static value — the exact shape that
+    // stayed stale under the old row-major single pass, since A1 is visited
+    // long before C5 in row-major order.
+    const rows = Array.from({ length: 5 }, () => ['', '', ''])
+    const formulas: (string | undefined)[][] = Array.from({ length: 5 }, () => [undefined, undefined, undefined])
+    formulas[0][0] = 'C5+1'
+    formulas[4][2] = '5+5'
+
+    const doc = createDocument([gridSheet(rows, formulas, 3)])
+
+    expect(doc.sheets[0].rows[4][2]).toBe('10')
+    expect(doc.sheets[0].rows[0][0]).toBe('11')
+  })
+
+  it('still computes a backward dependency (a cell references an EARLIER formula cell) correctly', () => {
+    const rows = [['', '']]
+    const formulas: (string | undefined)[][] = [['2+3', 'A1+1']]
+
+    const doc = createDocument([gridSheet(rows, formulas, 2)])
+
+    expect(doc.sheets[0].rows[0][0]).toBe('5')
+    expect(doc.sheets[0].rows[0][1]).toBe('6')
+  })
+
+  it('resolves a three-cell forward chain (A1 -> B1 -> C1) in one pass', () => {
+    // Row-major visits A1, B1, C1 in that order, but A1 depends on B1
+    // (later) which depends on C1 (later still) — two levels of look-ahead.
+    const rows = [['', '', '']]
+    const formulas: (string | undefined)[][] = [['B1+1', 'C1+1', '7']]
+
+    const doc = createDocument([gridSheet(rows, formulas, 3)])
+
+    expect(doc.sheets[0].rows[0]).toEqual(['9', '8', '7'])
+  })
+
+  it('recomputes correctly through a forward dependency on every subsequent edit, not just the first pass', () => {
+    const rows = Array.from({ length: 5 }, () => ['', '', ''])
+    const formulas: (string | undefined)[][] = Array.from({ length: 5 }, () => [undefined, undefined, undefined])
+    formulas[0][0] = 'C5+1'
+    formulas[4][2] = '5+5'
+    let doc = createDocument([gridSheet(rows, formulas, 3)])
+    expect(doc.sheets[0].rows[0][0]).toBe('11')
+
+    // Editing C5's formula directly must still propagate to A1 immediately.
+    doc = setCellValue(doc, 0, 4, 2, '=100')
+    expect(doc.sheets[0].rows[4][2]).toBe('100')
+    expect(doc.sheets[0].rows[0][0]).toBe('101')
+  })
+})
+
+describe('recalculateSheet — circular references (SHEET-5)', () => {
+  it('resolves a two-cell cycle (A1 <-> B1) to a defined error instead of hanging', () => {
+    const rows = [['', '']]
+    const formulas: (string | undefined)[][] = [['B1+1', 'A1+1']]
+
+    const doc = createDocument([gridSheet(rows, formulas, 2)])
+
+    expect(doc.sheets[0].rows[0][0]).toBe('#REF!')
+    expect(doc.sheets[0].rows[0][1]).toBe('#REF!')
+  })
+
+  it('resolves a three-cell cycle (A1 -> B1 -> C1 -> A1) to a defined error instead of hanging', () => {
+    const rows = [['', '', '']]
+    const formulas: (string | undefined)[][] = [['B1+1', 'C1+1', 'A1+1']]
+
+    const doc = createDocument([gridSheet(rows, formulas, 3)])
+
+    expect(doc.sheets[0].rows[0]).toEqual(['#REF!', '#REF!', '#REF!'])
+  })
+
+  it('does not let a cycle elsewhere in the sheet stop unrelated formula cells from computing normally', () => {
+    const rows = [['', '', '', '']]
+    const formulas: (string | undefined)[][] = [['B1+1', 'A1+1', undefined, '2+3']]
+
+    const doc = createDocument([gridSheet(rows, formulas, 4)])
+
+    expect(doc.sheets[0].rows[0][0]).toBe('#REF!')
+    expect(doc.sheets[0].rows[0][1]).toBe('#REF!')
+    expect(doc.sheets[0].rows[0][3]).toBe('5')
+  })
 })
 
 describe('setCellValue', () => {

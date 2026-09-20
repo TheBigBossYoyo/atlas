@@ -13,25 +13,31 @@
  * always exactly one sheet) share this same model — CsvViewer just never
  * exposes the sheet-add/rename/delete operations in its UI.
  *
- * Formula recalculation (documented scope cut, matching the style of
- * `spreadsheetFormula.ts`'s own header): there is no dependency graph. Any
- * edit that could change a formula's result (a value edit, a formula edit, a
- * row/column insert or delete, a paste) triggers exactly one row-major
- * left-to-right recalculation pass over every formula cell in that sheet.
- * A formula that references a cell computed *later* in that same pass still
- * sees that cell's *previous* value, not its freshly-recalculated one — a
- * real spreadsheet's dependency-graph engine would converge in one pass
- * regardless of layout order; this one does not. Circular references are
- * not detected; they simply resolve to whatever the referenced cell's
- * current display text already is (no infinite loop, since a single pass
- * never re-visits a cell). Inserting/deleting a row or column also does NOT
- * shift other cells' formula references (e.g. deleting row 2 leaves a
- * `=A3` elsewhere still reading literal row 3) — implementing Excel's
- * reference-shifting semantics is a substantial, separate undertaking, out
- * of scope here.
+ * Formula recalculation (SHEET-5): any edit that could change a formula's
+ * result (a value edit, a formula edit, a row/column insert or delete, a
+ * paste) triggers exactly one recalculation pass over every formula cell in
+ * that sheet — but that pass runs in real DEPENDENCY order, not row-major
+ * layout order. `recalculateSheet` scans each formula's text for the cells
+ * it references (a single ref or a range like `A1:A3`) and topologically
+ * sorts the sheet's formula cells so that, by the time a cell is evaluated,
+ * every OTHER formula cell it depends on has already been recomputed in
+ * THIS SAME pass — however far apart the two cells are in row/column order.
+ * The sort is an iterative (not recursive) traversal specifically so a long
+ * dependency chain can't blow the call stack. A circular reference (a cell
+ * that, directly or through a chain, depends on itself) is caught by that
+ * same traversal — an edge back to a node still mid-visit — and every cell
+ * in the cycle resolves to `#REF!` (this codebase's existing vocabulary for
+ * "this reference doesn't resolve", matching `xlsxPassthrough.ts`'s and
+ * `formulaRefs.ts`'s own use of it) instead of hanging or recursing forever.
+ *
+ * Inserting/deleting a row or column still does NOT shift other cells'
+ * formula references (e.g. deleting row 2 leaves a `=A3` elsewhere still
+ * reading literal row 3) — implementing Excel's reference-shifting semantics
+ * is a substantial, separate undertaking, out of scope here.
  */
 import { evaluateFormula } from './spreadsheetFormula'
 import type { CellLookup } from './spreadsheetFormula'
+import { parseCellRange } from './cellRef'
 import type { FrozenPanes, MergeRange, ParsedSheet } from '../shared/spreadsheetGrid'
 import {
   tablesAfterColumnDelete,
@@ -172,9 +178,147 @@ function replaceSheet(doc: SpreadsheetDocument, sheetIndex: number, sheet: Edita
   return { sheets: doc.sheets.map((s, i) => (i === sheetIndex ? sheet : s)) }
 }
 
+/** '#REF!' as a circular-reference result — see the module header: the same code this codebase already uses elsewhere for "this reference doesn't resolve" (`xlsxPassthrough.ts`, `formulaRefs.ts`), reused here rather than inventing a distinct "circular" error vocabulary. */
+const CIRCULAR_REFERENCE_ERROR = '#REF!'
+
+type FormulaCellEntry = { readonly row: number; readonly col: number; readonly formula: string }
+
+/** A cell reference/range shape, matching `spreadsheetFormula.ts`'s own tokenizer: `$?letters$?digits`, optionally `:$?letters$?digits` for a range. Built fresh per call (not a module-level `RegExp`) so concurrent/re-entrant use can't stomp on a shared `lastIndex`. */
+function referenceOrRangePattern(): RegExp {
+  return /\$?[A-Za-z]+\$?\d+(?::\$?[A-Za-z]+\$?\d+)?/g
+}
+
 /**
- * Recomputes every formula cell's display text in one row-major pass (see
- * module header for the single-pass/no-dependency-graph limitation).
+ * Every `cellKey(row, col)` this formula's text could read during
+ * evaluation — one per referenced cell, or every cell inside a range like
+ * `A1:A3`. This is a lightweight text scan, not a full parse (see
+ * `spreadsheetFormula.ts` for that); a SUPERSET of the true dependencies is
+ * safe here, since an extra dependency only adds an ordering constraint, it
+ * can never make a value wrong — a MISSED one is exactly the stale-value bug
+ * this function exists to fix, so scanning wider than strictly necessary is
+ * the safe direction to err in.
+ *
+ * Bounded to the sheet's own extent (`rowCount`/`colCount`): a formula like
+ * `=SUM(A1:A1048576)` typed against a 20-row sheet doesn't walk a million
+ * phantom rows that can't contain a formula cell anyway. This costs no more
+ * than `evaluateFormula` itself already pays to compute that same formula's
+ * result — not a new order of magnitude.
+ */
+function formulaDependencyKeys(formula: string, rowCount: number, colCount: number): string[] {
+  const deps: string[] = []
+  const seen = new Set<string>()
+  const pattern = referenceOrRangePattern()
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(formula)) !== null) {
+    const range = parseCellRange(match[0])
+    if (!range) continue
+    const r1 = Math.min(range.end.row, rowCount - 1)
+    const c1 = Math.min(range.end.col, colCount - 1)
+    for (let r = range.start.row; r <= r1; r++) {
+      for (let c = range.start.col; c <= c1; c++) {
+        const key = cellKey(r, c)
+        if (!seen.has(key)) {
+          seen.add(key)
+          deps.push(key)
+        }
+      }
+    }
+  }
+  return deps
+}
+
+type DfsFrame = { readonly key: string; readonly deps: ReadonlyArray<string>; depIndex: number }
+
+/** A back-edge from the frame currently being expanded to `target`, still mid-visit on `stack`: every frame from `target` up to the top of the stack is part of one cycle. */
+function markCycle(stack: ReadonlyArray<DfsFrame>, target: string, cyclic: Set<string>): void {
+  let start = stack.findIndex((frame) => frame.key === target)
+  if (start === -1) start = stack.length - 1 // defensive only — an IN-PROGRESS node is always still on this stack
+  for (let i = start; i < stack.length; i++) cyclic.add(stack[i].key)
+}
+
+/**
+ * Topologically sorts `formulaCells` (keyed by `cellKey`) so every cell
+ * comes after every OTHER formula cell it depends on — an iterative
+ * (explicit-stack) post-order DFS, not a recursive one, so a long
+ * dependency chain can't blow the call stack. `cyclic` collects every key
+ * that sits on a circular reference (a back-edge to a node still mid-visit);
+ * those cells are still included in `order` (still need SOME resolution),
+ * just flagged so the caller skips evaluating them and writes the circular-
+ * reference error instead. A cell's dependency on its OWN key is never part
+ * of this — see `frameFor`'s own comment for why a bare self-mention isn't
+ * treated as a one-cell cycle here.
+ */
+function topologicalFormulaOrder(
+  formulaCells: ReadonlyMap<string, FormulaCellEntry>,
+  rowCount: number,
+  colCount: number,
+): { readonly order: ReadonlyArray<FormulaCellEntry>; readonly cyclic: ReadonlySet<string> } {
+  const IN_PROGRESS = 1
+  const DONE = 2
+  const state = new Map<string, typeof IN_PROGRESS | typeof DONE>()
+  const cyclic = new Set<string>()
+  const order: FormulaCellEntry[] = []
+
+  const frameFor = (key: string): DfsFrame => {
+    const entry = formulaCells.get(key)
+    // A dependency on the cell's OWN key is dropped, not treated as a
+    // (trivial, one-cell) cycle: `lookup` is a plain, non-recursive array
+    // read (see the header above `recalculateSheet`), so a formula that
+    // merely MENTIONS its own cell — e.g. as one argument among several to
+    // an unsupported function like `VLOOKUP(A1,...)` stored AT A1, which
+    // `createDocument`'s own fixtures exercise — never risks a hang; it just
+    // reads whatever text is already sitting there, exactly as it always
+    // has. Forcing `#REF!` on every such mention would also misfire on that
+    // case: the formula fails for an unrelated reason (the unsupported
+    // function), and the existing, tested contract is to keep the cell's
+    // cached display text in that situation, not to overwrite it with a
+    // circular-reference error it was never actually driven by. A genuinely
+    // circular SELF-reference that a supported formula actually depends on
+    // (`=A1+1` stored at A1) is a narrower, pre-existing edge case this
+    // still doesn't flag — see this function's own header — left as-is
+    // rather than risk that same false positive.
+    const deps = entry
+      ? formulaDependencyKeys(entry.formula, rowCount, colCount).filter((k) => k !== key && formulaCells.has(k))
+      : []
+    state.set(key, IN_PROGRESS)
+    return { key, deps, depIndex: 0 }
+  }
+
+  for (const startKey of formulaCells.keys()) {
+    if (state.get(startKey) === DONE) continue
+
+    const stack: DfsFrame[] = [frameFor(startKey)]
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1]
+      if (frame.depIndex < frame.deps.length) {
+        const depKey = frame.deps[frame.depIndex]
+        frame.depIndex += 1
+        const depState = state.get(depKey)
+        if (depState === DONE) continue
+        if (depState === IN_PROGRESS) {
+          markCycle(stack, depKey, cyclic)
+          continue
+        }
+        stack.push(frameFor(depKey))
+      } else {
+        stack.pop()
+        state.set(frame.key, DONE)
+        // frame.key always has an entry: every key ever pushed came either
+        // from `formulaCells.keys()` directly or from a dependency already
+        // filtered to `formulaCells.has(k)` in `frameFor`.
+        order.push(formulaCells.get(frame.key)!)
+      }
+    }
+  }
+
+  return { order, cyclic }
+}
+
+/**
+ * Recomputes every formula cell's display text in true DEPENDENCY order
+ * (see module header) rather than row-major layout order — a topological
+ * sort over the sheet's formula cells, with circular references caught and
+ * resolved to `#REF!` instead of hanging.
  *
  * A formula our evaluator can compute (`result.ok`) always gets the live,
  * freshly-computed text — including on every subsequent edit, so a `=SUM(...)`
@@ -192,42 +336,58 @@ function replaceSheet(doc: SpreadsheetDocument, sheetIndex: number, sheet: Edita
  * Performance: `createDocument` calls this once per sheet on EVERY load,
  * including the 100k-row perf-guarantee fixtures (T2/DAT-07) that have no
  * formulas at all — so the common "no formulas in this sheet" case must not
- * pay for an O(rows) copy of every row it never needed. `rows` therefore
- * stays `null` (and the original `sheet` is returned unchanged) until a
- * formula cell is actually found; only then is the copy-on-write triggered —
- * and even then, only the specific ROW a formula cell was found in is ever
- * cloned (`rowCopied`, below). Every other row keeps its exact original
- * array reference. This matters because `setCellValue` calls this after
- * EVERY keystroke-commit: a sheet with even a single formula cell anywhere
- * would otherwise pay an O(rows × cols) copy on every unrelated edit
+ * pay for an O(rows) copy of every row it never needed. Collecting
+ * `formulaCells` below is still an O(rows × cols) SCAN either way (it always
+ * was, even before this rewrite — the original loop walked every cell to
+ * check `formula === undefined` too); what must stay lazy is the ARRAY COPY,
+ * not the scan. So this returns the original `sheet` unchanged the moment
+ * that scan finds zero formula cells, and otherwise only clones the outer
+ * `rows` array once (lazily, `ensureRowWritable` below) and each individual
+ * row at most once, the first time a value actually changes in it — never a
+ * blanket O(rows × cols) copy. This matters because `setCellValue` calls
+ * this after EVERY keystroke-commit: a sheet with even a single formula cell
+ * anywhere would otherwise pay a full-sheet copy on every unrelated edit
  * elsewhere in a 100k-row sheet, not just the O(rows) the edit itself needs.
  */
 export function recalculateSheet(sheet: EditableSheet): EditableSheet {
-  let rows: string[][] | null = null
-  const lookup: CellLookup = (row, col) => (rows ?? sheet.rows)[row]?.[col] ?? ''
-
+  const formulaCells = new Map<string, FormulaCellEntry>()
   for (let r = 0; r < sheet.formulas.length; r++) {
     const formulaRow = sheet.formulas[r]
-    let rowCopied = false
     for (let c = 0; c < formulaRow.length; c++) {
       const formula = formulaRow[c]
       if (formula === undefined) continue
-      // Outer array only, on first formula cell found anywhere in the sheet
-      // — every row still points at `sheet.rows`' own (readonly-typed, but
-      // never actually written to until `rowCopied` below) array until it's
-      // this row's turn to actually be written to, just below.
-      if (rows === null) rows = sheet.rows.map((row) => row as string[])
-      if (!rowCopied) {
-        rows[r] = [...rows[r]]
-        rowCopied = true
-      }
+      formulaCells.set(cellKey(r, c), { row: r, col: c, formula })
+    }
+  }
 
-      const result = evaluateFormula(formula, lookup)
-      if (result.ok) {
-        rows[r][c] = result.text
-      } else if (rows[r][c] === '') {
-        rows[r][c] = `=${formula}`
-      }
+  if (formulaCells.size === 0) return sheet
+
+  const { order, cyclic } = topologicalFormulaOrder(formulaCells, sheet.rows.length, sheet.colCount)
+
+  let rows: string[][] | null = null
+  const clonedRows = new Set<number>()
+  const lookup: CellLookup = (row, col) => (rows ?? sheet.rows)[row]?.[col] ?? ''
+
+  const ensureRowWritable = (r: number): string[] => {
+    if (rows === null) rows = sheet.rows.map((row) => row as string[])
+    if (!clonedRows.has(r)) {
+      rows[r] = [...rows[r]]
+      clonedRows.add(r)
+    }
+    return rows[r]
+  }
+
+  for (const { row: r, col: c, formula } of order) {
+    if (cyclic.has(cellKey(r, c))) {
+      ensureRowWritable(r)[c] = CIRCULAR_REFERENCE_ERROR
+      continue
+    }
+
+    const result = evaluateFormula(formula, lookup)
+    if (result.ok) {
+      ensureRowWritable(r)[c] = result.text
+    } else if ((rows ?? sheet.rows)[r][c] === '') {
+      ensureRowWritable(r)[c] = `=${formula}`
     }
   }
 
