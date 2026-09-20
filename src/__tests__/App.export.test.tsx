@@ -15,6 +15,22 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
 
+// PERF-01 — `App.tsx`'s export handlers now `await import('./utils/export')`
+// on demand instead of a top-level `import { exportXxx, ... }` (so cold
+// start / a non-export session never pays for bundling `docx`, `xlsx`,
+// `html2canvas-pro`, and `react-dom/server` — see App.tsx's own PERF-01
+// comment for the measured effect). In the real app that dynamic import is
+// just a `fetch()` of an already-built, pre-transformed chunk — effectively
+// instant. Under Vitest, though, a dynamic `import()` is transformed
+// on-demand the FIRST time it actually runs (unlike a statically-imported
+// module, which Vite's SSR module runner pre-transforms ahead of the test),
+// and that one-time esbuild pass over `utils/export`'s whole dependency
+// graph measurably exceeded `waitFor`'s default 1000ms budget on this
+// (shared, concurrently-loaded) machine — a test-environment artifact, not
+// a real regression: every test below still asserts the exact same
+// behavior, just with room for that one-time cost.
+const EXPORT_WAIT_OPTIONS = { timeout: 15_000 } as const;
+
 function buildElectronAPI(overrides: Partial<typeof window.electronAPI> = {}): typeof window.electronAPI {
   return {
     getInitialFile: vi.fn().mockResolvedValue(null),
@@ -88,7 +104,7 @@ describe('App — markdown HTML export serializes the live DOM (X2/UX-05)', () =
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
     fireEvent.click(screen.getByRole('button', { name: 'HTML' }));
 
-    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalled());
+    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalled(), EXPORT_WAIT_OPTIONS);
     const call = (window.electronAPI!.saveFile as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(call.content).toContain('class="katex"');
     expect(call.content).not.toContain('$E = mc^2$');
@@ -106,7 +122,7 @@ describe('App — CSV export for csv/tsv files (UX-12)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
     fireEvent.click(screen.getByRole('button', { name: 'Export to CSV' }));
 
-    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalled());
+    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalled(), EXPORT_WAIT_OPTIONS);
     const call = (window.electronAPI!.saveFile as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(call.content).toBe('name,age\nAda,36');
     expect(call.suggestedName).toBe('data.csv');
@@ -121,7 +137,7 @@ describe('App — CSV export for csv/tsv files (UX-12)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
     fireEvent.click(screen.getByRole('button', { name: 'Export to CSV' }));
 
-    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalled());
+    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalled(), EXPORT_WAIT_OPTIONS);
     const call = (window.electronAPI!.saveFile as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(call.content).toBe('name,age\r\nAda,36');
   });
@@ -140,7 +156,7 @@ describe('App — export failure surfaces as a toast, not a blocking alert() (UX
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
     fireEvent.click(screen.getByRole('button', { name: 'Markdown' }));
 
-    const toast = await screen.findByRole('alert');
+    const toast = await screen.findByRole('alert', {}, EXPORT_WAIT_OPTIONS);
     expect(toast).toHaveTextContent(/disk is full/i);
     expect(alertSpy).not.toHaveBeenCalled();
   });
@@ -165,7 +181,7 @@ describe('App — PDF "Save a copy" (X1 — this used to bypass the native save 
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save a copy' }));
 
-    await waitFor(() => expect(saveBinaryFileMock).toHaveBeenCalled());
+    await waitFor(() => expect(saveBinaryFileMock).toHaveBeenCalled(), EXPORT_WAIT_OPTIONS);
     expect(saveBinaryFileMock).toHaveBeenCalledWith(
       expect.objectContaining({ suggestedName: 'report.pdf' }),
     );

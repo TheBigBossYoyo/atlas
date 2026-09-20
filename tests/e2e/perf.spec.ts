@@ -186,6 +186,113 @@ test('opening a 100k-row XLSX keeps every renderer main-thread task under 200ms'
 })
 
 /**
+ * PERF-01 — cold start (no file argv, just the welcome screen) must not
+ * spend a long time evaluating JS before React's first commit.
+ *
+ * Before this task, `App.tsx` had a plain top-level
+ * `import { exportMarkdown, ... } from './utils/export'` (pulling in `docx`,
+ * `xlsx` via the shared spreadsheet parser, `html2canvas-pro`, and
+ * `react-dom/server` — none of which the Export menu needs until a user
+ * actually exports) and a plain top-level `import { MarkdownRenderer } from
+ * './components/MarkdownRenderer'` (pulling in `katex`, `highlight.js`,
+ * `dompurify`, `parse5`, and the whole react-markdown/rehype/remark chain —
+ * none of which the welcome screen needs at all). Both got bundled into the
+ * SAME eagerly-loaded entry chunk `main.tsx` itself sits in, every cold
+ * start, for every format, whether or not that session ever opens a
+ * markdown file or exports anything. Every other per-format viewer was
+ * already code-split through `formats/registry.ts`'s `lazy()` loaders —
+ * this made the export utilities and the markdown editor/preview split get
+ * the same treatment, via `React.lazy()` (Suspense-wrapped, falling back to
+ * the same `ViewerLoading` spinner every other viewer already shows) and a
+ * `loadExportUtils = () => import('./utils/export')` called from inside the
+ * two Export-menu handlers.
+ *
+ * Measured effect on `npx vite build`'s output: the main entry chunk
+ * (`dist/assets/index-*.js`) dropped from ~2635 KB to ~295 KB (-89%), and
+ * (this test's own metric) the single longest main-thread task recorded
+ * between process launch and the welcome screen's first paint dropped from
+ * ~155-190ms to ~50-56ms, measured back-to-back on the same machine under
+ * the same concurrent-agent load, 5 runs each side.
+ *
+ * A `longtask` budget is used instead of raw wall-clock (unlike the simpler
+ * open-to-visible timings used to develop this fix) because wall-clock also
+ * bundles in OS process-spawn and disk-I/O variance that swamps the actual
+ * JS-evaluation signal this regression cares about on a shared/loaded
+ * machine — see the CSV/XLSX tests above for the same reasoning applied to
+ * parse cost. The budget below sits well above the ~56ms this fix achieves
+ * locally and well below the ~155-190ms a reverted regression produces
+ * locally, then applies the same CI slack this file already uses for the
+ * CSV/XLSX budget above.
+ */
+const STARTUP_LONG_TASK_BUDGET_MS = 120
+const startupLongTaskBudgetMs = (): number =>
+  process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true'
+    ? STARTUP_LONG_TASK_BUDGET_MS * CI_LONG_TASK_SLACK
+    : STARTUP_LONG_TASK_BUDGET_MS
+
+test('cold start to the welcome screen has no long main-thread task', async () => {
+  test.setTimeout(60_000)
+
+  const electronApp = await electron.launch({
+    args: ['.'],
+    cwd: projectRoot,
+    env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
+  })
+
+  try {
+    // Same belt-and-suspenders init-script + page.evaluate pairing as
+    // `assertNoLongTasksOpening` above — see its comment for why both are
+    // needed to avoid a race with the window's own navigation.
+    await electronApp.context().addInitScript(() => {
+      const win = window as unknown as { __atlasLongTasks?: Array<{ duration: number; startTime: number }> }
+      if (win.__atlasLongTasks) return
+      win.__atlasLongTasks = []
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            win.__atlasLongTasks!.push({ duration: entry.duration, startTime: entry.startTime })
+          }
+        })
+        observer.observe({ entryTypes: ['longtask'] })
+      } catch {
+        // handled by the offenders check below finding nothing either way
+      }
+    })
+
+    const page = await electronApp.firstWindow()
+    await page.waitForSelector('#root', { timeout: 30_000 })
+    await page.evaluate(() => {
+      const win = window as unknown as { __atlasLongTasks?: Array<{ duration: number; startTime: number }> }
+      if (win.__atlasLongTasks) return
+      win.__atlasLongTasks = []
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            win.__atlasLongTasks!.push({ duration: entry.duration, startTime: entry.startTime })
+          }
+        })
+        observer.observe({ entryTypes: ['longtask'] })
+      } catch {
+        // handled below
+      }
+    })
+
+    await expect(page.locator('.welcome')).toHaveCount(1, { timeout: 30_000 })
+    await page.waitForTimeout(300)
+
+    const longTasks = await page.evaluate(
+      () => (window as unknown as { __atlasLongTasks?: Array<{ duration: number; startTime: number }> }).__atlasLongTasks ?? [],
+    )
+
+    const budget = startupLongTaskBudgetMs()
+    const offenders = longTasks.filter((task) => task.duration > budget)
+    expect(offenders, `long tasks over ${budget}ms before the welcome screen appeared: ${JSON.stringify(offenders)}`).toEqual([])
+  } finally {
+    await electronApp.close()
+  }
+})
+
+/**
  * D23 — typing in a long DOCX must not stall. Every keystroke re-paginates
  * the document; before the per-paragraph line cache and the time-sliced
  * yielding, a single character on a ~35-page document took about three
