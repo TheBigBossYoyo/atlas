@@ -43,6 +43,7 @@ import {
   type DrawingWrap,
   type DrawingWrapMode,
   type DrawingWrapSide,
+  type EmphasisMark,
   type Endnote,
   type EndnoteReference,
   type Field,
@@ -70,6 +71,7 @@ import {
   type PageNumberType,
   type ParaProps,
   type ParagraphChild,
+  type RPrUnknownChild,
   type Run,
   type RunChild,
   type RunProps,
@@ -1529,6 +1531,21 @@ function parseTableCell(element: OrderedXmlNode): TableCell {
   }
 }
 
+/**
+ * DOCX-12 — every `w:rPr` child name `parseRunProps` below understands,
+ * whether or not `RunProps` models it with a dedicated field (`w:cs` and
+ * friends fall through to `rPrUnknown` passthrough same as a genuinely
+ * invented tag would). `parseRPrUnknownChildren` consults this to decide
+ * what counts as "known" — keep it in sync with the `child(element, ...)`
+ * calls just below.
+ */
+const KNOWN_RPR_CHILD_NAMES: ReadonlySet<string> = new Set([
+  'w:rStyle', 'w:rFonts', 'w:b', 'w:bCs', 'w:i', 'w:iCs', 'w:caps', 'w:smallCaps',
+  'w:strike', 'w:dstrike', 'w:outline', 'w:emboss', 'w:imprint', 'w:vanish', 'w:webHidden',
+  'w:color', 'w:spacing', 'w:w', 'w:kern', 'w:position', 'w:sz', 'w:szCs', 'w:highlight',
+  'w:u', 'w:bdr', 'w:shd', 'w:vertAlign', 'w:rtl', 'w:em', 'w:lang',
+])
+
 function parseRunProps(element: OrderedXmlNode | undefined): RunProps | undefined {
   if (element === undefined) {
     return undefined
@@ -1559,6 +1576,18 @@ function parseRunProps(element: OrderedXmlNode | undefined): RunProps | undefine
   const vanish = parseToggleElement(child(element, 'w:vanish'))
   const webHidden = parseToggleElement(child(element, 'w:webHidden'))
   const rtl = parseToggleElement(child(element, 'w:rtl'))
+  // DOCX-12 — a general character-effects/scaling round-trip pass: these
+  // were parsed nowhere, so a run carrying any of them silently reverted on
+  // save (outline/emboss/imprint are routine "text effects" formatting; `em`
+  // — emphasis marks — is routine in CJK documents; `bdr`/`w` are rarer but
+  // just as silently dropped previously).
+  const outline = parseToggleElement(child(element, 'w:outline'))
+  const emboss = parseToggleElement(child(element, 'w:emboss'))
+  const imprint = parseToggleElement(child(element, 'w:imprint'))
+  const em = parseEmphasisMark(attr(child(element, 'w:em'), 'w:val'))
+  const bdr = parseBorder(child(element, 'w:bdr'))
+  const charScale = parseCharScale(attr(child(element, 'w:w'), 'w:val'))
+  const rPrUnknown = parseRPrUnknownChildren(element)
 
   if (rStyle !== undefined) props.rStyle = rStyle
   if (bold !== undefined) props.bold = bold
@@ -1584,8 +1613,86 @@ function parseRunProps(element: OrderedXmlNode | undefined): RunProps | undefine
   if (vanish !== undefined) props.vanish = vanish
   if (webHidden !== undefined) props.webHidden = webHidden
   if (rtl !== undefined) props.rtl = rtl
+  if (outline !== undefined) props.outline = outline
+  if (emboss !== undefined) props.emboss = emboss
+  if (imprint !== undefined) props.imprint = imprint
+  if (em !== undefined) props.em = em
+  if (bdr !== undefined) props.bdr = bdr
+  if (charScale !== undefined) props.charScale = charScale
+  if (rPrUnknown !== undefined) props.rPrUnknown = rPrUnknown
 
   return hasProps(props) ? props : undefined
+}
+
+function parseEmphasisMark(value: string | undefined): EmphasisMark | undefined {
+  switch (value) {
+    case 'none':
+    case 'dot':
+    case 'comma':
+    case 'circle':
+    case 'underDot':
+      return value
+    default:
+      return undefined
+  }
+}
+
+/** `w:w`'s `w:val` (`ST_TextScale`) — Word always writes a plain integer percentage; a trailing `%` is tolerated defensively but not expected from real files. */
+function parseCharScale(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined
+  }
+
+  const normalized = value.endsWith('%') ? value.slice(0, -1) : value
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+/**
+ * DOCX-12 — the general unknown-`w:rPr`-child passthrough. Walks `w:rPr`'s
+ * actual source children in order and captures every one whose name isn't
+ * in {@link KNOWN_RPR_CHILD_NAMES} via `parseUnknownNode` (byte-exact when
+ * called through `parseDocument`, tree-rebuilt otherwise — see that
+ * function's own doc comment), tagging each with the name of the nearest
+ * *known* sibling that followed it in the source so
+ * `buildRunPropertiesNode` can reinsert it at the same relative position
+ * once it rebuilds the known children in schema order. Returns `undefined`
+ * when `w:rPr` has no such children (the common case) rather than an empty
+ * array, matching this file's usual "absent, not empty" convention.
+ */
+function parseRPrUnknownChildren(element: OrderedXmlNode): ReadonlyArray<RPrUnknownChild> | undefined {
+  const entries = nodeChildren(element)
+  let unknown: RPrUnknownChild[] | undefined
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]
+    if (entry === undefined || isIgnorableText(entry)) {
+      continue
+    }
+
+    const name = nodeName(entry)
+    if (name === undefined || KNOWN_RPR_CHILD_NAMES.has(name)) {
+      continue
+    }
+
+    let before: string | undefined
+    for (let lookahead = index + 1; lookahead < entries.length; lookahead += 1) {
+      const laterEntry = entries[lookahead]
+      const laterName = laterEntry === undefined ? undefined : nodeName(laterEntry)
+      if (laterName !== undefined && KNOWN_RPR_CHILD_NAMES.has(laterName)) {
+        before = laterName
+        break
+      }
+    }
+
+    unknown ??= []
+    unknown.push({
+      xml: parseUnknownNode(entry).xml,
+      ...(before !== undefined ? { before } : {}),
+    })
+  }
+
+  return unknown
 }
 
 function parseParaProps(element: OrderedXmlNode | undefined): ParaProps | undefined {

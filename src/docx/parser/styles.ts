@@ -438,7 +438,51 @@ function parseRunPropsElement(node: XmlNode | undefined): RunProps | undefined {
   const rtl = parseOnOffElement(node['w:rtl'])
   if (rtl !== undefined) props.rtl = rtl
 
+  // DOCX-12 — mirrors `document.ts`'s `parseRunProps` (see its doc comment):
+  // a style's own run properties (`w:docDefaults`/named-style/table-
+  // conditional-format `w:rPr`) previously lost these the same way direct
+  // run formatting did.
+  const outline = parseOnOffElement(node['w:outline'])
+  if (outline !== undefined) props.outline = outline
+
+  const emboss = parseOnOffElement(node['w:emboss'])
+  if (emboss !== undefined) props.emboss = emboss
+
+  const imprint = parseOnOffElement(node['w:imprint'])
+  if (imprint !== undefined) props.imprint = imprint
+
+  const em = parseEmphasisMark(getValAttr(getNode(node, 'w:em')))
+  if (em !== undefined) props.em = em
+
+  const bdr = parseBorder(getNode(node, 'w:bdr'))
+  if (bdr !== undefined) props.bdr = bdr
+
+  const charScale = parseCharScale(getValAttr(getNode(node, 'w:w')))
+  if (charScale !== undefined) props.charScale = charScale
+
   return hasKeys(props) ? props : undefined
+}
+
+function parseEmphasisMark(value: string | undefined): RunProps['em'] {
+  switch (value) {
+    case 'none':
+    case 'dot':
+    case 'comma':
+    case 'circle':
+    case 'underDot':
+      return value
+    default:
+      return undefined
+  }
+}
+
+/** `w:w`'s `w:val` (`ST_TextScale`) — see `document.ts`'s `parseCharScale` doc comment. */
+function parseCharScale(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined
+
+  const normalized = value.endsWith('%') ? value.slice(0, -1) : value
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function parseParaPropsElement(node: XmlNode | undefined): ParaProps | undefined {

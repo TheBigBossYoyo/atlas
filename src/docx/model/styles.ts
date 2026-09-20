@@ -149,6 +149,9 @@ export type TabLeader =
 
 export type FontHint = 'default' | 'eastAsia' | 'cs' | 'hAnsi'
 
+/** `w:em` — emphasis mark (`CT_Em`/`ST_Em`, §17.18.24), routine in CJK documents. */
+export type EmphasisMark = 'none' | 'dot' | 'comma' | 'circle' | 'underDot'
+
 export type HighlightColor =
   | 'black'
   | 'blue'
@@ -368,6 +371,52 @@ export interface RunProps {
   readonly vanish?: OnOff
   readonly webHidden?: OnOff
   readonly rtl?: OnOff
+  /** DOCX-12 — `w:outline`: hollow/outlined character effect. */
+  readonly outline?: OnOff
+  /** DOCX-12 — `w:emboss`: embossed (raised) character effect. */
+  readonly emboss?: OnOff
+  /** DOCX-12 — `w:imprint`: engraved/imprinted character effect. */
+  readonly imprint?: OnOff
+  /** DOCX-12 — `w:em`: emphasis mark, routine in CJK documents. */
+  readonly em?: EmphasisMark
+  /** DOCX-12 — `w:bdr`: run-level (character) border, `CT_Border`. */
+  readonly bdr?: Border
+  /**
+   * DOCX-12 — `w:w`'s `w:val`: manual character width scaling as a whole
+   * percentage (`100` = no scaling). Named `charScale` rather than `w` to
+   * stay readable — `RunProps.w` would collide visually with `Width`'s own
+   * `w:w`-derived field name used elsewhere in this model.
+   */
+  readonly charScale?: number
+  /**
+   * DOCX-12 — opaque passthrough for a `w:rPr` child Atlas has no dedicated
+   * field for: a real ECMA-376 `CT_RPr`/`EG_RPrBase` sequence member this
+   * model doesn't carry (e.g. `w:effect`, `w:eastAsianLayout`, `w:fitText`,
+   * `w:noProof`, `w:snapToGrid`, `w:cs`, `w:specVanish`, `w:oMath`) or any
+   * other element a source document happens to contain there. Captured so a
+   * save doesn't silently drop it — see `RPrUnknownChild`'s doc comment for
+   * how the writer uses `before` to reinsert it in schema order.
+   */
+  readonly rPrUnknown?: ReadonlyArray<RPrUnknownChild>
+}
+
+/**
+ * One passthrough `w:rPr` child — see `RunProps.rPrUnknown`. `xml` is the
+ * element's own captured source text (or a tree-rebuilt equivalent — see
+ * `parser/document.ts`'s `parseUnknownNode`, reused for this capture).
+ * `before` is the tag name of the nearest *modeled* `w:rPr` sibling that
+ * followed this child in the source document; `buildRunPropertiesNode`
+ * (`serializer/documentWriter.ts`) looks that sibling up in the element it
+ * is rebuilding and splices this child back in immediately ahead of it, so
+ * the `CT_RPr` sequence — a strict `xsd:sequence`, not a bag, and one of
+ * Word's "unreadable content" triggers when violated — stays correctly
+ * ordered. `undefined` means this child was last among the source's `w:rPr`
+ * children (or last among the remaining unmodeled ones), so it is appended
+ * at the very end instead.
+ */
+export interface RPrUnknownChild {
+  readonly xml: string
+  readonly before?: string
 }
 
 export interface ParaProps {

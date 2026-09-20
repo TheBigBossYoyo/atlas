@@ -211,6 +211,43 @@ export function runStyleToCss(
   if (props.caps) css.textTransform = 'uppercase';
   if (props.smallCaps) css.fontVariant = 'small-caps';
 
+  // DOCX-12 — these were parsed nowhere (see `model/styles.ts`'s `RunProps`
+  // doc comments) so a run carrying any of them not only reverted on save,
+  // it also never looked right on screen while open. Best-effort CSS
+  // approximations, not pixel-exact reproductions of Word's own rendering.
+  if (props.outline) {
+    // Hollow/outlined characters: stroke the glyph, hide its fill.
+    (css as Record<string, string>).WebkitTextStroke = '1px currentColor';
+    (css as Record<string, string>).WebkitTextFillColor = 'transparent';
+  }
+  if (props.emboss) {
+    css.textShadow = '1px 1px 0 rgba(255,255,255,0.75), -1px -1px 0 rgba(0,0,0,0.55)';
+    if (!props.color) css.color = 'transparent';
+  } else if (props.imprint) {
+    css.textShadow = '-1px -1px 0 rgba(255,255,255,0.75), 1px 1px 0 rgba(0,0,0,0.55)';
+    if (!props.color) css.color = 'transparent';
+  }
+  if (props.em && props.em !== 'none') {
+    const mark = props.em === 'comma' ? 'filled comma'
+      : props.em === 'circle' ? 'filled circle'
+      : 'filled dot'; // 'dot' and 'underDot' both use a filled dot glyph
+    (css as Record<string, string>).textEmphasis = mark;
+    if (props.em === 'underDot') {
+      (css as Record<string, string>).textEmphasisPosition = 'under';
+    }
+  }
+  if (props.bdr) {
+    const border = borderToCss(props.bdr);
+    if (border) {
+      css.border = border;
+      css.padding = '0 1px';
+    }
+  }
+  if (props.charScale !== undefined && props.charScale !== 100) {
+    css.display = 'inline-block';
+    css.transform = `scaleX(${props.charScale / 100})`;
+  }
+
   return css;
 }
 
