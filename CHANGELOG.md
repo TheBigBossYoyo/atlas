@@ -8,6 +8,36 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Added
+- DOCX header/footer editing (D29 follow-up 2): a paragraph that MIXES plain
+  text with a drawing, a field (PAGE/NUMPAGES/DATE/etc), a hyperlink, a
+  footnote/comment reference, or an existing tracked change — the extremely
+  common real-world shape "Chapter title .......... Page X of Y", or a logo
+  image followed by a title — can now have its TEXT edited. The header/
+  footer panel renders such a paragraph as one editable input per plain-text
+  span, interleaved with a read-only, labelled chip per atom in between
+  ("[Image]", "[Page number]", "[Total pages]", "[Date]", "[Link: …]", …);
+  the atom itself is never read or rewritten by this editor, so a field's
+  own runs (`w:fldSimple`, or the `w:fldChar`/`w:instrText` triple) and a
+  drawing's own XML can never come apart from editing the text around them.
+  Editing one text segment reuses the same prefix/suffix run diff the
+  whole-paragraph case already used, scoped to that segment's own slice of
+  the paragraph, so every OTHER run — including every other text segment
+  and every atom — keeps its exact original object identity and formatting.
+  A bookmark/comment-range boundary sitting mid-paragraph splits the text on
+  either side into separate inputs (so an edit can never merge across it)
+  without ever being shown as its own chip. Previously such a paragraph was
+  ONE opaque, fully read-only placeholder with no way to touch even its
+  plain-text parts; a paragraph with no editable text anywhere, and a table
+  block, are still a read-only placeholder exactly as before. First-page/
+  even/default header-footer variants and section sharing, one-undo-step-
+  per-edit, and "Ctrl+S with a field still focused commits pending text
+  first" all continue to work unchanged, now per SEGMENT instead of per
+  paragraph. See `docs/KNOWN_LIMITATIONS.md`'s DOCX section for exactly
+  what still stays fully read-only and why.
+
 ## [3.3.0] — 2026-09-20 (waves 5-6: new documents, long-document speed, release hardening)
 
 ### Added

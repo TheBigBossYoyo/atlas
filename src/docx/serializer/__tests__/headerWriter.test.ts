@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { parseHeader } from '../../parser/headers'
 import type { Document, Header, Paragraph } from '../../model'
 import { writeHeaderXml } from '../headerWriter'
-import { setHeaderFooterBlockText } from '../../editor/headerFooter'
+import { buildHeaderFooterSegmentEdit, listHeaderFooterParts, setHeaderFooterBlockText } from '../../editor/headerFooter'
+import { applyCommand } from '../../editor/commands'
 
 function makeParagraph(text: string): Paragraph {
   return {
@@ -141,5 +142,102 @@ describe('writeHeaderXml', () => {
     // The PAGE field is untouched.
     expect(written).toContain('w:fldSimple')
     expect(written).toContain('PAGE')
+  })
+
+  // D29 follow-up 2 — the header/footer editor now edits the TEXT SEGMENTS
+  // of a paragraph that mixes plain text with a drawing/field/tab, rather
+  // than treating the whole paragraph as one untouchable placeholder. This
+  // is the real round trip that matters: one paragraph holding a logo
+  // drawing, a text run, a tab, and a complex (`w:fldChar`/`w:instrText`)
+  // PAGE field, with the text edited — the drawing, the field's own
+  // instruction-text runs (in order), and the tab must come out
+  // byte-identical, and only the text may change.
+  it('editing the text segments of a mixed paragraph (drawing + text + tab + complex PAGE field) leaves the drawing, the field, and the tab byte-identical', () => {
+    // The complex field form: begin/instrText/separate/result/end as SIBLING
+    // `w:r` elements (see `groupComplexFieldRuns`'s doc comment in the
+    // parser) — the shape a real Word document uses, and the one this
+    // editor must never come apart.
+    const fieldXml =
+      '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+      + '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+      + '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+      + '<w:r><w:t>1</w:t></w:r>'
+      + '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+
+    const sourceXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+      + ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+      + ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"'
+      + ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+      + ' xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+      + '<w:p>'
+      + '<w:r><w:drawing><wp:inline><wp:extent cx="190500" cy="190500"/>'
+      + '<wp:docPr id="1" name="Logo"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+      + '<pic:pic><pic:blipFill><a:blip r:embed="rIdLogo1"/></pic:blipFill></pic:pic>'
+      + '</a:graphicData></a:graphic></wp:inline></w:drawing></w:r>'
+      + '<w:r><w:t xml:space="preserve">Chapter Title</w:t></w:r>'
+      + '<w:r><w:tab/></w:r>'
+      + fieldXml
+      + '</w:p>'
+      + '</w:hdr>'
+
+    const header = parseHeader(sourceXml, 'rId3')
+    expect(header.blocks).toHaveLength(1)
+
+    // The drawing's CANONICAL serialized form — extracted from the
+    // unedited header's own re-serialization rather than hand-copied from
+    // `sourceXml`, since the writer legitimately re-emits `a:graphicData`'s
+    // spec-required `uri` attribute even for an untouched drawing (DXS-09
+    // canonicalization, unrelated to this feature). What must hold is that
+    // this exact substring survives editing the paragraph's text — not that
+    // it matches the original bytes on disk.
+    const beforeXml = writeHeaderXml(header)
+    const drawingXml = beforeXml.slice(beforeXml.indexOf('<w:drawing>'), beforeXml.indexOf('</w:drawing>') + '</w:drawing>'.length)
+    expect(drawingXml).toContain('rIdLogo1')
+
+    const stubDocument: Document = {
+      kind: 'document',
+      sections: [{ kind: 'section', props: { headerReference: [{ id: 'rId3', type: 'default' }] }, blocks: [] }],
+      styles: new Map(),
+      numbering: new Map(),
+      comments: new Map(),
+      footnotes: new Map(),
+      endnotes: new Map(),
+      headers: new Map([['rId3', header]]),
+      footers: new Map(),
+    }
+
+    // Sanity check the reading side first: this is a 'mixed' row (drawing,
+    // then editable text, then the field), not a placeholder.
+    const rowsBefore = listHeaderFooterParts(stubDocument)[0].rows
+    expect(rowsBefore).toEqual([
+      {
+        kind: 'mixed',
+        blockIndex: 0,
+        segments: [
+          { kind: 'atom', label: '[Image]' },
+          { kind: 'text', segmentIndex: 0, text: 'Chapter Title\t' },
+          { kind: 'atom', label: '[Page number]' },
+        ],
+      },
+    ])
+
+    const command = buildHeaderFooterSegmentEdit(stubDocument, 'header', 'rId3', 0, 0, 'Executive Summary\t')!
+    const applied = applyCommand(stubDocument, command)
+    const written = writeHeaderXml(applied.document.headers.get('rId3')!)
+
+    // The text changed...
+    expect(written).toContain('Executive Summary')
+    expect(written).not.toContain('Chapter Title')
+    // ...and everything else is byte-identical to the source.
+    expect(written).toContain(drawingXml)
+    expect(written).toContain(fieldXml)
+    expect(written).toContain('<w:tab/>')
+
+    // Undo restores the original paragraph object exactly (one undo step).
+    const undone = applyCommand(applied.document, applied.inverse)
+    expect(undone.document.headers.get('rId3')!.blocks[0]).toBe(header.blocks[0])
+    expect(writeHeaderXml(undone.document.headers.get('rId3')!)).toContain(drawingXml)
+    expect(writeHeaderXml(undone.document.headers.get('rId3')!)).toContain('Chapter Title')
   })
 })
