@@ -126,6 +126,74 @@ describe('writeWorkbookThroughOriginal', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// SHEET-2 — an Excel table's filterColumn/sortState must survive the
+// save-through-original path (`writeWorkbookThroughOriginal`, not just the
+// fresh-workbook `graftTables` path covered in `spreadsheetTables.test.ts`)
+// when the edit never touches that table's own columns.
+// ---------------------------------------------------------------------------
+
+const TABLE_WITH_FILTER_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Items" displayName="Items" ref="A1:C3" totalsRowShown="0">
+  <autoFilter ref="A1:C3"><filterColumn colId="1"><filters><filter val="45000"/></filters></filterColumn></autoFilter>
+  <sortState ref="A2:C3"><sortCondition ref="B2:B3"/></sortState>
+  <tableColumns count="3">
+    <tableColumn id="1" name="Item"/>
+    <tableColumn id="2" name="Due"/>
+    <tableColumn id="3" name="Cost"/>
+  </tableColumns>
+  <tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>
+</table>`
+
+async function buildWorkbookWithFilteredTable(): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(await buildStyledWorkbook())
+  zip.file('xl/tables/table1.xml', TABLE_WITH_FILTER_XML)
+  zip.file(
+    'xl/worksheets/_rels/sheet1.xml.rels',
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>',
+  )
+  const sheetXml = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+  zip.file(
+    'xl/worksheets/sheet1.xml',
+    sheetXml.replace('</worksheet>', '<tableParts count="1"><tablePart r:id="rId9"/></tableParts></worksheet>'),
+  )
+  const contentTypes = await zip.file('[Content_Types].xml')!.async('string')
+  zip.file(
+    '[Content_Types].xml',
+    contentTypes.replace(
+      '</Types>',
+      '<Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/></Types>',
+    ),
+  )
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
+describe('writeWorkbookThroughOriginal — Excel table filter/sort state', () => {
+  it("keeps an untouched table's filterColumn and sortState when an unrelated cell is edited", async () => {
+    const withTable = await buildWorkbookWithFilteredTable()
+    const doc = setCellValue(await load(withTable), 0, 1, 0, 'Recycled paper') // edits A2 — nothing to do with the table's columns
+    const bytes = (await writeWorkbookThroughOriginal(withTable, doc))!
+    expect(bytes).not.toBeNull()
+    const zip = await JSZip.loadAsync(bytes)
+    const tableXml = await zip.file('xl/tables/table1.xml')!.async('string')
+    expect(tableXml).toContain('<filterColumn colId="1">')
+    expect(tableXml).toContain('<filter val="45000"/>')
+    expect(tableXml).toContain('<sortState ref="A2:C3"><sortCondition ref="B2:B3"/></sortState>')
+  })
+
+  it("re-anchors the filterColumn and drops sortState when a column insert moves the table's columns", async () => {
+    const withTable = await buildWorkbookWithFilteredTable()
+    let doc = await load(withTable)
+    doc = insertColumnAt(doc, 0, 1) // insert a new column at B — Due (colId="1") moves to colId="2"
+    const bytes = (await writeWorkbookThroughOriginal(withTable, doc))!
+    expect(bytes).not.toBeNull()
+    const zip = await JSZip.loadAsync(bytes)
+    const tableXml = await zip.file('xl/tables/table1.xml')!.async('string')
+    expect(tableXml).toContain('<filterColumn colId="2">')
+    expect(tableXml).not.toContain('sortState')
+  })
+})
+
 describe('writeWorkbookThroughOriginal — structural sheet changes', () => {
   let multi: ArrayBuffer
   beforeEach(async () => {

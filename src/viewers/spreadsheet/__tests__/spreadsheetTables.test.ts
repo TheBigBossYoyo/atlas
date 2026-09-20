@@ -11,6 +11,7 @@ import {
   decodeRange,
   parseTableXml,
   readSheetTables,
+  rewriteTableXml,
   tableHeaderNames,
   tablesAfterColumnDelete,
   tablesAfterColumnInsert,
@@ -54,6 +55,24 @@ async function workbookWithTable(): Promise<ArrayBuffer> {
 
 function table(overrides: Partial<SheetTable> = {}): SheetTable {
   return { ...parseTableXml(TABLE_XML)!, ...overrides }
+}
+
+// A table part that also carries `sortState` (SHEET-2 coverage — `TABLE_XML`
+// above has none).
+const TABLE_XML_WITH_SORT = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Fruit" displayName="Fruit" ref="A1:C3" totalsRowShown="0">
+  <autoFilter ref="A1:C3"><filterColumn colId="1"><filters><filter val="3"/></filters></filterColumn></autoFilter>
+  <sortState ref="A2:C3"><sortCondition ref="B2:B3"/></sortState>
+  <tableColumns count="3">
+    <tableColumn id="1" name="Name"/>
+    <tableColumn id="2" name="Qty"/>
+    <tableColumn id="3" name="Price"/>
+  </tableColumns>
+  <tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/>
+</table>`
+
+function tableWithSort(overrides: Partial<SheetTable> = {}): SheetTable {
+  return { ...parseTableXml(TABLE_XML_WITH_SORT)!, ...overrides }
 }
 
 async function loadDocument(buffer: ArrayBuffer) {
@@ -124,7 +143,11 @@ describe('save keeps Excel tables', () => {
     const tableXml = await zip.file('xl/tables/table1.xml')!.async('string')
     expect(tableXml).toContain('ref="A1:C4"')
     expect(tableXml).toContain('<autoFilter ref="A1:C4"')
-    expect(tableXml).not.toContain('filterColumn')
+    // The row insert/column round-trip never touched this table's OWN
+    // columns (the insert+delete both landed at column index 3, outside the
+    // table's C0:C2 span, and net out to identity) — SHEET-2: the
+    // filterColumn survives with its colId untouched.
+    expect(tableXml).toContain('<filterColumn colId="1">')
     expect(tableXml).toMatch(/name="Count"/)
     expect(tableXml).toContain('TableStyleMedium2')
 
@@ -158,5 +181,51 @@ describe('save keeps Excel tables', () => {
     expect(plain.sheets[0].tables).toEqual([])
     const zip = await JSZip.loadAsync(await writeWorkbookBytesWithTables(plain, 'xlsx'))
     expect(zip.file('xl/tables/table1.xml')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SHEET-2 — an untouched table's filter/sort state must survive a save; one
+// whose columns genuinely moved gets its `filterColumn`s re-anchored (their
+// `colId` is relative to the table, and already tracked by `columnSources`)
+// while `sortState` — whose `ref`/`sortCondition/@ref` are absolute
+// worksheet cell references this module has no safe way to re-derive — is
+// dropped. Before this fix BOTH were dropped unconditionally on every save,
+// even one that never touched the table's columns at all.
+// ---------------------------------------------------------------------------
+
+describe('rewriteTableXml — filter/sort state', () => {
+  const names = ['Name', 'Qty', 'Price']
+
+  it('keeps sortState and filterColumn byte-for-byte when the table shape is unchanged', () => {
+    const xml = rewriteTableXml(tableWithSort(), 1, names)
+    expect(xml).toContain('<sortState ref="A2:C3"><sortCondition ref="B2:B3"/></sortState>')
+    expect(xml).toContain('<filterColumn colId="1">')
+    expect(xml).toContain('<filter val="3"/>')
+  })
+
+  it('re-anchors a filterColumn to its new position and drops sortState when a column was inserted', () => {
+    // Insert a new column at B: Name stays 0, the new column takes 1, Qty
+    // (originally colId="1") moves to 2, Price to 3.
+    const moved = tablesAfterColumnInsert([tableWithSort()], 1)[0]
+    const xml = rewriteTableXml(moved, 1, ['Name', 'New', 'Qty', 'Price'])
+    expect(xml).toContain('<filterColumn colId="2">')
+    expect(xml).not.toContain('sortState')
+  })
+
+  it('drops a filterColumn whose own column was deleted, and drops sortState', () => {
+    // Delete Qty (colId="1" in the original part).
+    const shrunk = tablesAfterColumnDelete([tableWithSort()], 1)[0]
+    const xml = rewriteTableXml(shrunk, 1, ['Name', 'Price'])
+    expect(xml).not.toContain('filterColumn')
+    expect(xml).not.toContain('sortState')
+  })
+
+  it('keeps filterColumn (colId unaffected) but drops sortState when only the table moved on the sheet', () => {
+    // A row inserted above the table shifts r0/r1 without touching columns.
+    const shifted = tablesAfterRowInsert([tableWithSort()], 0)[0]
+    const xml = rewriteTableXml(shifted, 1, names)
+    expect(xml).toContain('<filterColumn colId="1">')
+    expect(xml).not.toContain('sortState')
   })
 })

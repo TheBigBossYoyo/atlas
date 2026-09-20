@@ -79,3 +79,74 @@ describe('remapSqref', () => {
     expect(remapSqref('B2:B2', rowSources, undefined)).toBeNull()
   })
 })
+
+// ---------------------------------------------------------------------------
+// SHEET-3 — whole-column (`A:A`) and whole-row (`1:1`) ranges. Before this
+// fix `decodeRange` (which only understands `A1`-style cell corners) could
+// not parse either shape, so `remapSqref` treated them as malformed input
+// and dropped them — `updateShiftedRanges` in `xlsxPassthrough.ts` then
+// removed the owning conditional format / data validation / hyperlink /
+// autoFilter outright, on ANY row or column insert/delete anywhere on the
+// sheet, not just one that actually touched the range.
+// ---------------------------------------------------------------------------
+
+describe('remapSqref — whole-column and whole-row ranges', () => {
+  it('re-anchors a whole-column range through a column insert', () => {
+    const colSources = sourcesAfter(3, [], [0]) // a column inserted before A
+    expect(remapSqref('A:A', undefined, colSources)).toBe('B:B')
+  })
+
+  it('re-anchors a whole-column range through a column delete', () => {
+    const colSources = sourcesAfter(3, [0], []) // column A deleted
+    expect(remapSqref('B:B', undefined, colSources)).toBe('A:A')
+  })
+
+  it('re-anchors a multi-column whole-column range', () => {
+    const colSources = sourcesAfter(4, [], [0])
+    expect(remapSqref('A:B', undefined, colSources)).toBe('B:C')
+  })
+
+  it('leaves a whole-column range alone when only rows changed (a different axis)', () => {
+    const rowSources = sourcesAfter(4, [], [1])
+    expect(remapSqref('A:A', rowSources, undefined)).toBe('A:A')
+  })
+
+  it('drops a whole-column range entirely consumed by a delete', () => {
+    const colSources = sourcesAfter(1, [0], [])
+    expect(remapSqref('A:A', undefined, colSources)).toBeNull()
+  })
+
+  it('re-anchors a whole-row range through a row insert', () => {
+    const rowSources = sourcesAfter(3, [], [0]) // a row inserted before row 1
+    expect(remapSqref('1:1', rowSources, undefined)).toBe('2:2')
+  })
+
+  it('re-anchors a whole-row range through a row delete', () => {
+    const rowSources = sourcesAfter(3, [0], []) // row 1 deleted
+    expect(remapSqref('2:2', rowSources, undefined)).toBe('1:1')
+  })
+
+  it('re-anchors a multi-row whole-row range', () => {
+    const rowSources = sourcesAfter(4, [], [0])
+    expect(remapSqref('1:2', rowSources, undefined)).toBe('2:3')
+  })
+
+  it('leaves a whole-row range alone when only columns changed (a different axis)', () => {
+    const colSources = sourcesAfter(4, [], [1])
+    expect(remapSqref('1:1', undefined, colSources)).toBe('1:1')
+  })
+
+  it('drops a whole-row range entirely consumed by a delete', () => {
+    const rowSources = sourcesAfter(1, [0], [])
+    expect(remapSqref('1:1', rowSources, undefined)).toBeNull()
+  })
+
+  it('keeps a whole-column range unchanged with identity sources', () => {
+    expect(remapSqref('C:C', undefined, [0, 1, 2, 3])).toBe('C:C')
+  })
+
+  it('still drops a genuinely malformed piece rather than propagate garbage', () => {
+    const colSources = sourcesAfter(3, [], [0])
+    expect(remapSqref('A:A Sheet1!A1 1A:2B', undefined, colSources)).toBe('B:B')
+  })
+})
