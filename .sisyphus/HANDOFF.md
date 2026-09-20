@@ -11,12 +11,26 @@ in **French** — answer him in French. Code, commits, docs and UI stay in Engli
 - `CHANGELOG.md`, `STRICT_MODE_TODO.md`, `docs/KNOWN_LIMITATIONS.md`, `docs/RELEASE.md`
 - `git log --oneline -30`
 
-## Current state (3.3.0)
-- `main` is pushed and released as **3.3.0**; installer `release\Atlas-Setup-3.3.0.exe`
-  (SHA256 `87d63a4d01c9d47b15e49f60876927128492d7a9f17f673394b749c9715bed32`, unsigned).
-- 2839 unit tests, 57/57 Playwright e2e, `npm audit` 0, bundle gate green.
-- `npx tsc -b` now covers four projects: `src/`, `vite.config.ts`, `tests/e2e`, and
-  `electron/**/*.cjs` (`checkJs` + `strict`). Never weaken these.
+## Current state (3.6.0)
+- `main` is pushed and released as **3.6.0**; installer `release\Atlas-Setup-3.6.0.exe`
+  (SHA256 `647b1a7b844b59016c3f8663c8223f686584d14dce2d711c6aa916f7a35f2278`, unsigned).
+  The 3.4.0 and 3.5.0 installers are in `release\` too.
+- 3324 unit tests, 76 Playwright e2e, `npm audit` 0, bundle gate green, CI green.
+- `npx tsc -b` covers five projects: `src/`, `vite.config.ts`, `tests/e2e`,
+  `electron/**/*.cjs` and `scripts/**/*.mjs`. Never weaken these.
+
+### Shipped since 3.3.0 (waves 7-11, one autonomous overnight run)
+Data loss fixed: Save As left a tab pointing at the file it was opened from, so later saves went
+nowhere; every saved DOCX image lost its picture properties; legacy `.doc`/`.ppt` failed on any
+file over ~4 KB (every fixture was smaller); `.ods` was written with a non-conforming `mimetype`;
+several parts were written with their elements in the wrong schema order — Word's "unreadable
+content" trigger. A spec-level package validator (`scripts/validate-office-file.mjs`) now runs in
+CI and would catch all of those. Spreadsheet formulas, defined names, shared formulas and media
+follow every structural edit. Unedited content controls and shape fallbacks round-trip
+byte-for-byte, and a save that still drops something says so in plain language. The UI can be
+French (English stays the default, `src/i18n/`, 509 keys). Markdown parses in a Worker, so large
+documents no longer freeze the window. Start-up is ~33% faster (entry bundle -89%). Accessibility:
+WCAG AA contrast in all five themes, focus traps everywhere, a keyboard-only end-to-end journey.
 
 ### Shipped since 3.2.0 (waves 5 and 6)
 New documents (toolbar **New** + Ctrl+N) from blank templates in `electron/templates/`, and a 0-byte
@@ -42,11 +56,12 @@ speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked t
    certificate options and what changes in `electron-builder.yml`.
 2. **No Office verification** — nothing Atlas writes has ever been opened in real Microsoft Office or
    LibreOffice (neither is installed here). Structural validation is the substitute (see above).
-3. `.doc`/`.ppt` are read-only, text only. No split view.
-4. i18n: `DocxViewer`, the slide editor, and PDF find/thumbnail internals are not translated
-   (`docs/KNOWN_LIMITATIONS.md`'s "Internationalization" section has the full list).
-5. A version bump + CHANGELOG/findings-register update for waves 7-8 hasn't happened yet — everything
-   above is on `main` but still sits under CHANGELOG's `[Unreleased]` heading.
+3. **Memory**: a closed spreadsheet tab leaves ~24 MB reachable, root-caused to how the grid
+   library's image loader captures the viewer's scope (`docs/KNOWN_LIMITATIONS.md`).
+4. `.doc`/`.ppt` are read-only, text only. No split view. A 3-D spreadsheet reference only shifts
+   from its first sheet (matching Excel itself).
+5. A content control or shape whose content was edited, or one inside a table, header or footer,
+   is still unwrapped on save — reported to the user now, not silent.
 
 ## Environment rules (learned the hard way)
 - Windows 11; PowerShell primary, Git Bash available. Bash heredocs mangle `\\`, quotes and `\u`
