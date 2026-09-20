@@ -478,6 +478,22 @@ Wave 5 (2026-09-19, after 3.2.0; parallel agents in worktrees, merged and fully 
 | D29 follow-up | Fixed | `79649ee` | Header/footer editing per paragraph: images, fields, tables and untouched run formatting are preserved; Ctrl+S while the header field has focus now saves the new text. A paragraph mixing text with a field/image is shown read-only |
 | D23-PERF | Improved | `c0d969e` | Every page no longer re-renders twice per keystroke (96 → 24 page renders); typing on the 35-page perf fixture ~160-180 ms (was ~240-390 ms); footnote line-cache over-invalidation fixed. Page virtualization / incremental re-pagination still not done |
 
+Waves 7-9 (2026-09-20, after 3.3.0 — autonomous overnight run, parallel agents in worktrees, each wave merged and re-verified):
+
+| ID | Status | Where | Evidence |
+|---|---|---|---|
+| Save As (all binary formats) | Fixed | `1828680`, `d4f2ed0` | Ctrl+Shift+S was a silent no-op outside markdown (the DOCX viewer also swallowed the combo); and Save As left the document's tab on the file it was opened from, so returning to the tab re-read the OLD file over the user's work and the next Ctrl+S wrote to neither file. Viewers now report the path they saved to (`reportSavedPath`) and the shell moves the tab with it — `tests/e2e/docx-editor.spec.ts` fails without the fix |
+| Legacy .doc/.ppt | Fixed | `29de4b2` | Any real file failed: a stream at or past the 4 096-byte OLE mini-stream cutoff came back as a plain array, which the CFB wrapper rejected as corrupt. Every fixture was smaller than that, so no test caught it |
+| PDF find bar | Fixed | `314b267` | Escape only closed the bar when its input had focus (it takes focus 50 ms late), leaving it open to swallow the next shell shortcut — the real cause behind three "flaky CI" failures |
+| Run (code editor) | Fixed | `862fb19` | A running program kept going after its tab was switched away, with its Stop button gone and the one-run-at-a-time slot held until the 60 s timeout |
+| Write errors | Fixed | `862fb19` | A read-only file was reported as "open in another program"; a dropped folder surfaced a raw `EISDIR`; a multi-file drop opened only the first file |
+| OPC/ODF validation | New | `cc21b84` | A spec-level package validator built from scratch (`scripts/validate-office-file.mjs`, zip reader + content-types/rels/namespace/element-order checks) wired into CI. Found and fixed: every .ods Atlas wrote had `mimetype` neither first nor stored, and a stale calc-chain relationship survived its part's removal — both classic "Office offers to repair this file" causes |
+| DOCX round-trip | Fixed | `44a600f` | An empirical lossy-save detector (`src/docx/fidelity/lossySaveWarnings.ts`) diffs a re-save against the original. It found that EVERY saved image lost its picture properties (`pic:nvPicPr`, `pic:spPr`, blip-fill stretch), and that paragraph/section right-to-left settings, page borders, `w:multiLevelType` and complex-script bold/italic were dropped. All fixed; content controls and shape fallbacks remain intentionally unmodelled and are now reported rather than silent |
+| Spreadsheet formulas | Fixed | `9adb3bd` | Formulas referencing a renamed/reordered/deleted sheet are rewritten (`#REF!` on delete, like Excel); multi-area, function-wrapped and whole-row/column defined names re-anchored; a deleted sheet's tables/comments/drawings swept; shared strings compacted |
+| Accessibility | Fixed | `c33d294`, `7230573`, `4a90de9` | WCAG AA contrast failures fixed in all five themes (with a test that computes the ratios from the CSS tokens); focus traps and focus restoration on every dialog, overlay and dropdown; the unsaved-changes dialog could be tabbed straight past |
+| DEFER-6 (i18n) | Done | `a6ce796`, `542fb12` | A dependency-free i18n layer and a complete French UI (509 keys), English by default with a language menu; French typography and Office terminology |
+| P4.1 | Complete | `f032733`, `7008128` | `tsc -b` now covers `src/`, `vite.config.ts`, `tests/e2e`, `electron/**/*.cjs` and `scripts/**/*.mjs` — the ratchet is closed |
+
 Wave 6 (2026-09-20, released as 3.3.0; 5 parallel agents, merged and re-verified: 2839 unit tests, 57/57 e2e):
 
 | ID | Status | Where | Evidence |
