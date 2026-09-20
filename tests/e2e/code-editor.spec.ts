@@ -48,6 +48,16 @@ test('USR-18: edits, finds and saves a source file', async () => {
     await expect(page.locator('.cm-search')).toBeVisible()
     await page.keyboard.press('Escape')
 
+    // FIELD-02 — `basicSetup`'s own default `searchKeymap` binds Mod-g to
+    // "find next" ahead of this editor's own `editorKeys` in precedence
+    // order; without `Prec.high` on `editorKeys`, Ctrl+G silently opened the
+    // search panel above again (via findNext's no-active-query fallback)
+    // instead of "Go to line".
+    await page.locator('.cm-content').click()
+    await page.keyboard.press('Control+g')
+    await expect(page.locator('.cm-panel.cm-goto-line')).toBeVisible()
+    await page.keyboard.press('Escape')
+
     await page.getByRole('button', { name: 'Save', exact: true }).click()
     await expect.poll(() => fs.readFileSync(file, 'utf8'), { timeout: 10_000 }).toContain('const answer = 42')
   } finally {
