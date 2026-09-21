@@ -1122,6 +1122,15 @@ ipcMain.handle('export:printToPdf', async (event, req) => {
     return { ok: true, bytes: new Uint8Array(buffer) };
   } catch (err) {
     logMainEvent('ERROR', 'export:printToPdf failed', err);
+    // CI investigation (2026-09-21) — `logMainEvent` only ever reaches a
+    // rotating file on disk (`electron/lib/crashLog.cjs`), which nothing in
+    // the e2e harness reads. A genuine failure here (e.g. `printToPdf.cjs`'s
+    // own 30 s `did-finish-load` timeout) would previously leave zero trace
+    // in a CI log, indistinguishable from the export simply running long —
+    // exactly the ambiguity that made a prior "flaky" `waitForFile` timeout
+    // hard to diagnose. `console.error` reaches the Electron process's own
+    // stderr, which tests/e2e/export.spec.ts now pipes into the test output.
+    console.error('[export:printToPdf] failed:', err);
     const message =
       err instanceof PrintToPdfError
         ? err.message
