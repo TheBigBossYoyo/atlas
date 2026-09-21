@@ -11,13 +11,36 @@ in **French** — answer him in French. Code, commits, docs and UI stay in Engli
 - `CHANGELOG.md`, `STRICT_MODE_TODO.md`, `docs/KNOWN_LIMITATIONS.md`, `docs/RELEASE.md`
 - `git log --oneline -30`
 
-## Current state (3.6.0)
-- `main` is pushed and released as **3.6.0**; installer `release\Atlas-Setup-3.6.0.exe`
-  (SHA256 `647b1a7b844b59016c3f8663c8223f686584d14dce2d711c6aa916f7a35f2278`, unsigned).
-  The 3.4.0 and 3.5.0 installers are in `release\` too.
-- 3324 unit tests, 76 Playwright e2e, `npm audit` 0, bundle gate green, CI green.
+## Current state (3.7.0)
+- `main` is pushed and released as **3.7.0**; installer `release\Atlas-Setup-3.7.0.exe`
+  (SHA256 `ddb181307d210e42155bcb2abcb8fe861a22675d6186f6e58cb06f4a28f3ec40`, 136 MB, unsigned).
+  Earlier installers (3.4.0-3.6.0) are in `release\` too.
+- **The packaged installer has NOT been smoke-tested** (`docs/RELEASE.md` step 8). That step
+  needs an interactive UAC prompt and a human at the machine, so it was deliberately left
+  undone rather than skipped silently. Do it before trusting this build: install, launch from
+  the Start Menu, open a `.docx`/`.xlsx`/`.pdf` via Ctrl+O *and* via an Explorer double-click
+  (that is the only check of the file associations the installer registers), edit and save.
+- 3581 unit tests, 114 Playwright e2e, `npm audit` 0, bundle gate green, CI green.
 - `npx tsc -b` covers five projects: `src/`, `vite.config.ts`, `tests/e2e`,
   `electron/**/*.cjs` and `scripts/**/*.mjs`. Never weaken these.
+
+### Shipped in 3.7.0 (phase 4) — read `.sisyphus/plans/atlas-phase4-backlog-and-batches-2026-09-20.md`
+Everything in this release was found by **driving the real application**, not by the test
+suite, which was green throughout. Three defects were actively *asserted as correct* by
+existing tests — most starkly Insert Hyperlink, whose test mocked `window.prompt` (which
+Electron does not implement), so jsdom passed while the feature had never worked for anyone.
+
+Features that had never worked: Insert Hyperlink / Add Comment / Reply; Table Properties
+(borders, width and alignment were all discarded, because one invalid control silently
+blocks a whole HTML form submit); the first character typed into a spreadsheet cell;
+Insert Table; the caret inside a table cell; Insert Text Box on a slide. Invalid OOXML:
+every colour (`w:val="#ff0000"`) and every new list. Silent save losses: theme fonts, a
+class of character effects, Excel table filters, whole-column conditional formats,
+wrappers in notes/comments, Save As hijacking another tab, text-returning formulas.
+Security: a compromised renderer could silently overwrite any existing file.
+
+**Method note for the next session:** the value came from hands-on sweeps with byte-level
+verification of saved files, not from reading code and not from the suite. Budget for that.
 
 ### Shipped since 3.3.0 (waves 7-11, one autonomous overnight run)
 Data loss fixed: Save As left a tab pointing at the file it was opened from, so later saves went
