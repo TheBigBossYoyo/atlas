@@ -37,6 +37,44 @@ async function countPdfPages(filePath: string): Promise<number> {
   return doc.numPages
 }
 
+/**
+ * TEST-3 (phase4/b4-corpus-tests) — the DOCX/PPTX cases below used to assert
+ * only `countPdfPages(...) === 2`, which a bug that duplicated page 1 onto
+ * page 2 (or rendered page 2 blank) would still satisfy. Returns each page's
+ * own extracted text (index 0 = page 1) so callers can assert real,
+ * per-page content — the same technique the XLSX case in this file already
+ * uses for its own two-sheet assertion.
+ */
+async function getPdfPageTexts(filePath: string): Promise<ReadonlyArray<string>> {
+  const buffer = await fs.readFile(filePath)
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
+  return Promise.all(
+    Array.from({ length: doc.numPages }, (_, i) =>
+      doc
+        .getPage(i + 1)
+        .then(p => p.getTextContent())
+        .then(content => content.items.map(item => ('str' in item ? item.str : '')).join(' ')),
+    ),
+  )
+}
+
+/**
+ * pdf.js's `getTextContent` splits each printed page's text into one item
+ * per positioned text run, which Chromium's print pipeline can break in the
+ * middle of a word (observed: printing "fixture" produced separate "fi" and
+ * "xture" items — a ligature/kerning artifact of the print rasterizer, not
+ * of Atlas's own DOCX/PPTX renderer). `getPdfPageTexts` joins items with a
+ * space, which is right for word boundaries but wrong for a mid-word split
+ * like that. Stripping ALL whitespace before a `toContain`/`not.toContain`
+ * check sidesteps both directions of the ambiguity — real word boundaries
+ * and spurious mid-word ones alike — while still telling two genuinely
+ * different phrases (e.g. this fixture's two distinct page/slide texts)
+ * apart.
+ */
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, '')
+}
+
 /** Waits for a nonzero-size file to appear at `filePath` — `atomicWriteFile`
  * renames a temp file into place, so any observed nonzero size is already
  * the finished, final file, never a partial write. */
@@ -113,6 +151,20 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
       await waitForFile(outPath)
 
       await expect.poll(() => countPdfPages(outPath), { timeout: 10_000 }).toBe(2)
+
+      // Real per-page content (TEST-3): each page must carry its OWN fixture
+      // text (see tests/e2e/fixtures/generate.mjs's `makeMultiPageDocxBuffer`
+      // — page one's run text, then an explicit PageBreak, then page two's
+      // paragraph), not just any two pages. This is what actually catches a
+      // bug that duplicated page one onto page two, or rendered page two
+      // blank — both would still satisfy `numPages === 2` above.
+      const [page1Text, page2Text] = (await getPdfPageTexts(outPath)).map(collapseWhitespace)
+      expect(page1Text).toContain(collapseWhitespace('Atlas multipage DOCX fixture'))
+      expect(page1Text).toContain(collapseWhitespace('page one'))
+      expect(page1Text).not.toContain(collapseWhitespace('Page two content'))
+
+      expect(page2Text).toContain(collapseWhitespace('Page two content'))
+      expect(page2Text).not.toContain(collapseWhitespace('Atlas multipage DOCX fixture'))
     } finally {
       await electronApp.close()
       await fs.rm(outDir, { recursive: true, force: true })
@@ -140,6 +192,22 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
       await waitForFile(outPath)
 
       await expect.poll(() => countPdfPages(outPath), { timeout: 10_000 }).toBe(2)
+
+      // Real per-page content (TEST-3): each page must carry its OWN slide's
+      // text (see tests/e2e/fixtures/generate.mjs's
+      // `makeMultiSlidePptxBuffer` — slide1.xml vs slide2.xml), not just any
+      // two pages. This is what actually catches the SLD-01/UX-02 class of
+      // bug this whole test exists for: the old exporter rasterized
+      // whichever single slide the virtualized deck viewport happened to
+      // have mounted, which could produce 2 pages that are really the same
+      // slide twice.
+      const [page1Text, page2Text] = (await getPdfPageTexts(outPath)).map(collapseWhitespace)
+      expect(page1Text).toContain(collapseWhitespace('Atlas multislide fixture'))
+      expect(page1Text).toContain(collapseWhitespace('slide one'))
+      expect(page1Text).not.toContain(collapseWhitespace('Slide two content'))
+
+      expect(page2Text).toContain(collapseWhitespace('Slide two content'))
+      expect(page2Text).not.toContain(collapseWhitespace('Atlas multislide fixture'))
     } finally {
       await electronApp.close()
       await fs.rm(outDir, { recursive: true, force: true })
@@ -172,16 +240,7 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
       const pageCount = await countPdfPages(outPath)
       expect(pageCount).toBeGreaterThanOrEqual(2)
 
-      const buffer = await fs.readFile(outPath)
-      const doc = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise
-      const texts = await Promise.all(
-        Array.from({ length: doc.numPages }, (_, i) =>
-          doc
-            .getPage(i + 1)
-            .then(p => p.getTextContent())
-            .then(content => content.items.map(item => ('str' in item ? item.str : '')).join(' ')),
-        ),
-      )
+      const texts = await getPdfPageTexts(outPath)
       const allText = texts.join('\n')
       expect(allText).toContain('Berlin')
       expect(allText).toContain('Atlas')

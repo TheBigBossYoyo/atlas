@@ -94,21 +94,97 @@ function countTag(node: unknown, tagName: string): number {
   return total
 }
 
+/**
+ * Collects the value of `@_<attrName>` off every `<tagName .../>` element in
+ * the tree, in document order (siblings of the same tag name come back as an
+ * array from fast-xml-parser, so those are visited in source order; distinct
+ * sibling tag names are visited in the object's own key order, which
+ * fast-xml-parser assigns in the order it encounters them in the source —
+ * i.e. also document order). An element present with no `attrName` attribute
+ * at all (e.g. a bare `<w:vMerge/>`, whose OOXML-spec default is
+ * `"continue"`) records `attrDefault` instead of being silently skipped, so
+ * dropping the attribute doesn't just quietly shrink the array — it changes
+ * a recorded value, which `toEqual` still catches.
+ */
+function collectAttrValues(
+  node: unknown,
+  tagName: string,
+  attrName: string,
+  attrDefault: string,
+): ReadonlyArray<string> {
+  const attrKey = `@_${attrName}`
+  const values: string[] = []
+
+  function walk(current: unknown): void {
+    if (current === null || typeof current !== 'object') return
+    if (Array.isArray(current)) {
+      for (const item of current) walk(item)
+      return
+    }
+    for (const [key, value] of Object.entries(current as Record<string, unknown>)) {
+      if (key === tagName) {
+        for (const element of Array.isArray(value) ? value : [value]) {
+          if (element !== null && typeof element === 'object') {
+            const attrs = element as Record<string, unknown>
+            values.push(attrKey in attrs ? String(attrs[attrKey]) : attrDefault)
+          } else {
+            // A self-closing element with no attributes at all parses to a
+            // primitive (empty string), not an object with no matching key.
+            values.push(attrDefault)
+          }
+        }
+      }
+      walk(value)
+    }
+  }
+
+  walk(node)
+  return values
+}
+
 export interface DocumentStructuralCounts {
   readonly paragraphs: number
   readonly tables: number
   readonly drawings: number
   readonly sectPr: number
   readonly tblGrid: number
+  /**
+   * Element occurrence counts — TEST-2 (phase4/b4-corpus-tests): before this,
+   * `w:ins`/`w:del` weren't inspected at all, so a save that silently
+   * dropped all tracked-change wrapping left the five counts above
+   * unchanged and passed silently.
+   */
+  readonly insCount: number
+  readonly delCount: number
+  /**
+   * Attribute-level values, in document order — TEST-2: the counts above
+   * can't distinguish "list item flattened from level 2 to level 0" (same
+   * number of `w:ilvl` elements, different values) from an unchanged
+   * document, nor "vertical merge silently turned into a plain cell"
+   * (`w:gridSpan`/`w:vMerge` values changed, or degraded to the default,
+   * without the element count changing). `runSzValues`/`runColorValues`
+   * cover the same gap for direct run formatting (`w:sz`/`w:color` inside a
+   * `w:rPr`) — e.g. a save that silently coerced every run's font size or
+   * color to some default.
+   */
+  readonly ilvlValues: ReadonlyArray<string>
+  readonly numIdValues: ReadonlyArray<string>
+  readonly gridSpanValues: ReadonlyArray<string>
+  readonly vMergeValues: ReadonlyArray<string>
+  readonly runSzValues: ReadonlyArray<string>
+  readonly runColorValues: ReadonlyArray<string>
 }
 
 /**
- * A small structural fingerprint of `word/document.xml`: element counts that
- * should be unchanged by a no-op save or by inserting text into the first
- * paragraph (neither adds/removes paragraphs, tables, drawings, sections, or
- * table grids). Computed from the raw XML text, independent of Atlas's own
- * parser, so it also catches a part being silently dropped or corrupted on
- * the way through Atlas's model (e.g. DXS-02's `w:tblGrid` loss).
+ * A structural fingerprint of `word/document.xml`: element counts plus
+ * attribute-level values that should be unchanged by a no-op save or by the
+ * corpus's per-fixture trivial edit (see roundtrip.corpus.test.ts's
+ * `EDIT_POSITIONS`) — none of those insert/remove a paragraph, table,
+ * drawing, section, table grid, tracked change, list item, merged cell, or
+ * run-formatting property. Computed from the raw XML text, independent of
+ * Atlas's own parser, so it also catches a part being silently dropped or
+ * corrupted on the way through Atlas's model (e.g. DXS-02's `w:tblGrid`
+ * loss, or a regression that flattened every `w:ilvl` to 0).
  */
 export function documentStructuralCounts(documentXml: string): DocumentStructuralCounts {
   const tree = xmlParser.parse(documentXml) as unknown
@@ -118,6 +194,15 @@ export function documentStructuralCounts(documentXml: string): DocumentStructura
     drawings: countTag(tree, 'w:drawing'),
     sectPr: countTag(tree, 'w:sectPr'),
     tblGrid: countTag(tree, 'w:tblGrid'),
+    insCount: countTag(tree, 'w:ins'),
+    delCount: countTag(tree, 'w:del'),
+    ilvlValues: collectAttrValues(tree, 'w:ilvl', 'w:val', '0'),
+    numIdValues: collectAttrValues(tree, 'w:numId', 'w:val', ''),
+    gridSpanValues: collectAttrValues(tree, 'w:gridSpan', 'w:val', '1'),
+    // OOXML: a `w:vMerge` with no `w:val` means "continue" the merge above.
+    vMergeValues: collectAttrValues(tree, 'w:vMerge', 'w:val', 'continue'),
+    runSzValues: collectAttrValues(tree, 'w:sz', 'w:val', ''),
+    runColorValues: collectAttrValues(tree, 'w:color', 'w:val', ''),
   }
 }
 
