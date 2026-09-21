@@ -60,7 +60,55 @@ if (process.env.PLAYWRIGHT === '1' && !app.isPackaged) {
   } else {
     const e2eRoot = path.join(os.tmpdir(), 'atlas-e2e-profiles');
     fs.mkdirSync(e2eRoot, { recursive: true });
+    pruneStaleE2eProfiles(e2eRoot);
     app.setPath('userData', fs.mkdtempSync(path.join(e2eRoot, 'profile-')));
+  }
+}
+
+/**
+ * Deletes e2e profile directories left behind by earlier runs.
+ *
+ * Every `PLAYWRIGHT=1` launch above mints a fresh `userData` directory and
+ * nothing ever removed one, so they accumulated for the lifetime of the temp
+ * directory: measured on the development machine at **2,876 directories /
+ * 26 GB**, one per Electron launch across every local and CI run ever made.
+ * A full e2e pass is ~110 launches, so this grows by that much every time
+ * the suite runs.
+ *
+ * Deliberately conservative, because this deletes from the user's temp
+ * directory:
+ *   - only under the same `PLAYWRIGHT === '1' && !app.isPackaged` guard as
+ *     the creation above, so a shipped build never runs it;
+ *   - only inside `atlas-e2e-profiles`, and only entries matching the exact
+ *     `profile-` prefix `mkdtempSync` produces;
+ *   - only entries older than the cutoff, so a concurrently-running sibling
+ *     launch's profile is never removed out from under it;
+ *   - bounded, so a huge backlog is cleared over several runs rather than
+ *     stalling start-up once;
+ *   - entirely best-effort — a profile still locked by a process that is
+ *     mid-teardown throws EBUSY/EPERM, which is expected and ignored.
+ * @param {string} e2eRoot
+ */
+function pruneStaleE2eProfiles(e2eRoot) {
+  const MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2h — far longer than any single suite run
+  const MAX_DELETIONS = 400; // caps start-up cost; the backlog drains across runs
+  const cutoff = Date.now() - MAX_AGE_MS;
+  let deleted = 0;
+  try {
+    for (const entry of fs.readdirSync(e2eRoot, { withFileTypes: true })) {
+      if (deleted >= MAX_DELETIONS) break;
+      if (!entry.isDirectory() || !entry.name.startsWith('profile-')) continue;
+      const full = path.join(e2eRoot, entry.name);
+      try {
+        if (fs.statSync(full).mtimeMs > cutoff) continue;
+        fs.rmSync(full, { recursive: true, force: true });
+        deleted += 1;
+      } catch {
+        // Still in use, or vanished under us — leave it for a later run.
+      }
+    }
+  } catch {
+    // The root vanished or is unreadable; nothing to prune.
   }
 }
 
