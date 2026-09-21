@@ -8,6 +8,86 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [3.7.0] — 2026-09-21 (phase 4: features that never worked, and the tests that hid them)
+
+Every defect below was found by **driving the real application**, not by the test
+suite. The suite was fully green throughout — and in three cases was actively
+asserting the broken behaviour as correct.
+
+### Fixed — features that had never worked
+
+- **Insert Hyperlink, Add Comment and Reply now work at all.** All three called
+  `window.prompt`, which Electron does not implement, so nothing happened. Their
+  tests passed because they mocked `prompt`. They now use a real in-app dialog
+  with a proper label, focus trap and Escape-to-cancel.
+- **Table Properties no longer discards everything you set.** Ticking "Show
+  borders" and pressing Apply silently did nothing — and so did width and
+  alignment, because one invalid control blocks a whole HTML form submission.
+  The width field's `step` rejected Word's own default table width (6.25in), so
+  the form never submitted at all.
+- **Typing into a spreadsheet cell no longer eats the first character.** Click a
+  cell, type `HELLO`, and the file contained `ELLO`. Measured at every typing
+  speed and with pauses up to a second: 24 out of 24 attempts lost a character.
+- **Insert Table produces a usable table.** It rendered at zero width, and text
+  typed straight afterwards vanished entirely.
+- **The caret can be placed inside a table cell.** Clicking a cell put the cursor
+  in the paragraph after the table, which made cell merge unreachable.
+- **Insert Text Box on a slide keeps what you type**, and creates one shape
+  instead of two.
+
+### Fixed — documents Word may have refused to open
+
+- **Every colour Atlas wrote was invalid OOXML** (`w:val="#ff0000"` — the leading
+  `#` is not legal). Files already saved by an earlier version repair themselves
+  when reopened.
+- **New bullet and numbered lists were invalid OOXML** (a non-integer
+  `abstractNumId`).
+- The package validator now checks attribute datatypes, so it would have caught
+  both. It passed them clean before.
+
+### Fixed — silent data loss on save
+
+- **Theme fonts** (how Word has specified fonts since 2007) were dropped on every
+  save. A general passthrough now preserves any run property Atlas does not model,
+  including a whole class of character effects that were being stripped.
+- **Excel table filters and sorts** were wiped on every save, even when the table
+  was untouched.
+- **Whole-column conditional formats, data validation and hyperlinks** were
+  deleted by any row or column insert.
+- **Content controls and shape fallbacks in footnotes, endnotes and comments**
+  were stripped with no warning.
+- **Save As** could rename a different tab and re-read that file over your work.
+- An **xlsx save that cannot preserve the original layout now says so** instead of
+  silently downgrading.
+- **Formulas returning text** (`=A1&"!"`, `CONCATENATE`) were saved as literal
+  formula text; formulas depending on later formulas showed stale values.
+
+### Fixed — shell, keyboard and accessibility
+
+- **Ctrl+W did nothing while the cursor was in a text field** — including the
+  markdown editor, so the unsaved-changes prompt never appeared on that path.
+- **Ctrl+G** now opens Go to line in the code editor.
+- Closing a tab by keyboard no longer drops focus to nowhere; the shortcuts
+  dialog, unsaved-changes dialog, presenter view and PDF find bar all trap Tab.
+- The **markdown source editor** is translated and has a real accessible name.
+- A draft you **discarded** no longer comes back as a crash-recovery offer —
+  including when discarding at quit.
+- A document undone back to its saved state is no longer marked unsaved forever.
+- The **New** menu no longer opens partly off the left edge of the window.
+
+### Security
+
+- A compromised renderer could register **any existing file** as writable and
+  overwrite it with no dialog. Write access now requires a path the main process
+  itself vouched for.
+- The spreadsheet read path had no decompression limit, so a crafted file could
+  exhaust memory on open.
+
+### Housekeeping
+
+- Test runs leaked an Electron profile directory per launch, never deleted —
+  **2,876 directories and 26 GB** on the development machine. They are now pruned.
+
 ## [3.6.0] — 2026-09-20 (wave 11: schema conformance, accessibility, memory)
 
 ### Fixed

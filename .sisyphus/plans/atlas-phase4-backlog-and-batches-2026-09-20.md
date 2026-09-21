@@ -454,6 +454,49 @@ alone — the opposite direction), `App.export.test.tsx`, and whatever couples t
 the first one investigated was a real defect, these should not be assumed to be noise.
 Worth one focused investigation of the cluster rather than four separate chases.
 
+### Released as 3.7.0 (`2026-09-21`)
+
+Batches 1-3, a fix batch for everything the hands-on sweep found, and part of
+batch 4. Gate at release: tsc clean, eslint clean, 3581 unit tests, bundle gate
+passed, 114 e2e passed, CI green.
+
+**The sweep was the whole point.** Two hands-on sweeps found 7 defects the green
+suite could not see; a re-verification found an 8th. Three of those were
+*asserted as correct* by existing tests (the Excel table filter, the Ctrl+W
+swallow, and the hyperlink dialog, whose test mocked `window.prompt` so jsdom
+passed while real Electron threw). Fixing a test that pins a bug in place is not
+weakening it.
+
+### CI-only failures observed tonight — a pattern worth watching
+
+Three distinct failures, all on the `windows-latest` runner, all budget- or
+timeout-shaped, all passing locally or on retry:
+- `export.spec.ts` twice: first the outer per-test clock (a genuine budgeting
+  error, fixed), then `waitForFile`'s own 60s poll. Not reproduced locally
+  despite CPU contention, software rendering and 45 sequential launches;
+  baseline export is 180-350ms.
+- `perf.spec.ts`'s cold-start long-task budget once: a 592ms task against the
+  300ms CI-adjusted budget. **Passed on re-run of the same commit**, so variance.
+
+The export handler's only failure signal was `logMainEvent`, writing to a file
+nothing in the harness reads, so a genuine `PrintToPdfError` was
+indistinguishable from slowness. Main-process stderr is now piped into the
+export tests. If it recurs, the log will name the cause.
+
+Open question for a future session: whether the CI runner is simply slower than
+several of these budgets assume, or whether something genuinely stalls there.
+
+**PROFILE-LEAK-1 · fixed** — every `PLAYWRIGHT=1` launch minted a `userData`
+directory and nothing deleted one: 2,876 directories / 26 GB on the development
+machine, growing ~110 per full suite run. Now pruned on launch, bounded and
+best-effort. Found while investigating the export failure.
+
+**INSERT-TEXT-THROWS-1 · medium · OPEN** — `applyInsertText` throws for any
+paragraph containing a comment range/reference, a footnote/endnote reference, or
+a bare `w:oMath`. Typing in a paragraph that merely *contains* a comment or a
+formula is an everyday action. Proven by three `toThrow()` assertions in the
+corpus suite. What the user actually sees was not determined.
+
 ### New items found while executing batch 3
 
 **QUIT-DRAFT-1 · medium** — a discard at *quit* still leaves the autosave draft behind.
