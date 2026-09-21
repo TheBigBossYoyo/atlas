@@ -95,6 +95,26 @@ async function waitForFile(filePath: string): Promise<void> {
     .toBeGreaterThan(0)
 }
 
+/**
+ * CI investigation (2026-09-21, run 35552076678) — `waitForFile` failed with
+ * its own 60 s predicate timeout (not the outer per-test clock), meaning the
+ * exported PDF genuinely never reached non-zero size. `export:printToPdf`'s
+ * only failure signal was `logMainEvent`, which writes to a rotating file on
+ * disk (`electron/lib/crashLog.cjs`) that nothing in this harness ever reads
+ * — so a real main-process error (e.g. `PrintToPdfError` from
+ * `printToPdf.cjs`'s own 30 s `did-finish-load` timeout, well inside
+ * `waitForFile`'s 60 s budget) would leave no trace in the CI log at all,
+ * indistinguishable from a genuinely slow render. Piping the Electron
+ * process's own stdout/stderr into the test's output turns that silence into
+ * a visible `[main stderr]` line the next time this happens, without
+ * changing any product behaviour. Paired with the `console.error` added
+ * alongside `logMainEvent` in the `export:printToPdf` handler (main.cjs).
+ */
+function logMainProcessOutput(electronApp: ElectronApplication): void {
+  electronApp.process().stdout?.on('data', d => console.log(`[main stdout] ${d.toString()}`))
+  electronApp.process().stderr?.on('data', d => console.log(`[main stderr] ${d.toString()}`))
+}
+
 async function stubSaveDialog(electronApp: ElectronApplication, targetPath: string): Promise<void> {
   await electronApp.evaluate(({ dialog }, targetPathArg) => {
     dialog.showSaveDialog = (() =>
@@ -142,6 +162,7 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
       cwd: projectRoot,
       env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
     })
+    logMainProcessOutput(electronApp)
 
     try {
       await stubSaveDialog(electronApp, outPath)
@@ -183,6 +204,7 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
       cwd: projectRoot,
       env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
     })
+    logMainProcessOutput(electronApp)
 
     try {
       await stubSaveDialog(electronApp, outPath)
@@ -226,6 +248,7 @@ test.describe('Export to PDF captures the FULL document (X1 / SLD-01 / UX-02 / R
       cwd: projectRoot,
       env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
     })
+    logMainProcessOutput(electronApp)
 
     try {
       await stubSaveDialog(electronApp, outPath)
