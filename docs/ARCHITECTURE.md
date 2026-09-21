@@ -307,6 +307,23 @@ serializer bug can silently corrupt a file that still opens.
 | **Coverage ratchet** | `npm run coverage` (v8 provider, text+html reporters, `reportOnFailure: true` so a failing run still shows what it covered) enforces a measured-floor threshold per global metric — see `vitest.config.ts`'s `coverage.thresholds` comment for the current numbers and how to raise them. | `vitest.config.ts` |
 | **Shared test doubles** | `createMockElectronAPI()` (`src/__tests__/mocks/electronAPI.ts`) is the one typed `window.electronAPI` fixture; import and override rather than hand-rolling a new literal per test file (P4.8/QA-25). | `src/__tests__/mocks/electronAPI.ts` |
 
+**Cross-relaunch E2E coverage.** Every `PLAYWRIGHT=1` launch gets its own
+throwaway `userData` profile directory (`electron/main.cjs`, guarded by
+`PLAYWRIGHT === '1' && !app.isPackaged`) — the right default, since it stops
+parallel/sequential test runs from colliding with each other or with the
+owner's real profile. The side effect: nothing that lives under `userData`
+(the persisted recent-files list, window size/position, and the
+`recentFilesStore` ground truth behind `recent:request-open`'s security
+check) could be exercised across a relaunch. `ATLAS_E2E_PROFILE_DIR` is an
+opt-in override, gated behind that same condition, so it's structurally
+incapable of doing anything in a packaged build: set it to a directory a spec
+controls and two consecutive `electron.launch()` calls share that profile;
+leave it unset (as every other spec does) and behavior is unchanged. See
+`tests/e2e/recent-files.spec.ts` for the specs that use it (including the
+`recent:request-open` security invariant checked in both directions) and its
+own header comment for how to sequence two launches against a shared
+profile without hitting the singleton-lock race described in main.cjs.
+
 **Manual backstop.** Automated coverage catches regressions a snapshot can
 articulate; it does not catch "this looks subtly wrong" the way a human
 glancing at rendered output does. Every phase gate that touches shared shell
