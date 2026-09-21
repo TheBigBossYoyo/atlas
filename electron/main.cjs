@@ -20,15 +20,48 @@ const { decideFileOpenAction } = require('./lib/fileOpenRouting.cjs');
 const { resolveIsDev } = require('./lib/devDetect.cjs');
 const { NEW_DOCUMENT_FORMATS, templateBytesForExtension, readTemplateBytes } = require('./lib/newDocumentTemplates.cjs');
 
-// E2E runs: every launch gets its own profile. Otherwise an instance that is
-// still being torn down (taskkill /T is not instantaneous) keeps the shared
-// profile's singleton lock file open and the next test's launch fails with
-// "Lock file can not be created! Error code: 32" — and tests would also write
-// into the user's real recent-files/window-state store.
+// E2E runs: every launch gets its own profile by default. Otherwise an
+// instance that is still being torn down (taskkill /T is not instantaneous)
+// keeps the shared profile's singleton lock file open and the next test's
+// launch fails with "Lock file can not be created! Error code: 32" — and
+// tests would also write into the user's real recent-files/window-state
+// store.
+//
+// TEST-7 — this made everything that lives under `userData` (recent files,
+// window state, and the `recentFilesStore` ground truth behind
+// `recent:request-open`'s security check — see `registerRecentPath` below)
+// structurally impossible to test across a relaunch: a fresh directory every
+// time means launch 2 never sees anything launch 1 persisted. `ATLAS_E2E_PROFILE_DIR`
+// is an opt-in escape hatch for exactly that: a spec that wants two
+// consecutive `electron.launch()` calls to share a profile sets this to a
+// directory it controls (typically its own `fs.mkdtempSync` result) and both
+// launches use it instead of getting their own throwaway one. Every other
+// spec is unaffected — omitting the var (as every existing spec does)
+// reproduces the original fresh-profile-per-launch behavior exactly.
+//
+// Guarded by the same `PLAYWRIGHT === '1' && !app.isPackaged` condition as
+// the fresh-profile branch, so — like that branch — it is structurally
+// incapable of doing anything in a packaged build: `app.isPackaged` is
+// `true` there regardless of what environment variables happen to be set,
+// so this whole block (default OR override) never runs and `userData` keeps
+// Electron's normal packaged-build default. A shipped Atlas cannot be made
+// to share or redirect its profile via this var.
+//
+// A caller that reuses the same directory across launches owns sequencing
+// its own launches so the first one's singleton lock is actually released
+// before the second starts (kill with `taskkill /PID <pid> /T /F`, then wait
+// for the process to exit) — this block only decides which directory to use,
+// it has no way to enforce that.
 if (process.env.PLAYWRIGHT === '1' && !app.isPackaged) {
-  const e2eRoot = path.join(os.tmpdir(), 'atlas-e2e-profiles');
-  fs.mkdirSync(e2eRoot, { recursive: true });
-  app.setPath('userData', fs.mkdtempSync(path.join(e2eRoot, 'profile-')));
+  const overrideProfileDir = process.env.ATLAS_E2E_PROFILE_DIR;
+  if (typeof overrideProfileDir === 'string' && overrideProfileDir.length > 0) {
+    fs.mkdirSync(overrideProfileDir, { recursive: true });
+    app.setPath('userData', overrideProfileDir);
+  } else {
+    const e2eRoot = path.join(os.tmpdir(), 'atlas-e2e-profiles');
+    fs.mkdirSync(e2eRoot, { recursive: true });
+    app.setPath('userData', fs.mkdtempSync(path.join(e2eRoot, 'profile-')));
+  }
 }
 
 /**

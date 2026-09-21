@@ -803,3 +803,122 @@ describe('App — a save still in flight while the tab it belongs to is switched
     expect(localStorage.getItem('atlas-draft')).toBe(draftBeforeResolve);
   });
 });
+
+describe('App — Save As onto an already-open tab (SESS-1, through the real shell)', () => {
+  // `documentSessions.test.ts` already unit-tests `renameSession`'s two
+  // collision branches directly against the pure reducer (both are exercised
+  // there with plain `LoadedFile`/`DocumentSessionsState` values). What that
+  // suite can't prove is that `App.tsx` actually reaches those branches with
+  // the right arguments at the right time — this describe block drives both
+  // through the real component tree: a real Ctrl+Shift+S, a real deferred
+  // `window.electronAPI.saveFile` promise, and real DOM assertions on the
+  // resulting tab strip and editor content.
+
+  it('Save As from the active tab onto an already-open background tab\'s path drops the background tab; the renamed tab stays active with its saved content', async () => {
+    // Case 1 (the common case) — `followSavedPath`'s synchronous branch:
+    // the ACTIVE document (a.md) is Save-As'd onto a path a background tab
+    // (b.md) already occupies. b.md's tab is dropped; a.md's content now
+    // lives under b.md's path, still active, still the tab the user is
+    // looking at.
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    mockOpenMarkdownFile('/abs/b.md', '# B');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('b.md'));
+
+    fireEvent.click(screen.getByRole('tab', { name: 'a.md' }));
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (about to be saved onto b.md\'s path)' },
+    });
+    await waitFor(() => expect(toolbarIsDirty()).toBe(true));
+
+    window.electronAPI!.saveFile = vi.fn().mockResolvedValue({ saved: true, path: '/abs/b.md' });
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => expect(toolbarFilenameText()).toBe('b.md'));
+    expect(toolbarIsDirty()).toBe(false);
+
+    // Only one tab survives — b.md's original background tab was dropped,
+    // not duplicated alongside the renamed one (no two sessions share an id).
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
+    expect(screen.getByRole('tab', { name: 'b.md' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'a.md' })).not.toBeInTheDocument();
+
+    // The surviving tab holds a.md's (just-saved) content, not whatever
+    // b.md used to hold.
+    expect(screen.getByPlaceholderText('Type or paste markdown here...')).toHaveValue(
+      '# A (about to be saved onto b.md\'s path)',
+    );
+  });
+
+  it('a background Save As that resolves onto the currently-active tab\'s path leaves the active tab untouched and drops the background one instead', async () => {
+    // Case 2 (the deliberately conservative exception) —
+    // `applySavedPathToInactiveTab`'s branch: a.md's Save As started while it
+    // was active, but the user switched to b.md before it resolved. It
+    // resolves onto b.md's path — the path of the tab now ACTUALLY on
+    // screen. There's nothing to re-render a.md's content into (nothing
+    // adopts it), so b.md is left exactly as it was and a.md's now-redundant
+    // background tab is dropped instead — mirroring
+    // documentSessions.test.ts's "renaming a background document onto the
+    // currently-active document's path" reducer case, but reached here via
+    // a real async save race instead of a direct reducer call.
+    let resolveSave: ((result: { saved: boolean; path?: string }) => void) | undefined;
+
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    mockOpenMarkdownFile('/abs/b.md', '# B');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('b.md'));
+
+    // Switch back to a.md, dirty it, and start a Save As that never resolves
+    // on its own.
+    fireEvent.click(screen.getByRole('tab', { name: 'a.md' }));
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    fireEvent.change(screen.getByPlaceholderText('Type or paste markdown here...'), {
+      target: { value: '# A (background save, about to collide with b.md)' },
+    });
+    await waitFor(() => expect(toolbarIsDirty()).toBe(true));
+
+    window.electronAPI!.saveFile = vi.fn().mockImplementation(
+      () => new Promise<{ saved: boolean; path?: string }>((resolve) => { resolveSave = resolve; }),
+    );
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(window.electronAPI!.saveFile).toHaveBeenCalledTimes(1));
+
+    // While that save is still pending, switch to b.md — a.md is still
+    // dirty from the app's perspective, so this goes through the
+    // unsaved-changes guard; Discard proceeds with the switch (mirrors the
+    // in-flight-save describe block above).
+    fireEvent.click(screen.getByRole('tab', { name: 'b.md' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(toolbarFilenameText()).toBe('b.md'));
+
+    // The stale a.md Save As now resolves — landing on '/abs/b.md', the path
+    // of the tab actually on screen right now.
+    await act(async () => {
+      resolveSave?.({ saved: true, path: '/abs/b.md' });
+    });
+
+    // b.md is still showing, completely untouched by a.md's save.
+    expect(toolbarFilenameText()).toBe('b.md');
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    expect(screen.getByPlaceholderText('Type or paste markdown here...')).toHaveValue('# B');
+
+    // a.md's now-redundant background tab is gone — not left dangling, and
+    // not duplicated onto b.md's identity either.
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
+    expect(screen.getByRole('tab', { name: 'b.md' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'a.md' })).not.toBeInTheDocument();
+  });
+});
