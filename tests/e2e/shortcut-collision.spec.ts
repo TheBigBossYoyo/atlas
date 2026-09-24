@@ -6,6 +6,8 @@ import { execFileSync } from 'node:child_process'
 import { _electron as electron, expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from '@playwright/test'
 
+import { openMarkdownEditorWithShortcut } from './helpers/markdownViewMode'
+
 /**
  * P4.6 (part) / P2.1 (SHELL-08, SHELL-09, UX-03) — shortcut-collision
  * regression coverage against the real app, on top of the inline unit-level
@@ -124,9 +126,8 @@ test('Markdown editor (RawEditor): Ctrl+B does not toggle the sidebar while typi
     // Switch to a view mode that mounts RawEditor (a plain <textarea> with
     // no key handling of its own — SHELL-08's fix must hold even though
     // this component makes zero effort to claim the combo itself).
-    await page.keyboard.press('Control+2')
+    await openMarkdownEditorWithShortcut(page)
     const textarea = page.locator('.editor-panel__textarea')
-    await expect(textarea).toBeVisible({ timeout: 10_000 })
     await textarea.click()
 
     const sidebar = page.locator('.sidebar')

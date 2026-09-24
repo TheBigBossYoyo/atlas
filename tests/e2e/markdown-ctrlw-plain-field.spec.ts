@@ -6,6 +6,8 @@ import { execFileSync } from 'node:child_process'
 import { _electron as electron, expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from '@playwright/test'
 
+import { openMarkdownEditorWithShortcut } from './helpers/markdownViewMode'
+
 /**
  * FIELD-01 — live repro for the bug found driving the real app: typing in
  * the markdown editor's plain `<textarea>` (RawEditor), then pressing
@@ -63,9 +65,8 @@ test('Ctrl+W with focus inside the markdown editor textarea raises the unsaved-c
 
     // Mount RawEditor — a plain <textarea> with no key handling of its own,
     // exactly the surface the bug report reproduced against.
-    await page.keyboard.press('Control+2')
+    await openMarkdownEditorWithShortcut(page)
     const textarea = page.locator('.editor-panel__textarea')
-    await expect(textarea).toBeVisible({ timeout: 10_000 })
     await textarea.click()
     await textarea.fill('# Edited by the FIELD-01 e2e spec\n')
 

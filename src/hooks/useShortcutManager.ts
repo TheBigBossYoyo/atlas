@@ -15,7 +15,7 @@
  * for a test harness, not a bug to work around.
  */
 
-import { useContext, useEffect, useRef } from 'react'
+import { useContext, useLayoutEffect, useRef } from 'react'
 
 import { ShortcutManagerContext, type ShortcutHandler } from './shortcutManagerContext'
 
@@ -30,14 +30,21 @@ function useRegisteredShortcut(
   // registered wrapper without re-registering (and thus reordering the
   // precedence stack) on every render just because the caller passed a new
   // inline closure. Assigned in an effect, never during render, per the
-  // project's `react-hooks/refs` lint rule (see ViewerContext.tsx's own
-  // dirtyGuardStateRef for the same pattern).
+  // project's `react-hooks/refs` lint rule.
+  //
+  // Layout effects, not passive ones (REF-EFFECT-1): a key pressed after a
+  // render has committed but before its passive effects ran would otherwise
+  // be dispatched to the PREVIOUS render's handler — e.g. Ctrl+2 rejected by
+  // a closure from before the document loaded (`isMarkdown` still false), or
+  // Ctrl+S calling a `saveFile` that captured the text one keystroke ago.
+  // Layout effects run in the same commit, so what is on screen and what
+  // handles the next key can never disagree.
   const handlerRef = useRef(handler)
-  useEffect(() => {
+  useLayoutEffect(() => {
     handlerRef.current = handler
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!enabled || !manager) return undefined
     const stableHandler: ShortcutHandler = (event, ctx) => handlerRef.current(event, ctx)
     return scope === 'viewer'

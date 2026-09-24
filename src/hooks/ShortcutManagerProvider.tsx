@@ -43,7 +43,7 @@
  * fresh inline closure on every render with no memoization burden.
  */
 
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 
 import {
   ShortcutManagerContext,
@@ -90,7 +90,7 @@ export function ShortcutManagerProvider({ children }: { children: ReactNode }): 
     }
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     function dispatch(event: KeyboardEvent): void {
       const ctx: ShortcutDispatchContext = { inPlainField: isPlainFieldTarget(event.target) }
 

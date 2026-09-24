@@ -158,19 +158,22 @@ function ViewerSessionBridge({
   const saveAs = useViewerSaveAs();
   const getExportableContent = useGetExportableContent();
 
-  useEffect(() => {
+  // REF-EFFECT-1 - layout effects for this block: a key (Ctrl+W, Ctrl+S)
+  // arriving between a commit and its passive effects must not see the
+  // previous render's dirty state or save/export functions.
+  useLayoutEffect(() => {
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     saveRef.current = save;
   }, [save, saveRef]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     saveAsRef.current = saveAs;
   }, [saveAs, saveAsRef]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     exportContentRef.current = getExportableContent;
     // `getExportableContent`'s own identity is stable even when a newly
     // mounted viewer's registration changes what it would return (mirroring
@@ -372,7 +375,9 @@ function AppShell() {
 
   // Keep confirmDiscardChanges's ref-read state fresh. An effect (not a
   // render-time assignment) so this never mutates a ref during render.
-  useEffect(() => {
+  // Layout effect (REF-EFFECT-1): Ctrl+W right after a keystroke must not read
+  // the previous render's "not dirty" and close without asking.
+  useLayoutEffect(() => {
     dirtyGuardStateRef.current = { isMarkdownDocument, isDirty, viewerDirty };
   }, [isMarkdownDocument, isDirty, viewerDirty]);
 
@@ -477,7 +482,7 @@ function AppShell() {
   // call time, so there is no re-subscription and therefore no window for a
   // stale closure to run.
   const saveFileRef = useRef(saveFile);
-  useEffect(() => {
+  useLayoutEffect(() => {
     saveFileRef.current = saveFile;
   }, [saveFile]);
 
