@@ -135,9 +135,12 @@ type PendingSeed = {
  * hold shortcuts like Ctrl+S indefinitely. (The known stranding path — glide
  * declining to open an overlay — is cleared precisely in `handleKeyDown`.)
  * Overlay mounts take 100-300ms normally; at 24x CPU throttling one took
- * 2.45s, which a 2s bound let a held Ctrl+S overtake.
+ * 2.45s locally (a 2s bound let a held Ctrl+S overtake it), and on the slower
+ * CI runner the 24x test exceeded 5s. Once glide has confirmed it opened an
+ * editor the edit really is coming (the only other way to strand it is the
+ * grid unmounting, which detaches KeyHold anyway), so this bound is generous.
  */
-const PENDING_EDIT_MAX_MS = 5000
+const PENDING_EDIT_MAX_MS = 30_000
 
 /** Holds the current `SpreadsheetDataEditor` instance's pending-seed ref — see module header on why this goes through context rather than a closure. */
 const PendingSeedContext = createContext<{ current: PendingSeed | null } | null>(null)

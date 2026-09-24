@@ -111,6 +111,16 @@ async function typeIntoXlsxA1(delay: number, pause: number, slow?: SlowCpu, wait
     await page.waitForTimeout(1500)
     if (slow?.from === 'grid-ready') await throttleCpu(page, slow.rate)
     await clickTypeSave(page, file, '[data-viewer="xlsx"] canvas', 'HELLO', delay, pause, waitBeforeSave)
+    const savedA1 = sheetCells(file).A1
+    if (savedA1 !== 'HELLO') {
+      // Diagnostic only (the assertion below still fails): was the edit lost,
+      // or did it land after the save? Save again once things have settled.
+      const mtime = fs.statSync(file).mtimeMs
+      await page.waitForTimeout(5000)
+      await page.keyboard.press('Control+s')
+      await expect.poll(() => fs.statSync(file).mtimeMs, { timeout: 15_000 }).toBeGreaterThan(mtime).catch(() => undefined)
+      console.log(`[F6 diagnostic] first save A1=${JSON.stringify(savedA1)}; a second save 5s later has A1=${JSON.stringify(sheetCells(file).A1)}`)
+    }
     expectA1Saved(file, 'HELLO')
   } finally {
     kill(app)
