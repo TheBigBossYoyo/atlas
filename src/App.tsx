@@ -346,8 +346,18 @@ function AppShell() {
     // that first render) — dismiss any pending draft-recovery prompt rather
     // than showing it alongside newly-opened content; the draft itself stays
     // in storage in case the user wants it back another time.
+    //
+    // SHELL-6 — except when this IS the draft's file (relaunching straight
+    // into the file being edited when Atlas crashed is the usual way back)
+    // and the draft differs from what's on disk: that is exactly when the
+    // prompt matters. Restore then applies the draft to this file.
     if (fileIdentityKey !== null) {
-      setPendingDraft(null);
+      const loadedPath = file?.path;
+      setPendingDraft((draft) =>
+        draft !== null && loadedPath !== undefined && draft.filePath === loadedPath && draft.markdown !== markdown
+          ? draft
+          : null,
+      );
     }
   }
 
@@ -786,7 +796,17 @@ function AppShell() {
   // file can never keep writing markdown drafts under its name (a stale
   // `localMarkdown`/`fileName` pairing was possible for one render during a
   // file-identity transition before this gate existed).
-  useAutosave(isMarkdownDocument ? localMarkdown : '', fileName, isMarkdownDocument);
+  // SHELL-6 — only unsaved changes are worth a draft (loading a file changes
+  // `localMarkdown` too, and used to overwrite a crashed session's draft
+  // ~800ms after relaunch), and never while a recovered draft is still being
+  // offered: typing before answering the prompt must not replace it.
+  useAutosave(
+    isMarkdownDocument ? localMarkdown : '',
+    fileName,
+    isMarkdownDocument && isDirty && pendingDraft === null,
+    undefined,
+    file?.path ?? null,
+  );
 
   const [viewMode, setViewMode] = useState<ViewMode>('preview');
   const [sidebarOpen, setSidebarOpen] = useState(true);

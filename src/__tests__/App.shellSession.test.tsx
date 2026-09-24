@@ -337,6 +337,60 @@ describe('App — draft recovery (P2.6/SHELL-11/LOAD-20)', () => {
   });
 });
 
+// SHELL-6 — found by the night sweep in the real app: after a crash, relaunching
+// Atlas straight into the file being edited (the usual way back) never offered
+// the draft, and autosave then overwrote it with the file's on-disk content
+// ~800ms later (it wrote whenever the text changed, dirty or not — and loading
+// a file changes it).
+describe('App — draft recovery when reopening the crashed file (SHELL-6)', () => {
+  function seedDraftFor(filePath: string, markdown: string) {
+    localStorage.setItem(
+      'atlas-draft',
+      JSON.stringify({ markdown, fileName: filePath.split('/').pop(), filePath, savedAt: Date.now() }),
+    );
+  }
+
+  it('opening the file a draft belongs to keeps the restore prompt, and Restore applies the draft to that file', async () => {
+    seedDraftFor('/abs/a.md', '# A (unsaved edits before the crash)');
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    expect(screen.getByText(/unsaved changes to "a\.md"/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+
+    await waitFor(() => expect(toolbarIsDirty()).toBe(true));
+    expect(toolbarFilenameText()).toBe('a.md');
+    fireEvent.click(screen.getByRole('button', { name: 'Editor' }));
+    expect(screen.getByPlaceholderText('Type or paste markdown here...')).toHaveValue('# A (unsaved edits before the crash)');
+  });
+
+  it('loading that file does not overwrite the pending draft', async () => {
+    seedDraftFor('/abs/a.md', '# A (unsaved edits before the crash)');
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    // Longer than the 800ms autosave debounce.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(localStorage.getItem('atlas-draft')).toContain('unsaved edits before the crash');
+  });
+
+  it('opening a different file dismisses the prompt but leaves the draft in storage until the user edits', async () => {
+    seedDraftFor('/abs/other.md', '# Other (unsaved)');
+    render(<App />);
+    mockOpenMarkdownFile('/abs/a.md', '# A');
+    await openViaToolbar();
+    await waitFor(() => expect(toolbarFilenameText()).toBe('a.md'));
+
+    expect(screen.queryByText(/unsaved changes to/i)).not.toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    expect(localStorage.getItem('atlas-draft')).toContain('# Other (unsaved)');
+  });
+});
+
 describe('App — discarding a markdown draft actually clears it (DRAFT-1)', () => {
   // Types into the editor and waits for the REAL 800ms autosave debounce to
   // actually persist a draft — a hand-seeded `localStorage` entry wouldn't
