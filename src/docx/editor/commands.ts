@@ -1635,7 +1635,34 @@ function applyInsertText(
   }
 
   const paragraph = requireParagraph(doc, cmd.at.paragraphPath)
-  const editableRuns = requireEditableRuns(paragraph)
+
+  // INSERT-TEXT-THROWS-1 — a paragraph that merely *contains* an inert,
+  // non-run marker (a bookmark, a comment range start/end, a comment
+  // reference, a footnote/endnote reference run, or an opaque unrecognized
+  // node such as a bare `w:oMath`) used to make `getEditableRuns` reject the
+  // *entire* paragraph, so `requireEditableRuns` threw and typing anywhere
+  // in that paragraph — including nowhere near the marker — silently no-opped
+  // (every caller `preventDefault()`s on a throw). `chunkParagraphForInsert`
+  // instead partitions the paragraph into inert markers (kept byte-identical,
+  // never a target a caret position can land on or split) and maximal runs of
+  // genuinely editable content in between, so typing elsewhere in the same
+  // paragraph works and the marker itself is never disturbed.
+  const chunks = chunkParagraphForInsert(paragraph)
+  if (chunks === null) {
+    throw new Error('This command currently supports paragraphs with direct text runs (optionally inside a hyperlink) only')
+  }
+
+  const editableRuns: EditableRun[] = []
+  const chunkIndexByEntry: number[] = []
+  chunks.forEach((chunk, chunkIndex) => {
+    if (chunk.kind !== 'editable') {
+      return
+    }
+    for (const entry of chunk.entries) {
+      editableRuns.push(entry)
+      chunkIndexByEntry.push(chunkIndex)
+    }
+  })
 
   if (editableRuns.length === 0) {
     if (cmd.at.runIndex !== 0 || cmd.at.charOffset !== 0) {
@@ -1644,7 +1671,22 @@ function applyInsertText(
 
     const owner = resolveInsertOwner(doc, trackChanges, DIRECT_OWNER)
     const insertedRun = createRunWithText(undefined, cmd.text)
-    const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren([{ run: insertedRun, owner }]))
+    // No editable content exists in this paragraph to anchor to (e.g. a
+    // paragraph that is nothing but a bare `w:oMath`): every chunk must be
+    // inert (an editable chunk always carries at least one entry), so append
+    // the typed text as a new run after every inert node instead of
+    // replacing them.
+    const inertNodes: ParagraphChild[] = chunks.map((chunk) => {
+      if (chunk.kind !== 'inert') {
+        throw new Error('InsertText position is outside the paragraph')
+      }
+      return chunk.node
+    })
+    const nextChildren: ParagraphChild[] = [
+      ...inertNodes,
+      ...buildParagraphChildren([{ run: insertedRun, owner }]),
+    ]
+    const nextParagraph = cloneParagraph(paragraph, freezeArray(nextChildren))
     const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
     const start = createPosition(cmd.at.paragraphPath, 0, 0)
     const end = createPosition(cmd.at.paragraphPath, 0, cmd.text.length)
@@ -1658,6 +1700,7 @@ function applyInsertText(
 
   const target = resolveInsertTarget(editableRuns, cmd.at)
   const current = editableRuns[target.runIndex]
+  const targetChunkIndex = chunkIndexByEntry[target.runIndex]
 
   // DXE-18/D18 — `resolveInsertTarget`'s own end-of-paragraph branch resolves
   // "insert at the very end" to `{runIndex: lastIndex, charOffset: 0}` when
@@ -1678,7 +1721,7 @@ function applyInsertText(
   // zero-length `.text` but is not a boundary — it must still take the
   // normal splice path below so typing into it replaces its content in
   // place instead of leaving a stray empty run behind.
-  if (isAtomicRun(current.run) || current.owner.kind === 'del-revision') {
+  if (isInsertAtomicRun(current.run) || current.owner.kind === 'del-revision') {
     const owner = resolveInsertOwner(doc, trackChanges, current.owner)
     const insertedRun = createRunWithText(undefined, cmd.text)
     const nextEntries: RunEntry[] = [
@@ -1687,7 +1730,10 @@ function applyInsertText(
       ...editableRuns.slice(target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
     ]
 
-    const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
+    const nextParagraph = cloneParagraph(
+      paragraph,
+      rebuildParagraphChildrenWithInert(chunks, nextEntries, targetChunkIndex),
+    )
     const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
     const start = createPosition(cmd.at.paragraphPath, target.runIndex + 1, 0)
     const end = createPosition(cmd.at.paragraphPath, target.runIndex + 1, cmd.text.length)
@@ -1716,7 +1762,10 @@ function applyInsertText(
         : { run: entry.run, owner: entry.owner },
     )
 
-    const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
+    const nextParagraph = cloneParagraph(
+      paragraph,
+      rebuildParagraphChildrenWithInert(chunks, nextEntries, targetChunkIndex),
+    )
     const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
     const start = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset)
     const end = createPosition(cmd.at.paragraphPath, target.runIndex, target.charOffset + cmd.text.length)
@@ -1752,7 +1801,10 @@ function applyInsertText(
     ...editableRuns.slice(target.runIndex + 1).map((entry) => ({ run: entry.run, owner: entry.owner })),
   ]
 
-  const nextParagraph = cloneParagraph(paragraph, buildParagraphChildren(nextEntries))
+  const nextParagraph = cloneParagraph(
+    paragraph,
+    rebuildParagraphChildrenWithInert(chunks, nextEntries, targetChunkIndex),
+  )
   const nextDocument = replaceParagraphOrThrow(doc, cmd.at.paragraphPath, nextParagraph)
   const start = createPosition(cmd.at.paragraphPath, insertedIndex, 0)
   const end = createPosition(cmd.at.paragraphPath, insertedIndex, cmd.text.length)
@@ -2574,6 +2626,182 @@ function getEditableRuns(paragraph: Paragraph): ReadonlyArray<EditableRun> | nul
   }
 
   return editableRuns
+}
+
+// ---------------------------------------------------------------------------
+// INSERT-TEXT-THROWS-1 — inert-marker-tolerant chunking for applyInsertText
+// ---------------------------------------------------------------------------
+
+/**
+ * Paragraph-level children that never carry editable text and must never be
+ * split, replaced, or reflowed by an insert: bookmarks, comment range
+ * start/end markers, comment references, footnote/endnote reference runs,
+ * and any unrecognized construct captured verbatim as `UnknownNode` (notably
+ * a bare `w:oMath` equation — the parser has no first-class model for it).
+ * `getEditableRuns` (above) still rejects the whole paragraph the instant it
+ * sees one of these, which is correct for every OTHER command (delete,
+ * formatting, hyperlink-wrapping) that this task does not touch; only
+ * `applyInsertText` — via `chunkParagraphForInsert` — treats them as inert
+ * markers to type around instead.
+ */
+const INERT_INSERT_MARKER_KINDS: ReadonlySet<ParagraphChild['kind']> = new Set([
+  'bookmark',
+  'comment-range',
+  // `CommentReference`/`FootnoteReference`/`EndnoteReference` are typed as
+  // both a `ParagraphChild` (a bare paragraph-level sibling, as the parser
+  // actually emits them for `comments-with-reply`/`footnotes-endnotes`) and
+  // a `RunChild` (nested inside a `w:r`) — `isInsertAtomicRun` below handles
+  // the nested shape; these three entries handle the top-level shape.
+  'comment-reference',
+  'footnote-reference',
+  'endnote-reference',
+  'unknown',
+])
+
+/**
+ * `CommentReference`/`FootnoteReference`/`EndnoteReference` are *run*
+ * children (`RunChild`, not `ParagraphChild` — they sit inside a `w:r`
+ * alongside/instead of text), unlike bookmarks and comment-range markers
+ * which are always their own paragraph-level sibling. A run whose only child
+ * is one of these three is exactly as atomic as the existing image/break/tab
+ * case `isAtomicRun` already recognizes (D18): zero-width, never a target a
+ * delete/insert range can split, never rewritable via `createRunLike`. Kept
+ * local to `applyInsertText`'s chunking rather than folded into the shared
+ * `ATOMIC_LEAF_KINDS`/`isAtomicRun` so this widening only affects insert-text
+ * (INSERT-TEXT-THROWS-1's scope) and not delete/format, which this task does
+ * not touch.
+ */
+const INSERT_ATOMIC_RUN_LEAF_KINDS: ReadonlySet<string> = new Set([
+  'footnote-reference',
+  'endnote-reference',
+  'comment-reference',
+])
+
+function isInsertAtomicRun(run: Run): boolean {
+  return (
+    isAtomicRun(run) ||
+    (run.children.length === 1 && INSERT_ATOMIC_RUN_LEAF_KINDS.has(run.children[0].kind))
+  )
+}
+
+function toInsertRunEntryOrNull(run: Run, owner: RunOwner): EditableRun | null {
+  if (isInsertAtomicRun(run)) {
+    return { run, text: '', owner }
+  }
+  return toRunEntryOrNull(run, owner)
+}
+
+type ParagraphChunk =
+  | { readonly kind: 'inert'; readonly node: ParagraphChild }
+  | { readonly kind: 'editable'; readonly entries: ReadonlyArray<EditableRun> }
+
+/**
+ * Partitions a paragraph's children, in order, into inert markers (kept
+ * byte-identical) and maximal runs of editable content between them. Returns
+ * `null` for any paragraph shape this editor genuinely can't reconstruct
+ * (the same set `getEditableRuns` already rejects, minus the inert-marker
+ * kinds above).
+ */
+function chunkParagraphForInsert(paragraph: Paragraph): ReadonlyArray<ParagraphChunk> | null {
+  const chunks: ParagraphChunk[] = []
+  let currentEditable: EditableRun[] | null = null
+
+  const flushEditable = (): void => {
+    if (currentEditable !== null) {
+      chunks.push({ kind: 'editable', entries: freezeArray(currentEditable) })
+      currentEditable = null
+    }
+  }
+
+  for (const child of paragraph.children) {
+    if (INERT_INSERT_MARKER_KINDS.has(child.kind)) {
+      flushEditable()
+      chunks.push({ kind: 'inert', node: child })
+      continue
+    }
+
+    if (child.kind === 'run') {
+      const entry = toInsertRunEntryOrNull(child, DIRECT_OWNER)
+      if (entry === null) {
+        return null
+      }
+      ;(currentEditable ??= []).push(entry)
+      continue
+    }
+
+    if (child.kind === 'hyperlink' || child.kind === 'ins-revision' || child.kind === 'del-revision') {
+      const owner: RunOwner =
+        child.kind === 'hyperlink'
+          ? { kind: 'hyperlink', wrapper: child }
+          : child.kind === 'ins-revision'
+            ? { kind: 'ins-revision', wrapper: child }
+            : { kind: 'del-revision', wrapper: child }
+
+      for (const grandchild of child.children) {
+        if (grandchild.kind !== 'run') {
+          return null
+        }
+
+        if (child.kind === 'del-revision') {
+          if (getRunText(grandchild) === null && !isInsertAtomicRun(grandchild)) {
+            return null
+          }
+          ;(currentEditable ??= []).push({ run: grandchild, owner, text: '' })
+          continue
+        }
+
+        const entry = toInsertRunEntryOrNull(grandchild, owner)
+        if (entry === null) {
+          return null
+        }
+        ;(currentEditable ??= []).push(entry)
+      }
+      continue
+    }
+
+    return null
+  }
+
+  flushEditable()
+  return chunks
+}
+
+/**
+ * Rebuilds a paragraph's children from `chunks` (the original inert/editable
+ * partition) plus `flatNextEntries` (the full, possibly-longer flat run list
+ * `applyInsertText` already produced for its edit). Only `changedChunkIndex`
+ * may have grown or shrunk relative to its original entry count — every
+ * other editable chunk's slice of `flatNextEntries` is exactly its original
+ * entries, byte-identical — so this walks the chunks in order, taking each
+ * one's slice off the front of `flatNextEntries` (using the chunk's original
+ * length, except the changed chunk, whose new length absorbs the whole size
+ * delta), and interleaves the untouched inert nodes back in at their
+ * original positions.
+ */
+function rebuildParagraphChildrenWithInert(
+  chunks: ReadonlyArray<ParagraphChunk>,
+  flatNextEntries: ReadonlyArray<RunEntry>,
+  changedChunkIndex: number,
+): ReadonlyArray<ParagraphChild> {
+  const originalTotal = chunks.reduce((sum, chunk) => sum + (chunk.kind === 'editable' ? chunk.entries.length : 0), 0)
+  const delta = flatNextEntries.length - originalTotal
+
+  const result: ParagraphChild[] = []
+  let cursor = 0
+
+  chunks.forEach((chunk, index) => {
+    if (chunk.kind === 'inert') {
+      result.push(chunk.node)
+      return
+    }
+
+    const length = index === changedChunkIndex ? chunk.entries.length + delta : chunk.entries.length
+    const slice = flatNextEntries.slice(cursor, cursor + length)
+    cursor += length
+    result.push(...buildParagraphChildren(slice))
+  })
+
+  return freezeArray(result)
 }
 
 /**
