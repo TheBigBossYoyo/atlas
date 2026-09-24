@@ -1316,6 +1316,61 @@ function DocxEditor({
    * extends), double-click selects the word, triple-click the paragraph, and
    * dragging extends from the mousedown anchor.
    */
+  /**
+   * DOCX-2 — the actual mapping from a click's client point to a model
+   * position (below) is pure geometry (`getBoundingClientRect()` over
+   * `.docx-page__line`/run elements), which is unaffected by an ancestor's
+   * CSS clipping/scroll — unlike the browser's own native hit-testing
+   * (`elementFromPoint`), which is. When the page renders wider than the
+   * `.docx-viewer__surface` scrollport (e.g. once the Comments panel narrows
+   * the available width), part of a line can fall into a clipped dead zone:
+   * a click there never reaches `editorRootRef`'s subtree at all (its native
+   * event target is an ancestor, e.g. `.docx-viewer__workspace`, not a
+   * descendant), so `onMouseDown` bound only to the surface never fires,
+   * `range` is never updated, and every following keystroke silently no-ops
+   * behind `Input.ts`'s `range === null` guard — with focus/selection
+   * already sitting wherever they were before the click (often the
+   * document's very start from initial mount), giving zero visual
+   * indication anything is wrong. Splitting the resolution logic out lets
+   * `handleWorkspaceMouseDown` (below) run the exact same geometry-based
+   * lookup for that dead-zone case — it doesn't need the click to have
+   * physically landed inside `root`'s clipped box, only `root` itself as the
+   * element to search and focus.
+   */
+  const resolveClickPosition = useCallback(
+    (root: HTMLElement, clientX: number, clientY: number, detail: number, shiftKey: boolean): void => {
+      root.focus({ preventScroll: true })
+      verticalGoalXRef.current = null
+
+      if (detail >= 3) {
+        const paragraph = paragraphRangeFromClientPoint(clientX, clientY, root, documentModel)
+        dragAnchorRef.current = null
+        if (paragraph !== null) {
+          setRange(paragraph)
+        }
+        return
+      }
+
+      if (detail === 2) {
+        const word = wordRangeFromClientPoint(clientX, clientY, root, documentModel)
+        dragAnchorRef.current = null
+        if (word !== null) {
+          setRange(word)
+        }
+        return
+      }
+
+      const position = positionFromClientPoint(clientX, clientY, root, documentModel)
+      if (position === null) {
+        return
+      }
+      const anchor = shiftKey && range !== null ? range.anchor : position
+      dragAnchorRef.current = anchor
+      setRange({ anchor, focus: position })
+    },
+    [documentModel, range],
+  )
+
   const handleSurfaceMouseDown = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       const root = editorRootRef.current
@@ -1328,37 +1383,82 @@ function DocxEditor({
       }
 
       event.preventDefault()
-      root.focus({ preventScroll: true })
-      verticalGoalXRef.current = null
-
-      if (event.detail >= 3) {
-        const paragraph = paragraphRangeFromClientPoint(event.clientX, event.clientY, root, documentModel)
-        dragAnchorRef.current = null
-        if (paragraph !== null) {
-          setRange(paragraph)
-        }
-        return
-      }
-
-      if (event.detail === 2) {
-        const word = wordRangeFromClientPoint(event.clientX, event.clientY, root, documentModel)
-        dragAnchorRef.current = null
-        if (word !== null) {
-          setRange(word)
-        }
-        return
-      }
-
-      const position = positionFromClientPoint(event.clientX, event.clientY, root, documentModel)
-      if (position === null) {
-        return
-      }
-      const anchor = event.shiftKey && range !== null ? range.anchor : position
-      dragAnchorRef.current = anchor
-      setRange({ anchor, focus: position })
+      resolveClickPosition(root, event.clientX, event.clientY, event.detail, event.shiftKey)
     },
-    [documentModel, range],
+    [resolveClickPosition],
   )
+
+  /**
+   * DOCX-2 fallback — a NATIVE listener on `containerRef.current` (the outer
+   * `.docx-viewer`), not a React `onMouseDown` prop. `containerRef`'s own
+   * `<div>` is owned by the parent `DocxViewerBase` component, one or more
+   * DOM levels OUTSIDE everything this component renders — the actual
+   * clickable/scrollable box of `.docx-viewer__surface` (and its child
+   * `.docx-viewer__workspace`) can start well inside the page's own
+   * left/right edges once the page renders wider than the available column,
+   * e.g. with the Comments panel open (see `resolveClickPosition`'s doc
+   * comment), and the resulting click's native event TARGET is
+   * `.docx-viewer` itself, an ANCESTOR of everything this component owns —
+   * never a DESCENDANT of it. React's synthetic event system only invokes a
+   * handler on an element that is the target or one of the target's
+   * ancestors *in the React tree*; attaching a JSX `onMouseDown` to any
+   * `<div>` this component renders (all of them are DESCENDANTS of
+   * `.docx-viewer`) can never fire for that click. A real
+   * `addEventListener` on the actual DOM node has no such restriction.
+   *
+   * Only acts when the native click target is NOT inside the surface at all
+   * (the dead-zone case) AND is not inside any of the other, non-editor UI
+   * `.docx-viewer` also contains (toolbar, header/footer panel, Comments
+   * panel, dialogs, menus) — so a normal click on rendered text is handled
+   * exactly once, by `handleSurfaceMouseDown`, and a click on the
+   * toolbar/Comments panel/a dialog is left entirely alone. Word's own
+   * behavior: a click anywhere on the page places the caret at the nearest
+   * real position; this is that, plus it guarantees the editor is never left
+   * "looks focused but range is null" after a click.
+   */
+  const nonEditorUiSelector = [
+    'button',
+    'input',
+    'select',
+    'textarea',
+    '[role="separator"]',
+    '[role="dialog"]',
+    '[data-resize-handle]',
+    '.docx-table-resize-handle',
+    '.docx-viewer__topbar',
+    '.docx-viewer__header-footer',
+    '.comments-pane',
+    '.docx-toolbar__popover',
+    '.docx-viewer__context-menu',
+    '.docx-viewer__context-menu-overlay',
+    '.modal-backdrop',
+    '.docx-viewer__error',
+    '.docx-viewer__field-status',
+  ].join(', ')
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (container === null) {
+      return undefined
+    }
+
+    const handleContainerMouseDown = (event: MouseEvent): void => {
+      const root = editorRootRef.current
+      const target = event.target as HTMLElement | null
+      if (event.button !== 0 || root === null || target === null || root.contains(target)) {
+        return
+      }
+      if (target.closest(nonEditorUiSelector) !== null) {
+        return
+      }
+
+      event.preventDefault()
+      resolveClickPosition(root, event.clientX, event.clientY, event.detail, event.shiftKey)
+    }
+
+    container.addEventListener('mousedown', handleContainerMouseDown)
+    return () => container.removeEventListener('mousedown', handleContainerMouseDown)
+  }, [containerRef, nonEditorUiSelector, resolveClickPosition])
 
   useEffect(() => {
     const handleMove = (event: MouseEvent): void => {
@@ -1629,10 +1729,25 @@ function DocxEditor({
         return
       }
 
+      // DOCX-2 — the editor must never silently swallow a keystroke just
+      // because `range` state hasn't caught up with a real, valid native
+      // selection (e.g. a click resolved outside this component's own
+      // pointer handlers, or any other path that left state stale). Before
+      // giving up, re-read the DOM directly one time as a last resort —
+      // cheap, and far better than a keystroke vanishing with no feedback.
+      const effectiveRange = range ?? (() => {
+        const root = editorRootRef.current
+        const resynced = root === null ? null : getSelectionFromDom(root, documentModel)
+        if (resynced !== null) {
+          setRange(resynced)
+        }
+        return resynced
+      })()
+
       const applied = applyResult(
         handleBeforeInput(nativeEvent, {
           document: documentModel,
-          range,
+          range: effectiveRange,
           history: historyRef.current,
           trackChanges: getTrackChanges(),
         }),

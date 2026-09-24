@@ -1967,4 +1967,46 @@ describe('DocxViewer editor — DOCX-1 vertical caret movement', () => {
     expect(selection?.isCollapsed).toBe(true)
     expect(selectionParagraphPath()).toBe('11')
   })
+
+  // DOCX-2 — a click that lands outside the `.docx-viewer__surface` subtree
+  // entirely (e.g. because the page renders wider than the surface's own
+  // visible column, a real layout condition confirmed against the actual app
+  // with the Comments panel open) never reached `handleSurfaceMouseDown`
+  // (its `onMouseDown` only fires for a target that is the surface or one of
+  // its DESCENDANTS), so `range` was left stale/null while focus and the
+  // native selection looked perfectly normal — every following keystroke
+  // then silently no-opped behind `Input.ts`'s `range === null` guard. Fixed
+  // by a native `mousedown` listener on the outer `.docx-viewer` container
+  // (see its own doc comment in DocxViewer.tsx), which still resolves the
+  // click via the exact same geometry-based `positionFromClientPoint` a
+  // normal click uses.
+  it('DOCX-2: a mousedown whose target is the outer .docx-viewer (not a descendant of the surface) still places the caret', async () => {
+    const editor = await renderEditor()
+    const { lines } = mountVerticalCaretLines()
+    const container = editor.closest('.docx-viewer') as HTMLElement
+    expect(container).not.toBeNull()
+    expect(container.contains(editor)).toBe(true)
+
+    const rect0 = lines[0].getBoundingClientRect()
+    // Fired on `container` itself, not `editor` (the surface) — the event's
+    // native `target` is `container`, exactly the CSS dead-zone shape: a
+    // click whose target is an ANCESTOR of the surface, not a descendant.
+    fireEvent.mouseDown(container, { button: 0, clientX: rect0.left, clientY: rect0.top + rect0.height / 2 })
+
+    expect(selectionParagraphPath()).toBe('10')
+    expect(document.activeElement).toBe(editor)
+  })
+
+  it("DOCX-2: a mousedown on the outer container's own Save button is left alone (not hijacked into a caret placement)", async () => {
+    const editor = await renderEditor()
+    mountVerticalCaretLines()
+    const container = editor.closest('.docx-viewer') as HTMLElement
+    const saveButton = screen.getByRole('button', { name: 'Save' })
+    expect(container.contains(saveButton)).toBe(true)
+
+    fireEvent.mouseDown(saveButton, { button: 0, clientX: 1, clientY: 1 })
+
+    // No selection was created from this click landing on a real control.
+    expect(selectionParagraphPath()).toBeNull()
+  })
 })
