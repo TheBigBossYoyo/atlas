@@ -497,6 +497,42 @@ a bare `w:oMath`. Typing in a paragraph that merely *contains* a comment or a
 formula is an everyday action. Proven by three `toThrow()` assertions in the
 corpus suite. What the user actually sees was not determined.
 
+### 2026-09-24 — the CI red on `95a28a8` was F6 regressing on a slow CPU
+
+**F6b · high (silent data loss) · fixed** — the 3.7.0 F6 fix held only on a fast
+machine. With the renderer CPU-throttled through CDP
+(`Emulation.setCPUThrottlingRate`), click a cell, type "HELLO", save: the bytes
+held `"ELLO"` in 3 of 4 trials at 4-8x, and `"Name"` (the cell untouched, the
+exact CI failure) at 0ms/char. The unthrottled 48/48 probe could not see it.
+Cause, from a keydown/focusin trace: glide-data-grid's pointer-down handler
+`preventDefault()`s the browser's focus move and focuses the grid one
+`requestAnimationFrame` later; until then keys go to `<body>` and are lost.
+The F6 seed buffer never saw them, because the grid never did.
+
+Tried and rejected: focusing the canvas on mouse-down. That frame is also
+when the click's selection takes effect: keys delivered earlier hit a grid
+with no selection (click, ArrowRight, ArrowDown x2, "42" put 42 in A1;
+caught by `spreadsheet-editor.spec.ts`). The fix (`src/viewers/shared/keyHold.ts`)
+holds keystrokes from a grid click until the grid owns focus, then replays
+them in order, one per task, with a 250ms fallback if glide's frame never
+comes. Proof: the new throttled e2e tests fail on the unpatched build
+(`"Name"`, `"ELLO"`, `"ELLO,value"`) and pass after; a 24-trial throttled probe
+went from 3/4 wrong to 24/24 correct.
+
+Not proven: why the CI runner's frame was late even with a 1000ms pause after
+the click. CI kept no e2e output, so the workflow now uploads `test-results/`
+when e2e fails. The spec also now waits on the file's mtime instead of a fixed
+1500ms sleep, and prints every saved cell on failure, so "never saved", "edit
+lost" and "wrong cell" fail differently.
+
+**TEST-11 · OPEN** — `App.shellSession.test.tsx` › "a background Save As that
+resolves onto the currently-active tab's path…" failed on CI (`9987bfd`,
+ubuntu unit job): the editor showed `# A (background save…)` where `# B` was
+expected. Passes 3/3 alone locally and on the previous CI run. Same App-shell
+load-sensitive cluster as TEST-9/10; one of those was a real bug, so this
+needs a real investigation (is the active tab's content ever replaced by a
+background Save As in the real app?), not a retry.
+
 ### New items found while executing batch 3
 
 **QUIT-DRAFT-1 · medium** — a discard at *quit* still leaves the autosave draft behind.
