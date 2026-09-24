@@ -4,7 +4,7 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
-import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx'
+import { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableLayoutType, TableRow, TextRun } from 'docx'
 
 /**
  * DOCX-1 — ArrowUp/ArrowDown/PageUp/PageDown silently teleported the
@@ -41,6 +41,50 @@ async function createFixture(): Promise<string> {
   })
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-docx-vertical-caret-'))
   const file = path.join(dir, 'vertical-caret.docx')
+  fs.writeFileSync(file, await Packer.toBuffer(doc))
+  return file
+}
+
+// Enough paragraphs, each padded long enough to wrap onto several visual
+// lines, that the document is guaranteed to spill onto a second page
+// regardless of the exact page size/margins Atlas renders with — verifying
+// DOCX-1's fix actually crosses a `.docx-page` boundary, not just a
+// paragraph boundary within one page.
+async function createMultiPageFixture(): Promise<string> {
+  const filler = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar. '
+  const paragraphs = Array.from(
+    { length: 40 },
+    (_unused, index) => new Paragraph({ children: [new TextRun(`Paragraph ${index} ${filler.repeat(3)}`)] }),
+  )
+  const doc = new Document({ sections: [{ children: paragraphs }] })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-docx-vertical-caret-multipage-'))
+  const file = path.join(dir, 'multipage.docx')
+  fs.writeFileSync(file, await Packer.toBuffer(doc))
+  return file
+}
+
+async function createTableFixture(): Promise<string> {
+  const cell = (text: string) => new TableCell({ children: [new Paragraph({ children: [new TextRun(text)] })] })
+  const doc = new Document({
+    sections: [
+      {
+        children: [
+          new Paragraph({ children: [new TextRun('Intro paragraph before the table.')] }),
+          new Table({
+            columnWidths: [3000, 3000, 3000],
+            layout: TableLayoutType.FIXED,
+            rows: [
+              new TableRow({ children: [cell('A1'), cell('B1'), cell('C1')] }),
+              new TableRow({ children: [cell('A2'), cell('B2'), cell('C2')] }),
+            ],
+          }),
+          new Paragraph({ children: [new TextRun('Paragraph after the table.')] }),
+        ],
+      },
+    ],
+  })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-docx-vertical-caret-table-'))
+  const file = path.join(dir, 'table.docx')
   fs.writeFileSync(file, await Packer.toBuffer(doc))
   return file
 }
@@ -216,6 +260,99 @@ test('DOCX-1: Shift+ArrowDown extends the selection instead of collapsing it', a
     // the document's end.
     expect(selectionText.length).toBeGreaterThan(0)
     expect(selectionText).toContain('Paragraph one')
+  } finally {
+    kill(app)
+  }
+})
+
+test('DOCX-1: ArrowDown repeated enough times crosses a real page boundary and lands on page 2', async () => {
+  const fixture = await createMultiPageFixture()
+  const { app, page } = await launch(fixture)
+  try {
+    const pageCountBefore = await page.locator('.docx-page').count()
+    expect(pageCountBefore).toBeGreaterThan(1)
+
+    const p0 = page.locator('[data-paragraph-path="0"]').first()
+    const box = await p0.boundingBox()
+    if (box === null) throw new Error('paragraph 0 has no bounding box')
+    await page.mouse.click(box.x + 10, box.y + box.height / 2)
+    await page.waitForTimeout(150)
+
+    // Repeatedly press ArrowDown until the caret's own client rect sits
+    // inside the SECOND `.docx-page` element — real vertical movement,
+    // line by line, across the page break, not a jump to the doc's end.
+    let landedOnPageTwo = false
+    for (let i = 0; i < 200; i += 1) {
+      await page.keyboard.press('ArrowDown')
+      const onPageTwo = await page.evaluate(() => {
+        const pages = Array.from(document.querySelectorAll('.docx-page'))
+        const sel = window.getSelection()
+        const node = sel?.focusNode
+        if (pages.length < 2 || !node) return false
+        return pages[1].contains(node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element))
+      })
+      if (onPageTwo) {
+        landedOnPageTwo = true
+        break
+      }
+    }
+    expect(landedOnPageTwo).toBe(true)
+
+    await page.keyboard.type('PAGE2MARK', { delay: 20 })
+    await page.waitForTimeout(200)
+    const xml = await saveAndReadDocumentXml(page, fixture)
+    expect(xml).toContain('PAGE2MARK')
+    // Must NOT have landed at the very end of the document (the pre-fix
+    // teleport-to-end bug) — the marker sits well before the last paragraph.
+    expect(xml.indexOf('PAGE2MARK')).toBeLessThan(xml.indexOf('Paragraph 39'))
+  } finally {
+    kill(app)
+  }
+})
+
+test('DOCX-1: ArrowDown moves the caret into a table cell below, and out the other side', async () => {
+  const fixture = await createTableFixture()
+  const { app, page } = await launch(fixture)
+  try {
+    // Click into the intro paragraph, immediately above the table.
+    const intro = page.locator('[data-paragraph-path="0"]').first()
+    const introBox = await intro.boundingBox()
+    if (introBox === null) throw new Error('intro paragraph has no bounding box')
+    await page.mouse.click(introBox.x + 10, introBox.y + introBox.height / 2)
+    await page.waitForTimeout(150)
+
+    await page.keyboard.press('ArrowDown')
+    await page.waitForTimeout(150)
+    await page.keyboard.type('INTABLE', { delay: 20 })
+    await page.waitForTimeout(200)
+
+    const cellText = await page.evaluate(() => {
+      const table = document.querySelector('.docx-page__table')
+      const td = Array.from(table?.querySelectorAll('td') ?? []).find((c) => c.textContent?.includes('INTABLE'))
+      return td?.textContent ?? null
+    })
+    expect(cellText).not.toBeNull()
+    // The A1 cell's original text was "A1" — the typed marker lands
+    // somewhere inside it (exact caret offset isn't the point here, landing
+    // in the right cell is), so "A1" surrounds "INTABLE" rather than being
+    // adjacent to it.
+    expect(cellText).toMatch(/^A.*INTABLE.*1$/)
+
+    // From inside the first row, ArrowDown enough times should reach the
+    // paragraph after the table (out the other side), not skip past it.
+    for (let i = 0; i < 10; i += 1) {
+      await page.keyboard.press('ArrowDown')
+      await page.waitForTimeout(80)
+    }
+    await page.keyboard.type('AFTERTABLE', { delay: 20 })
+    await page.waitForTimeout(200)
+
+    const xml = await saveAndReadDocumentXml(page, fixture)
+    expect(xml).toContain('INTABLE')
+    expect(xml).toContain('AFTERTABLE')
+    // The after-table marker must land after the in-table one in document
+    // order (moving further down, not teleporting to the doc's start/end).
+    expect(xml.indexOf('AFTERTABLE')).toBeGreaterThan(xml.indexOf('INTABLE'))
   } finally {
     kill(app)
   }
