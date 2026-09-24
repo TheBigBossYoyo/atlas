@@ -254,6 +254,23 @@ describe('electron/main.cjs IPC handlers', () => {
       const result = handler('open-file-by-path')(ALLOWED_EVENT, filePath) as { content: string } | null
       expect(result?.content).toBe('# Notes')
     })
+
+    // NIGHT/text-roundtrip — SHELL-1/SHELL-2: `open-file-by-path` (and every
+    // other read path funneling through `readMarkdownFile`) must report the
+    // file's encoding/BOM/newline so a later `save-file` can reproduce it.
+    it('reports meta for a CRLF file with a UTF-8 BOM', async () => {
+      const filePath = path.join(tempDir, 'crlf-bom.md')
+      fs.writeFileSync(filePath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# Title\r\n\r\nBody\r\n', 'utf-8')]))
+      mocks.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [filePath] })
+      await handler('dialog:openFileBinary')(ALLOWED_EVENT)
+
+      const result = handler('open-file-by-path')(ALLOWED_EVENT, filePath) as {
+        content: string
+        meta?: { encoding: string; bom: boolean; newline: string }
+      } | null
+      expect(result?.content).toBe('# Title\n\nBody\n')
+      expect(result?.meta).toEqual({ encoding: 'utf-8', bom: true, newline: 'crlf' })
+    })
   })
 
   describe('path:register-dropped', () => {
@@ -329,6 +346,43 @@ describe('electron/main.cjs IPC handlers', () => {
       expect(result.saved).toBe(true)
       expect(mocks.dialog.showSaveDialog).not.toHaveBeenCalled()
       expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content')
+    })
+
+    // NIGHT/text-roundtrip — SHELL-1/SHELL-2 fix: `req.meta` reapplies the
+    // source file's encoding/BOM/newline convention instead of always
+    // writing BOM-less UTF-8 with `\n` line endings.
+    it('reapplies CRLF and a UTF-8 BOM when req.meta says so (SHELL-1/SHELL-2)', async () => {
+      const filePath = path.join(tempDir, 'roundtrip.md')
+      fs.writeFileSync(filePath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('# Title\r\n\r\nLine one.\r\n', 'utf-8')]))
+      mocks.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [filePath] })
+      await handler('dialog:openFileBinary')(ALLOWED_EVENT)
+
+      const result = (await handler('save-file')(ALLOWED_EVENT, {
+        content: '# Title\n\nLine one.\nExtra line appended.',
+        suggestedName: 'roundtrip.md',
+        existingPath: filePath,
+        meta: { encoding: 'utf-8', bom: true, newline: 'crlf' },
+      })) as { saved: boolean }
+
+      expect(result.saved).toBe(true)
+      const raw = fs.readFileSync(filePath)
+      expect(raw.subarray(0, 3)).toEqual(Buffer.from([0xef, 0xbb, 0xbf]))
+      expect(raw.toString('utf-8')).toBe('﻿# Title\r\n\r\nLine one.\r\nExtra line appended.')
+    })
+
+    it('writes plain BOM-less UTF-8 with LF when req.meta is omitted (unchanged default)', async () => {
+      const filePath = path.join(tempDir, 'no-meta.md')
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath })
+
+      const result = (await handler('save-file')(ALLOWED_EVENT, {
+        content: 'a\nb',
+        suggestedName: 'no-meta.md',
+      })) as { saved: boolean }
+
+      expect(result.saved).toBe(true)
+      const raw = fs.readFileSync(filePath)
+      expect(raw.subarray(0, 3)).not.toEqual(Buffer.from([0xef, 0xbb, 0xbf]))
+      expect(raw.toString('utf-8')).toBe('a\nb')
     })
 
     it('falls back to the save dialog for a non-allowlisted existingPath', async () => {

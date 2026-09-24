@@ -9,7 +9,7 @@ const { listSystemFontFamilies } = require('./lib/systemFonts.cjs');
 const { createCodeRunner, runtimeFor: runCodeRuntimeFor } = require('./lib/codeRunner.cjs');
 const { atomicWriteFile, FileLockedError, classifyWriteError, classifyWriteErrorCode } = require('./lib/atomicWrite.cjs');
 const { printHtmlToPdfBuffer, PrintToPdfError } = require('./lib/printToPdf.cjs');
-const { decodeTextBuffer } = require('./lib/textDecoding.cjs');
+const { decodeTextBufferWithMeta, encodeTextBuffer } = require('./lib/textDecoding.cjs');
 const { buildContentSecurityPolicy } = require('./lib/csp.cjs');
 const { logToFile } = require('./lib/crashLog.cjs');
 const { FileTooLargeError, assertFileSizeAllowed } = require('./lib/fileSizeGuard.cjs');
@@ -380,16 +380,21 @@ function extractFilePath(argv) {
  * failure (matching the previous behavior of every caller); propagates
  * `FileTooLargeError` so the interactive open flows can surface a friendly
  * message instead of a silent no-op.
+ *
+ * NIGHT/text-roundtrip — `meta` (encoding/BOM/newline, see
+ * `lib/textDecoding.cjs`) rides alongside `content` so a later `save-file`
+ * can reproduce the file's original byte shape instead of silently
+ * re-encoding it as BOM-less UTF-8 (SHELL-1/SHELL-2).
  * @param {string} filePath
- * @returns {{ content: string; name: string; path: string } | null}
+ * @returns {{ content: string; name: string; path: string; meta: import('./lib/textDecoding.d.cts').TextFileMeta } | null}
  */
 function readMarkdownFile(filePath) {
   try {
     assertFileSizeAllowed(filePath);
     const buffer = fs.readFileSync(filePath);
-    const content = decodeTextBuffer(buffer);
+    const { content, meta } = decodeTextBufferWithMeta(buffer);
     const name = path.basename(filePath);
-    return { content, name, path: filePath };
+    return { content, name, path: filePath, meta };
   } catch (err) {
     if (err instanceof FileTooLargeError) {
       throw err;
@@ -1088,10 +1093,29 @@ ipcMain.handle('save-file', async (event, req) => {
     targetPath = result.filePath;
   }
 
+  // NIGHT/text-roundtrip — `req.meta` (encoding/BOM/newline, see
+  // `lib/textDecoding.cjs`) is optional so every existing/unowned caller
+  // that only ever sends `{ content, suggestedName, ... }` (e.g. the
+  // CSV/TSV save path in `useSpreadsheetEditor.ts`) keeps writing plain
+  // BOM-less UTF-8 exactly as before. When present, encode to the file's
+  // original byte shape instead (SHELL-1/SHELL-2 fix).
+  let bytesToWrite = req.content;
+  let encodingFallback = false;
+  if (req.meta && typeof req.meta === 'object') {
+    const encoded = encodeTextBuffer(req.content, req.meta);
+    bytesToWrite = encoded.buffer;
+    encodingFallback = encoded.encodingFallback;
+  }
+
   try {
-    atomicWriteFile(targetPath, req.content);
+    atomicWriteFile(targetPath, bytesToWrite);
     trustPath(targetPath);
-    return { saved: true, path: targetPath, name: path.basename(targetPath) };
+    return {
+      saved: true,
+      path: targetPath,
+      name: path.basename(targetPath),
+      ...(encodingFallback ? { encodingFallback: true } : {}),
+    };
   } catch (err) {
     logMainEvent('ERROR', 'save-file failed', err);
     return {

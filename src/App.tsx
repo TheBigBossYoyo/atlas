@@ -58,6 +58,7 @@ import { LocaleProvider, useTranslate } from './i18n';
 import { translateWriteError } from './i18n/translateWriteError';
 import { useToast } from './hooks/useToast';
 import { scrollIntoViewRespectingMotionPreference } from './utils/motionPreference';
+import { getTextFileMeta, carryTextFileMeta } from './utils/textDecoding';
 
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
@@ -430,13 +431,26 @@ function AppShell() {
     // write failure (surfaced with a generic fallback when main didn't
     // supply a more specific reason).
     const hadExistingPath = Boolean(filePath);
+    // NIGHT/text-roundtrip — reapply this document's source encoding/BOM/
+    // newline convention (SHELL-1/SHELL-2) instead of always writing
+    // BOM-less UTF-8 with whatever newlines the `<textarea>` normalized to.
+    // A brand-new/untracked path falls back to today's defaults (plain
+    // UTF-8, no BOM, LF) via `getTextFileMeta`.
+    const savingMeta = getTextFileMeta(filePath || '');
     const result = await window.electronAPI.saveFile({
       content: savingContent,
       suggestedName: fileName ?? 'document.md',
       existingPath: filePath || undefined,
+      meta: savingMeta,
     });
     const stillShowing = fileIdentityKeyRef.current === savingIdentityKey;
     if (result.saved) {
+      // Save As to a new file keeps the source's conventions (per this
+      // fix's spec) — carry the meta forward to the new path before
+      // `followSavedPath`/`applySavedPathToInactiveTab` switch the session
+      // over to it, so the NEXT save (which reads by the new path) still
+      // finds it.
+      if (result.path) carryTextFileMeta(filePath || '', result.path);
       if (stillShowing) {
         setIsDirty(false);
         setSaveError(null);
@@ -499,12 +513,19 @@ function AppShell() {
     const savingFile = file;
     const savingIdentityKey = fileIdentityKey;
     const savingContent = localMarkdown;
+    // NIGHT/text-roundtrip — see `saveFile`'s identical comment. "Save As to
+    // a new file keeps the source's conventions" (this fix's spec): reapply
+    // the CURRENTLY-open file's meta, then carry it to the chosen new path
+    // below on success.
+    const savingMeta = getTextFileMeta(filePath || '');
     const result = await window.electronAPI.saveFile({
       content: savingContent,
       suggestedName: fileName ?? 'document.md',
+      meta: savingMeta,
     });
     const stillShowing = fileIdentityKeyRef.current === savingIdentityKey;
     if (result.saved) {
+      if (result.path) carryTextFileMeta(filePath || '', result.path);
       if (stillShowing) {
         setIsDirty(false);
         setSaveError(null);
@@ -521,7 +542,7 @@ function AppShell() {
       setSaveError(translateWriteError(t, result));
     }
     return false;
-  }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, followSavedPath, isMarkdownDocument, localMarkdown, t]);
+  }, [applySavedPathToInactiveTab, file, fileIdentityKey, fileName, filePath, followSavedPath, isMarkdownDocument, localMarkdown, t]);
   // (viewerSaveAsRef is a stable ref identity, so it's intentionally left
   // out of the dependency array above, matching viewerSaveRef's usage in
   // saveFile.)

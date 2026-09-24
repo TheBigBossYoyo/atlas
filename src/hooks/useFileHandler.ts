@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { LoadedFile, FormatId } from '../formats/types';
 import { detectByExtension, detectByMagic, looksLikeText } from '../formats/detect';
-import { decodeTextBuffer } from '../utils/textDecoding';
+import { decodeTextBufferWithMeta, setTextFileMeta } from '../utils/textDecoding';
 import type { RecentFile } from '../types';
 import { t } from '../i18n';
 
@@ -219,15 +219,26 @@ export function useFileHandler({
           // Open dialog's own IPC handler reads the file to return it
           // alongside the chosen path); decode locally instead of asking
           // main to read the same file from disk a second time.
+          //
+          // NIGHT/text-roundtrip — `decodeTextBufferWithMeta` also detects
+          // the file's encoding/BOM/newline convention so a later save can
+          // reproduce it (SHELL-1/SHELL-2); recorded in the path-keyed
+          // registry since `LoadedFile` itself carries no such field.
+          const { content, meta } = decodeTextBufferWithMeta(prefetchedBuffer);
+          setTextFileMeta(absPath, meta);
           loaded = {
             kind: 'text',
-            content: decodeTextBuffer(prefetchedBuffer),
+            content,
             path: absPath,
             format: extFormat,
           };
         } else {
           const data = await electronAPI.openFileByPath(absPath);
           if (!data) throw new Error(fileNotFoundError());
+          // NIGHT/text-roundtrip — main's `readMarkdownFile` already detected
+          // `meta` (see `electron/main.cjs`); record it the same way as the
+          // prefetched-buffer branch above.
+          if (data.meta) setTextFileMeta(absPath, data.meta);
           loaded = {
             kind: 'text',
             content: data.content,
@@ -272,9 +283,13 @@ export function useFileHandler({
           // P2.11/LOAD-10 — an extensionless plain-text file (README,
           // LICENSE, Dockerfile, .gitignore) gets a real text viewer
           // instead of the generic "unknown format" empty state.
+          // NIGHT/text-roundtrip — same metadata tracking as the TEXT_CLASS
+          // branch above, so this file's Ctrl+S round-trips too.
+          const { content, meta } = decodeTextBufferWithMeta(buffer);
+          setTextFileMeta(absPath, meta);
           loaded = {
             kind: 'text',
-            content: decodeTextBuffer(buffer),
+            content,
             path: absPath,
             format: 'text',
           };

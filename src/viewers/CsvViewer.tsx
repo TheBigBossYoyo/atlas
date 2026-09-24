@@ -27,6 +27,14 @@ const LazyDataEditor = lazy(async () => {
 type CsvData = {
   rows: string[][]
   colCount: number
+  /**
+   * NIGHT/text-roundtrip — SHEET-6 fix. The delimiter Papa Parse actually
+   * detected/used for THIS file (e.g. `;` for a semicolon-delimited CSV),
+   * not necessarily the format's nominal default. Threaded through to the
+   * save target below so a semicolon-delimited `.csv` is saved back with a
+   * semicolon instead of silently being rewritten as comma-delimited.
+   */
+  delimiter: string
 }
 
 type LoadState =
@@ -39,10 +47,13 @@ const CSV_SAVE_FORMATS = [
   { id: 'tsv', labelKey: 'csv.format.tsv' },
 ] as const
 
-function targetFor(formatId: string): SpreadsheetSaveTarget {
+const DEFAULT_DELIMITER_FOR_FORMAT: Readonly<Record<string, string>> = { tsv: '\t', csv: ',' }
+
+function targetFor(formatId: string, delimiter?: string): SpreadsheetSaveTarget {
+  const resolvedDelimiter = delimiter ?? DEFAULT_DELIMITER_FOR_FORMAT[formatId] ?? ','
   return formatId === 'tsv'
-    ? { kind: 'delimited', delimiter: '\t', extension: 'tsv', filterName: 'Tab-Separated Values' }
-    : { kind: 'delimited', delimiter: ',', extension: 'csv', filterName: 'Comma-Separated Values' }
+    ? { kind: 'delimited', delimiter: resolvedDelimiter, extension: 'tsv', filterName: 'Tab-Separated Values' }
+    : { kind: 'delimited', delimiter: resolvedDelimiter, extension: 'csv', filterName: 'Comma-Separated Values' }
 }
 
 function CsvViewerBase({ file }: ViewerProps) {
@@ -81,7 +92,13 @@ function CsvViewerBase({ file }: ViewerProps) {
         }
         const rows = result.data
         const colCount = rows.reduce((max: number, row: string[]) => Math.max(max, row.length), 0)
-        setState({ status: 'ready', data: { rows, colCount } })
+        // SHEET-6 — `result.meta.delimiter` is what Papa actually detected
+        // (auto-detected for `.csv`, or the forced `'\t'` for `.tsv` above),
+        // not necessarily the format's nominal default; falls back to the
+        // format default only in the pathological case of a single-column/
+        // single-row file where Papa reports an empty delimiter.
+        const detectedDelimiter = result.meta.delimiter || (file.format === 'tsv' ? '\t' : ',')
+        setState({ status: 'ready', data: { rows, colCount, delimiter: detectedDelimiter } })
       } catch (err) {
         if (!cancelled) {
           setState({ status: 'error', error: err instanceof Error ? err.message : String(err) })
@@ -105,7 +122,13 @@ function CsvViewerBase({ file }: ViewerProps) {
     [data],
   )
 
-  const defaultTarget = useMemo<SpreadsheetSaveTarget>(() => targetFor(file.format === 'tsv' ? 'tsv' : 'csv'), [file.format])
+  // SHEET-6 — use the delimiter actually detected in the loaded file (once
+  // known) instead of the format's nominal default, so a semicolon-
+  // delimited `.csv` saves back with a semicolon.
+  const defaultTarget = useMemo<SpreadsheetSaveTarget>(
+    () => targetFor(file.format === 'tsv' ? 'tsv' : 'csv', data?.delimiter),
+    [file.format, data?.delimiter],
+  )
 
   const editor = useSpreadsheetEditor(initialDocument, file.path, defaultTarget)
   const sheet = editor.document.sheets[0]

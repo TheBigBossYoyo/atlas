@@ -1,14 +1,18 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 /** @typedef {'light' | 'dark' | 'sepia' | 'nord' | 'dracula'} Theme */
-/** @typedef {{ content: string; name: string; path: string }} ElectronFileData */
+/** @typedef {{ content: string; name: string; path: string; meta?: import('./lib/textDecoding.d.cts').TextFileMeta }} ElectronFileData */
 /** @typedef {{ name: string; extensions: string[] }} DialogFilter */
 /**
+ * NIGHT/text-roundtrip — `meta` (encoding/BOM/newline) is optional so a
+ * caller that doesn't track it (e.g. the CSV/TSV save path) keeps writing
+ * plain BOM-less UTF-8 exactly as before.
  * @typedef {{
  *   content: string;
  *   suggestedName: string;
  *   filters?: DialogFilter[];
  *   existingPath?: string;
+ *   meta?: import('./lib/textDecoding.d.cts').TextFileMeta;
  * }} SaveFileRequest
  */
 /**
