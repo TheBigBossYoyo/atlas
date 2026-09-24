@@ -71,8 +71,24 @@ export function bookTypeForExtension(ext: string): XLSX.BookType {
 
 type TypedCellValue = { readonly t: 'n'; readonly v: number } | { readonly t: 's'; readonly v: string }
 
-/** Re-types a cell's current display text: a whole numeric string becomes a number cell, anything else (including an empty string, handled by the caller) a string cell. */
-function typeCellText(text: string): TypedCellValue {
+/**
+ * Re-types a cell's current display text: a whole numeric string becomes a
+ * number cell, anything else (including an empty string, handled by the
+ * caller) a string cell.
+ *
+ * SHEET-3 — a leading `'` (Excel's own "force text" quote prefix) always
+ * makes the value text, stripped of the quote itself (`'007` saves as the
+ * text `"007"`, never the number `7`), matching `xlsxPassthrough.ts`'s own
+ * `buildCell`. Only that half of SHEET-3 applies here: this writer builds a
+ * brand-new workbook with no per-cell styles at all (see this module's own
+ * header), so there is no existing `@` (text-formatted) cell to check for
+ * the other half. `forFormula` skips the quote-prefix rule for a formula
+ * cell's own (computed, never user-typed) display text.
+ */
+function typeCellText(text: string, forFormula = false): TypedCellValue {
+  if (!forFormula && text.startsWith("'")) {
+    return { t: 's', v: text.slice(1) }
+  }
   const trimmed = text.trim()
   if (trimmed !== '' && Number.isFinite(Number(trimmed))) {
     return { t: 'n', v: Number(trimmed) }
@@ -92,7 +108,7 @@ function buildWorksheet(sheet: EditableSheet): XLSX.WorkSheet {
       if (text === '' && formula === undefined) continue // a genuinely blank cell — no entry at all
 
       const addr = XLSX.utils.encode_cell({ r, c })
-      const typed = typeCellText(text)
+      const typed = typeCellText(text, formula !== undefined)
       ws[addr] = formula !== undefined ? { ...typed, f: formula } : typed
     }
   }

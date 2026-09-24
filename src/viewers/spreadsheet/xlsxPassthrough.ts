@@ -148,6 +148,211 @@ function isNumericText(text: string): boolean {
   return trimmed !== '' && Number.isFinite(Number(trimmed))
 }
 
+// SHEET-3/4/5 — Excel-parity auto-typing on write (the xlsx passthrough
+// path only; `spreadsheetWrite.ts`'s fresh-workbook writer has its own,
+// deliberately simpler `typeCellText` for the formats that never carry a
+// `styles.xml` to consult at all).
+//
+// A handful of a builtin numFmt codes ECMA-376 Part 1 §18.8.30 fixes by ID
+// (never spelled out in `styles.xml` itself) — just enough to classify a
+// cell's EXISTING format, not a full builtin table. Anything not listed
+// here that still resolves to a real numFmtId (there are ~50 more, mostly
+// currency/accounting/time variants irrelevant to this classification)
+// falls through `classifyFormatCode`'s own `'other'` catch-all, which is
+// the conservative "respect it, don't touch" outcome either way.
+const BUILTIN_NUMFMT_CODES: ReadonlyMap<number, string> = new Map([
+  [0, 'General'],
+  [9, '0%'],
+  [10, '0.00%'],
+  [14, 'mm-dd-yy'],
+  [15, 'd-mmm-yy'],
+  [16, 'd-mmm'],
+  [17, 'mmm-yy'],
+  [22, 'm/d/yy h:mm'],
+  [49, '@'],
+])
+
+type NumFmtKind = 'general' | 'text' | 'percent' | 'date' | 'other'
+
+/** Classifies a resolved `formatCode` string (never a numFmtId) for the auto-typing decision below. */
+function classifyFormatCode(code: string): NumFmtKind {
+  if (code === '' || code.toLowerCase() === 'general') return 'general'
+  if (code === '@') return 'text'
+  if (code.includes('%')) return 'percent'
+  // Date detection: strip bracketed locale/color tags (`[$-409]`, `[Red]`)
+  // and quoted literals before looking for date tokens, so a literal string
+  // like `"m" units` doesn't false-positive.
+  const stripped = code.replace(/\[[^\]]*\]/g, '').replace(/"[^"]*"/g, '')
+  if (/(yy|mm|dd|m\/d|d\/m|mmm)/i.test(stripped)) return 'date'
+  return 'other'
+}
+
+/** Parsed once per save from `xl/styles.xml`; `null` when that part is missing/unreadable or has no `<cellXfs>` at all — every helper below then degrades to "don't touch the format", never throws. */
+type StylesContext = {
+  readonly doc: XMLDocument
+  readonly root: Element
+  numFmtsEl: Element | null
+  readonly cellXfsEl: Element
+  readonly xfs: Element[]
+  readonly numFmtCodeById: Map<number, string>
+  nextCustomNumFmtId: number
+  dirty: boolean
+}
+
+function loadStylesContext(stylesXml: string | undefined): StylesContext | null {
+  if (!stylesXml) return null
+  let doc: XMLDocument
+  try {
+    doc = parseXmlPart(stylesXml)
+  } catch {
+    return null
+  }
+  const root = doc.documentElement
+  const cellXfsEl = firstChildElement(root, 'cellXfs')
+  if (!cellXfsEl) return null // no cellXfs at all — nothing to index cell styles into
+
+  const numFmtsEl = firstChildElement(root, 'numFmts')
+  const numFmtCodeById = new Map<number, string>()
+  if (numFmtsEl) {
+    for (const el of childElements(numFmtsEl, 'numFmt')) {
+      const id = Number(el.getAttribute('numFmtId'))
+      const code = el.getAttribute('formatCode') ?? ''
+      if (Number.isFinite(id)) numFmtCodeById.set(id, code)
+    }
+  }
+  let nextCustomNumFmtId = 164 // first ID the OOXML spec reserves for custom (non-builtin) formats
+  for (const id of numFmtCodeById.keys()) {
+    if (id >= nextCustomNumFmtId) nextCustomNumFmtId = id + 1
+  }
+
+  return {
+    doc,
+    root,
+    numFmtsEl,
+    cellXfsEl,
+    xfs: childElements(cellXfsEl, 'xf'),
+    numFmtCodeById,
+    nextCustomNumFmtId,
+    dirty: false,
+  }
+}
+
+function resolveNumFmtCode(ctx: StylesContext, numFmtId: number): string {
+  return ctx.numFmtCodeById.get(numFmtId) ?? BUILTIN_NUMFMT_CODES.get(numFmtId) ?? ''
+}
+
+/** What format an existing cell (by its `s` style-index attribute, or `null` for none = default General) already carries. */
+function classifyStyle(ctx: StylesContext | null, styleIndexStr: string | null): NumFmtKind {
+  if (!ctx || styleIndexStr === null) return 'general'
+  const idx = Number(styleIndexStr)
+  const xf = Number.isFinite(idx) ? ctx.xfs[idx] : undefined
+  if (!xf) return 'general'
+  const numFmtId = Number(xf.getAttribute('numFmtId') ?? '0')
+  if (!Number.isFinite(numFmtId) || numFmtId === 0) return 'general'
+  const code = resolveNumFmtCode(ctx, numFmtId)
+  if (code === '') return 'other' // an unresolvable numFmtId — conservative: leave it alone
+  return classifyFormatCode(code)
+}
+
+/** True when `candidate`'s non-numFmt attributes (font/fill/border/alignment refs) already match `base` (or match the all-default xf when there is no base) — lets a new percent/date style reuse an existing `cellXfs` entry instead of growing the array on every save that happens to hit this path. */
+function sameXfExceptNumFmt(candidate: Element, base: Element | undefined): boolean {
+  const attrs = ['fontId', 'fillId', 'borderId', 'xfId', 'applyFont', 'applyFill', 'applyBorder', 'applyAlignment']
+  for (const name of attrs) {
+    const a = candidate.getAttribute(name) ?? ''
+    const b = base?.getAttribute(name) ?? ''
+    if (a !== b) return false
+  }
+  return true
+}
+
+/** Finds (or creates) a custom `<numFmt>` entry for `code` in `<numFmts>`, returning its numFmtId. `<numFmts>` must be the FIRST child of `<styleSheet>` per CT_Stylesheet's fixed element order — created there when it doesn't exist yet. */
+function ensureCustomNumFmtId(ctx: StylesContext, code: string): number {
+  for (const [id, existingCode] of ctx.numFmtCodeById) {
+    if (existingCode === code) return id
+  }
+  const id = ctx.nextCustomNumFmtId++
+  ctx.numFmtCodeById.set(id, code)
+  let numFmtsEl = ctx.numFmtsEl
+  if (!numFmtsEl) {
+    numFmtsEl = ctx.doc.createElementNS(ctx.root.namespaceURI, 'numFmts')
+    ctx.root.insertBefore(numFmtsEl, ctx.root.firstChild)
+    ctx.numFmtsEl = numFmtsEl
+  }
+  const el = ctx.doc.createElementNS(ctx.root.namespaceURI, 'numFmt')
+  el.setAttribute('numFmtId', String(id))
+  el.setAttribute('formatCode', code)
+  numFmtsEl.appendChild(el)
+  numFmtsEl.setAttribute('count', String(numFmtsEl.children.length))
+  ctx.dirty = true
+  return id
+}
+
+/** Finds (or creates) a `cellXfs` entry using `numFmtId`, cloning `baseStyleIndexStr`'s other attributes (font/fill/border) so assigning a percent/date format doesn't discard an edited cell's existing look. Returns the new `s` index as a string, ready to set on the `<c>` element. */
+function ensureXfWithNumFmt(ctx: StylesContext, baseStyleIndexStr: string | null, numFmtId: number): string {
+  const baseIdx = baseStyleIndexStr !== null ? Number(baseStyleIndexStr) : NaN
+  const base = Number.isFinite(baseIdx) ? ctx.xfs[baseIdx] : undefined
+
+  for (let i = 0; i < ctx.xfs.length; i++) {
+    if (Number(ctx.xfs[i].getAttribute('numFmtId') ?? '0') !== numFmtId) continue
+    if (sameXfExceptNumFmt(ctx.xfs[i], base)) return String(i)
+  }
+
+  const fresh = base ? (base.cloneNode(true) as Element) : ctx.doc.createElementNS(ctx.root.namespaceURI, 'xf')
+  fresh.setAttribute('numFmtId', String(numFmtId))
+  fresh.setAttribute('applyNumberFormat', '1')
+  if (!base) {
+    fresh.setAttribute('fontId', '0')
+    fresh.setAttribute('fillId', '0')
+    fresh.setAttribute('borderId', '0')
+    fresh.setAttribute('xfId', '0')
+  }
+  ctx.cellXfsEl.appendChild(fresh)
+  ctx.xfs.push(fresh)
+  ctx.cellXfsEl.setAttribute('count', String(ctx.xfs.length))
+  ctx.dirty = true
+  return String(ctx.xfs.length - 1)
+}
+
+/** Reuses/creates a percent `cellXfs` entry — builtin `0%`(9) or `0.00%`(10), matching how many decimal places the user actually typed (`"50%"` vs `"12.3%"`). */
+function ensurePercentStyle(ctx: StylesContext | null, baseStyle: string | null, hasDecimal: boolean): string | null {
+  if (!ctx) return null
+  return ensureXfWithNumFmt(ctx, baseStyle, hasDecimal ? 10 : 9)
+}
+
+/** Reuses/creates a date `cellXfs` entry with a custom `yyyy-mm-dd` numFmt — the same unambiguous shape this only ever recognizes on input (see `buildCell`), so the cell displays back exactly what the user typed. */
+function ensureDateStyle(ctx: StylesContext | null, baseStyle: string | null): string | null {
+  if (!ctx) return null
+  const numFmtId = ensureCustomNumFmtId(ctx, 'yyyy-mm-dd')
+  return ensureXfWithNumFmt(ctx, baseStyle, numFmtId)
+}
+
+const PERCENT_TEXT = /^-?\d+(\.\d+)?%$/
+const ISO_DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/
+
+/**
+ * Excel's own serial-date numbering: whole days since the fictitious
+ * 1899-12-30 "day zero" (one day before 1900-01-01, which is itself day 1) —
+ * the classic epoch trick that also reproduces Excel's well-known "1900 was
+ * a leap year" bug for any real date on or after 1900-03-01 without special
+ * cased for it, since the phantom Feb-29-1900 falls before this range.
+ * Returns `null` for a string that parses as digits but isn't a real
+ * calendar date (`2024-02-30`, `2024-13-01`) — `Date.UTC` itself normalizes
+ * those into a DIFFERENT valid date instead of rejecting them, so the
+ * round-trip-through-UTC-components check below is what actually catches it.
+ */
+function excelSerialFromIsoDate(match: RegExpExecArray): number | null {
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const asUtc = Date.UTC(year, month - 1, day)
+  const roundTrip = new Date(asUtc)
+  if (roundTrip.getUTCFullYear() !== year || roundTrip.getUTCMonth() !== month - 1 || roundTrip.getUTCDate() !== day) {
+    return null
+  }
+  const epoch = Date.UTC(1899, 11, 30)
+  return Math.round((asUtc - epoch) / 86_400_000)
+}
+
 type OriginalSheet = {
   readonly doc: XMLDocument
   readonly root: Element
@@ -192,7 +397,27 @@ function blankOriginalSheet(): OriginalSheet {
   return readOriginalSheet(xml)!
 }
 
-/** Builds the `<c>` element for a cell that was edited (or is new). */
+/**
+ * Builds the `<c>` element for a cell that was edited (or is new).
+ *
+ * SHEET-3/4/5 auto-typing (a user-typed value only — `formula !== undefined`
+ * skips all of it and keeps the prior plain numeric-vs-text rule, since a
+ * formula's text is a COMPUTED result, never something the user typed):
+ *
+ *  - A leading `'` (Excel's own "force text" quote prefix) or a cell already
+ *    styled `@` (text format) makes the value text NO MATTER what it looks
+ *    like — `'007` and `007` in an `@`-formatted cell both save as the text
+ *    `"007"`, apostrophe never stored. Plain `007` with neither still becomes
+ *    the number `7`, unchanged: that already matches Excel's own default.
+ *  - An unambiguous `N%`/`N.N%` becomes a numeric value (`/100`) with a
+ *    percent format; an unambiguous ISO `YYYY-MM-DD` becomes an Excel date
+ *    serial with a date format — but ONLY when the target cell's own
+ *    existing format is General. A cell that already carries some other
+ *    explicit format keeps that format (`ensure*Style` is never called), so
+ *    an existing choice is never second-guessed — just the parsed numeric
+ *    value is written under it, mirroring how Excel itself won't silently
+ *    swap a cell's chosen format out from under a typed value.
+ */
 function buildCell(
   doc: XMLDocument,
   namespace: string | null,
@@ -200,6 +425,7 @@ function buildCell(
   text: string,
   formula: string | undefined,
   style: string | null,
+  stylesCtx: StylesContext | null,
 ): Element {
   const cell = doc.createElementNS(namespace, 'c')
   cell.setAttribute('r', address)
@@ -213,17 +439,75 @@ function buildCell(
 
   if (text === '' && formula === undefined) return cell
 
-  if (isNumericText(text)) {
+  // A formula's cached value is a COMPUTED result, not something the user
+  // typed — none of the auto-typing below applies to it; it keeps the prior
+  // plain numeric-vs-text rule exactly (a numeric result gets no `t`
+  // attribute at all, matching a plain numeric cell; anything else is
+  // `t="str"`).
+  if (formula !== undefined) {
+    if (isNumericText(text)) {
+      const value = doc.createElementNS(namespace, 'v')
+      value.textContent = String(Number(text.trim()))
+      cell.appendChild(value)
+      return cell
+    }
+    cell.setAttribute('t', 'str')
     const value = doc.createElementNS(namespace, 'v')
-    value.textContent = String(Number(text.trim()))
+    value.textContent = xmlSafeText(text)
     cell.appendChild(value)
     return cell
   }
 
-  if (formula !== undefined) {
-    cell.setAttribute('t', 'str')
+  const formatKind = classifyStyle(stylesCtx, style)
+  let raw = text
+  let forceText = formatKind === 'text'
+  if (raw.startsWith("'")) {
+    raw = raw.slice(1)
+    forceText = true
+  }
+
+  // Percent/date auto-typing needs `stylesCtx` to assign (or find) a format
+  // for the General case — without it (missing/unreadable `xl/styles.xml`,
+  // see `loadStylesContext`), skip straight to the plain numeric/text rule
+  // below rather than writing an unformatted numeric value that would
+  // display as a bare `0.5` or `45365` instead of the percent/date the user
+  // actually typed.
+  if (!forceText && stylesCtx) {
+    const trimmed = raw.trim()
+    const percentMatch = PERCENT_TEXT.exec(trimmed)
+    if (percentMatch) {
+      const numeric = Number(trimmed.slice(0, -1)) / 100
+      if (Number.isFinite(numeric)) {
+        if (formatKind === 'general') {
+          const newStyle = ensurePercentStyle(stylesCtx, style, percentMatch[1] !== undefined)
+          if (newStyle !== null) cell.setAttribute('s', newStyle)
+        }
+        const value = doc.createElementNS(namespace, 'v')
+        value.textContent = String(numeric)
+        cell.appendChild(value)
+        return cell
+      }
+    }
+
+    const dateMatch = ISO_DATE_TEXT.exec(trimmed)
+    if (dateMatch) {
+      const serial = excelSerialFromIsoDate(dateMatch)
+      if (serial !== null) {
+        if (formatKind === 'general') {
+          const newStyle = ensureDateStyle(stylesCtx, style)
+          if (newStyle !== null) cell.setAttribute('s', newStyle)
+        }
+        const value = doc.createElementNS(namespace, 'v')
+        value.textContent = String(serial)
+        cell.appendChild(value)
+        return cell
+      }
+    }
+  }
+
+  if (!forceText && isNumericText(raw)) {
     const value = doc.createElementNS(namespace, 'v')
-    value.textContent = xmlSafeText(text)
+    value.textContent = String(Number(raw.trim()))
     cell.appendChild(value)
     return cell
   }
@@ -233,7 +517,7 @@ function buildCell(
   const inlineString = doc.createElementNS(namespace, 'is')
   const textElement = doc.createElementNS(namespace, 't')
   textElement.setAttribute('xml:space', 'preserve')
-  textElement.textContent = xmlSafeText(text)
+  textElement.textContent = xmlSafeText(raw)
   inlineString.appendChild(textElement)
   cell.appendChild(inlineString)
   return cell
@@ -325,6 +609,7 @@ function rebuildSheetData(
   sheet: EditableSheet,
   original: OriginalSheet,
   changesByOriginalName: ReadonlyMap<string, SheetChange>,
+  stylesCtx: StylesContext | null,
 ): void {
   const { doc, sheetData } = original
   const namespace = sheetData.namespaceURI
@@ -366,7 +651,7 @@ function rebuildSheetData(
       const style = originalCell?.getAttribute('s') ?? null
       if (text === '' && formula === undefined) {
         // Keep an empty-but-styled cell so its formatting survives.
-        if (style !== null) rowElement.appendChild(buildCell(doc, namespace, address, '', undefined, style))
+        if (style !== null) rowElement.appendChild(buildCell(doc, namespace, address, '', undefined, style, stylesCtx))
         continue
       }
       // A formula the user typed (or a formula cell otherwise rebuilt from
@@ -375,7 +660,7 @@ function rebuildSheetData(
       // coordinate (see `formulaRefs.ts`'s module header).
       const rewrittenFormula =
         formula === undefined ? undefined : rewriteFormulaReferences(formula, { changesByOriginalName, remapCoordinates: false })
-      rowElement.appendChild(buildCell(doc, namespace, address, text, rewrittenFormula, style))
+      rowElement.appendChild(buildCell(doc, namespace, address, text, rewrittenFormula, style, stylesCtx))
     }
 
     if (rowElement.children.length > 0 || template) fresh.appendChild(rowElement)
@@ -502,6 +787,29 @@ function updateShiftedRanges(root: Element, sheet: EditableSheet): void {
     const next = ref ? remapSqref(ref, rowSources, colSources) : null
     if (next) autoFilter.setAttribute('ref', next)
     else autoFilter.parentNode?.removeChild(autoFilter)
+  }
+
+  // SHEET-9 — `<ignoredErrors>` (the "number stored as text"/"formula
+  // omits cells" markers Excel writes so it doesn't keep flagging the same
+  // cell) has its own `sqref`-bearing `<ignoredError>` children, same shape
+  // as `dataValidation`, but this element was never re-anchored through a
+  // row/column insert or delete at all — left stale while every sibling
+  // above (`conditionalFormatting`, `dataValidation`) already tracked the
+  // sheet's growth/shrink.
+  const ignoredErrors = firstChildElement(root, 'ignoredErrors')
+  if (ignoredErrors) {
+    let survivors = 0
+    for (const ignoredError of childElements(ignoredErrors, 'ignoredError')) {
+      const sqref = ignoredError.getAttribute('sqref')
+      const next = sqref ? remapSqref(sqref, rowSources, colSources) : null
+      if (next) {
+        ignoredError.setAttribute('sqref', next)
+        survivors += 1
+      } else {
+        ignoredErrors.removeChild(ignoredError)
+      }
+    }
+    if (survivors === 0) ignoredErrors.parentNode?.removeChild(ignoredErrors)
   }
 }
 
@@ -997,6 +1305,15 @@ export async function writeWorkbookThroughOriginal(
   const sheetsContainer = firstChildElement(workbookRoot, 'sheets')
   if (!sheetsContainer) return null
 
+  // SHEET-4/5 — loaded once for the whole save so every sheet's percent/date
+  // auto-typing shares (and reuses) the same `cellXfs`/`numFmts` entries
+  // instead of each sheet growing its own duplicate ones. Missing/unreadable
+  // `xl/styles.xml` degrades to `null`, which turns the auto-typing off
+  // entirely (`buildCell` still writes the parsed numeric value in that
+  // case — see its own header — just never assigns a format for it).
+  const stylesXml = await zip.file('xl/styles.xml')?.async('string')
+  const stylesCtx = loadStylesContext(stylesXml)
+
   const relsXml = (await zip.file(WORKBOOK_RELS_PATH)?.async('string')) ?? null
   let relsDoc: XMLDocument | null = null
   if (relsXml) {
@@ -1139,7 +1456,7 @@ export async function writeWorkbookThroughOriginal(
     const parsed = perSheetOriginal.get(newIndex)!
     const partPath = perSheetPartPath.get(newIndex)!
 
-    rebuildSheetData(sheet, parsed, changesByOriginalName)
+    rebuildSheetData(sheet, parsed, changesByOriginalName, stylesCtx)
     updateDimension(parsed.root, sheet)
     updateMergeCells(parsed.doc, parsed.root, sheet)
     updateColumns(parsed.doc, parsed.root, sheet)
@@ -1177,6 +1494,11 @@ export async function writeWorkbookThroughOriginal(
   if (contentTypesDoc) zip.file(CONTENT_TYPES_PATH, serializeXmlPart(contentTypesDoc))
   zip.file(WORKBOOK_RELS_PATH, serializeXmlPart(relsDoc))
   zip.file('xl/workbook.xml', serializeXmlPart(workbookDoc))
+  // SHEET-4/5 — only rewritten when a percent/date auto-type actually added
+  // a `numFmt`/`cellXfs` entry this save; every other save leaves
+  // `xl/styles.xml` byte-identical (still copied through untouched, since
+  // it's outside this function's own zip writes).
+  if (stylesCtx?.dirty) zip.file('xl/styles.xml', serializeXmlPart(stylesCtx.doc))
 
   await updateAppPropsTitles(
     zip,

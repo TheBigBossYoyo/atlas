@@ -149,6 +149,48 @@ describe('buildWorkbook / writeWorkbookBytes — round trip', () => {
     const wb = buildWorkbook(doc)
     expect(wb.Sheets['Sheet1']['A1']).toMatchObject({ t: 's', v: 'Alice' })
   })
+
+  // SHEET-3 — a leading `'` (Excel's own "force text" quote prefix) forces
+  // text even for a whole-numeric-looking string, and the quote itself is
+  // never stored. A plain leading-zero string with no quote still becomes a
+  // number (matches Excel's own default — see `xlsxPassthrough.test.ts` for
+  // the styles-aware `@`-format half of SHEET-3, only reachable on the xlsx
+  // passthrough path this fresh-workbook writer doesn't have).
+  it('forces a leading-apostrophe numeric-looking string to text, apostrophe not stored', () => {
+    const doc = createDocument([sheetFixture([["'007"]])])
+    const wb = buildWorkbook(doc)
+    expect(wb.Sheets['Sheet1']['A1']).toMatchObject({ t: 's', v: '007' })
+  })
+
+  it('still types a plain leading-zero string (no apostrophe) as a number', () => {
+    const doc = createDocument([sheetFixture([['007']])])
+    const wb = buildWorkbook(doc)
+    expect(wb.Sheets['Sheet1']['A1']).toMatchObject({ t: 'n', v: 7 })
+  })
+
+  it('does not apply the apostrophe rule to a formula cell (a computed, never user-typed, display text)', () => {
+    // Built directly (not via `setCellValue`) so the formula's CACHED
+    // display text is exactly `'007` regardless of what this build's
+    // evaluator would compute for any particular formula text — the point
+    // under test is only that `buildWorksheet` skips the apostrophe rule
+    // whenever a cell has a formula at all.
+    const doc: SpreadsheetDocument = {
+      sheets: [
+        {
+          name: 'Sheet1',
+          hidden: false,
+          rows: [["'007"]],
+          formulas: [['A2']],
+          colCount: 1,
+          merges: [],
+          colWidthsPx: [],
+          rowHeightsPx: [],
+        },
+      ],
+    }
+    const wb = buildWorkbook(doc)
+    expect(wb.Sheets['Sheet1']['A1']).toMatchObject({ f: 'A2', t: 's', v: "'007" })
+  })
 })
 
 describe('documentToDelimitedText', () => {

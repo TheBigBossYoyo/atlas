@@ -604,3 +604,187 @@ describe('writeWorkbookThroughOriginal — structural sheet changes (column rang
     expect(sheet).toContain('<autoFilter ref="A1:C3"/>')
   })
 })
+
+// ---------------------------------------------------------------------------
+// SHEET-3/4/5 — Excel-parity auto-typing on write (`buildCell`). Reuses
+// `buildStyledWorkbook`'s A2 (no style — General), B2 (`s="3"`, numFmtId 164
+// `dd/mm/yyyy` — an existing DATE format) and C2 (`s="4"`, numFmtId 44 — an
+// existing, non-date/percent/General format) to cover both "General cell
+// gets a fresh format" and "an already-formatted cell keeps its own format".
+// ---------------------------------------------------------------------------
+
+const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const rels = (items: string): string =>
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`
+
+/** A single-cell (A1) workbook whose only style is `@` (text format, builtin numFmtId 49) — SHEET-3's "already text-formatted cell" case, which `buildStyledWorkbook` has no equivalent of. */
+async function buildTextFormattedWorkbook(): Promise<ArrayBuffer> {
+  const zip = new JSZip()
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>` +
+      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+      `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+  )
+  zip.file('_rels/.rels', rels(`<Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/>`))
+  zip.file(
+    'xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${REL}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+  )
+  zip.file('xl/_rels/workbook.xml.rels', rels(`<Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/>`))
+  zip.file(
+    'xl/worksheets/sheet1.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData><row r="1"><c r="A1" s="1"/></row></sheetData></worksheet>`,
+  )
+  zip.file(
+    'xl/styles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs></styleSheet>`,
+  )
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
+describe('writeWorkbookThroughOriginal — SHEET-3/4/5 auto-typing', () => {
+  it('still types a plain leading-zero string as the number 7 (Excel default, unchanged)', async () => {
+    const doc = setCellValue(await load(original), 0, 1, 0, '007') // A2 — no style, General
+    const { sheet } = await saved(original, doc)
+    expect(sheet).toContain('<c r="A2"><v>7</v></c>')
+  })
+
+  it('forces a leading-apostrophe value to text, without storing the apostrophe', async () => {
+    const doc = setCellValue(await load(original), 0, 1, 0, "'007")
+    const { sheet } = await saved(original, doc)
+    expect(sheet).toContain('<t xml:space="preserve">007</t>')
+    expect(sheet).not.toContain("'007")
+  })
+
+  it('forces ANY value to text in a cell already styled `@` (text format), apostrophe never needed', async () => {
+    const textWb = await buildTextFormattedWorkbook()
+    const doc = setCellValue(await load(textWb), 0, 0, 0, '007')
+    const bytes = (await writeWorkbookThroughOriginal(textWb, doc))!
+    const zip = await JSZip.loadAsync(bytes)
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    expect(sheet).toContain('<c r="A1" s="1" t="inlineStr">')
+    expect(sheet).toContain('<t xml:space="preserve">007</t>')
+  })
+
+  /** The `<xf>` entries inside `<cellXfs>` ONLY (a cell's `s` index refers into this list, not `<cellStyleXfs>`, which sits earlier in the document and would otherwise shift every index off by one). */
+  function cellXfsOf(stylesXml: string): string[] {
+    const block = /<cellXfs count="\d+">([\s\S]*?)<\/cellXfs>/.exec(stylesXml)
+    expect(block).not.toBeNull()
+    return Array.from(block![1].matchAll(/<xf [^>]*\/>/g)).map((m) => m[0])
+  }
+
+  it('types "50%" as 0.5 with a fresh percent format when the cell was General', async () => {
+    const doc = setCellValue(await load(original), 0, 1, 0, '50%') // A2 — General
+    const { zip, sheet } = await saved(original, doc)
+    const cellMatch = /<c r="A2"( s="(\d+)")?><v>0\.5<\/v><\/c>/.exec(sheet)
+    expect(cellMatch).not.toBeNull()
+    const styleIndex = cellMatch![2]
+    expect(styleIndex).toBeDefined()
+    const styles = await zip.file('xl/styles.xml')!.async('string')
+    // Builtin `0%` (numFmtId 9) needs no new `<numFmt>` entry at all.
+    expect(cellXfsOf(styles)[Number(styleIndex)]).toContain('numFmtId="9"')
+  })
+
+  it('types "12.5%" with the two-decimal builtin percent format (0.00%)', async () => {
+    const doc = setCellValue(await load(original), 0, 1, 0, '12.5%')
+    const { zip, sheet } = await saved(original, doc)
+    const cellMatch = /<c r="A2"( s="(\d+)")?><v>0\.125<\/v><\/c>/.exec(sheet)
+    expect(cellMatch).not.toBeNull()
+    const styles = await zip.file('xl/styles.xml')!.async('string')
+    expect(cellXfsOf(styles)[Number(cellMatch![2])]).toContain('numFmtId="10"')
+  })
+
+  it('types an ISO date as an Excel serial with a fresh yyyy-mm-dd format when the cell was General', async () => {
+    const doc = setCellValue(await load(original), 0, 1, 0, '2024-03-14') // A2 — General
+    const { zip, sheet } = await saved(original, doc)
+    const cellMatch = /<c r="A2" s="(\d+)"><v>45365<\/v><\/c>/.exec(sheet) // 45365 is 2024-03-14's real Excel serial
+    expect(cellMatch).not.toBeNull()
+    const styles = await zip.file('xl/styles.xml')!.async('string')
+    expect(cellXfsOf(styles)[Number(cellMatch![1])]).toContain('numFmtId="165"')
+    // STYLES_XML already uses numFmtId 164 for the pre-existing "dd/mm/yyyy"
+    // date format — the new one must pick a genuinely free id (165) rather
+    // than collide with it, and the original entry must stay untouched.
+    expect(styles).toContain('<numFmt numFmtId="164" formatCode="dd/mm/yyyy"/>')
+    expect(styles).toContain('<numFmt numFmtId="165" formatCode="yyyy-mm-dd"/>')
+  })
+
+  it('respects an existing DATE format instead of assigning a new one', async () => {
+    // B2 already carries s="3" -> numFmtId 164 "dd/mm/yyyy" in STYLES_XML.
+    const doc = setCellValue(await load(original), 0, 1, 1, '2024-03-14')
+    const { zip, sheet } = await saved(original, doc)
+    expect(sheet).toContain('<c r="B2" s="3"><v>45365</v></c>')
+    // No new numFmt/cellXfs entries were added for this save.
+    expect(await zip.file('xl/styles.xml')!.async('string')).toBe(STYLES_XML)
+  })
+
+  it('respects an existing non-percent/date format when a percent-looking value is typed', async () => {
+    // C2 already carries s="4" -> numFmtId 44 (accounting), neither General nor percent/date.
+    const doc = setCellValue(await load(original), 0, 1, 2, '50%')
+    const { zip, sheet } = await saved(original, doc)
+    expect(sheet).toContain('<c r="C2" s="4"><v>0.5</v></c>')
+    expect(await zip.file('xl/styles.xml')!.async('string')).toBe(STYLES_XML)
+  })
+
+  it('leaves an unparseable/ambiguous value as plain text (not 50%, not a date)', async () => {
+    let doc = setCellValue(await load(original), 0, 1, 0, '150%%')
+    let result = await saved(original, doc)
+    expect(result.sheet).toContain('<t xml:space="preserve">150%%</t>')
+
+    doc = setCellValue(await load(original), 0, 1, 0, '2024-13-40') // not a real calendar date
+    result = await saved(original, doc)
+    expect(result.sheet).toContain('<t xml:space="preserve">2024-13-40</t>')
+  })
+
+  it('does not reinterpret a FORMULA result as a percent/date (only user-typed values)', async () => {
+    // A formula computing to the text "50%" must stay a plain string cell, not a re-parsed percent.
+    let doc = await load(original)
+    doc = setCellValue(doc, 0, 1, 0, '="50%"')
+    const { sheet } = await saved(original, doc)
+    expect(sheet).toContain('<f>"50%"</f>')
+    expect(sheet).toMatch(/<c r="A2"[^>]*t="str"[^>]*>[\s\S]*?<v>50%<\/v>/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SHEET-9 — `ignoredErrors`' `sqref` must shift through a row/column
+// insert/delete exactly like `conditionalFormatting`/`dataValidation` do.
+// ---------------------------------------------------------------------------
+
+async function buildWorkbookWithIgnoredErrors(): Promise<ArrayBuffer> {
+  const zip = await JSZip.loadAsync(await buildMultiSheetWorkbook())
+  const sheet1 = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+  zip.file(
+    'xl/worksheets/sheet1.xml',
+    sheet1.replace(
+      '</worksheet>',
+      '<ignoredErrors><ignoredError numberStoredAsText="1" sqref="B2:B3"/></ignoredErrors></worksheet>',
+    ),
+  )
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
+describe('writeWorkbookThroughOriginal — SHEET-9 ignoredErrors sqref', () => {
+  it('shifts ignoredErrors sqref through a row insert, like conditionalFormatting/dataValidation', async () => {
+    const withIgnored = await buildWorkbookWithIgnoredErrors()
+    let doc = await load(withIgnored)
+    doc = insertRowAt(doc, 0, 0) // insert above row 1 — everything shifts down by one
+    const bytes = (await writeWorkbookThroughOriginal(withIgnored, doc))!
+    const zip = await JSZip.loadAsync(bytes)
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    expect(sheet).toContain('sqref="B3:B4"') // was B2:B3
+    expect(sheet).toContain('sqref="C3:C4"') // conditionalFormatting shifted the same way (was C2:C3, a ROW insert)
+  })
+
+  it('drops ignoredErrors entirely when its whole range is deleted', async () => {
+    const withIgnored = await buildWorkbookWithIgnoredErrors()
+    let doc = await load(withIgnored)
+    doc = deleteRowAt(doc, 0, 1) // deletes row 2 and row 3 in turn -- consumes B2:B3 entirely
+    doc = deleteRowAt(doc, 0, 1)
+    const bytes = (await writeWorkbookThroughOriginal(withIgnored, doc))!
+    const zip = await JSZip.loadAsync(bytes)
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+    expect(sheet).not.toContain('ignoredError')
+  })
+})
