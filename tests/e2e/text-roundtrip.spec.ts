@@ -19,18 +19,10 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
  * proven below.
  *
  * SHEET-6 (CSV delimiter rewritten) is fully fixed and proven below.
- * SHEET-7/SHEET-8 (CSV BOM stripped / LF -> CRLF) are NOT fixed by this
- * commit — `documentToDelimitedText` (the only file in
- * `src/viewers/spreadsheet/` this fix owns) has no way to learn a per-file
- * BOM/newline convention without a one-line change to
- * `useSpreadsheetEditor.ts`'s `writeToDisk`, which is out of this fix's
- * ownership (`src/viewers/spreadsheet/**` other than that one function is
- * explicitly do-not-touch). The CSV test below documents this honestly: it
- * asserts the delimiter fix (real) and the BOM-still-stripped/LF-still-CRLF
- * gap (real, unfixed, characterized rather than silently ignored) in the
- * same test, rather than a passing test with a false "byte-faithful"
- * implication. See this fix's report for the exact diff that would close
- * the gap.
+ * SHEET-7/SHEET-8 (CSV BOM stripped / LF -> CRLF / final newline dropped)
+ * are fixed by the coordinator's follow-up: `useSpreadsheetEditor`'s
+ * delimited save passes the file's recorded encoding/BOM/newline to
+ * `save-file`, and `CsvViewer` keeps the final line break. Proven byte-exact below.
  */
 
 const projectRoot = process.cwd()
@@ -184,7 +176,7 @@ async function editFirstCell(page: Page, text: string): Promise<void> {
   await expect(page.locator('#portal textarea')).toHaveCount(0)
 }
 
-test('SHEET-6: a semicolon-delimited CSV with a UTF-8 BOM keeps its semicolon delimiter on save (BOM/newline are a documented, unfixed gap)', async () => {
+test('SHEET-6: a semicolon-delimited CSV with a UTF-8 BOM keeps its semicolon delimiter, BOM, CRLF and final newline on save (SHEET-6/7/8)', async () => {
   const original = Buffer.concat([
     Buffer.from([0xef, 0xbb, 0xbf]),
     Buffer.from('Name;Amount\r\nAlice;1,5\r\nBob;2,0\r\n', 'utf-8'),
@@ -203,18 +195,16 @@ test('SHEET-6: a semicolon-delimited CSV with a UTF-8 BOM keeps its semicolon de
     const firstLine = savedText.replace(/^\uFEFF/, '').split(/\r?\n/)[0]
     expect(firstLine.split(';').length).toBeGreaterThan(1)
 
-    // Documented, unfixed gap (see module header): BOM/newline are not
-    // reachable from `documentToDelimitedText` without an unowned call-site
-    // change, so today they still fall back to "no BOM" / Papa's own
-    // default newline rather than the source file's actual convention.
+    // SHEET-7/SHEET-8: the BOM and CRLF line endings survive too.
+    // Byte-exact, including the final CRLF (Papa's writer used to drop it).
     const raw = fs.readFileSync(file)
-    expect(raw.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOM preservation is NOT fixed yet').toBe(false)
+    expect(raw.equals(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('EDITED;Amount\r\nAlice;1,5\r\nBob;2,0\r\n', 'utf-8')]))).toBe(true)
   } finally {
     kill(app)
   }
 })
 
-test('a comma-delimited, LF-only CSV keeps its delimiter and content on save (newline preservation is the same documented, unfixed gap)', async () => {
+test('a comma-delimited, LF-only CSV keeps its delimiter, LF line endings and final newline on save (SHEET-8)', async () => {
   const original = Buffer.from('Name,Amount\nAlice,10\nBob,20\n', 'utf-8')
   const file = tempFile('lf-comma.csv', original)
   const { app, page } = await launchCsv(file)
@@ -223,10 +213,8 @@ test('a comma-delimited, LF-only CSV keeps its delimiter and content on save (ne
     await page.keyboard.press('Control+s')
     await expect.poll(() => fs.readFileSync(file, 'utf-8'), { timeout: 10_000 }).toContain('EDITED')
 
-    const savedText = fs.readFileSync(file, 'utf-8')
-    expect(savedText).toContain(',')
-    expect(savedText).toContain('EDITED')
-    expect(savedText).toContain('Bob')
+    // SHEET-8: an LF file stays LF (it used to come back CRLF, without its final newline).
+    expect(fs.readFileSync(file, 'utf-8')).toBe('EDITED,Amount\nAlice,10\nBob,20\n')
   } finally {
     kill(app)
   }

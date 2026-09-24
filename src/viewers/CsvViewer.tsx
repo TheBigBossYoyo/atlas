@@ -49,11 +49,11 @@ const CSV_SAVE_FORMATS = [
 
 const DEFAULT_DELIMITER_FOR_FORMAT: Readonly<Record<string, string>> = { tsv: '\t', csv: ',' }
 
-function targetFor(formatId: string, delimiter?: string): SpreadsheetSaveTarget {
+function targetFor(formatId: string, delimiter?: string, trailingNewline = false): SpreadsheetSaveTarget {
   const resolvedDelimiter = delimiter ?? DEFAULT_DELIMITER_FOR_FORMAT[formatId] ?? ','
   return formatId === 'tsv'
-    ? { kind: 'delimited', delimiter: resolvedDelimiter, extension: 'tsv', filterName: 'Tab-Separated Values' }
-    : { kind: 'delimited', delimiter: resolvedDelimiter, extension: 'csv', filterName: 'Comma-Separated Values' }
+    ? { kind: 'delimited', delimiter: resolvedDelimiter, extension: 'tsv', filterName: 'Tab-Separated Values', trailingNewline }
+    : { kind: 'delimited', delimiter: resolvedDelimiter, extension: 'csv', filterName: 'Comma-Separated Values', trailingNewline }
 }
 
 function CsvViewerBase({ file }: ViewerProps) {
@@ -125,9 +125,11 @@ function CsvViewerBase({ file }: ViewerProps) {
   // SHEET-6 — use the delimiter actually detected in the loaded file (once
   // known) instead of the format's nominal default, so a semicolon-
   // delimited `.csv` saves back with a semicolon.
+  // SHEET-8 — and keep the file's final line break, which Papa's writer drops.
+  const endsWithNewline = file.kind === 'text' && file.content.endsWith('\n')
   const defaultTarget = useMemo<SpreadsheetSaveTarget>(
-    () => targetFor(file.format === 'tsv' ? 'tsv' : 'csv', data?.delimiter),
-    [file.format, data?.delimiter],
+    () => targetFor(file.format === 'tsv' ? 'tsv' : 'csv', data?.delimiter, endsWithNewline),
+    [file.format, data?.delimiter, endsWithNewline],
   )
 
   const editor = useSpreadsheetEditor(initialDocument, file.path, defaultTarget)

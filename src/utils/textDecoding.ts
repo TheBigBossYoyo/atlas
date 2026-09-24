@@ -158,6 +158,16 @@ export function setTextFileMeta(path: string, meta: TextFileMeta): void {
   textFileMetaRegistry.set(path, meta)
 }
 
+/** Drops `path`'s recorded convention (tests; a later save then behaves as for a new file). */
+export function forgetTextFileMeta(path: string): void {
+  textFileMetaRegistry.delete(path)
+}
+
+/** `path`'s recorded convention, or `undefined` when it was never loaded from disk (a caller that must keep its own historical default for new files can tell the two apart). */
+export function findTextFileMeta(path: string): TextFileMeta | undefined {
+  return textFileMetaRegistry.get(path)
+}
+
 /** Looks up `path`'s recorded convention, or today's-defaults for an untracked/new path. */
 export function getTextFileMeta(path: string): TextFileMeta {
   return textFileMetaRegistry.get(path) ?? DEFAULT_TEXT_FILE_META

@@ -36,6 +36,7 @@ import {
   type SpreadsheetDocument,
 } from './spreadsheetDocument'
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
+import { carryTextFileMeta, findTextFileMeta } from '../../utils/textDecoding'
 import { writeWorkbookThroughOriginal } from './xlsxPassthrough'
 import { useUndoableState } from './useUndoableState'
 import {
@@ -54,7 +55,14 @@ export type SpreadsheetSaveTarget =
       readonly extension: string
       readonly filterName: string
     }
-  | { readonly kind: 'delimited'; readonly delimiter: string; readonly extension: string; readonly filterName: string }
+  | {
+      readonly kind: 'delimited'
+      readonly delimiter: string
+      readonly extension: string
+      readonly filterName: string
+      /** The loaded file ended with a line break (Papa's writer never emits one, so it is re-added on save). */
+      readonly trailingNewline?: boolean
+    }
 
 const EMPTY_DOCUMENT: SpreadsheetDocument = { sheets: [] }
 
@@ -79,6 +87,8 @@ async function writeToDisk(
   suggestedName: string,
   existingPath: string | undefined,
   originalBuffer: ArrayBuffer | null,
+  /** The document's current path (for delimited text: whose recorded encoding/BOM/newline to reapply). */
+  metaSourcePath: string,
 ): Promise<{ readonly saved: boolean; readonly path?: string; readonly error?: string; readonly usedFallbackWriter: boolean }> {
   const filters = [{ name: target.filterName, extensions: [target.extension] }]
 
@@ -115,13 +125,24 @@ async function writeToDisk(
     return { saved: result?.saved ?? false, path: result?.path, error: result?.error, usedFallbackWriter }
   }
 
-  const text = documentToDelimitedText(doc, target.delimiter)
+  // SHEET-7/8 — a CSV/TSV read from disk keeps its own encoding, BOM and line
+  // endings: emit `\n`-only text and let `save-file` reapply the recorded
+  // convention, exactly as markdown/code saves do (`encodeTextBuffer` expects
+  // `\n` input, so the text must not carry CRLF or a BOM of its own). A file
+  // never loaded from disk keeps the historical output (CRLF, no BOM).
+  const sourceMeta = findTextFileMeta(metaSourcePath)
+  const body = sourceMeta
+    ? documentToDelimitedText(doc, target.delimiter, { newline: 'lf' })
+    : documentToDelimitedText(doc, target.delimiter)
+  const text = target.trailingNewline && body.length > 0 ? body + (sourceMeta ? '\n' : '\r\n') : body
   const result = await window.electronAPI?.saveFile?.({
     content: text,
     suggestedName,
     filters,
     ...(existingPath ? { existingPath } : {}),
+    ...(sourceMeta ? { meta: sourceMeta } : {}),
   })
+  if (sourceMeta && result?.saved && result.path) carryTextFileMeta(metaSourcePath, result.path)
   return { saved: result?.saved ?? false, path: result?.path, error: result?.error, usedFallbackWriter: false }
 }
 
@@ -286,6 +307,7 @@ export function useSpreadsheetEditor(
           suggestedName,
           forceDialog ? undefined : savePath,
           originalBuffer,
+          savePath ?? filePath,
         )
 
         if (!result.saved) {

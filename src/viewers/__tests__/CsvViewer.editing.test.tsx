@@ -127,7 +127,10 @@ describe('CsvViewer — save round trip', () => {
     })
 
     expect(window.electronAPI!.saveFile).toHaveBeenCalledWith(
-      expect.objectContaining({ content: 'name,value\r\nAtlas,99', suggestedName: 'sample.csv', existingPath: '/tmp/sample.csv' }),
+      // SHEET-8 — the file ended with a line break, so the save keeps one (this
+      // used to assert it was dropped: the bug). No encoding metadata is
+      // recorded in this component test, so the historical CRLF output applies.
+      expect.objectContaining({ content: 'name,value\r\nAtlas,99\r\n', suggestedName: 'sample.csv', existingPath: '/tmp/sample.csv' }),
     )
 
     const savedContent = (window.electronAPI!.saveFile as ReturnType<typeof vi.fn>).mock.calls[0][0].content as string
@@ -165,7 +168,7 @@ describe('CsvViewer — save round trip', () => {
     })
 
     expect(window.electronAPI!.saveFile).toHaveBeenCalledWith(
-      expect.objectContaining({ content: 'name\tvalue\r\nAtlas\t42' }),
+      expect.objectContaining({ content: 'name\tvalue\r\nAtlas\t42\r\n' }),
     )
 
     const savedContent = (window.electronAPI!.saveFile as ReturnType<typeof vi.fn>).mock.calls[0][0].content as string

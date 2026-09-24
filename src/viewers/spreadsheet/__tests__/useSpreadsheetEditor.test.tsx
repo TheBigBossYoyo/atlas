@@ -12,6 +12,7 @@ import { createDocument } from '../spreadsheetDocument'
 import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from '../useSpreadsheetEditor'
 import type { ParsedSheet } from '../../shared/spreadsheetGrid'
 import { translate } from '../../../i18n/translate'
+import { forgetTextFileMeta, setTextFileMeta } from '../../../utils/textDecoding'
 
 const WORKBOOK_TARGET: SpreadsheetSaveTarget = {
   kind: 'workbook',
@@ -310,6 +311,30 @@ describe('useSpreadsheetEditor — save (delimited target)', () => {
     expect(window.electronAPI!.saveFile).toHaveBeenCalledWith(
       expect.objectContaining({ content: 'a,b\r\n1,2', suggestedName: 'sample.csv' }),
     )
+    // A file never loaded from disk sends no encoding metadata (historical output unchanged).
+    expect(vi.mocked(window.electronAPI!.saveFile).mock.calls[0][0]).not.toHaveProperty('meta')
+  })
+
+  // SHEET-7/8 — a CSV read from disk hands its recorded encoding/BOM/newline
+  // to save-file (which reapplies them) and sends `\n`-only text: sending
+  // CRLF here would come out as `\r\r\n` once save-file converts `\n`.
+  it('sends a loaded file\'s recorded encoding/BOM/newline with LF-only text, and keeps a final line break', async () => {
+    const meta = { encoding: 'utf-8', bom: true, newline: 'crlf' } as const
+    setTextFileMeta('/tmp/sample.xlsx', meta)
+    try {
+      const { getEditor } = renderHarness({ ...DELIMITED_TARGET, trailingNewline: true })
+      await waitFor(() => expect(getEditor()).toBeTruthy())
+
+      await act(async () => {
+        await getEditor().handleSave()
+      })
+
+      expect(window.electronAPI!.saveFile).toHaveBeenCalledWith(
+        expect.objectContaining({ content: 'a,b\n1,2\n', meta }),
+      )
+    } finally {
+      forgetTextFileMeta('/tmp/sample.xlsx')
+    }
   })
 })
 
