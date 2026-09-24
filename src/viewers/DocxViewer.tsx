@@ -76,8 +76,11 @@ import {
   findEnclosingTable,
   findParagraph,
   findPrev,
+  extendOrCollapse,
   handleBeforeInput,
   handleKeyDown,
+  moveCursorToLineEnd,
+  moveCursorToLineStart,
   insertHyperlinkIntoBundle,
   insertImageIntoBundle,
   buildPasteCommands,
@@ -106,13 +109,17 @@ import {
   type HeaderFooterKind,
 } from '../docx/editor'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
-import { comparePositions } from '../docx/editor/Selection'
+import { comparePositions, isRangeCollapsed, normalizeRange } from '../docx/editor/Selection'
 import {
+  caretClientRect,
   domPointToPosition,
   paragraphRangeFromClientPoint,
   positionFromClientPoint,
+  positionOnAdjacentLine,
+  positionOnePageVertically,
   positionToDomRange,
   wordRangeFromClientPoint,
+  type VerticalDirection,
 } from '../docx/editor/Cursor'
 import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import { TableEditMenuItems } from '../docx/editor/toolbar/TableEditMenuItems'
@@ -169,10 +176,11 @@ const COMMON_OFFICE_FONTS: ReadonlyArray<string> = [
   'Palatino Linotype', 'Segoe UI', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana',
 ]
 
-/** USR-07/USR-09 — navigation keys the model does not handle yet (vertical
- * movement needs layout), so the browser moves the caret and the DOM
- * selection is read back on keyup. Every other key keeps the model range. */
-const NATIVE_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
+/** DOCX-1 — vertical-caret keys, resolved entirely by `handleKeyDownEvent`
+ * itself (via `Cursor.ts`'s line-geometry helpers) before `Input.ts` ever
+ * sees them; always `preventDefault()`ed so the browser's own broken native
+ * vertical-caret handling on this `inline-block`-run layout never runs. */
+const VERTICAL_MOVE_KEYS: ReadonlySet<string> = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
 
 const DEFAULT_FONT_METRICS: FontMetrics = Object.freeze({
   unitsPerEm: 1000,
@@ -856,10 +864,14 @@ function DocxEditor({
   // USR-06 — set by Find next/prev so the post-render selection sync scrolls
   // the match into view.
   const revealSelectionRef = useRef(false)
-  // USR-07/USR-09 — whether the last keydown was handled by the model; only
-  // natively-handled navigation keys re-read the DOM selection on keyup, so a
-  // model selection (Ctrl+A, formatting) is never overwritten by a stale DOM.
-  const nativeNavigationKeyRef = useRef(false)
+  // DOCX-1 — the client-x "goal column" ArrowUp/ArrowDown/PageUp/PageDown
+  // keep across consecutive presses, so moving down through a run of short
+  // lines stays under the same visual column instead of snapping to each
+  // line's own length (matches every real text editor). `null` means "no
+  // goal yet — derive one from the current caret" and is restored after
+  // every move that isn't itself a vertical one (typing, clicking,
+  // Left/Right/Home/End, …see handleKeyDownEvent/handleSurfaceMouseDown).
+  const verticalGoalXRef = useRef<number | null>(null)
   const historyRef = useRef(new History())
   // DEFER-4 / DXP-13 — this document's own embedded fonts (already
   // de-obfuscated), keyed off the raw archive so switching to a different
@@ -1317,6 +1329,7 @@ function DocxEditor({
 
       event.preventDefault()
       root.focus({ preventScroll: true })
+      verticalGoalXRef.current = null
 
       if (event.detail >= 3) {
         const paragraph = paragraphRangeFromClientPoint(event.clientX, event.clientY, root, documentModel)
@@ -1664,7 +1677,74 @@ function DocxEditor({
       const ctrl = event.ctrlKey || event.metaKey
       const shift = event.shiftKey
       const lowerKey = event.key.toLowerCase()
-      nativeNavigationKeyRef.current = NATIVE_NAVIGATION_KEYS.has(event.key)
+
+      // DOCX-1 — resolved entirely here, before Input.ts's `handleKeyDown`
+      // (which has no DOM access and always no-ops on these four keys — see
+      // its own comment). Always `preventDefault()`ed so the browser's own
+      // broken native vertical-caret handling on this `inline-block`-run
+      // layout never runs, even when there's nothing for us to move to yet
+      // (e.g. no root mounted, or no selection).
+      if (VERTICAL_MOVE_KEYS.has(event.key)) {
+        event.preventDefault()
+        const root = editorRootRef.current
+        if (root === null || range === null) {
+          return
+        }
+
+        const direction: VerticalDirection = event.key === 'ArrowUp' || event.key === 'PageUp' ? 'up' : 'down'
+        const isPageMove = event.key === 'PageUp' || event.key === 'PageDown'
+
+        // Matches ArrowLeft/ArrowRight's own convention just below: the
+        // first non-Shift vertical press on an existing selection only
+        // collapses it (to the edge that direction already reads towards),
+        // it doesn't also move past that same edge on the same keystroke.
+        if (!shift && !isRangeCollapsed(range)) {
+          const { start, end } = normalizeRange(range)
+          const collapsed = direction === 'up' ? start : end
+          verticalGoalXRef.current = null
+          setRange({ anchor: collapsed, focus: collapsed })
+          return
+        }
+
+        const fromRect = caretClientRect(range.focus, root, documentModel)
+        if (fromRect === null) {
+          // Can't locate the caret in the live DOM (e.g. mid-render) — leave
+          // the selection alone rather than guess; default is still
+          // prevented above.
+          return
+        }
+
+        const goalX = verticalGoalXRef.current ?? fromRect.left
+        verticalGoalXRef.current = goalX
+
+        const target = isPageMove
+          ? positionOnePageVertically(
+              fromRect,
+              goalX,
+              direction,
+              // USR-04's own doc comment on `scrollContainerRef` explains why
+              // `containerRef` (the outer `.docx-viewer`), not `root`, is the
+              // element that actually has a real scrollable viewport height.
+              containerRef.current?.clientHeight ?? root.getBoundingClientRect().height,
+              root,
+              documentModel,
+            )
+          : positionOnAdjacentLine(range.focus, goalX, direction, root, documentModel)
+
+        // No line to move to (top/bottom of the document, or of what's
+        // currently mounted) — land on this line's own start/end instead of
+        // doing nothing, matching Home/End's behavior for the current line.
+        const newFocus =
+          target ??
+          (direction === 'up'
+            ? moveCursorToLineStart(range.focus, documentModel)
+            : moveCursorToLineEnd(range.focus, documentModel))
+
+        setRange(extendOrCollapse(range, newFocus, shift))
+        return
+      }
+
+      verticalGoalXRef.current = null
 
       // Wave F.4 — MS Word keyboard parity.  Intercept the parity-only
       // shortcuts here BEFORE falling through to the editor's handleKeyDown
@@ -1762,7 +1842,7 @@ function DocxEditor({
         event.preventDefault()
       }
     },
-    [applyResult, documentModel, getTrackChanges, range],
+    [applyResult, containerRef, documentModel, getTrackChanges, range],
   )
 
   const handleCompositionStart = useCallback((event: FormEvent<HTMLDivElement>) => {
@@ -3007,11 +3087,6 @@ function DocxEditor({
           spellCheck={spellCheckEnabled}
           onKeyDown={handleKeyDownEvent}
           onMouseDown={handleSurfaceMouseDown}
-          onKeyUp={() => {
-            if (nativeNavigationKeyRef.current) {
-              syncRangeFromDom()
-            }
-          }}
           onFocus={() => {
             if (range === null) {
               syncRangeFromDom()

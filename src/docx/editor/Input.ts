@@ -693,9 +693,18 @@ export function handleKeyDown(
       return { document, range: extendOrCollapse(range, newFocus, shift) }
     }
 
-    // Vertical movement deferred (needs paginator)
+    // DOCX-1 — vertical movement needs real rendered-line geometry
+    // (`getBoundingClientRect`), which this module deliberately doesn't have
+    // access to (it works purely on the Document/Position model, same as
+    // every other branch here). `DocxViewer.tsx`'s `handleKeyDownEvent`
+    // intercepts these four keys before they ever reach `handleKeyDown` and
+    // resolves them itself via `Cursor.ts`'s `positionOnAdjacentLine`/
+    // `positionOnePageVertically` (the same point→position mapper a mouse
+    // click uses). This branch only still exists so a caller that reaches
+    // `handleKeyDown` directly — a unit test, or some future caller that
+    // isn't `DocxViewer.tsx` — gets a safe no-op instead of falling through
+    // to the browser's own broken native vertical-caret handling.
     if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'PageUp' || key === 'PageDown') {
-      // TODO: vertical movement needs paginator output — deferred to a later wave
       return null
     }
 

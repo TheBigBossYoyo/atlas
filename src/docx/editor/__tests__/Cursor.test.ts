@@ -15,9 +15,12 @@ import type {
 } from '../../model'
 import { twip } from '../../model'
 import {
+  caretClientRect,
   domPointToPosition,
   findPositionAtClientPoint,
   positionFromClientPoint,
+  positionOnAdjacentLine,
+  positionOnePageVertically,
   positionToDomRange,
 } from '../Cursor'
 
@@ -375,5 +378,155 @@ describe('DOCX-17 — table-cell hit-testing', () => {
     expect(point).not.toBeNull()
     expect(point?.node).toBe(spans[1].firstChild)
     expect(point?.offset).toBe(2)
+  })
+})
+
+// ─── DOCX-1 — vertical caret movement geometry ─────────────────────────────
+//
+// jsdom never lays anything out, so every helper below stubs
+// `getBoundingClientRect` on the elements it cares about — the same pattern
+// `mountTableDom` above already uses. Every line shares the same x-range
+// ([20, 120)) so a `goalX` of exactly 20 (a line's own left edge) always
+// resolves to charOffset 0 via `positionFromClientPoint`'s own left-edge
+// special case, without needing real sub-character `Range` geometry (which
+// jsdom can't provide either).
+
+/** Three stacked lines, each one paragraph, non-overlapping vertical bands:
+ * line 0 at y=[0,20), line 1 at y=[40,60), line 2 at y=[80,100). */
+function mountThreeLineDom() {
+  document.body.innerHTML = `
+    <div id="root">
+      <div class="docx-page__line" data-paragraph-path="0">
+        <span data-run-index="0" data-char-start="0" data-char-end="4">zero</span>
+      </div>
+      <div class="docx-page__line" data-paragraph-path="1">
+        <span data-run-index="0" data-char-start="0" data-char-end="3">one</span>
+      </div>
+      <div class="docx-page__line" data-paragraph-path="2">
+        <span data-run-index="0" data-char-start="0" data-char-end="3">two</span>
+      </div>
+    </div>
+  `
+
+  const root = document.getElementById('root') as HTMLElement
+  const lines = Array.from(root.querySelectorAll<HTMLElement>('.docx-page__line'))
+  const spans = Array.from(root.querySelectorAll<HTMLElement>('[data-run-index]'))
+  const bands: ReadonlyArray<[number, number]> = [[0, 20], [40, 60], [80, 100]]
+
+  lines.forEach((line, index) => {
+    const [top, bottom] = bands[index]
+    line.getBoundingClientRect = () => rect(20, top, 100, bottom - top)
+  })
+  spans.forEach((span, index) => {
+    const [top, bottom] = bands[index]
+    span.getBoundingClientRect = () => rect(20, top, 100, bottom - top)
+  })
+
+  return { root, lines, spans }
+}
+
+describe('DOCX-1 — positionOnAdjacentLine', () => {
+  it('moves down to the nearest line below', () => {
+    const { root } = mountThreeLineDom()
+    const fromPosition = { paragraphPath: [1], runIndex: 0, charOffset: 1 } // caret on line 1
+
+    const position = positionOnAdjacentLine(fromPosition, 20, 'down', root)
+
+    expect(position).toEqual({ paragraphPath: [2], runIndex: 0, charOffset: 0 })
+  })
+
+  it('moves up to the nearest line above', () => {
+    const { root } = mountThreeLineDom()
+    const fromPosition = { paragraphPath: [1], runIndex: 0, charOffset: 1 } // caret on line 1
+
+    const position = positionOnAdjacentLine(fromPosition, 20, 'up', root)
+
+    expect(position).toEqual({ paragraphPath: [0], runIndex: 0, charOffset: 0 })
+  })
+
+  it('returns null moving up from the first line (top of document)', () => {
+    const { root } = mountThreeLineDom()
+    const fromPosition = { paragraphPath: [0], runIndex: 0, charOffset: 1 } // caret on line 0
+
+    expect(positionOnAdjacentLine(fromPosition, 20, 'up', root)).toBeNull()
+  })
+
+  it('returns null moving down from the last line (bottom of document)', () => {
+    const { root } = mountThreeLineDom()
+    const fromPosition = { paragraphPath: [2], runIndex: 0, charOffset: 1 } // caret on line 2
+
+    expect(positionOnAdjacentLine(fromPosition, 20, 'down', root)).toBeNull()
+  })
+
+  it('never lands back on its own line, even when its own line’s rect reports a center a couple of px off from the caret rect (line-height/baseline offsets)', () => {
+    const { root, lines } = mountThreeLineDom()
+    // Line 1's own bounding rect (used as the "current line" anchor) is
+    // shifted 3px from its band's true center — bigger than the 1px
+    // same-line epsilon — mimicking the real caret-vs-line-rect mismatch
+    // DOCX-1's own e2e repro hit (a run's precise caret rect and its
+    // enclosing line's own rect don't share an exact center).
+    lines[1].getBoundingClientRect = () => rect(20, 37, 100, 20) // band [40,60) shifted to [37,57)
+    const fromPosition = { paragraphPath: [1], runIndex: 0, charOffset: 1 }
+
+    expect(positionOnAdjacentLine(fromPosition, 20, 'up', root)).toEqual({
+      paragraphPath: [0],
+      runIndex: 0,
+      charOffset: 0,
+    })
+    expect(positionOnAdjacentLine(fromPosition, 20, 'down', root)).toEqual({
+      paragraphPath: [2],
+      runIndex: 0,
+      charOffset: 0,
+    })
+  })
+
+  it('keeps the given goal x across the move (lands at the target line under the same column)', () => {
+    const { root } = mountThreeLineDom()
+    const fromPosition = { paragraphPath: [0], runIndex: 0, charOffset: 1 } // caret on line 0
+
+    // x=120 is line 1's right edge — its own special-case "past the last
+    // character" branch in positionFromClientPoint, landing at charOffset 3.
+    const position = positionOnAdjacentLine(fromPosition, 120, 'down', root)
+
+    expect(position).toEqual({ paragraphPath: [1], runIndex: 0, charOffset: 3 })
+  })
+})
+
+describe('DOCX-1 — positionOnePageVertically', () => {
+  it('moving down by a viewport height lands on the nearest line to that offset', () => {
+    const { root } = mountThreeLineDom()
+    const fromRect = rect(20, 0, 0, 20) // caret on line 0, top=0
+
+    // targetY = 0 + 100 = 100 — closest to line 2's band [80,100).
+    const position = positionOnePageVertically(fromRect, 20, 'down', 100, root)
+
+    expect(position).toEqual({ paragraphPath: [2], runIndex: 0, charOffset: 0 })
+  })
+
+  it('moving up by a viewport height clamps to the first line when it overshoots the document', () => {
+    const { root } = mountThreeLineDom()
+    const fromRect = rect(20, 80, 0, 20) // caret on line 2, top=80
+
+    // targetY = 80 - 100 = -20 — no line up there, nearest is line 0.
+    const position = positionOnePageVertically(fromRect, 20, 'up', 100, root)
+
+    expect(position).toEqual({ paragraphPath: [0], runIndex: 0, charOffset: 0 })
+  })
+})
+
+describe('DOCX-1 — caretClientRect', () => {
+  it('falls back to the containing run element’s rect when the DOM Range reports no client rects (jsdom)', () => {
+    const { root, spans } = mountThreeLineDom()
+    spans[1].getBoundingClientRect = () => rect(20, 40, 100, 20)
+
+    const caretRect = caretClientRect({ paragraphPath: [1], runIndex: 0, charOffset: 1 }, root)
+
+    expect(caretRect).toMatchObject({ left: 20, top: 40, right: 120, bottom: 60, width: 100, height: 20 })
+  })
+
+  it('returns null when the position cannot be mapped into the DOM at all', () => {
+    const { root } = mountThreeLineDom()
+
+    expect(caretClientRect({ paragraphPath: [99], runIndex: 0, charOffset: 0 }, root)).toBeNull()
   })
 })
