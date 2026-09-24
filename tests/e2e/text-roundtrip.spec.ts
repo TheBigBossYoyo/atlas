@@ -200,7 +200,7 @@ test('SHEET-6: a semicolon-delimited CSV with a UTF-8 BOM keeps its semicolon de
     // Fixed (SHEET-6): the delimiter is still `;`, not silently rewritten to `,`.
     expect(savedText).toContain(';')
     expect(savedText.replace(/EDITED/g, '')).not.toContain('Alice,')
-    const firstLine = savedText.replace(/^﻿/, '').split(/\r?\n/)[0]
+    const firstLine = savedText.replace(/^\uFEFF/, '').split(/\r?\n/)[0]
     expect(firstLine.split(';').length).toBeGreaterThan(1)
 
     // Documented, unfixed gap (see module header): BOM/newline are not
