@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, lazy, Suspense } from 'react';
 import { ViewerRouter } from './components/ViewerRouter';
 import { ViewerLoading } from './components/ViewerLoading';
 import { useTheme } from './hooks/useTheme';
@@ -318,8 +318,14 @@ function AppShell() {
   // ref (not the `fileIdentityKey` closed over at call time) so it always
   // reads the *latest* identity rather than the one from whichever render
   // kicked off the save.
+  //
+  // TEST-11 — a layout effect, not a passive one: it must be updated in the
+  // same commit that puts the new tab on screen. A passive effect runs later,
+  // and under load a save resolving in between read the previous tab's
+  // identity, took the "still showing" branch, and adopted the old tab's
+  // content under the new tab's path (toolbar "b.md", editor "# A…").
   const fileIdentityKeyRef = useRef<string | null>(fileIdentityKey);
-  useEffect(() => {
+  useLayoutEffect(() => {
     fileIdentityKeyRef.current = fileIdentityKey;
   }, [fileIdentityKey]);
 

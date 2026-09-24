@@ -18,6 +18,12 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   before then went nowhere. Typing "HELLO" could save "ELLO", or leave the cell
   unchanged. Keys typed in that moment are now held and delivered to the grid,
   in order, once it is ready. Affects `.xlsx`, `.ods` and `.csv` alike.
+- **Spreadsheets: pressing Ctrl+S straight after typing into a cell now saves
+  what you typed.** On a slow machine the save could run before the edit
+  reached the sheet, so the file on disk lacked it until you saved again.
+- **Tabs: a Save As finishing just as you switch tabs can no longer show the
+  previous document's text under the new tab's name.** Very hard to hit by
+  hand; found by a test that failed only under load.
 
 ## [3.7.0] — 2026-09-21 (phase 4: features that never worked, and the tests that hid them)
 

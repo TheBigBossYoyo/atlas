@@ -525,13 +525,66 @@ when e2e fails. The spec also now waits on the file's mtime instead of a fixed
 1500ms sleep, and prints every saved cell on failure, so "never saved", "edit
 lost" and "wrong cell" fail differently.
 
-**TEST-11 · OPEN** — `App.shellSession.test.tsx` › "a background Save As that
-resolves onto the currently-active tab's path…" failed on CI (`9987bfd`,
-ubuntu unit job): the editor showed `# A (background save…)` where `# B` was
-expected. Passes 3/3 alone locally and on the previous CI run. Same App-shell
-load-sensitive cluster as TEST-9/10; one of those was a real bug, so this
-needs a real investigation (is the active tab's content ever replaced by a
-background Save As in the real app?), not a retry.
+**F6b, second half · fixed** — CI on `4200064` failed the new 8x/0ms test
+with `"Name"` again, but a second save 3s later held `"HELLO"`: **Ctrl+S
+overtook the edit.** Two paths, both traced at 24x: the save chord bypassed
+keys `KeyHold` was still holding (chords were deliberately not held), or it
+ran after every key replayed but before the overlay mounted and applied
+`commitOnMount` (that one predates 3.7.0's fix too). `KeyHold` now holds
+chords as well while waiting for focus, holds them while an edit is in flight
+(the F6 pending seed), and queues everything behind anything held. A seed is
+dropped as soon as glide shows it opened no editor (read-only grid or cell),
+so it can't hold Ctrl+C/Ctrl+S; 5s is only a last-resort bound (a 2s bound
+lost to a 2.45s overlay mount at 24x). New e2e test: 24x, Ctrl+S straight
+after Enter. It failed 3/3 on `4200064`'s build and passed 10/10 after.
+
+**TEST-11 · fixed — real, test-visible, very unlikely for a user** —
+`App.shellSession.test.tsx` › "a background Save As that resolves onto the
+currently-active tab's path…" (CI `9987bfd`: editor `# A (background save…)`
+under toolbar `b.md`). Cause: `fileIdentityKeyRef`, which `saveFile`/`saveFileAs`
+read to decide "is the saved tab still showing", was updated in a passive
+`useEffect`. After a tab switch commits, a save resolving before that effect
+runs reads the old tab, takes the "still showing" branch, and adopts the old
+tab's content under the new tab's path. Reproduced 3/4 runs (40 repeats each)
+under 3 CPU burners; 0/2 alone. Fixed with `useLayoutEffect`: 0 failures in
+6 x 40 loaded repeats. A person can hardly hit this window, because Save As is a
+modal dialog.
+
+**REF-EFFECT-1 · OPEN, likely lead for TEST-9/10** — the same "ref mirrors
+state through a passive effect, read by async code" pattern remains in
+`App.tsx`: `saveRef`, `saveAsRef`, `exportContentRef`, `saveFileRef`, and
+`dirtyGuardStateRef` (read by the unsaved-changes guard; a stale "not dirty"
+right after a commit is how a close could skip the prompt). Reproduce each
+under load (3 burners + `{ repeats: 40 }`, see TEST-11) before changing it.
+
+**SHORTCUT-FIELD-1 · OPEN, UX, needs an owner decision** — found by the
+installer smoke test: Ctrl+O does nothing while the cursor is in a Word
+document's text (it works with focus elsewhere). `isPlainFieldTarget` counts
+every contentEditable as a field, and `useUniversalShortcuts` skips
+o/n/e/t/b/1/2/3// in fields. Ctrl+O/N/T have no native meaning in a text
+field to protect, and the Markdown editor is contentEditable too. Same
+class as FIELD-01 (Ctrl+W). Ctrl+B must stay gated.
+
+### 2026-09-24 — packaged installer smoke test (`docs/RELEASE.md` step 8), 3.7.0
+
+Owner installed `Atlas-Setup-3.7.0.exe` (UAC); the rest was driven against
+`C:\Program Files\Atlas\Atlas.exe` with Playwright (`executablePath`) and
+checked against saved bytes. Results:
+- PASS: the packaged build runs (`isPackaged`, 3.7.0). Start Menu shortcut → `Atlas.exe`,
+  window opens.
+- PASS: `.docx`/`.xlsx`/`.pdf`/`.pptx`/`.md`/`.csv` registered under
+  `OpenWithProgids` (`Atlas.Document` etc., command `"…\Atlas.exe" "%1"`).
+  Running that exact command opened the file (title `assoc-test.docx — Atlas`).
+  Atlas is not the *default* handler for any of them, so an Explorer
+  double-click opens Atlas only via "Open with" or after the user picks it.
+- PASS: `.docx` opened from the command line, edited, saved; the text is in
+  `word/document.xml`. `.xlsx` via Ctrl+O, A1 edited, saved, read back.
+  `.pdf` via Ctrl+O rendered. `validate-office-file.mjs`: both saved files clean.
+- PASS: version resource (Atlas, 3.7.0 / 3.7.0.0, copyright) and icon matches
+  `build/icon.png`.
+- FAIL: Ctrl+O with the cursor in the `.docx` body (SHORTCUT-FIELD-1).
+- Ctrl+O's native dialog was stubbed (`dialog.showOpenDialog`), not clicked.
+  Step 6 (uninstall) is not done: it removes the owner's install.
 
 ### New items found while executing batch 3
 

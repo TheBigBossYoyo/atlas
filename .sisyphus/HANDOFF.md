@@ -15,11 +15,11 @@ in **French** — answer him in French. Code, commits, docs and UI stay in Engli
 - `main` is pushed and released as **3.7.0**; installer `release\Atlas-Setup-3.7.0.exe`
   (SHA256 `ddb181307d210e42155bcb2abcb8fe861a22675d6186f6e58cb06f4a28f3ec40`, 136 MB, unsigned).
   Earlier installers (3.4.0-3.6.0) are in `release\` too.
-- **The packaged installer has NOT been smoke-tested** (`docs/RELEASE.md` step 8). That step
-  needs an interactive UAC prompt and a human at the machine, so it was deliberately left
-  undone rather than skipped silently. Do it before trusting this build: install, launch from
-  the Start Menu, open a `.docx`/`.xlsx`/`.pdf` via Ctrl+O *and* via an Explorer double-click
-  (that is the only check of the file associations the installer registers), edit and save.
+- **The 3.7.0 installer was smoke-tested on 2026-09-24** (`docs/RELEASE.md` steps 1-5; results
+  in the phase-4 plan, "packaged installer smoke test"). All passed except Ctrl+O inside a
+  document's text (SHORTCUT-FIELD-1). Step 6 (uninstall) not done. 3.7.0 also still has F6b
+  (first keystroke lost / Ctrl+S overtaking an edit on a slow machine), fixed on `main` since.
+  Cut a 3.7.1.
 - 3581 unit tests, 114 Playwright e2e, `npm audit` 0, bundle gate green, CI green.
 - `npx tsc -b` covers five projects: `src/`, `vite.config.ts`, `tests/e2e`,
   `electron/**/*.cjs` and `scripts/**/*.mjs`. Never weaken these.
