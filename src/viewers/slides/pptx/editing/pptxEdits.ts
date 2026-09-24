@@ -28,8 +28,35 @@ import { xmlSafeText } from '../../../../office/ooxmlDom'
 export type ShapeBox = { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
 
 const SHAPE_TAGS = new Set(['sp', 'pic', 'graphicFrame', 'cxnSp', 'grpSp'])
+const ADDRESSABLE_SHAPE_TAGS = new Set(['sp', 'pic', 'graphicFrame', 'cxnSp'])
+
+/**
+ * SHELL-3 / USR-16 — the write side of `parser.ts`'s `collectShapeElementsInOrder`.
+ * MUST walk `spTree` in the exact same depth-first, grpSp-entering order, or a
+ * positional (`@N`) sourceId will resolve to the wrong shape.
+ */
+function collectShapeElementsInOrder(container: Element): Element[] {
+  const results: Element[] = []
+  for (const child of Array.from(container.children)) {
+    if (child.localName === 'grpSp') {
+      results.push(...collectShapeElementsInOrder(child))
+    } else if (ADDRESSABLE_SHAPE_TAGS.has(child.localName)) {
+      results.push(child)
+    }
+  }
+  return results
+}
 
 function findShape(doc: XMLDocument, sourceId: string): Element | null {
+  // SHELL-3 — a shape with no cNvPr id, or one shared with another shape, is
+  // addressed by structural position instead (see parser.ts for why).
+  if (sourceId.startsWith('@')) {
+    const index = Number(sourceId.slice(1))
+    if (!Number.isInteger(index) || index < 0) return null
+    const spTree = descendants(doc, 'spTree')[0]
+    if (!spTree) return null
+    return collectShapeElementsInOrder(spTree)[index] ?? null
+  }
   for (const cNvPr of descendants(doc, 'cNvPr')) {
     if (cNvPr.getAttribute('id') !== sourceId) continue
     const shape = cNvPr.parentElement?.parentElement ?? null

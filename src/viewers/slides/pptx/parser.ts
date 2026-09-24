@@ -11,6 +11,7 @@ import type { SlideData, SlideShape } from '../../shared/SlideDeck.types'
 import type { CancelSignal, ZipArchive } from '../shared/xmlUtils'
 import {
   getAttributeValue,
+  getDirectChildren,
   getElementsByLocalName,
   getFirstByLocalName,
   getRequiredZipEntry,
@@ -28,6 +29,32 @@ import { traverseShapeTree } from './transforms'
 
 const DEFAULT_SLIDE_WIDTH = 1280
 const DEFAULT_SLIDE_HEIGHT = 720
+
+/** Local names `traverseShapeTree` treats as addressable leaf shapes (mirrors `transforms.ts`'s own `LEAF_TAGS`). */
+const ADDRESSABLE_SHAPE_TAGS = new Set(['sp', 'pic', 'graphicFrame', 'cxnSp'])
+
+/**
+ * SHELL-3 / USR-16 fallback identity: every `sp`/`pic`/`graphicFrame`/`cxnSp`
+ * element under `spTree`, depth-first, entering `p:grpSp` containers — used
+ * to address a shape for editing when its own `cNvPr` has no `id` (real
+ * PowerPoint always writes one, but hand-built/converted files may not), or
+ * when its `id` is shared with another shape (both make plain id-matching
+ * ambiguous or impossible). A position is always available even when an id
+ * isn't. `pptxEdits.ts`'s `collectShapeElementsInOrder` MUST walk in this
+ * same order — the two are the read and write sides of one addressing
+ * scheme, and edits land on the wrong shape (or none) if they diverge.
+ */
+function collectShapeElementsInOrder(container: Element): Element[] {
+  const results: Element[] = []
+  for (const child of getDirectChildren(container)) {
+    if (child.localName === 'grpSp') {
+      results.push(...collectShapeElementsInOrder(child))
+    } else if (ADDRESSABLE_SHAPE_TAGS.has(child.localName)) {
+      results.push(child)
+    }
+  }
+  return results
+}
 
 export type SlideSize = { readonly width: number; readonly height: number }
 
@@ -117,6 +144,15 @@ async function buildSlideShapes(
 
   const relationships = relationshipsById(await parseRelationships(zip, slidePath, signal))
   const positioned = traverseShapeTree(spTree, chain)
+  const addressable = collectShapeElementsInOrder(spTree)
+  // SHELL-3 — id -> occurrence count across the WHOLE slide, so a duplicated
+  // id (same bug class as a missing one: plain id-matching can no longer
+  // pick out the right shape) also falls back to positional addressing.
+  const idCounts = new Map<string, number>()
+  for (const cNvPr of getElementsByLocalName(slideDocument, 'cNvPr')) {
+    const id = cNvPr.getAttribute('id')
+    if (id) idCounts.set(id, (idCounts.get(id) ?? 0) + 1)
+  }
   const consumedTextNodes = new Set<Element>()
   const shapes: SlideShape[] = []
   let genericStackIndex = 0
@@ -139,8 +175,14 @@ async function buildSlideShapes(
       genericStackIndex += 1
     }
 
-    // USR-16 — address for editing: the shape's own cNvPr id; only top-level shapes move directly.
-    const source = { sourceId: getFirstByLocalName(element, 'cNvPr')?.getAttribute('id') ?? undefined, movable: !inGroup }
+    // USR-16 — address for editing: the shape's own cNvPr id when it's present and unique;
+    // SHELL-3 — otherwise its structural position (see `collectShapeElementsInOrder` above).
+    // Only top-level shapes move directly.
+    const rawId = getFirstByLocalName(element, 'cNvPr')?.getAttribute('id') ?? null
+    const hasUniqueId = rawId !== null && rawId !== '' && idCounts.get(rawId) === 1
+    const ordinal = addressable.indexOf(element)
+    const sourceId = hasUniqueId ? rawId : ordinal >= 0 ? `@${ordinal}` : undefined
+    const source = { sourceId, movable: !inGroup }
 
     try {
       if (element.localName === 'sp' || element.localName === 'cxnSp') {
