@@ -105,6 +105,41 @@ describe('useUniversalShortcuts — inPlainField gate', () => {
     expect(props.toggleSidebar).toHaveBeenCalledTimes(1);
   });
 
+  // SHORTCUT-FIELD-1 — found by the 3.7.0 installer smoke test and the shell
+  // sweep: Ctrl+O did nothing with the caret in a Word document, the markdown
+  // editor or the code editor. Like Ctrl+S/Ctrl+W, open/new are file-level
+  // commands with no in-field meaning to protect.
+  it.each([
+    ['o', 'openFile'],
+    ['n', 'openNewMenu'],
+  ] as const)('SHORTCUT-FIELD-1: Ctrl+%s reaches %s even with a plain field focused', (key, action) => {
+    const props = baseProps();
+    render(
+      <ShortcutManagerProvider>
+        <Probe {...props} />
+      </ShortcutManagerProvider>,
+    );
+
+    fireEvent.keyDown(document.querySelector('[data-testid="plain-field"]')!, { key, ctrlKey: true });
+
+    expect(props[action]).toHaveBeenCalledTimes(1);
+  });
+
+  it('SHORTCUT-FIELD-1: Ctrl+E and Ctrl+T stay gated inside a field (a rich-text surface may claim them)', () => {
+    const props = baseProps();
+    render(
+      <ShortcutManagerProvider>
+        <Probe {...props} />
+      </ShortcutManagerProvider>,
+    );
+
+    fireEvent.keyDown(document.querySelector('[data-testid="plain-field"]')!, { key: 'e', ctrlKey: true });
+    fireEvent.keyDown(document.querySelector('[data-testid="plain-field"]')!, { key: 't', ctrlKey: true });
+
+    expect(props.openExportMenu).not.toHaveBeenCalled();
+    expect(props.cycleTheme).not.toHaveBeenCalled();
+  });
+
   it('a plain letter with no modifier is never touched regardless of focus (sanity: handler bails before inPlainField is even read)', () => {
     const props = baseProps();
     render(

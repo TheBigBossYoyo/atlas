@@ -37,10 +37,10 @@ interface UseUniversalShortcutsOptions {
  * competing in-field meaning, not a per-field editing command. Gating it
  * behind `inPlainField` meant typing in the markdown editor's textarea and
  * pressing Ctrl+W did nothing at all — no close, no unsaved-changes prompt —
- * since `closeFile` was never reached. The other entries below the gate
- * (`o`/`n`/`e`/`t`/`b`/`1`/`2`/`3`/`/`) were checked against the same
- * question and don't share this bug: none of them guards a safety-critical
- * action a field-focused user can otherwise never trigger, and `b` in
+ * since `closeFile` was never reached. SHORTCUT-FIELD-1 later found the same
+ * for Ctrl+O/Ctrl+N (dead while typing in a Word document, the markdown
+ * editor or the code editor), so they moved above the gate too. The rest
+ * (`e`/`t`/`b`/`1`/`2`/`3`/`/`) stay gated: `b` in
  * particular *must* stay gated — Ctrl+B is the exact combo a contentEditable
  * rich-text surface (e.g. DocxViewer) natively treats as "toggle bold",
  * which is precisely what this gate exists to protect.
@@ -91,17 +91,24 @@ export function useUniversalShortcuts({
         return true;
       }
 
+      // SHORTCUT-FIELD-1 — open/new are file-level commands with the same
+      // shape as Ctrl+S/Ctrl+W: no field gives them a meaning of its own, and
+      // gating them left Ctrl+O dead while typing in any editor.
+      if (lowerKey === 'o') {
+        event.preventDefault();
+        void openFile();
+        return true;
+      }
+
+      if (lowerKey === 'n') {
+        event.preventDefault();
+        openNewMenu();
+        return true;
+      }
+
       if (ctx.inPlainField) return false;
 
       switch (lowerKey) {
-        case 'o':
-          event.preventDefault();
-          void openFile();
-          return true;
-        case 'n':
-          event.preventDefault();
-          openNewMenu();
-          return true;
         case 'e':
           event.preventDefault();
           openExportMenu();
