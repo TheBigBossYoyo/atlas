@@ -1,6 +1,16 @@
-import { memo, useCallback, useEffect, useMemo, useState, lazy, Suspense, useDeferredValue } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  lazy,
+  Suspense,
+  useDeferredValue,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import { Table, FileSpreadsheet, Eye, EyeOff, Plus, X } from 'lucide-react'
-import type { GridColumn, Item, Rectangle } from '@glideapps/glide-data-grid'
+import { CompactSelection, type GridColumn, type GridSelection, type Item, type Rectangle } from '@glideapps/glide-data-grid'
 
 import type { ViewerProps } from '../formats/types'
 import { useSetNavItems, useSetViewerStats, useRegisterViewerFind } from './shared/useViewerContext'
@@ -318,6 +328,52 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     [editor, activeSheetIndex],
   )
 
+  // SHEET-1 — glide-data-grid's own Ctrl+End ("goToLastCell") jumps to
+  // `rows - 1` / `columns.length - 1` as PASSED TO IT, which is
+  // `gridRowCount`/`gridColCount` from `useGridBlankMargin` — the sheet's
+  // real extent PLUS the blank editing margin (50 rows / enough columns for
+  // at least 26) drawn past the data so a value can be typed just past the
+  // last cell (USR-17). That margin is meant to be reachable by scrolling or
+  // arrowing into it, not to redefine what Excel calls the "used range":
+  // Ctrl+End must land on the real last cell (`rows.length - 1`,
+  // `colCount - 1`), exactly like Excel, so typing there doesn't silently
+  // grow the saved file's dimensions with a phantom cell far past the data.
+  // Intercepted in the CAPTURE phase (ahead of glide-data-grid's own
+  // keydown handler on the canvas) so its default jump never happens at all
+  // — a bubble-phase handler would only be able to correct the selection
+  // one render after the wrong one already landed.
+  const handleGridKeyDownCapture = useCallback(
+    (e: ReactKeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key !== 'End') return
+      if (!activeSheet || activeSheet.rows.length === 0) return
+      const lastSheetRow = activeSheet.rows.length - 1
+      const lastSheetCol = Math.max(activeSheet.colCount - 1, 0)
+      // Mirrors the rowOffset/bodyRowIndices assumption used throughout this
+      // file (see `filteredRowIndices`'s own comment): unfiltered, sheet row
+      // N sits at grid row N - frozenRowCount; filtered (frozen rows are
+      // always off while filtering), the sheet's last row may not be a
+      // visible match at all, so this falls back to the last VISIBLE row —
+      // "the end of what's currently shown" is the only sensible target then.
+      let gridRow = isFiltering ? -1 : lastSheetRow - frozenRowCount
+      if (gridRow < 0 || gridRow >= bodyRowIndices.length) {
+        gridRow = bodyRowIndices.length > 0 ? bodyRowIndices.length - 1 : 0
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      const selection: GridSelection = {
+        current: {
+          cell: [lastSheetCol, gridRow],
+          range: { x: lastSheetCol, y: gridRow, width: 1, height: 1 },
+          rangeStack: [],
+        },
+        columns: CompactSelection.empty(),
+        rows: CompactSelection.empty(),
+      }
+      gridFind.onGridSelectionChange(selection)
+    },
+    [activeSheet, isFiltering, frozenRowCount, bodyRowIndices, gridFind],
+  )
+
   const commitRename = useCallback(
     (sheetName: string, newName: string) => {
       const idx = sheets.findIndex((s) => s.name === sheetName)
@@ -453,6 +509,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
       <div
         className="spreadsheet-viewer__grid"
         role="group"
+        onKeyDownCapture={handleGridKeyDownCapture}
         aria-label={
           activeSheet
             ? t('spreadsheet.gridAria', {
