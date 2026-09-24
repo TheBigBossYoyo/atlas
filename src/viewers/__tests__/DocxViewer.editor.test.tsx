@@ -863,6 +863,57 @@ describe('DocxViewer editor', () => {
     expect(request.existingPath).toBeUndefined()
   })
 
+  // DOCX-3 — the native OS Save dialog Save As opens takes focus away from
+  // the whole Electron window; nothing gave it back to the editor once the
+  // dialog closed, so `document.activeElement` was left as `<body>` and
+  // every keystroke typed right after Save As vanished silently. This test
+  // exercises DocxViewer in isolation (no ViewerRouter/shell wrapping it,
+  // matching every other test in this file), which is exactly the part of
+  // the fix that lives in this component: `handleSaveInternal`'s
+  // `forceDialog` branch now re-focuses `editorRootRef` and resyncs the
+  // selection once `saveBinaryFile` resolves. NOTE: driving the real app
+  // end-to-end (tests/e2e/docx-editor.spec.ts's "DOCX-3" test) additionally
+  // found that `src/components/ViewerRouter.tsx` keys the viewer subtree by
+  // `file.path` (`<ViewerErrorBoundary key={file.path}>`), so the moment
+  // Save As changes the active tab's path, the shell remounts a BRAND NEW
+  // DocxViewer instance a moment later that has no memory of this restored
+  // focus — undoing it. That remount doesn't happen in this unit test
+  // (there is no ViewerRouter here), so this test alone can't catch that
+  // half of the bug; see the final report for the ViewerRouter-side finding.
+  it('DOCX-3: focus and the caret return to the editor once Save As resolves to a new path', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.mouseDown(editor, { button: 0 })
+    expect(document.activeElement).toBe(editor)
+
+    window.electronAPI!.saveBinaryFile = vi.fn().mockResolvedValue({
+      saved: true,
+      path: 'C:/docs/sample-copy.docx',
+      name: 'sample-copy.docx',
+    })
+
+    // Simulate the OS dialog taking focus away, exactly like a real save
+    // dialog does — jsdom doesn't do this on its own.
+    editor.blur()
+    expect(document.activeElement).not.toBe(editor)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save As' }))
+
+    await waitFor(() => {
+      expect(window.electronAPI!.saveBinaryFile).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(document.activeElement).toBe(editor)
+    })
+  })
+
   it('DXE-25: a save failure stays visible until dismissed or a save succeeds, not cleared by the next edit', async () => {
     window.electronAPI!.saveBinaryFile = vi.fn().mockResolvedValue({ saved: false, error: 'Disk is full' })
 

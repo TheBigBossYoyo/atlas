@@ -2422,6 +2422,38 @@ function DocxEditor({
           return false
         }
 
+        // DOCX-3 — Save As (`options?.forceDialog`) shows a native OS save
+        // dialog via the main process; that dialog takes OS-level focus away
+        // from the whole Electron window, and nothing gives it back to
+        // `editorRootRef` once it closes (Chromium doesn't restore focus to
+        // whatever had it before an OS dialog interrupted the page).
+        // `document.activeElement` is left as `<body>`, and the model
+        // `range`/native `Selection` are never resynced because the
+        // selection-sync effect only re-runs when `pages` or `range` change
+        // — neither does just from saving — so the user has to click back
+        // into the document before typing does anything again. Plain Save
+        // never shows a dialog (confirmed against the real app: no observed
+        // focus loss), so this is scoped to the Save As path specifically.
+        //
+        // This is necessary but NOT sufficient end-to-end: confirmed against
+        // the real app that once `reportSavedPath` (above) updates the
+        // active tab's path, `src/components/ViewerRouter.tsx` — which keys
+        // its `ViewerErrorBoundary` (and so this whole component) by
+        // `file.path` — remounts a BRAND NEW `DocxEditor` a render or two
+        // later, discarding the focus this restores along with it. Fixing
+        // that fully needs a change in ViewerRouter.tsx (outside this
+        // component's ownership), described in this task's final report;
+        // this restoration still stands on its own for any Save As that
+        // doesn't trigger that remount, and is the half of the fix that
+        // belongs here.
+        if (options?.forceDialog) {
+          const root = editorRootRef.current
+          if (root !== null) {
+            root.focus({ preventScroll: true })
+            syncSelectionToDom(root, range, documentModelRef.current)
+          }
+        }
+
         // Record *the revision that was actually written*
         // (`revisionToSave`, captured alongside `documentToSave` above,
         // including any header/footer edit `flushHeaderFooterEdits` just
@@ -2467,7 +2499,7 @@ function DocxEditor({
         return false
       }
     },
-    [bundle, flushHeaderFooterEdits, savePath, file.path, reportSavedPath, t],
+    [bundle, flushHeaderFooterEdits, savePath, file.path, range, reportSavedPath, t],
   )
 
   const handleSave = useCallback((): Promise<boolean> => handleSaveInternal(), [handleSaveInternal])

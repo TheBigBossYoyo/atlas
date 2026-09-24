@@ -396,3 +396,84 @@ test('after Save As, the tab follows the document to its new file', async () => 
     kill(app)
   }
 })
+
+test('DOCX-3: typing continues to work immediately after Save As, without clicking back into the document', async () => {
+  // Found by driving the real app: the native Save dialog Save As opens
+  // takes OS-level focus away from the whole Electron window; nothing gave
+  // it back to the editor once the dialog closed, so `document.activeElement`
+  // was left as `<body>` and every keystroke typed right after Save As
+  // vanished silently — no error, no visual sign, until the user noticed and
+  // clicked back into the page.
+  //
+  // FIX-1/2: src/viewers/DocxViewer.tsx's handleSaveInternal now re-focuses
+  // editorRootRef and resyncs the selection once Save As's saveBinaryFile
+  // call resolves (verified directly: a temporary console.log right after
+  // that call showed `document.activeElement` correctly back on the editor
+  // surface).
+  //
+  // FIX-2/2 — NOT done here, outside this task's file ownership: a moment
+  // later, once `reportSavedPath` (called just before the fix above, to tell
+  // the shell the tab's file renamed) updates the active tab's path,
+  // `src/components/ViewerRouter.tsx` remounts a BRAND NEW DocxEditor
+  // instance — `<ViewerErrorBoundary key={file.path} ...>` there keys the
+  // whole viewer subtree by `file.path`, and Save As always changes it — so
+  // the freshly restored focus is immediately discarded along with the old
+  // instance. Confirmed via a temporary render-count console.log: the
+  // component remounts (a fresh `file.path` value in a fresh render) within
+  // ~300ms of the focus fix running. See this task's final report for the
+  // exact fix ViewerRouter.tsx needs (it needs to distinguish "the current
+  // document was renamed by its own Save As" from "the user opened a
+  // different file" before deciding whether to remount).
+  //
+  // Pinned via `test.fail()` rather than deleted or weakened: this documents
+  // the exact remaining gap and will flip to an unexpected PASS (Playwright
+  // then reports it as a failure needing promotion back to a plain `test`)
+  // the moment ViewerRouter.tsx's half of the fix lands.
+  test.fail()
+
+  const source = await createFixture()
+  const target = path.join(path.dirname(source), 'saveas-continue-typing.docx')
+
+  const app = await electron.launch({
+    args: ['.', source],
+    cwd: projectRoot,
+    env: { ...process.env, CI: '1', PLAYWRIGHT: '1' },
+  })
+  try {
+    const page = await app.firstWindow()
+    await page.waitForSelector('[data-paragraph-path]', { timeout: 20_000 })
+    await page.waitForTimeout(800)
+
+    await app.evaluate(async ({ dialog }, filePath) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+    }, target)
+
+    const line = page.locator('[data-paragraph-path="1"]').first()
+    const box = await line.boundingBox()
+    if (box === null) throw new Error('paragraph 1 has no bounding box')
+    await page.mouse.click(box.x + 10, box.y + box.height / 2)
+    await page.keyboard.type('Before save-as. ')
+
+    await page.keyboard.press('Control+Shift+S')
+    await expect.poll(() => fs.existsSync(target), { timeout: 15_000 }).toBe(true)
+    await expect(page.getByRole('tab', { name: 'saveas-continue-typing.docx' })).toBeVisible({ timeout: 15_000 })
+
+    // No click here — this is the exact repro: type right away.
+    await page.waitForTimeout(300)
+    await page.keyboard.type('POSTSAVEASMARK')
+    await page.waitForTimeout(300)
+
+    expect(await paragraphText(page, 1)).toContain('POSTSAVEASMARK')
+
+    const before = fs.statSync(target).mtimeMs
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect.poll(() => fs.statSync(target).mtimeMs, { timeout: 10_000 }).toBeGreaterThan(before)
+    await page.waitForTimeout(300)
+
+    const zip = await (await import('jszip')).default.loadAsync(fs.readFileSync(target))
+    const xml = textOnly(await zip.file('word/document.xml')!.async('string'))
+    expect(xml).toContain('POSTSAVEASMARK')
+  } finally {
+    kill(app)
+  }
+})
