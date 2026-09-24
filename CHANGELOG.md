@@ -8,6 +8,17 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Spreadsheets: the first character typed after clicking a cell is no longer
+  lost on a slow or busy computer.** 3.7.0's fix for this held only on a fast
+  machine: the grid takes focus one frame after the click, and anything typed
+  before then went nowhere. Typing "HELLO" could save "ELLO", or leave the cell
+  unchanged. Keys typed in that moment are now held and delivered to the grid,
+  in order, once it is ready. Affects `.xlsx`, `.ods` and `.csv` alike.
+
 ## [3.7.0] — 2026-09-21 (phase 4: features that never worked, and the tests that hid them)
 
 Every defect below was found by **driving the real application**, not by the test

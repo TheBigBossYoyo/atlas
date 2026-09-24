@@ -71,8 +71,27 @@
  * instead of only seeding it and leaving the commit to a keystroke that will
  * now never come (the overlay has focus, but nothing is still "racing" to
  * retrigger it).
+ *
+ * F6b — the buffer above only helps keystrokes that reach the grid. On a slow
+ * or busy CPU the FIRST keystroke after a click did not: glide-data-grid's
+ * pointer-down handler calls `preventDefault()` (suppressing the browser's
+ * own focus move) and only focuses the grid in a `requestAnimationFrame`
+ * (`focus()` in data-editor.js). Until that frame runs, DOM focus is still on
+ * `<body>` (or wherever it was), so a key typed in that window goes there and
+ * is silently discarded — measured with the renderer CPU-throttled 8x:
+ * click, type "HELLO" at 120ms/char, save, and the cell held "ELLO" in every
+ * trial, with a keydown trace showing "H" targeting BODY and "E" the canvas.
+ *
+ * Focusing the grid early is NOT a fix: that frame is also when the click's
+ * selection has taken effect, and keys delivered before it act on a grid
+ * with no selection yet (tried: click, ArrowRight, ArrowDown x2, type "42"
+ * put 42 in A1 — every arrow ignored). Instead `KeyHold` (keyHold.ts) holds
+ * the keystrokes typed between a click on the grid and the grid owning focus,
+ * then replays them in order once it does, one per task. It only engages when
+ * focus is outside the grid and its edit overlay (glide's `#portal`), so
+ * typing and clicking inside an already-focused grid are untouched.
  */
-import { createContext, useCallback, useContext, useEffect, useRef, type ChangeEvent, type KeyboardEvent } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import {
   DataEditor,
   GridCellKind,
@@ -85,6 +104,8 @@ import {
   type TextCell,
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
+
+import { KeyHold } from './keyHold'
 
 /** A movement tuple, matching `TextCellEditor`'s own Enter/Tab handler below. */
 type Movement = readonly [-1 | 0 | 1, -1 | 0 | 1]
@@ -239,9 +260,26 @@ export function SpreadsheetDataEditor(props: DataEditorProps) {
     [onKeyDownIn],
   )
 
+  // F6b — see module header.
+  const [keyHold] = useState(() => new KeyHold())
+  useEffect(() => () => keyHold.stop(), [keyHold])
+
+  const holdKeysOnMouseDown = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      // The click lands on glide's `.dvn-scroller`, layered over the canvas.
+      if (event.button !== 0 || !(event.target instanceof Element) || event.target.closest('.dvn-scroller') === null) return
+      const active = document.activeElement
+      if (active !== null && (event.currentTarget.contains(active) || active.closest('#portal') !== null)) return
+      keyHold.start(event.currentTarget)
+    },
+    [keyHold],
+  )
+
   return (
     <PendingSeedContext.Provider value={pendingSeedRef}>
-      <DataEditor provideEditor={provideCellEditor} {...props} onKeyDown={handleKeyDown} />
+      <div style={{ display: 'contents' }} onMouseDownCapture={holdKeysOnMouseDown} onFocusCapture={keyHold.release}>
+        <DataEditor provideEditor={provideCellEditor} {...props} onKeyDown={handleKeyDown} />
+      </div>
     </PendingSeedContext.Provider>
   )
 }
