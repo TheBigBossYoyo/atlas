@@ -60,6 +60,7 @@ async function clickTypeSave(
   text: string,
   delay: number,
   postClickPause: number,
+  waitBeforeSave = 500,
 ): Promise<void> {
   const mtimeBefore = fs.statSync(file).mtimeMs
   const box = (await page.locator(gridSelector).first().boundingBox())!
@@ -69,7 +70,7 @@ async function clickTypeSave(
   // ordinary typing outruns glide-data-grid's own overlay-mount latency.
   await page.keyboard.type(text, { delay })
   await page.keyboard.press('Enter')
-  await page.waitForTimeout(500)
+  if (waitBeforeSave > 0) await page.waitForTimeout(waitBeforeSave)
   await page.keyboard.press('Control+s')
   // Wait for the write itself, not a fixed sleep: a slow save and a lost
   // edit must fail differently (this one times out; a lost edit saves the
@@ -96,17 +97,20 @@ function expectA1Saved(file: string, expected: string): void {
   expect(cells.A1, `saved cells: ${JSON.stringify(cells)}`).toBe(expected)
 }
 
-async function typeIntoXlsxA1(delay: number, pause: number, cpuRate = 1): Promise<void> {
+type SlowCpu = { rate: number; from: 'launch' | 'grid-ready' }
+
+async function typeIntoXlsxA1(delay: number, pause: number, slow?: SlowCpu, waitBeforeSave?: number): Promise<void> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-f6-xlsx-'))
   const file = path.join(dir, 'b.xlsx')
   fs.copyFileSync(path.join(projectRoot, 'tests/e2e/fixtures/sample.xlsx'), file)
 
   const { app, page } = await launch(file)
   try {
-    if (cpuRate > 1) await throttleCpu(page, cpuRate)
+    if (slow?.from === 'launch') await throttleCpu(page, slow.rate)
     await page.waitForSelector('[data-viewer="xlsx"]', { timeout: 30_000 })
     await page.waitForTimeout(1500)
-    await clickTypeSave(page, file, '[data-viewer="xlsx"] canvas', 'HELLO', delay, pause)
+    if (slow?.from === 'grid-ready') await throttleCpu(page, slow.rate)
+    await clickTypeSave(page, file, '[data-viewer="xlsx"] canvas', 'HELLO', delay, pause, waitBeforeSave)
     expectA1Saved(file, 'HELLO')
   } finally {
     kill(app)
@@ -130,9 +134,17 @@ test.describe('F6 — click a cell and type: the leading character must not be d
 test.describe('F6b — on a slow CPU the first keystroke must not beat the grid to focus (xlsx)', () => {
   for (const delay of [0, 120]) {
     test(`renderer throttled 8x, typing at ${delay}ms/char right after a click saves the full word`, async () => {
-      await typeIntoXlsxA1(delay, 0, 8)
+      await typeIntoXlsxA1(delay, 0, { rate: 8, from: 'launch' })
     })
   }
+
+  // Ctrl+S straight after Enter used to overtake the edit — either the held
+  // keys still waiting to replay, or the overlay's commit-on-mount — and save
+  // the file without it (CI, 8x; locally from ~24x). Throttled only once the
+  // grid is up: from launch, 24x takes ~25s just to open the file.
+  test('renderer throttled 24x, Ctrl+S pressed straight after typing saves the typed text', async () => {
+    await typeIntoXlsxA1(0, 0, { rate: 24, from: 'grid-ready' }, 0)
+  })
 })
 
 test.describe('F6 — CSV shares the same grid/editor pipeline, so it must not be affected either', () => {

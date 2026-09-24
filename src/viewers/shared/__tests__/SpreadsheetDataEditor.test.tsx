@@ -191,4 +191,32 @@ describe('SpreadsheetDataEditor — first-keystroke seeding race (F6)', () => {
     props.onKeyDown!(elsewhere)
     expect(elsewhere.cancel).not.toHaveBeenCalled()
   })
+
+  // F6b — a seed left behind when no editor opens would count as an edit in
+  // flight and hold every shortcut (Ctrl+S, Ctrl+C…) until it timed out.
+  it('drops the seed when glide-data-grid opened no editor for the key (read-only grid or cell)', async () => {
+    openEditor = null
+    render(<SpreadsheetDataEditor getCellContent={() => textCell('')} columns={[]} rows={10} />)
+    const props = lastDataEditorProps!
+
+    const notOpened = { isDefaultPrevented: () => false } as unknown as GridKeyEventArgs['rawEvent']
+    props.onKeyDown!(keyEvent({ key: 'H', location: [0, 0], rawEvent: notOpened }))
+    await Promise.resolve()
+    const next = keyEvent({ key: 'E', location: [0, 0] })
+    props.onKeyDown!(next)
+    expect(next.cancel).not.toHaveBeenCalled()
+  })
+
+  it('keeps the seed when glide-data-grid did open the editor', async () => {
+    openEditor = null
+    render(<SpreadsheetDataEditor getCellContent={() => textCell('')} columns={[]} rows={10} />)
+    const props = lastDataEditorProps!
+
+    const opened = { isDefaultPrevented: () => true } as unknown as GridKeyEventArgs['rawEvent']
+    props.onKeyDown!(keyEvent({ key: 'H', location: [0, 0], rawEvent: opened }))
+    await Promise.resolve()
+    const next = keyEvent({ key: 'E', location: [0, 0] })
+    props.onKeyDown!(next)
+    expect(next.cancel).toHaveBeenCalled()
+  })
 })

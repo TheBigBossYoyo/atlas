@@ -90,8 +90,16 @@
  * then replays them in order once it does, one per task. It only engages when
  * focus is outside the grid and its edit overlay (glide's `#portal`), so
  * typing and clicking inside an already-focused grid are untouched.
+ *
+ * Shortcuts must keep their place in that order too. At 24x throttling, a
+ * 0ms/char "HELLO", Enter, Ctrl+S saved "Name": the save either overtook
+ * held keys still waiting to replay, or ran after they replayed but before
+ * the overlay mounted and applied `commitOnMount`. The edit landed a moment
+ * later (a second save had "HELLO"), but the file saved at the user's
+ * Ctrl+S lacked it. So `KeyHold` also holds Ctrl/Alt/Meta chords while a
+ * pending seed is in flight, and replays them only once it has committed.
  */
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, type ChangeEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import {
   DataEditor,
   GridCellKind,
@@ -117,7 +125,19 @@ type PendingSeed = {
   chars: string[]
   /** Set when Enter/Tab arrived before the overlay mounted — see module header. */
   commitOnMount?: Movement
+  /** `performance.now()` when the first key opened it — bounds how long it counts as in flight (F6b). */
+  readonly startedAt: number
 }
+
+/**
+ * F6b — last-resort bound: a pending seed older than this no longer counts as
+ * an edit in flight, so a seed stranded by some path nobody foresaw can never
+ * hold shortcuts like Ctrl+S indefinitely. (The known stranding path — glide
+ * declining to open an overlay — is cleared precisely in `handleKeyDown`.)
+ * Overlay mounts take 100-300ms normally; at 24x CPU throttling one took
+ * 2.45s, which a 2s bound let a held Ctrl+S overtake.
+ */
+const PENDING_EDIT_MAX_MS = 5000
 
 /** Holds the current `SpreadsheetDataEditor` instance's pending-seed ref — see module header on why this goes through context rather than a closure. */
 const PendingSeedContext = createContext<{ current: PendingSeed | null } | null>(null)
@@ -255,29 +275,51 @@ export function SpreadsheetDataEditor(props: DataEditorProps) {
       // First qualifying keystroke for this cell: let glide-data-grid's own
       // `editOnType` open the overlay as usual (there is no public API to do
       // that ourselves — see module header), and start tracking it.
-      pendingSeedRef.current = { row, col, chars: [] }
+      const seed: PendingSeed = { row, col, chars: [], startedAt: performance.now() }
+      pendingSeedRef.current = seed
+      // glide-data-grid preventDefault()s this keydown when `editOnType`
+      // really opens the overlay (right after this handler returns). If it
+      // didn't — a read-only grid or cell, a cell scrolled out of view — no
+      // editor is coming, and a seed left behind would hold every shortcut
+      // (F6b) until PENDING_EDIT_MAX_MS.
+      const raw = event.rawEvent
+      if (raw !== undefined) {
+        queueMicrotask(() => {
+          if (!raw.isDefaultPrevented() && pendingSeedRef.current === seed) pendingSeedRef.current = null
+        })
+      }
     },
     [onKeyDownIn],
   )
 
   // F6b — see module header.
-  const [keyHold] = useState(() => new KeyHold())
-  useEffect(() => () => keyHold.stop(), [keyHold])
+  const keyHoldRef = useRef<KeyHold | null>(null)
+  useEffect(() => {
+    const keyHold = new KeyHold(() => {
+      const pending = pendingSeedRef.current
+      return pending !== null && performance.now() - pending.startedAt < PENDING_EDIT_MAX_MS
+    })
+    keyHoldRef.current = keyHold
+    const detach = keyHold.attach()
+    return () => {
+      detach()
+      keyHoldRef.current = null
+    }
+  }, [])
 
-  const holdKeysOnMouseDown = useCallback(
-    (event: MouseEvent<HTMLDivElement>) => {
-      // The click lands on glide's `.dvn-scroller`, layered over the canvas.
-      if (event.button !== 0 || !(event.target instanceof Element) || event.target.closest('.dvn-scroller') === null) return
-      const active = document.activeElement
-      if (active !== null && (event.currentTarget.contains(active) || active.closest('#portal') !== null)) return
-      keyHold.start(event.currentTarget)
-    },
-    [keyHold],
-  )
+  const holdKeysOnMouseDown = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    // The click lands on glide's `.dvn-scroller`, layered over the canvas.
+    if (event.button !== 0 || !(event.target instanceof Element) || event.target.closest('.dvn-scroller') === null) return
+    const active = document.activeElement
+    if (active !== null && (event.currentTarget.contains(active) || active.closest('#portal') !== null)) return
+    keyHoldRef.current?.start(event.currentTarget)
+  }, [])
+
+  const releaseKeysOnGridFocus = useCallback(() => keyHoldRef.current?.release(), [])
 
   return (
     <PendingSeedContext.Provider value={pendingSeedRef}>
-      <div style={{ display: 'contents' }} onMouseDownCapture={holdKeysOnMouseDown} onFocusCapture={keyHold.release}>
+      <div style={{ display: 'contents' }} onMouseDownCapture={holdKeysOnMouseDown} onFocusCapture={releaseKeysOnGridFocus}>
         <DataEditor provideEditor={provideCellEditor} {...props} onKeyDown={handleKeyDown} />
       </div>
     </PendingSeedContext.Provider>
