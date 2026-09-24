@@ -74,7 +74,13 @@ export type SlideTransform = {
 type SlideShapeBase = {
   readonly id: string
   readonly transform: SlideTransform
-  /** USR-16 — the shape's `p:cNvPr@id` in its slide part, used to address it for editing (PPTX only). */
+  /**
+   * USR-16 — this shape's address for editing (PPTX only): its `p:cNvPr@id`
+   * when one is present and unique in the slide, or (SHELL-3) an `@N`
+   * fallback naming its structural position in the shape tree when the id is
+   * missing or shared with another shape — see `parser.ts`'s
+   * `collectShapeElementsInOrder` and `pptxEdits.ts`'s `findShape`.
+   */
   readonly sourceId?: string
   /** USR-16 — a top-level (not grouped) shape whose box can be moved/resized in place. */
   readonly movable?: boolean

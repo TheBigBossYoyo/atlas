@@ -30,6 +30,32 @@ function buildMinimalPptxZip(): JSZip {
   return zip
 }
 
+/**
+ * SHELL-3 — a slide whose two shapes share the SAME `cNvPr id` (a lossy
+ * converter or hand-built file can produce this just as easily as one with
+ * no id at all — plain id-matching can no longer tell them apart either
+ * way, so both fall back to positional addressing).
+ */
+function buildDuplicateIdPptxZip(): JSZip {
+  const zip = new JSZip()
+  zip.file('ppt/presentation.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+</p:presentation>`)
+  zip.file('ppt/_rels/presentation.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+</Relationships>`)
+  zip.file('ppt/slides/slide1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp><p:nvSpPr><p:cNvPr id="5" name="First"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>First shape</a:t></a:r></a:p></p:txBody></p:sp>
+    <p:sp><p:nvSpPr><p:cNvPr id="5" name="Second"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Second shape</a:t></a:r></a:p></p:txBody></p:sp>
+  </p:spTree></p:cSld>
+</p:sld>`)
+  return zip
+}
+
 describe('parsePptxSlides', () => {
   it('resolves the deck slide size from p:sldSz', async () => {
     const slides = await parseFixture()
@@ -62,6 +88,37 @@ describe('parsePptxSlides', () => {
     const shape = slide1?.shapes.find(candidate => candidate.kind === 'text') as SlideTextBox | undefined
     expect(shape?.text).toBe('Atlas PPTX fixture')
     expect(shape?.transform).toEqual({ x: 24, y: 24, w: expect.any(Number), h: 24 })
+  })
+
+  // SHELL-3 — a shape with no <p:nvSpPr><p:cNvPr id="…"/></p:nvSpPr> at all (real
+  // PowerPoint always writes one; hand-built or lossily-converted files may not)
+  // used to get `sourceId: undefined`, which made it silently unselectable and
+  // uneditable (SlideEditCanvas's hitTest requires a truthy sourceId). It must
+  // now fall back to a truthy, structural-position address.
+  it('SHELL-3 — a shape with no cNvPr id at all still gets an addressable (truthy) sourceId', async () => {
+    const zip = buildMinimalPptxZip()
+    const signal: CancelSignal = { cancelled: false }
+    const [slide1] = await parsePptxSlides(zip as unknown as ZipArchive, signal)
+
+    const shape = slide1?.shapes.find(candidate => candidate.kind === 'text') as SlideTextBox | undefined
+    expect(shape?.sourceId).toBe('@0')
+  })
+
+  // SHELL-3 — same bug class: two shapes sharing one cNvPr id are just as
+  // unaddressable by plain id-matching as no id at all (editing either one
+  // would always hit whichever shares the id first in the XML). Both must
+  // fall back to distinct, truthy, positional addresses.
+  it('SHELL-3 — shapes sharing a duplicate cNvPr id fall back to distinct positional sourceIds', async () => {
+    const zip = buildDuplicateIdPptxZip()
+    const signal: CancelSignal = { cancelled: false }
+    const [slide1] = await parsePptxSlides(zip as unknown as ZipArchive, signal)
+
+    const [first, second] = (slide1?.shapes ?? []) as SlideTextBox[]
+    expect(first?.text).toBe('First shape')
+    expect(second?.text).toBe('Second shape')
+    expect(first?.sourceId).toBe('@0')
+    expect(second?.sourceId).toBe('@1')
+    expect(first?.sourceId).not.toBe(second?.sourceId)
   })
 
   it('S3 — resolves run formatting via the master txStyles fallback and theme accent colors', async () => {

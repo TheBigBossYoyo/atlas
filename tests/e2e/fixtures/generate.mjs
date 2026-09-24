@@ -119,6 +119,39 @@ function makeWorkbookBuffer(bookType) {
   return XLSX.write(workbook, { type: 'buffer', bookType })
 }
 
+/**
+ * FIXTURE-1 — ODF requires the `mimetype` entry to be the FIRST file in the
+ * zip (and stored, uncompressed), or the package isn't recognized as ODF at
+ * all (`scripts/lib/officeValidator.mjs`'s `odf-mimetype-not-first`/
+ * `odf-mimetype-not-stored` checks; real ODF writers, and Atlas's own
+ * `writeOfficePackage`, guarantee this). SheetJS's `.ods` writer stores it
+ * uncompressed but does NOT put it first (it comes third, after
+ * `META-INF/manifest.xml` and `meta.xml`) — repack so "Atlas opens .ods" is
+ * proven against a file a real tool could have produced, not one only
+ * Atlas's own lenient reader happens to tolerate.
+ * @param {Buffer} buffer
+ * @returns {Promise<Buffer>}
+ */
+async function reorderOdfMimetypeFirst(buffer) {
+  const source = await JSZip.loadAsync(buffer)
+  const mimetypeEntry = source.file('mimetype')
+  if (!mimetypeEntry) return buffer // not an ODF package — nothing to reorder.
+
+  const mimetype = await mimetypeEntry.async('nodebuffer')
+  const zip = new JSZip()
+  zip.file('mimetype', mimetype, { compression: 'STORE' })
+  for (const [name, entry] of Object.entries(source.files)) {
+    if (name === 'mimetype' || entry.dir) continue
+    zip.file(name, await entry.async('nodebuffer'))
+  }
+  return zip.generateAsync({ type: 'nodebuffer' })
+}
+
+/** @returns {Promise<Buffer>} */
+async function makeOdsBuffer() {
+  return reorderOdfMimetypeFirst(makeWorkbookBuffer('ods'))
+}
+
 async function makeDocxBuffer() {
   const document = new Document({
     sections: [
@@ -181,6 +214,26 @@ function makeMultiSheetWorkbookBuffer(bookType) {
   return XLSX.write(workbook, { type: 'buffer', bookType })
 }
 
+/**
+ * SHELL-3 / FIXTURE-1 — a shape's `<p:nvSpPr><p:cNvPr id="…"/></p:nvSpPr>` is
+ * effectively mandatory in real OOXML: PowerPoint, LibreOffice and
+ * python-pptx all always write one. `p:spTree` also always opens with its own
+ * `p:nvGrpSpPr`/`p:grpSpPr` (the group-shape properties every `CT_GroupShape`
+ * requires). Omitting both used to be how every PPTX fixture here was built
+ * — which is exactly why SHELL-3 (shapes with no id are unselectable) went
+ * unnoticed: the two "canonical" sample files were themselves the
+ * non-conforming case. `groupPropsId` lets two shapes in the same slide share
+ * a distinct `p:cNvPr` id from the group's.
+ * @param {string} text
+ * @param {number} shapeId
+ * @returns {string}
+ */
+function conformingSpXml(text, shapeId) {
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${shapeId}" name="TextBox ${shapeId}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:txBody></p:sp>`
+}
+
+const GROUP_PROPS_XML = '<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>'
+
 async function makePptxBuffer() {
   const zip = new JSZip()
   zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -215,13 +268,8 @@ async function makePptxBuffer() {
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
     <p:spTree>
-      <p:sp>
-        <p:txBody>
-          <a:bodyPr/>
-          <a:lstStyle/>
-          <a:p><a:r><a:t>Atlas PPTX fixture</a:t></a:r></a:p>
-        </p:txBody>
-      </p:sp>
+      ${GROUP_PROPS_XML}
+      ${conformingSpXml('Atlas PPTX fixture', 2)}
     </p:spTree>
   </p:cSld>
 </p:sld>`)
@@ -229,11 +277,57 @@ async function makePptxBuffer() {
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
     <p:spTree>
+      ${GROUP_PROPS_XML}
+      ${conformingSpXml('Second PPTX slide', 2)}
+    </p:spTree>
+  </p:cSld>
+</p:sld>`)
+  return zip.generateAsync({ type: 'nodebuffer' })
+}
+
+/**
+ * SHELL-3 — the deliberately NON-conforming counterpart to `makePptxBuffer`:
+ * shapes with no `<p:nvSpPr><p:cNvPr id="…"/></p:nvSpPr>` at all (a lossy
+ * converter, or a minimal hand/script-built file, can produce exactly this —
+ * this is what the OTHER pptx fixtures accidentally were, before FIXTURE-1).
+ * Used only by the SHELL-3 e2e spec, which needs a real file on disk to
+ * prove such a shape is now selectable/editable/saveable end to end; every
+ * other spec should exercise the conforming `sample.pptx` instead.
+ */
+async function makeNoIdPptxBuffer() {
+  const zip = new JSZip()
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+</Types>`)
+  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+</Relationships>`)
+  zip.file('ppt/presentation.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldSz cx="12192000" cy="6858000"/>
+  <p:sldIdLst>
+    <p:sldId id="256" r:id="rId1"/>
+  </p:sldIdLst>
+</p:presentation>`)
+  zip.file('ppt/_rels/presentation.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+</Relationships>`)
+  zip.file('ppt/slides/slide1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
       <p:sp>
+        <p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="5486400" cy="1828800"/></a:xfrm></p:spPr>
         <p:txBody>
           <a:bodyPr/>
           <a:lstStyle/>
-          <a:p><a:r><a:t>Second PPTX slide</a:t></a:r></a:p>
+          <a:p><a:r><a:t>Atlas no-id PPTX fixture</a:t></a:r></a:p>
         </p:txBody>
       </p:sp>
     </p:spTree>
@@ -277,13 +371,8 @@ async function makeMultiSlidePptxBuffer() {
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
     <p:spTree>
-      <p:sp>
-        <p:txBody>
-          <a:bodyPr/>
-          <a:lstStyle/>
-          <a:p><a:r><a:t>Atlas multislide fixture — slide one</a:t></a:r></a:p>
-        </p:txBody>
-      </p:sp>
+      ${GROUP_PROPS_XML}
+      ${conformingSpXml('Atlas multislide fixture — slide one', 2)}
     </p:spTree>
   </p:cSld>
 </p:sld>`)
@@ -291,13 +380,8 @@ async function makeMultiSlidePptxBuffer() {
 <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld>
     <p:spTree>
-      <p:sp>
-        <p:txBody>
-          <a:bodyPr/>
-          <a:lstStyle/>
-          <a:p><a:r><a:t>Slide two content</a:t></a:r></a:p>
-        </p:txBody>
-      </p:sp>
+      ${GROUP_PROPS_XML}
+      ${conformingSpXml('Slide two content', 2)}
     </p:spTree>
   </p:cSld>
 </p:sld>`)
@@ -385,6 +469,7 @@ export async function generateFixtures() {
 
   const docxBuffer = await makeDocxBuffer()
   const pptxBuffer = await makePptxBuffer()
+  const noIdPptxBuffer = await makeNoIdPptxBuffer()
   const odpBuffer = await makeOdpBuffer()
   const odtBuffer = await makeOdtBuffer()
   const pdfBuffer = makePdfBuffer()
@@ -392,6 +477,7 @@ export async function generateFixtures() {
   const multiPageDocxBuffer = await makeMultiPageDocxBuffer()
   const multiSlidePptxBuffer = await makeMultiSlidePptxBuffer()
   const multiSheetXlsxBuffer = makeMultiSheetWorkbookBuffer('xlsx')
+  const odsBuffer = await makeOdsBuffer()
 
   const writes = [
     writeFixture(
@@ -404,13 +490,16 @@ export async function generateFixtures() {
     writeFixture('sample.csv', 'name,value\nAtlas,2\nPhase,1\n'),
     writeFixture('sample.tsv', 'name\tvalue\nAtlas\t2\nPhase\t1\n'),
     writeFixture('sample.xlsx', makeWorkbookBuffer('xlsx')),
-    writeFixture('sample.ods', makeWorkbookBuffer('ods')),
+    writeFixture('sample.ods', odsBuffer),
     writeFixture('sample.docx', docxBuffer),
     writeFixture('sample.rtf', '{\\rtf1\\ansi Atlas RTF fixture\\par Smoke test document.\\par}'),
     writeFixture('sample.odt', odtBuffer),
     writeFixture('sample.pdf', pdfBuffer),
     writeFixture('sample-multipage.pdf', multiPagePdfBuffer),
     writeFixture('sample.pptx', pptxBuffer),
+    // SHELL-3 — deliberately non-conforming (no cNvPr ids), for the SHELL-3
+    // e2e spec only; every other spec should use the conforming sample.pptx.
+    writeFixture('sample-noid.pptx', noIdPptxBuffer),
     writeFixture('sample.odp', odpBuffer),
     writeFixture('sample-multipage.docx', multiPageDocxBuffer),
     writeFixture('sample-multislide.pptx', multiSlidePptxBuffer),

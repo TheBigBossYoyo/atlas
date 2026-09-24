@@ -23,6 +23,11 @@ export const NS = {
 export const REL_TYPE = {
   slide: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide',
   slideLayout: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout',
+  // SHELL-5 — needed by pptxSlideOps.ts's `ensureFallbackLayout`, which links
+  // a synthesized slideMaster to a theme and a synthesized slideLayout (and
+  // the presentation itself) to that slideMaster.
+  slideMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster',
+  theme: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme',
   notesSlide: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide',
   notesMaster: 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster',
 } as const
@@ -30,6 +35,9 @@ export const REL_TYPE = {
 export const CONTENT_TYPE = {
   slide: 'application/vnd.openxmlformats-officedocument.presentationml.slide+xml',
   notesSlide: 'application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml',
+  slideMaster: 'application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml',
+  slideLayout: 'application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml',
+  theme: 'application/vnd.openxmlformats-officedocument.theme+xml',
 } as const
 
 /** Re-exported under this module's shorter names (see src/office/ooxmlDom.ts). */
