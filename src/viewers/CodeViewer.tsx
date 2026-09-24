@@ -15,6 +15,7 @@ import {
 } from './shared/useViewerContext'
 import { useTranslate } from '../i18n'
 import { translateWriteError } from '../i18n/translateWriteError'
+import { getTextFileMeta, carryTextFileMeta } from '../utils/textDecoding'
 import './__styles__/viewer-code.css'
 
 /** USR-18 — CodeMirror is a sizeable chunk; only code files pay for it. */
@@ -57,7 +58,6 @@ function baseName(path: string): string {
 
 function CodeViewerBase({ file }: ViewerProps) {
   const original = file.kind === 'text' ? file.content : ''
-  const usesCrlf = original.includes('\r\n')
   const lang = getLangForExt(`.${extensionOf(file.path)}`) || 'text'
   const { theme } = useTheme()
   const t = useTranslate()
@@ -93,23 +93,36 @@ function CodeViewerBase({ file }: ViewerProps) {
     if (!api) return false
     setSaveError(null)
     const text = api.getText()
-    const content = usesCrlf ? text.replace(/\r?\n/g, '\r\n') : text
+    // NIGHT/text-roundtrip — reapply this file's source encoding/BOM/newline
+    // convention (SHELL-1/SHELL-2's same defect applied here too: CodeMirror
+    // normalizes everything to `\n` internally, and no encoding/BOM was ever
+    // remembered past the initial decode). `text` itself stays `\n`-only —
+    // `meta` travels alongside it and main does the re-encoding, the same
+    // contract as the markdown save path in App.tsx.
+    const meta = getTextFileMeta(savePath)
     const extension = extensionOf(savePath)
     const result = await window.electronAPI?.saveFile?.({
-      content,
+      content: text,
       suggestedName: baseName(savePath),
       filters: extension ? [{ name: 'Source file', extensions: [extension] }] : [],
       existingPath: savePath,
+      meta,
     })
     if (!result?.saved) {
       setSaveError(result?.error ? translateWriteError(t, result) : t('codeViewer.saveCancelled'))
       return false
     }
-    if (result.path) setSavePath(result.path)
+    // Save As to a new file keeps the source's conventions (this fix's
+    // spec) — carry `meta` to the new path before switching `savePath` over
+    // to it, so the next save still finds it.
+    if (result.path) {
+      carryTextFileMeta(savePath, result.path)
+      setSavePath(result.path)
+    }
     setDirty(false)
     setSymbolSource(text)
     return true
-  }, [savePath, setDirty, usesCrlf, t])
+  }, [savePath, setDirty, t])
 
   useEffect(() => {
     registerSave(save)

@@ -1,9 +1,12 @@
 import type { Theme } from './types';
+import type { TextFileMeta } from './utils/textDecoding';
 
 interface ElectronFileData {
   content: string;
   name: string;
   path: string;
+  /** NIGHT/text-roundtrip — the file's detected source encoding/BOM/newline convention, so a later save can reproduce its original byte shape (SHELL-1/SHELL-2). Absent only from stale test doubles that predate this field. */
+  meta?: TextFileMeta;
 }
 
 interface SaveFileResult {
@@ -14,6 +17,8 @@ interface SaveFileResult {
   error?: string;
   /** Stable key for `error` (`errors.write.*` in `src/i18n`), set whenever `classifyWriteError`/`FileLockedError` recognized the failure. Absent for an unclassified error, where `error`'s English text is the only signal available. */
   errorCode?: string;
+  /** NIGHT/text-roundtrip — set when `req.meta.encoding` was `windows-1252` but the content being saved contained a character cp1252 can't represent, so main fell back to writing UTF-8 (no BOM) instead. No UI surfaces this yet — see this fix's report for the i18n string it needs. */
+  encodingFallback?: boolean;
 }
 
 interface SaveFileRequest {
@@ -23,6 +28,8 @@ interface SaveFileRequest {
   filters?: Array<{ name: string; extensions: string[] }>;
   /** If provided, save there silently (no dialog) */
   existingPath?: string;
+  /** NIGHT/text-roundtrip — the source file's encoding/BOM/newline convention to reproduce on write. Omitted entirely by callers that don't track it (e.g. the CSV/TSV save path), which keeps writing plain BOM-less UTF-8 exactly as before. */
+  meta?: TextFileMeta;
 }
 
 interface BinarySaveFileRequest {

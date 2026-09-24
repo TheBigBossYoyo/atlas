@@ -121,3 +121,113 @@ export function decodeTextBuffer(buffer: ArrayBuffer): string {
 
   return decodeWindows1252(bytes)
 }
+
+// ---------------------------------------------------------------------------
+// NIGHT/text-roundtrip — round-trip fidelity metadata (renderer-side mirror
+// of `electron/lib/textDecoding.cjs`'s additions). See that file's header
+// for the full rationale (SHELL-1/SHELL-2): every save used to silently
+// re-encode as BOM-less UTF-8 with whatever newlines the DOM editor
+// normalized to, discarding the source file's actual encoding/BOM/newline
+// convention. `decodeTextBufferWithMeta` below is used by the
+// `prefetchedBuffer` decode path in `useFileHandler.ts` (the Open dialog
+// already has the bytes in the renderer, so decoding happens here rather
+// than round-tripping through main a second time); the registry lets a save
+// (in App.tsx/CodeViewer.tsx, run long after the original decode) look the
+// file's convention back up by path. `LoadedFile` itself
+// (`src/formats/types.ts`) is not owned by this fix and carries no such
+// field, so the registry is the fallback: metadata keyed by path instead of
+// carried on the loaded-file object.
+// ---------------------------------------------------------------------------
+
+export type TextEncodingName = 'utf-8' | 'utf-16le' | 'utf-16be' | 'windows-1252'
+export type NewlineStyle = 'crlf' | 'lf'
+
+export interface TextFileMeta {
+  readonly encoding: TextEncodingName
+  readonly bom: boolean
+  readonly newline: NewlineStyle
+}
+
+/** A brand-new/untracked document keeps today's defaults: plain UTF-8, no BOM, LF. */
+export const DEFAULT_TEXT_FILE_META: TextFileMeta = { encoding: 'utf-8', bom: false, newline: 'lf' }
+
+const textFileMetaRegistry = new Map<string, TextFileMeta>()
+
+/** Records `path`'s source encoding/BOM/newline so a later save can reapply it. */
+export function setTextFileMeta(path: string, meta: TextFileMeta): void {
+  textFileMetaRegistry.set(path, meta)
+}
+
+/** Looks up `path`'s recorded convention, or today's-defaults for an untracked/new path. */
+export function getTextFileMeta(path: string): TextFileMeta {
+  return textFileMetaRegistry.get(path) ?? DEFAULT_TEXT_FILE_META
+}
+
+/** Save As / rename: `newPath` should keep reapplying `oldPath`'s convention on every later save. A no-op if `oldPath` was never tracked (new document, saved for the first time). */
+export function carryTextFileMeta(oldPath: string, newPath: string): void {
+  const meta = textFileMetaRegistry.get(oldPath)
+  if (meta !== undefined && oldPath !== newPath) {
+    textFileMetaRegistry.set(newPath, meta)
+  }
+}
+
+/** Normalizes every line ending to `\n` (CRLF and lone CR both collapse to LF) — matches what a `<textarea>`/CodeMirror already does to anything typed or pasted into it. */
+export function normalizeNewlines(content: string): string {
+  return content.replace(/\r\n|\r/g, '\n')
+}
+
+/** Detects the dominant line-ending convention of already-decoded text. See the `.cjs` twin's doc comment for the mixed-file tie-break rule. */
+export function detectNewline(content: string): NewlineStyle {
+  let crlf = 0
+  let lf = 0
+  for (let i = 0; i < content.length; i += 1) {
+    if (content[i] === '\n') {
+      if (i > 0 && content[i - 1] === '\r') {
+        crlf += 1
+      } else {
+        lf += 1
+      }
+    }
+  }
+  if (crlf === 0) return 'lf'
+  if (lf === 0) return 'crlf'
+  return crlf > lf ? 'crlf' : 'lf'
+}
+
+/**
+ * Decodes a text-class file's raw bytes AND detects its round-trip metadata.
+ * `content` is always `\n`-normalized; `meta.newline` is detected from the
+ * ORIGINAL bytes, before normalization. Mirrors `electron/lib/
+ * textDecoding.cjs`'s `decodeTextBufferWithMeta` for the renderer's own
+ * `prefetchedBuffer` decode path (`useFileHandler.ts`).
+ */
+export function decodeTextBufferWithMeta(buffer: ArrayBuffer): { content: string; meta: TextFileMeta } {
+  const bytes = new Uint8Array(buffer)
+  let encoding: TextEncodingName
+  let bom: boolean
+  let decoded: string
+
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    encoding = 'utf-8'
+    bom = true
+    decoded = new TextDecoder('utf-8').decode(bytes.subarray(3))
+  } else if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    encoding = 'utf-16le'
+    bom = true
+    decoded = new TextDecoder('utf-16le').decode(bytes.subarray(2))
+  } else if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    encoding = 'utf-16be'
+    bom = true
+    decoded = new TextDecoder('utf-16be').decode(bytes.subarray(2))
+  } else if (isValidUtf8(bytes)) {
+    encoding = 'utf-8'
+    bom = false
+    decoded = new TextDecoder('utf-8').decode(bytes)
+  } else {
+    encoding = 'windows-1252'
+    bom = false
+    decoded = decodeWindows1252(bytes)
+  }
+
+  return { content: normalizeNewlines(decoded), meta: { encoding, bom, newline: detectNewline(decoded) } }
+}

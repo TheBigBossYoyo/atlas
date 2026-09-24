@@ -166,4 +166,38 @@ describe('documentToDelimitedText', () => {
     const doc = createDocument([sheetFixture([['has, comma', 'plain']])])
     expect(documentToDelimitedText(doc, ',')).toBe('"has, comma",plain')
   })
+
+  // NIGHT/text-roundtrip — SHEET-7 (BOM stripped on save)/SHEET-8 (LF -> CRLF
+  // on save). `documentToDelimitedText` bakes both directly into the
+  // returned string since it has no other way to reach `main.cjs`'s write
+  // path — see `DelimitedTextMeta`'s doc comment for why nothing calls this
+  // with `meta` set YET (a real fix needs one unowned call-site change in
+  // `useSpreadsheetEditor.ts`); this only proves the mechanism itself is
+  // correct once that wiring lands.
+  it('prepends a BOM character when meta.bom is true', () => {
+    const doc = createDocument([sheetFixture([['a', 'b']])])
+    const text = documentToDelimitedText(doc, ',', { bom: true })
+    expect(text.charCodeAt(0)).toBe(0xfeff)
+    expect(text).toBe(String.fromCharCode(0xfeff) + 'a,b')
+  })
+
+  it('does not prepend a BOM character by default', () => {
+    const doc = createDocument([sheetFixture([['a', 'b']])])
+    expect(documentToDelimitedText(doc, ',').charCodeAt(0)).not.toBe(0xfeff)
+  })
+
+  it('uses LF line endings when meta.newline is "lf"', () => {
+    const doc = createDocument([sheetFixture([['a', 'b'], ['1', '2']])])
+    expect(documentToDelimitedText(doc, ',', { newline: 'lf' })).toBe('a,b\n1,2')
+  })
+
+  it('keeps CRLF (Papa Parse\'s own default, unchanged) when meta is omitted', () => {
+    // This is the SAME assertion as the "serializes the first sheet..." test
+    // above, restated explicitly as a regression guard for the *default*
+    // now that `documentToDelimitedText` takes an optional third argument —
+    // a brand-new/untracked document (no real source file to reapply a
+    // convention from) must keep behaving exactly as before.
+    const doc = createDocument([sheetFixture([['a', 'b'], ['1', '2']])])
+    expect(documentToDelimitedText(doc, ',')).toBe('a,b\r\n1,2')
+  })
 })

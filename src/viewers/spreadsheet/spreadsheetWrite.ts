@@ -191,27 +191,69 @@ export async function writeWorkbookBytesWithTables(
 }
 
 /**
+ * Optional round-trip metadata for {@link documentToDelimitedText} (NIGHT/
+ * text-roundtrip — SHEET-7/SHEET-8). `bom`/`newline` are baked directly into
+ * the RETURNED STRING (a leading U+FEFF BOM character, and the requested
+ * line-ending convention) rather than returned as separate out-of-band
+ * fields, because this function's only caller,
+ * `useSpreadsheetEditor.ts`'s `writeToDisk` (NOT owned by this fix — see
+ * `src/viewers/spreadsheet/**` in FIX-RULES's do-not-touch list), hands the
+ * string straight to `window.electronAPI.saveFile({ content: text, ... })`
+ * with no `meta` field at all; `main.cjs`'s `save-file` handler writes
+ * whatever UTF-8 bytes a plain JS string encodes to verbatim, so a BOM
+ * character and explicit `\r\n`s survive that path unchanged, with zero
+ * changes needed in the unowned caller.
+ *
+ * KNOWN GAP (documented, not fixed by this commit — needs a change in a file
+ * this fix does not own): nothing today actually CALLS this with `meta` set,
+ * because `useSpreadsheetEditor.ts` calls
+ * `documentToDelimitedText(doc, target.delimiter)` with exactly those two
+ * positional arguments — no third argument, so `meta` is always `undefined`
+ * and BOM/newline default to "no BOM, Papa's own default newline" (`\r\n`
+ * — kept as the default here, unchanged, precisely so an existing/synthetic
+ * document with no real source file — brand-new CSV content, or every
+ * existing unit test below written against `createDocument`/`sheetFixture`
+ * fixtures — keeps behaving exactly as before; "new files keep today's
+ * defaults" per this fix's spec) on every save regardless of the source
+ * file. To thread a real per-file value through, `SpreadsheetSaveTarget`
+ * (`useSpreadsheetEditor.ts`) needs `bom`/`newline` fields, `CsvViewer.tsx`
+ * (owned by this fix) needs to populate them from `getTextFileMeta(file.path)`
+ * when building `defaultTarget`, and `writeToDisk`'s one call site needs
+ * `documentToDelimitedText(doc, target.delimiter, { bom: target.bom, newline:
+ * target.newline })`. See this fix's report for the exact diff.
+ */
+export interface DelimitedTextMeta {
+  /** Prepend a UTF-8 BOM character. Default `false` (today's existing behavior). */
+  readonly bom?: boolean
+  /** Line-ending convention for the WHOLE file (embedded quoted-field newlines follow the same rule Papa already applies). Default (`undefined`/omitted) keeps Papa Parse's own default, `'\r\n'` — see module note above for why this default is deliberately left unchanged rather than flipped to `'lf'` unconditionally. */
+  readonly newline?: 'crlf' | 'lf'
+}
+
+/**
  * Serializes a single-sheet document (CsvViewer's use case) as delimited
  * text via Papa Parse's own writer, so quoting/escaping matches exactly what
  * `csvParse.ts` already reads back. `doc.sheets[0]` is used unconditionally
  * — CSV/TSV have no multi-sheet concept.
  *
- * Encoding/BOM (documented limitation): the delimiter is genuinely
- * preserved (the caller passes the same one the file was parsed with — see
- * `CsvViewer`'s `defaultSaveTarget`), but the *original file's byte-level*
- * encoding and BOM presence are not — `electron/lib/textDecoding.cjs`
- * normalizes every text-class file to a plain UTF-8 JS string at load time
- * (stripping any BOM in the process) with no metadata carried forward
- * recording what the original encoding/BOM actually was, so there's nothing
- * for this function to preserve even in principle. The renderer's own save
- * path (`window.electronAPI.saveFile`) always writes this string back as
- * plain UTF-8 with no BOM.
+ * The delimiter is genuinely preserved (the caller passes whichever one the
+ * file was parsed with — see `CsvViewer`'s target). `meta.bom`/
+ * `meta.newline` are honored when supplied — see {@link DelimitedTextMeta}'s
+ * doc comment for why nothing calls this with them set yet (a known,
+ * documented gap, not a silent one).
  */
-export function documentToDelimitedText(doc: SpreadsheetDocument, delimiter: string): string {
+export function documentToDelimitedText(
+  doc: SpreadsheetDocument,
+  delimiter: string,
+  meta: DelimitedTextMeta = {},
+): string {
   const sheet = doc.sheets[0]
   if (!sheet) return ''
-  return Papa.unparse(
+  // Default stays Papa's own `'\r\n'` (unchanged) unless a caller explicitly
+  // asks for `'lf'` — see `DelimitedTextMeta.newline`'s doc comment.
+  const newline = meta.newline === 'lf' ? '\n' : '\r\n'
+  const text = Papa.unparse(
     sheet.rows.map((row) => [...row]),
-    { delimiter },
+    { delimiter, newline },
   )
+  return meta.bom ? '﻿' + text : text
 }
