@@ -23,17 +23,42 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
  * click already uses — so it works regardless of where the native event's
  * target landed. See atlas-night/docx-report.md's DOCX-2 section for the
  * original repro.
+ *
+ * DOCX-SMALL-WINDOW-1 — this originally only ran at this laptop's own
+ * default window size (~1202x802). CI's e2e-windows runner (and, more to
+ * the point, any real user with a smaller window) hit a SECOND, larger
+ * dead zone at 1024x768: the page rendered wider than its scrollable
+ * column, and `align-items: center` on `.docx-page-stack` (a flex column
+ * inside a scrolling ancestor) pushed the page's start edge into
+ * scroll-offset territory `scrollLeft` can never reach (browsers clamp it
+ * to >= 0) — the LEFT portion of the page became genuinely unreachable by
+ * scrolling, not just clipped-but-scrollable, and `document
+ * .elementsFromPoint` there resolved to the app's own SIDEBAR (a sibling of
+ * `.docx-viewer`, not an ancestor my mousedown listener could reach).
+ * Fixed in `src/viewers/__styles__/viewer-docx.css` (`align-items: safe
+ * center`) — see that file's own doc comment. Parametrized across two
+ * window sizes (the CI/small-window size that broke, and a comfortably
+ * large one) so this stays proven size-independent rather than re-pinned to
+ * one laptop's default.
  */
 
 const projectRoot = process.cwd()
+const WINDOW_SIZES: ReadonlyArray<{ readonly label: string; readonly width: number; readonly height: number }> = [
+  { label: '1024x768', width: 1024, height: 768 },
+  { label: '1400x900', width: 1400, height: 900 },
+]
 
-async function launch(file: string): Promise<{ app: ElectronApplication; page: Page }> {
+async function launch(file: string, width: number, height: number): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
     args: ['.', file],
     cwd: projectRoot,
     env: { ...process.env, CI: '1', PLAYWRIGHT: '1', ATLAS_HIDDEN_WINDOW: '1' },
   })
   const page = await app.firstWindow()
+  await app.evaluate(
+    ({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height),
+    { width, height },
+  )
   await page.waitForSelector('[data-paragraph-path]', { timeout: 20_000 })
   await page.waitForTimeout(1000)
   return { app, page }
@@ -56,41 +81,43 @@ async function saveAndReadDocumentXml(page: Page, file: string): Promise<string>
   return zip.file('word/document.xml')!.async('string')
 }
 
-test('DOCX-2: clicking the page margin next to a paragraph (with the Comments panel open) still places a working caret', async () => {
-  const src = path.join(projectRoot, 'src/docx/__fixtures__/corpus/comments-with-reply.docx')
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-docx-margin-click-'))
-  const file = path.join(dir, 'comments-with-reply.docx')
-  fs.copyFileSync(src, file)
+for (const { label, width, height } of WINDOW_SIZES) {
+  test(`DOCX-2: clicking the page margin next to a paragraph (with the Comments panel open) still places a working caret [${label}]`, async () => {
+    const src = path.join(projectRoot, 'src/docx/__fixtures__/corpus/comments-with-reply.docx')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-docx-margin-click-'))
+    const file = path.join(dir, 'comments-with-reply.docx')
+    fs.copyFileSync(src, file)
 
-  const { app, page } = await launch(file)
-  try {
-    // Opening a document with existing comments auto-opens the Comments
-    // panel, narrowing the page column — the real layout condition the
-    // original bug report reproduced against.
-    const p0 = page.locator('[data-paragraph-path="0"]').first()
-    const box = await p0.boundingBox()
-    if (box === null) throw new Error('paragraph 0 has no bounding box')
+    const { app, page } = await launch(file, width, height)
+    try {
+      // Opening a document with existing comments auto-opens the Comments
+      // panel, narrowing the page column — the real layout condition the
+      // original bug report reproduced against.
+      const p0 = page.locator('[data-paragraph-path="0"]').first()
+      const box = await p0.boundingBox()
+      if (box === null) throw new Error('paragraph 0 has no bounding box')
 
-    // 20px in from paragraph 0's own reported left edge: inside its logical
-    // box, but the exact coordinate the original report found unclickable
-    // once the Comments panel narrowed the page.
-    await page.mouse.click(box.x + 20, box.y + box.height / 2)
-    await page.waitForTimeout(200)
+      // 20px in from paragraph 0's own reported left edge: inside its logical
+      // box, but the exact coordinate the original report found unclickable
+      // once the Comments panel narrowed the page.
+      await page.mouse.click(box.x + 20, box.y + box.height / 2)
+      await page.waitForTimeout(200)
 
-    await page.keyboard.type('MARGINCLICK', { delay: 20 })
-    await page.waitForTimeout(300)
+      await page.keyboard.type('MARGINCLICK', { delay: 20 })
+      await page.waitForTimeout(300)
 
-    const text = await page.evaluate(
-      (p) => Array.from(document.querySelectorAll(`[data-paragraph-path="${p}"]`)).map((el) => el.textContent ?? '').join(''),
-      0,
-    )
-    // The pre-fix bug: this stayed exactly "Fixture: comments-with-reply."
-    // (the keystroke discarded silently, no error, caret looked normal).
-    expect(text).toContain('MARGINCLICK')
+      const text = await page.evaluate(
+        (p) => Array.from(document.querySelectorAll(`[data-paragraph-path="${p}"]`)).map((el) => el.textContent ?? '').join(''),
+        0,
+      )
+      // The pre-fix bug: this stayed exactly "Fixture: comments-with-reply."
+      // (the keystroke discarded silently, no error, caret looked normal).
+      expect(text).toContain('MARGINCLICK')
 
-    const xml = await saveAndReadDocumentXml(page, file)
-    expect(xml).toContain('MARGINCLICK')
-  } finally {
-    kill(app)
-  }
-})
+      const xml = await saveAndReadDocumentXml(page, file)
+      expect(xml).toContain('MARGINCLICK')
+    } finally {
+      kill(app)
+    }
+  })
+}

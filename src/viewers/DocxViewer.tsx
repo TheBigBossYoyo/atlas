@@ -872,6 +872,32 @@ function DocxEditor({
   // every move that isn't itself a vertical one (typing, clicking,
   // Left/Right/Home/End, …see handleKeyDownEvent/handleSurfaceMouseDown).
   const verticalGoalXRef = useRef<number | null>(null)
+  // DOCX-SMALL-WINDOW-2 — a vertical move (ArrowUp/Down/PageUp/Down) that
+  // needs to land on a page adjacent to the current one has to wait for that
+  // page's real DOM to exist first: `pinnedPageIndices` below only pins the
+  // page(s) holding the CURRENT caret, and `PageStack`'s scroll-driven
+  // virtualization (`src/docx/render/pageVirtualization.ts`) only mounts a
+  // page's content once it (or a viewport-height buffer around it) has
+  // actually scrolled into view — which plain keyboard movement never
+  // triggers on its own. At a small enough window (or a document long
+  // enough relative to it), the very next page can be a bare placeholder
+  // with zero `.docx-page__line` elements, so `positionOnAdjacentLine`'s
+  // geometry search finds nothing and the caret gets stuck at the last
+  // MOUNTED line, silently indistinguishable from a genuine document
+  // boundary. Set when a vertical move's target page isn't mounted yet;
+  // pinning it (via `pinnedPageIndices` below) forces `PageStack` to mount
+  // it, and the `useLayoutEffect` further below retries the exact same move
+  // once that DOM exists.
+  const [pendingVerticalMove, setPendingVerticalMove] = useState<{
+    readonly direction: VerticalDirection
+    readonly goalX: number
+    readonly isPageMove: boolean
+    readonly fromRect: DOMRect
+    readonly viewportHeight: number
+    readonly shift: boolean
+    readonly baseRange: Range
+    readonly mountPageIndex: number
+  } | null>(null)
   const historyRef = useRef(new History())
   // DEFER-4 / DXP-13 — this document's own embedded fonts (already
   // de-obfuscated), keyed off the raw archive so switching to a different
@@ -1063,15 +1089,57 @@ function DocxEditor({
   // real node, not a placeholder.
   const pinnedPageIndices = useMemo(() => {
     if (pages === null || range === null) {
-      return EMPTY_PINNED_PAGE_INDICES
+      return pendingVerticalMove === null ? EMPTY_PINNED_PAGE_INDICES : new Set([pendingVerticalMove.mountPageIndex])
     }
     const anchorPages = findPagesForParagraphPath(pages, range.anchor.paragraphPath)
     const focusPages = findPagesForParagraphPath(pages, range.focus.paragraphPath)
-    if (anchorPages.length === 0 && focusPages.length === 0) {
+    if (anchorPages.length === 0 && focusPages.length === 0 && pendingVerticalMove === null) {
       return EMPTY_PINNED_PAGE_INDICES
     }
-    return new Set([...anchorPages, ...focusPages])
-  }, [pages, range])
+    const indices = new Set([...anchorPages, ...focusPages])
+    // DOCX-SMALL-WINDOW-2 — see `pendingVerticalMove`'s own doc comment: force
+    // the target page to mount so the retry below has real DOM to search.
+    if (pendingVerticalMove !== null) {
+      indices.add(pendingVerticalMove.mountPageIndex)
+    }
+    return indices
+  }, [pages, range, pendingVerticalMove])
+
+  // DOCX-SMALL-WINDOW-2 — retries the vertical move `handleKeyDownEvent`
+  // deferred once `pendingVerticalMove.mountPageIndex` is pinned (above) and
+  // has had a chance to mount real `.docx-page__line` DOM. Runs as a layout
+  // effect (not a plain effect) so it fires in the SAME paint as the newly
+  // mounted page, before the user sees any intermediate state. If the
+  // target page's content still doesn't yield a line to land on (a
+  // genuinely short/empty page, or content that failed to mount for some
+  // other reason), falls back to the same line-start/end clamp
+  // `handleKeyDownEvent` itself uses — this must never leave the caret
+  // stuck with no visible response to the keypress.
+  useLayoutEffect(() => {
+    if (pendingVerticalMove === null) {
+      return
+    }
+    const root = editorRootRef.current
+    if (root === null) {
+      setPendingVerticalMove(null)
+      return
+    }
+
+    const { direction, goalX, isPageMove, fromRect, viewportHeight, shift, baseRange } = pendingVerticalMove
+
+    const target = isPageMove
+      ? positionOnePageVertically(fromRect, goalX, direction, viewportHeight, root, documentModel)
+      : positionOnAdjacentLine(baseRange.focus, goalX, direction, root, documentModel)
+
+    const newFocus =
+      target ??
+      (direction === 'up'
+        ? moveCursorToLineStart(baseRange.focus, documentModel)
+        : moveCursorToLineEnd(baseRange.focus, documentModel))
+
+    setRange(extendOrCollapse(baseRange, newFocus, shift))
+    setPendingVerticalMove(null)
+  }, [pendingVerticalMove, documentModel])
 
   const toolbarState = useMemo(
     () => createToolbarState(documentModel, range, { spellCheck: spellCheckEnabled, trackChanges: trackChangesEnabled }),
@@ -1831,6 +1899,7 @@ function DocxEditor({
 
         const goalX = verticalGoalXRef.current ?? fromRect.left
         verticalGoalXRef.current = goalX
+        const viewportHeight = containerRef.current?.clientHeight ?? root.getBoundingClientRect().height
 
         const target = isPageMove
           ? positionOnePageVertically(
@@ -1840,15 +1909,36 @@ function DocxEditor({
               // USR-04's own doc comment on `scrollContainerRef` explains why
               // `containerRef` (the outer `.docx-viewer`), not `root`, is the
               // element that actually has a real scrollable viewport height.
-              containerRef.current?.clientHeight ?? root.getBoundingClientRect().height,
+              viewportHeight,
               root,
               documentModel,
             )
           : positionOnAdjacentLine(range.focus, goalX, direction, root, documentModel)
 
+        if (target === null && pages !== null) {
+          // DOCX-SMALL-WINDOW-2 — before concluding this is a genuine
+          // document boundary, check whether there's a NEXT page in this
+          // direction that simply isn't mounted yet (see
+          // `pendingVerticalMove`'s own doc comment). Only the page(s) the
+          // CURRENT range sits on are guaranteed mounted, so an adjacent page
+          // that hasn't scrolled into view can be a bare placeholder with no
+          // lines at all, indistinguishable from "no more document" to
+          // `positionOnAdjacentLine`'s geometry search.
+          const focusPageIndices = findPagesForParagraphPath(pages, range.focus.paragraphPath)
+          if (focusPageIndices.length > 0) {
+            const currentPageIndex = direction === 'down' ? Math.max(...focusPageIndices) : Math.min(...focusPageIndices)
+            const mountPageIndex = direction === 'down' ? currentPageIndex + 1 : currentPageIndex - 1
+            if (mountPageIndex >= 0 && mountPageIndex < pages.length && !pinnedPageIndices.has(mountPageIndex)) {
+              setPendingVerticalMove({ direction, goalX, isPageMove, fromRect, viewportHeight, shift, baseRange: range, mountPageIndex })
+              return
+            }
+          }
+        }
+
         // No line to move to (top/bottom of the document, or of what's
-        // currently mounted) — land on this line's own start/end instead of
-        // doing nothing, matching Home/End's behavior for the current line.
+        // currently mounted, with no further page left to try mounting) —
+        // land on this line's own start/end instead of doing nothing,
+        // matching Home/End's behavior for the current line.
         const newFocus =
           target ??
           (direction === 'up'
@@ -1957,7 +2047,7 @@ function DocxEditor({
         event.preventDefault()
       }
     },
-    [applyResult, containerRef, documentModel, getTrackChanges, range],
+    [applyResult, containerRef, documentModel, getTrackChanges, pages, pinnedPageIndices, range],
   )
 
   const handleCompositionStart = useCallback((event: FormEvent<HTMLDivElement>) => {
