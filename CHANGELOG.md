@@ -25,6 +25,38 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   previous document's text under the new tab's name.** Very hard to hit by
   hand; found by a test that failed only under load.
 
+### Fixed — found by driving the app overnight (2026-09-25)
+
+- **Word documents: Up/Down move the cursor one line, and Page Up/Page Down
+  about one screen.** They used to send the insertion point to the very start or end of
+  the whole document, so the next thing you typed landed there.
+- **Word documents: clicking in the margin next to a paragraph places the
+  cursor.** With the Comments panel open, a click just left of the text left a
+  cursor that looked right but silently ignored everything you typed.
+- **Word documents: typing in a paragraph that contains a comment, a footnote
+  reference or an equation works.** It used to be refused without a word.
+- **Crash recovery: reopening the file you were editing offers your unsaved
+  changes.** Relaunching straight into it (double-click, Open with) used to
+  skip the offer, and then overwrite the recovered changes within a second.
+- **Text files keep their encoding, BOM and line endings on save.** Markdown,
+  code and CSV files written with Windows line endings, a UTF-8 BOM, UTF-16 or
+  Windows-1252 used to be rewritten as plain UTF-8 with Unix line endings, on
+  every line, not just the ones you edited.
+- **CSV: a semicolon-separated file stays semicolon-separated**, and keeps its
+  final line break.
+- **Spreadsheets: Ctrl+End goes to the last cell that has data**, not into the
+  blank margin (where typing wrote a stray cell into the file).
+- **Spreadsheets: `50%` and dates like `2024-03-14` are stored as numbers**
+  with a percent/date format, as in Excel, instead of as text. `'007` (leading
+  apostrophe) and cells formatted as text keep what you typed.
+- **Slides: shapes without an id (files from some tools) can be selected and
+  edited**, and "New slide" works in a deck that has no slide layouts.
+- **Ctrl+O and Ctrl+N work while you are typing** in a Word document, the
+  Markdown editor or the code editor.
+- **Keyboard shortcuts pressed immediately after opening a file or typing act
+  on what is on screen**, not on a moment earlier (a shortcut could run
+  against the previous state of the document).
+
 ## [3.7.0] — 2026-09-21 (phase 4: features that never worked, and the tests that hid them)
 
 Every defect below was found by **driving the real application**, not by the test

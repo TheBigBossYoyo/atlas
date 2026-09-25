@@ -565,6 +565,40 @@ o/n/e/t/b/1/2/3// in fields. Ctrl+O/N/T have no native meaning in a text
 field to protect, and the Markdown editor is contentEditable too. Same
 class as FIELD-01 (Ctrl+W). Ctrl+B must stay gated.
 
+### 2026-09-25 night run — sweep + fixes (full log: `..\atlas-night\NIGHT-LOG.md` and the three sweep reports there)
+
+Three QA agents drove a frozen build (`76bee8d`) against saved bytes; four fix agents worked in
+separate worktrees with disjoint files; the coordinator re-verified every claim on `main`
+(tsc -b, eslint, targeted vitest, build, affected e2e) before merging.
+
+**Fixed and merged:** REF-EFFECT-1 (`c86d716`), SHORTCUT-FIELD-1 (`481a548`), text encoding/BOM/EOL
+round trip for markdown/code/CSV incl. UTF-16 and cp1252 (SHELL-1/2, SHEET-6/7/8: `fe585fd`, `672645b`),
+SHEET-1/3/4/5/9 (`17f0a1a`), SHELL-3/5 + FIXTURE-1 (`35a8ec3`), SHELL-6 crash draft overwritten on
+relaunch (`89303cd`), DOCX-1 vertical caret, DOCX-2 margin-click dead caret, INSERT-TEXT-THROWS-1
+(docx merge). Every fix has a test shown to fail before and pass after.
+
+**Rejected finding:** SHEET-2 (frozen-pane click off by one) was the sweep harness's own bug; regression
+tests now pin the correct mapping.
+
+**Tests that pinned bugs, corrected:** the three `toThrow()` INSERT-TEXT-THROWS-1 assertions;
+`CsvViewer.editing.test.tsx` asserting the CSV final newline was dropped.
+
+**Still open:**
+- **DOCX-3** — after Save As, focus is lost (typing does nothing until you click). Cause:
+  `ViewerRouter.tsx:63` keys `ViewerErrorBoundary` by `file.path`, so the rename remounts the viewer
+  (content is correct: `showSessionFile` re-reads the saved file). Likely also loses undo history and
+  scroll (inferred, not verified). Fix = keep viewers mounted across a rename, which needs the per-viewer
+  state audit that file's own comment describes. Pinned by a `test.fail()` e2e test.
+- **CI-only flakes to watch:** the 24x "Ctrl+S straight after typing" test failed once (`35a8ec3`) and
+  passed on later runs; the in-flight bound was raised 5s→30s (`0c48ffb`), not proven to be the cause.
+  `spreadsheet-grid-fixes.spec.ts` SHEET-4/5 failed once on a `toBeFocused` readiness check reporting
+  "inactive" (document without OS focus on the runner); passed on re-run. The two markdown Ctrl+2
+  specs now self-diagnose.
+- Windows-1252 save that can't be represented falls back to UTF-8 and reports `encodingFallback`; no UI
+  surfaces it yet (needs an i18n string).
+- PageUp/PageDown move by about one screen (no paginator is wired to the editor), not an exact page.
+- Not swept: legacy `.doc`/`.ppt` (no fixtures), markdown preview rendering details, recent files across relaunch.
+
 ### 2026-09-24 — packaged installer smoke test (`docs/RELEASE.md` step 8), 3.7.0
 
 Owner installed `Atlas-Setup-3.7.0.exe` (UAC); the rest was driven against

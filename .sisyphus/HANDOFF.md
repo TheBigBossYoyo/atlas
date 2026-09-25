@@ -20,7 +20,10 @@ in **French** — answer him in French. Code, commits, docs and UI stay in Engli
   document's text (SHORTCUT-FIELD-1). Step 6 (uninstall) not done. 3.7.0 also still has F6b
   (first keystroke lost / Ctrl+S overtaking an edit on a slow machine), fixed on `main` since.
   Cut a 3.7.1.
-- 3581 unit tests, 114 Playwright e2e, `npm audit` 0, bundle gate green, CI green.
+- 2026-09-25 night run merged ~20 fixes found by driving the app (see the phase-4 plan's
+  "2026-09-25 night run" section and `..\atlas-night\NIGHT-LOG.md`). Unit tests: 3672. DOCX-3 (focus lost
+  after Save As, via ViewerRouter's path-keyed remount) is the main open item from it.
+- (at 3.7.0: 3581 unit tests, 114 Playwright e2e, `npm audit` 0, bundle gate green, CI green.)
 - `npx tsc -b` covers five projects: `src/`, `vite.config.ts`, `tests/e2e`,
   `electron/**/*.cjs` and `scripts/**/*.mjs`. Never weaken these.
 
