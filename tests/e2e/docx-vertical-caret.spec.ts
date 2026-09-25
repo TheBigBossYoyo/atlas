@@ -89,13 +89,27 @@ async function createTableFixture(): Promise<string> {
   return file
 }
 
-async function launch(file: string): Promise<{ app: ElectronApplication; page: Page }> {
+const WINDOW_SIZES: ReadonlyArray<{ readonly label: string; readonly width: number; readonly height: number }> = [
+  { label: '1024x768', width: 1024, height: 768 },
+  { label: '1400x900', width: 1400, height: 900 },
+]
+
+async function launch(
+  file: string,
+  size?: { readonly width: number; readonly height: number },
+): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({
     args: ['.', file],
     cwd: projectRoot,
     env: { ...process.env, CI: '1', PLAYWRIGHT: '1', ATLAS_HIDDEN_WINDOW: '1' },
   })
   const page = await app.firstWindow()
+  if (size !== undefined) {
+    await app.evaluate(
+      ({ BrowserWindow }, s) => BrowserWindow.getAllWindows()[0].setSize(s.width, s.height),
+      size,
+    )
+  }
   await page.waitForSelector('[data-paragraph-path]', { timeout: 20_000 })
   await page.waitForTimeout(800)
   return { app, page }
@@ -265,50 +279,64 @@ test('DOCX-1: Shift+ArrowDown extends the selection instead of collapsing it', a
   }
 })
 
-test('DOCX-1: ArrowDown repeated enough times crosses a real page boundary and lands on page 2', async () => {
-  const fixture = await createMultiPageFixture()
-  const { app, page } = await launch(fixture)
-  try {
-    const pageCountBefore = await page.locator('.docx-page').count()
-    expect(pageCountBefore).toBeGreaterThan(1)
+// DOCX-SMALL-WINDOW-2 — at a small enough window (confirmed: CI's
+// e2e-windows runner and any window at 1024x768 on this laptop), only the
+// page(s) holding the current caret are guaranteed mounted (`pinnedPageIndices`
+// in DocxViewer.tsx); the NEXT page can still be a bare placeholder with
+// zero `.docx-page__line` elements, since plain keyboard vertical movement
+// never scrolled it into the scroll-driven virtualization's visible+buffer
+// range. `positionOnAdjacentLine`'s geometry search then found nothing and
+// the caret got stuck at the last MOUNTED line, indistinguishable from a
+// genuine document boundary. Fixed by pinning the target page and retrying
+// the same move once it mounts (see `pendingVerticalMove`'s doc comment in
+// DocxViewer.tsx). Parametrized across two window sizes so this stays
+// proven size-independent rather than re-pinned to one laptop's default.
+for (const { label, width, height } of WINDOW_SIZES) {
+  test(`DOCX-1: ArrowDown repeated enough times crosses a real page boundary and lands on page 2 [${label}]`, async () => {
+    const fixture = await createMultiPageFixture()
+    const { app, page } = await launch(fixture, { width, height })
+    try {
+      const pageCountBefore = await page.locator('.docx-page').count()
+      expect(pageCountBefore).toBeGreaterThan(1)
 
-    const p0 = page.locator('[data-paragraph-path="0"]').first()
-    const box = await p0.boundingBox()
-    if (box === null) throw new Error('paragraph 0 has no bounding box')
-    await page.mouse.click(box.x + 10, box.y + box.height / 2)
-    await page.waitForTimeout(150)
+      const p0 = page.locator('[data-paragraph-path="0"]').first()
+      const box = await p0.boundingBox()
+      if (box === null) throw new Error('paragraph 0 has no bounding box')
+      await page.mouse.click(box.x + 10, box.y + box.height / 2)
+      await page.waitForTimeout(150)
 
-    // Repeatedly press ArrowDown until the caret's own client rect sits
-    // inside the SECOND `.docx-page` element — real vertical movement,
-    // line by line, across the page break, not a jump to the doc's end.
-    let landedOnPageTwo = false
-    for (let i = 0; i < 200; i += 1) {
-      await page.keyboard.press('ArrowDown')
-      const onPageTwo = await page.evaluate(() => {
-        const pages = Array.from(document.querySelectorAll('.docx-page'))
-        const sel = window.getSelection()
-        const node = sel?.focusNode
-        if (pages.length < 2 || !node) return false
-        return pages[1].contains(node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element))
-      })
-      if (onPageTwo) {
-        landedOnPageTwo = true
-        break
+      // Repeatedly press ArrowDown until the caret's own client rect sits
+      // inside the SECOND `.docx-page` element — real vertical movement,
+      // line by line, across the page break, not a jump to the doc's end.
+      let landedOnPageTwo = false
+      for (let i = 0; i < 200; i += 1) {
+        await page.keyboard.press('ArrowDown')
+        const onPageTwo = await page.evaluate(() => {
+          const pages = Array.from(document.querySelectorAll('.docx-page'))
+          const sel = window.getSelection()
+          const node = sel?.focusNode
+          if (pages.length < 2 || !node) return false
+          return pages[1].contains(node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element))
+        })
+        if (onPageTwo) {
+          landedOnPageTwo = true
+          break
+        }
       }
-    }
-    expect(landedOnPageTwo).toBe(true)
+      expect(landedOnPageTwo).toBe(true)
 
-    await page.keyboard.type('PAGE2MARK', { delay: 20 })
-    await page.waitForTimeout(200)
-    const xml = await saveAndReadDocumentXml(page, fixture)
-    expect(xml).toContain('PAGE2MARK')
-    // Must NOT have landed at the very end of the document (the pre-fix
-    // teleport-to-end bug) — the marker sits well before the last paragraph.
-    expect(xml.indexOf('PAGE2MARK')).toBeLessThan(xml.indexOf('Paragraph 39'))
-  } finally {
-    kill(app)
-  }
-})
+      await page.keyboard.type('PAGE2MARK', { delay: 20 })
+      await page.waitForTimeout(200)
+      const xml = await saveAndReadDocumentXml(page, fixture)
+      expect(xml).toContain('PAGE2MARK')
+      // Must NOT have landed at the very end of the document (the pre-fix
+      // teleport-to-end bug) — the marker sits well before the last paragraph.
+      expect(xml.indexOf('PAGE2MARK')).toBeLessThan(xml.indexOf('Paragraph 39'))
+    } finally {
+      kill(app)
+    }
+  })
+}
 
 test('DOCX-1: ArrowDown moves the caret into a table cell below, and out the other side', async () => {
   const fixture = await createTableFixture()

@@ -94,8 +94,30 @@
   box-shadow: 0 0 0 1px var(--accent, #0969da);
 }
 
+/* DOCX-SMALL-WINDOW-1 — `align-items: center` (the plain page-view.css
+ * default) on a flex column INSIDE a scrollable ancestor (`.docx-viewer__
+ * surface`, `overflow: auto`) is a well-known CSS trap: the instant a page
+ * renders wider than the surface's own scrollport (a real Letter/A4 page at
+ * 100% zoom easily does, once the window is narrow and/or the Comments
+ * panel is open), the browser centers it by pushing its start edge into
+ * negative scroll-offset territory that `scrollLeft` can never reach (it's
+ * clamped to >= 0) — the LEFT portion of the page (its own margin, and
+ * whatever text sits near it) becomes genuinely unreachable by scrolling,
+ * not just clipped-but-scrollable. `document.elementsFromPoint` there
+ * resolves to whatever unrelated UI happens to sit behind the surface at
+ * that screen position (confirmed: the app sidebar, at a 1024x768 window)
+ * — worse than DOCX-2's dead zone, since no client-rect-based geometry fix
+ * can place a caret somewhere that never actually renders. `align-items:
+ * safe center` is the standard, purpose-built fix (Chromium since 2022,
+ * well within this app's Electron 44 baseline): identical to `center` when
+ * the content fits, and falls back to start-alignment the instant it
+ * doesn't, keeping the WHOLE page within the scrollable range on both
+ * sides. Confirmed fixes both the click dead zone and (separately) vertical
+ * caret movement being unable to reach a page that never mounts into the
+ * reachable scroll range in the first place.
+ */
 .docx-viewer__surface .docx-page-stack {
-  align-items: center;
+  align-items: safe center;
 }
 
 .docx-viewer__error {
