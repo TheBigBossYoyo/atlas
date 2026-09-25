@@ -76,8 +76,11 @@ import {
   findEnclosingTable,
   findParagraph,
   findPrev,
+  extendOrCollapse,
   handleBeforeInput,
   handleKeyDown,
+  moveCursorToLineEnd,
+  moveCursorToLineStart,
   insertHyperlinkIntoBundle,
   insertImageIntoBundle,
   buildPasteCommands,
@@ -106,13 +109,17 @@ import {
   type HeaderFooterKind,
 } from '../docx/editor'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
-import { comparePositions } from '../docx/editor/Selection'
+import { comparePositions, isRangeCollapsed, normalizeRange } from '../docx/editor/Selection'
 import {
+  caretClientRect,
   domPointToPosition,
   paragraphRangeFromClientPoint,
   positionFromClientPoint,
+  positionOnAdjacentLine,
+  positionOnePageVertically,
   positionToDomRange,
   wordRangeFromClientPoint,
+  type VerticalDirection,
 } from '../docx/editor/Cursor'
 import { Toolbar } from '../docx/editor/toolbar/Toolbar'
 import { TableEditMenuItems } from '../docx/editor/toolbar/TableEditMenuItems'
@@ -169,10 +176,11 @@ const COMMON_OFFICE_FONTS: ReadonlyArray<string> = [
   'Palatino Linotype', 'Segoe UI', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana',
 ]
 
-/** USR-07/USR-09 — navigation keys the model does not handle yet (vertical
- * movement needs layout), so the browser moves the caret and the DOM
- * selection is read back on keyup. Every other key keeps the model range. */
-const NATIVE_NAVIGATION_KEYS: ReadonlySet<string> = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
+/** DOCX-1 — vertical-caret keys, resolved entirely by `handleKeyDownEvent`
+ * itself (via `Cursor.ts`'s line-geometry helpers) before `Input.ts` ever
+ * sees them; always `preventDefault()`ed so the browser's own broken native
+ * vertical-caret handling on this `inline-block`-run layout never runs. */
+const VERTICAL_MOVE_KEYS: ReadonlySet<string> = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
 
 const DEFAULT_FONT_METRICS: FontMetrics = Object.freeze({
   unitsPerEm: 1000,
@@ -856,10 +864,14 @@ function DocxEditor({
   // USR-06 — set by Find next/prev so the post-render selection sync scrolls
   // the match into view.
   const revealSelectionRef = useRef(false)
-  // USR-07/USR-09 — whether the last keydown was handled by the model; only
-  // natively-handled navigation keys re-read the DOM selection on keyup, so a
-  // model selection (Ctrl+A, formatting) is never overwritten by a stale DOM.
-  const nativeNavigationKeyRef = useRef(false)
+  // DOCX-1 — the client-x "goal column" ArrowUp/ArrowDown/PageUp/PageDown
+  // keep across consecutive presses, so moving down through a run of short
+  // lines stays under the same visual column instead of snapping to each
+  // line's own length (matches every real text editor). `null` means "no
+  // goal yet — derive one from the current caret" and is restored after
+  // every move that isn't itself a vertical one (typing, clicking,
+  // Left/Right/Home/End, …see handleKeyDownEvent/handleSurfaceMouseDown).
+  const verticalGoalXRef = useRef<number | null>(null)
   const historyRef = useRef(new History())
   // DEFER-4 / DXP-13 — this document's own embedded fonts (already
   // de-obfuscated), keyed off the raw archive so switching to a different
@@ -1304,6 +1316,61 @@ function DocxEditor({
    * extends), double-click selects the word, triple-click the paragraph, and
    * dragging extends from the mousedown anchor.
    */
+  /**
+   * DOCX-2 — the actual mapping from a click's client point to a model
+   * position (below) is pure geometry (`getBoundingClientRect()` over
+   * `.docx-page__line`/run elements), which is unaffected by an ancestor's
+   * CSS clipping/scroll — unlike the browser's own native hit-testing
+   * (`elementFromPoint`), which is. When the page renders wider than the
+   * `.docx-viewer__surface` scrollport (e.g. once the Comments panel narrows
+   * the available width), part of a line can fall into a clipped dead zone:
+   * a click there never reaches `editorRootRef`'s subtree at all (its native
+   * event target is an ancestor, e.g. `.docx-viewer__workspace`, not a
+   * descendant), so `onMouseDown` bound only to the surface never fires,
+   * `range` is never updated, and every following keystroke silently no-ops
+   * behind `Input.ts`'s `range === null` guard — with focus/selection
+   * already sitting wherever they were before the click (often the
+   * document's very start from initial mount), giving zero visual
+   * indication anything is wrong. Splitting the resolution logic out lets
+   * `handleWorkspaceMouseDown` (below) run the exact same geometry-based
+   * lookup for that dead-zone case — it doesn't need the click to have
+   * physically landed inside `root`'s clipped box, only `root` itself as the
+   * element to search and focus.
+   */
+  const resolveClickPosition = useCallback(
+    (root: HTMLElement, clientX: number, clientY: number, detail: number, shiftKey: boolean): void => {
+      root.focus({ preventScroll: true })
+      verticalGoalXRef.current = null
+
+      if (detail >= 3) {
+        const paragraph = paragraphRangeFromClientPoint(clientX, clientY, root, documentModel)
+        dragAnchorRef.current = null
+        if (paragraph !== null) {
+          setRange(paragraph)
+        }
+        return
+      }
+
+      if (detail === 2) {
+        const word = wordRangeFromClientPoint(clientX, clientY, root, documentModel)
+        dragAnchorRef.current = null
+        if (word !== null) {
+          setRange(word)
+        }
+        return
+      }
+
+      const position = positionFromClientPoint(clientX, clientY, root, documentModel)
+      if (position === null) {
+        return
+      }
+      const anchor = shiftKey && range !== null ? range.anchor : position
+      dragAnchorRef.current = anchor
+      setRange({ anchor, focus: position })
+    },
+    [documentModel, range],
+  )
+
   const handleSurfaceMouseDown = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       const root = editorRootRef.current
@@ -1316,36 +1383,82 @@ function DocxEditor({
       }
 
       event.preventDefault()
-      root.focus({ preventScroll: true })
-
-      if (event.detail >= 3) {
-        const paragraph = paragraphRangeFromClientPoint(event.clientX, event.clientY, root, documentModel)
-        dragAnchorRef.current = null
-        if (paragraph !== null) {
-          setRange(paragraph)
-        }
-        return
-      }
-
-      if (event.detail === 2) {
-        const word = wordRangeFromClientPoint(event.clientX, event.clientY, root, documentModel)
-        dragAnchorRef.current = null
-        if (word !== null) {
-          setRange(word)
-        }
-        return
-      }
-
-      const position = positionFromClientPoint(event.clientX, event.clientY, root, documentModel)
-      if (position === null) {
-        return
-      }
-      const anchor = event.shiftKey && range !== null ? range.anchor : position
-      dragAnchorRef.current = anchor
-      setRange({ anchor, focus: position })
+      resolveClickPosition(root, event.clientX, event.clientY, event.detail, event.shiftKey)
     },
-    [documentModel, range],
+    [resolveClickPosition],
   )
+
+  /**
+   * DOCX-2 fallback — a NATIVE listener on `containerRef.current` (the outer
+   * `.docx-viewer`), not a React `onMouseDown` prop. `containerRef`'s own
+   * `<div>` is owned by the parent `DocxViewerBase` component, one or more
+   * DOM levels OUTSIDE everything this component renders — the actual
+   * clickable/scrollable box of `.docx-viewer__surface` (and its child
+   * `.docx-viewer__workspace`) can start well inside the page's own
+   * left/right edges once the page renders wider than the available column,
+   * e.g. with the Comments panel open (see `resolveClickPosition`'s doc
+   * comment), and the resulting click's native event TARGET is
+   * `.docx-viewer` itself, an ANCESTOR of everything this component owns —
+   * never a DESCENDANT of it. React's synthetic event system only invokes a
+   * handler on an element that is the target or one of the target's
+   * ancestors *in the React tree*; attaching a JSX `onMouseDown` to any
+   * `<div>` this component renders (all of them are DESCENDANTS of
+   * `.docx-viewer`) can never fire for that click. A real
+   * `addEventListener` on the actual DOM node has no such restriction.
+   *
+   * Only acts when the native click target is NOT inside the surface at all
+   * (the dead-zone case) AND is not inside any of the other, non-editor UI
+   * `.docx-viewer` also contains (toolbar, header/footer panel, Comments
+   * panel, dialogs, menus) — so a normal click on rendered text is handled
+   * exactly once, by `handleSurfaceMouseDown`, and a click on the
+   * toolbar/Comments panel/a dialog is left entirely alone. Word's own
+   * behavior: a click anywhere on the page places the caret at the nearest
+   * real position; this is that, plus it guarantees the editor is never left
+   * "looks focused but range is null" after a click.
+   */
+  const nonEditorUiSelector = [
+    'button',
+    'input',
+    'select',
+    'textarea',
+    '[role="separator"]',
+    '[role="dialog"]',
+    '[data-resize-handle]',
+    '.docx-table-resize-handle',
+    '.docx-viewer__topbar',
+    '.docx-viewer__header-footer',
+    '.comments-pane',
+    '.docx-toolbar__popover',
+    '.docx-viewer__context-menu',
+    '.docx-viewer__context-menu-overlay',
+    '.modal-backdrop',
+    '.docx-viewer__error',
+    '.docx-viewer__field-status',
+  ].join(', ')
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (container === null) {
+      return undefined
+    }
+
+    const handleContainerMouseDown = (event: MouseEvent): void => {
+      const root = editorRootRef.current
+      const target = event.target as HTMLElement | null
+      if (event.button !== 0 || root === null || target === null || root.contains(target)) {
+        return
+      }
+      if (target.closest(nonEditorUiSelector) !== null) {
+        return
+      }
+
+      event.preventDefault()
+      resolveClickPosition(root, event.clientX, event.clientY, event.detail, event.shiftKey)
+    }
+
+    container.addEventListener('mousedown', handleContainerMouseDown)
+    return () => container.removeEventListener('mousedown', handleContainerMouseDown)
+  }, [containerRef, nonEditorUiSelector, resolveClickPosition])
 
   useEffect(() => {
     const handleMove = (event: MouseEvent): void => {
@@ -1616,10 +1729,25 @@ function DocxEditor({
         return
       }
 
+      // DOCX-2 — the editor must never silently swallow a keystroke just
+      // because `range` state hasn't caught up with a real, valid native
+      // selection (e.g. a click resolved outside this component's own
+      // pointer handlers, or any other path that left state stale). Before
+      // giving up, re-read the DOM directly one time as a last resort —
+      // cheap, and far better than a keystroke vanishing with no feedback.
+      const effectiveRange = range ?? (() => {
+        const root = editorRootRef.current
+        const resynced = root === null ? null : getSelectionFromDom(root, documentModel)
+        if (resynced !== null) {
+          setRange(resynced)
+        }
+        return resynced
+      })()
+
       const applied = applyResult(
         handleBeforeInput(nativeEvent, {
           document: documentModel,
-          range,
+          range: effectiveRange,
           history: historyRef.current,
           trackChanges: getTrackChanges(),
         }),
@@ -1664,7 +1792,74 @@ function DocxEditor({
       const ctrl = event.ctrlKey || event.metaKey
       const shift = event.shiftKey
       const lowerKey = event.key.toLowerCase()
-      nativeNavigationKeyRef.current = NATIVE_NAVIGATION_KEYS.has(event.key)
+
+      // DOCX-1 — resolved entirely here, before Input.ts's `handleKeyDown`
+      // (which has no DOM access and always no-ops on these four keys — see
+      // its own comment). Always `preventDefault()`ed so the browser's own
+      // broken native vertical-caret handling on this `inline-block`-run
+      // layout never runs, even when there's nothing for us to move to yet
+      // (e.g. no root mounted, or no selection).
+      if (VERTICAL_MOVE_KEYS.has(event.key)) {
+        event.preventDefault()
+        const root = editorRootRef.current
+        if (root === null || range === null) {
+          return
+        }
+
+        const direction: VerticalDirection = event.key === 'ArrowUp' || event.key === 'PageUp' ? 'up' : 'down'
+        const isPageMove = event.key === 'PageUp' || event.key === 'PageDown'
+
+        // Matches ArrowLeft/ArrowRight's own convention just below: the
+        // first non-Shift vertical press on an existing selection only
+        // collapses it (to the edge that direction already reads towards),
+        // it doesn't also move past that same edge on the same keystroke.
+        if (!shift && !isRangeCollapsed(range)) {
+          const { start, end } = normalizeRange(range)
+          const collapsed = direction === 'up' ? start : end
+          verticalGoalXRef.current = null
+          setRange({ anchor: collapsed, focus: collapsed })
+          return
+        }
+
+        const fromRect = caretClientRect(range.focus, root, documentModel)
+        if (fromRect === null) {
+          // Can't locate the caret in the live DOM (e.g. mid-render) — leave
+          // the selection alone rather than guess; default is still
+          // prevented above.
+          return
+        }
+
+        const goalX = verticalGoalXRef.current ?? fromRect.left
+        verticalGoalXRef.current = goalX
+
+        const target = isPageMove
+          ? positionOnePageVertically(
+              fromRect,
+              goalX,
+              direction,
+              // USR-04's own doc comment on `scrollContainerRef` explains why
+              // `containerRef` (the outer `.docx-viewer`), not `root`, is the
+              // element that actually has a real scrollable viewport height.
+              containerRef.current?.clientHeight ?? root.getBoundingClientRect().height,
+              root,
+              documentModel,
+            )
+          : positionOnAdjacentLine(range.focus, goalX, direction, root, documentModel)
+
+        // No line to move to (top/bottom of the document, or of what's
+        // currently mounted) — land on this line's own start/end instead of
+        // doing nothing, matching Home/End's behavior for the current line.
+        const newFocus =
+          target ??
+          (direction === 'up'
+            ? moveCursorToLineStart(range.focus, documentModel)
+            : moveCursorToLineEnd(range.focus, documentModel))
+
+        setRange(extendOrCollapse(range, newFocus, shift))
+        return
+      }
+
+      verticalGoalXRef.current = null
 
       // Wave F.4 — MS Word keyboard parity.  Intercept the parity-only
       // shortcuts here BEFORE falling through to the editor's handleKeyDown
@@ -1762,7 +1957,7 @@ function DocxEditor({
         event.preventDefault()
       }
     },
-    [applyResult, documentModel, getTrackChanges, range],
+    [applyResult, containerRef, documentModel, getTrackChanges, range],
   )
 
   const handleCompositionStart = useCallback((event: FormEvent<HTMLDivElement>) => {
@@ -2227,6 +2422,38 @@ function DocxEditor({
           return false
         }
 
+        // DOCX-3 — Save As (`options?.forceDialog`) shows a native OS save
+        // dialog via the main process; that dialog takes OS-level focus away
+        // from the whole Electron window, and nothing gives it back to
+        // `editorRootRef` once it closes (Chromium doesn't restore focus to
+        // whatever had it before an OS dialog interrupted the page).
+        // `document.activeElement` is left as `<body>`, and the model
+        // `range`/native `Selection` are never resynced because the
+        // selection-sync effect only re-runs when `pages` or `range` change
+        // — neither does just from saving — so the user has to click back
+        // into the document before typing does anything again. Plain Save
+        // never shows a dialog (confirmed against the real app: no observed
+        // focus loss), so this is scoped to the Save As path specifically.
+        //
+        // This is necessary but NOT sufficient end-to-end: confirmed against
+        // the real app that once `reportSavedPath` (above) updates the
+        // active tab's path, `src/components/ViewerRouter.tsx` — which keys
+        // its `ViewerErrorBoundary` (and so this whole component) by
+        // `file.path` — remounts a BRAND NEW `DocxEditor` a render or two
+        // later, discarding the focus this restores along with it. Fixing
+        // that fully needs a change in ViewerRouter.tsx (outside this
+        // component's ownership), described in this task's final report;
+        // this restoration still stands on its own for any Save As that
+        // doesn't trigger that remount, and is the half of the fix that
+        // belongs here.
+        if (options?.forceDialog) {
+          const root = editorRootRef.current
+          if (root !== null) {
+            root.focus({ preventScroll: true })
+            syncSelectionToDom(root, range, documentModelRef.current)
+          }
+        }
+
         // Record *the revision that was actually written*
         // (`revisionToSave`, captured alongside `documentToSave` above,
         // including any header/footer edit `flushHeaderFooterEdits` just
@@ -2272,7 +2499,7 @@ function DocxEditor({
         return false
       }
     },
-    [bundle, flushHeaderFooterEdits, savePath, file.path, reportSavedPath, t],
+    [bundle, flushHeaderFooterEdits, savePath, file.path, range, reportSavedPath, t],
   )
 
   const handleSave = useCallback((): Promise<boolean> => handleSaveInternal(), [handleSaveInternal])
@@ -3007,11 +3234,6 @@ function DocxEditor({
           spellCheck={spellCheckEnabled}
           onKeyDown={handleKeyDownEvent}
           onMouseDown={handleSurfaceMouseDown}
-          onKeyUp={() => {
-            if (nativeNavigationKeyRef.current) {
-              syncRangeFromDom()
-            }
-          }}
           onFocus={() => {
             if (range === null) {
               syncRangeFromDom()

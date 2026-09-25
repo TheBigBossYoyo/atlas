@@ -787,6 +787,178 @@ export function paragraphRangeFromClientPoint(
   return anchor === null || focus === null ? null : { anchor, focus }
 }
 
+// ─── Vertical caret movement (DOCX-1) ─────────────────────────────────────
+//
+// ArrowUp/ArrowDown/PageUp/PageDown used to fall through to the browser's
+// native contentEditable caret handling, which this layout breaks (every run
+// is `display: inline-block`, so native line-wise movement can collapse to
+// the very start/end of the whole editable region — see the DOCX-1 report).
+// `Input.ts`'s own model has no notion of a "line" at all (it only knows
+// paragraphs/runs/chars), so line-to-line movement has to be geometry-based,
+// the same way pointer hit-testing above already is: find the rendered line
+// above/below the caret's current line from real `getBoundingClientRect()`
+// data, then hand the target (x, y) to the SAME `positionFromClientPoint`
+// mapper a mouse click uses, so table cells, paragraph boundaries and
+// multi-column pages all resolve exactly like a click would.
+
+export type VerticalDirection = 'up' | 'down'
+
+/** Rendered lines within 1px of the same vertical center as one another are
+ * treated as "the same line" rather than as being strictly above/below it —
+ * guards against float rounding making a line adjacent to itself. */
+const SAME_LINE_EPSILON_PX = 1
+
+function lineCenterY(rect: DOMRect): number {
+  return rect.top + rect.height / 2
+}
+
+/**
+ * The caret's own client rect at `position` — used both as the vertical
+ * anchor for finding the line above/below, and (its `left`) as the initial
+ * "goal x" a vertical-move caller keeps across consecutive presses. Prefers
+ * a zero-width `Range` at the exact DOM point (real sub-character precision,
+ * matching what the browser itself would show); falls back to the
+ * containing element's rect when that yields nothing — collapsed ranges at
+ * some DOM points report no client rects, and this also keeps the function
+ * testable against the same stubbed `getBoundingClientRect` this file's
+ * other hit-testing already relies on (jsdom's own layout is always
+ * zero-size).
+ */
+export function caretClientRect(
+  position: Position,
+  root: HTMLElement,
+  docModel?: DocxDocument,
+): DOMRect | null {
+  const point = positionToDomRange(position, root, docModel)
+  if (point === null) {
+    return null
+  }
+
+  const element = point.node.nodeType === Node.ELEMENT_NODE ? (point.node as Element) : point.node.parentElement
+  const fallbackRect = element?.getBoundingClientRect() ?? null
+
+  if (point.node.nodeType === Node.TEXT_NODE) {
+    try {
+      const range = root.ownerDocument.createRange()
+      range.setStart(point.node, point.offset)
+      range.setEnd(point.node, point.offset)
+      const rects = range.getClientRects()
+      if (rects.length > 0) {
+        return rects[0]
+      }
+    } catch {
+      // fall through to the element-level rect below
+    }
+  }
+
+  return fallbackRect
+}
+
+/**
+ * The `.docx-page__line` element `position` itself sits on/in, resolved the
+ * same way `positionToDomRange` does (falls back to the DOM point's own
+ * element for an empty-paragraph line, which is the line element already).
+ */
+function resolveOwnLineElement(
+  position: Position,
+  root: HTMLElement,
+  docModel: DocxDocument | undefined,
+): HTMLElement | null {
+  const point = positionToDomRange(position, root, docModel)
+  if (point === null) {
+    return null
+  }
+  const element = point.node.nodeType === Node.ELEMENT_NODE ? (point.node as Element) : point.node.parentElement
+  return element?.closest<HTMLElement>('.docx-page__line') ?? null
+}
+
+/**
+ * Model position on the rendered line adjacent to `position`'s own line, in
+ * `direction`, hit-tested at client x `goalX` via `positionFromClientPoint`
+ * — the same point→position mapper a mouse click uses. `null` when there is
+ * no such line: top/bottom of the document, or of the currently mounted/
+ * virtualized window. Callers treat `null` as "there is no line to move to"
+ * and fall back to that line's own start/end (ArrowUp on the first line,
+ * ArrowDown on the last).
+ *
+ * Excludes `position`'s own line by DOM identity rather than by comparing
+ * vertical centers within some epsilon: a run's precise caret rect (from
+ * `caretClientRect`'s `Range.getClientRects()`) and its enclosing
+ * `.docx-page__line`'s own `getBoundingClientRect()` don't necessarily share
+ * the exact same center — line-height/baseline metrics can offset them by a
+ * few px — so an epsilon-based "is this close enough to be the same line"
+ * check was intermittently satisfied by the CURRENT line itself, landing
+ * back on the same paragraph instead of moving.
+ */
+export function positionOnAdjacentLine(
+  position: Position,
+  goalX: number,
+  direction: VerticalDirection,
+  root: HTMLElement,
+  docModel?: DocxDocument,
+): Position | null {
+  const ownLine = resolveOwnLineElement(position, root, docModel)
+  const fromRect = ownLine?.getBoundingClientRect() ?? caretClientRect(position, root, docModel)
+  if (fromRect === null) {
+    return null
+  }
+
+  const fromCenter = lineCenterY(fromRect)
+  let bestRect: DOMRect | null = null
+  let bestDistance = Infinity
+
+  for (const line of findLineElements(root, docModel)) {
+    if (line.element === ownLine) {
+      continue
+    }
+    const rect = line.element.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) {
+      continue
+    }
+    const center = lineCenterY(rect)
+    const isBeyond =
+      direction === 'down' ? center > fromCenter + SAME_LINE_EPSILON_PX : center < fromCenter - SAME_LINE_EPSILON_PX
+    if (!isBeyond) {
+      continue
+    }
+    const distance = Math.abs(center - fromCenter)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestRect = rect
+    }
+  }
+
+  if (bestRect === null) {
+    return null
+  }
+
+  return positionFromClientPoint(goalX, lineCenterY(bestRect), root, docModel)
+}
+
+/**
+ * Model position roughly one viewport page away vertically (PageUp/
+ * PageDown): `fromRect` shifted by `viewportHeight` px, hit-tested the same
+ * way as a mouse click. A real "one page" move would need per-page geometry
+ * from the layout/paginator that `Input.ts`'s deferred-vertical-movement TODO
+ * pointed at (see the DOCX-1 report) — this editor doesn't have that piped
+ * through to it, so a plain client-rect offset by the scroll container's own
+ * height is the same approximation any contentEditable-based editor falls
+ * back to without page geometry. `positionFromClientPoint`'s nearest-line
+ * search naturally clamps to the first/last line when the offset overshoots
+ * the document, so no separate top/bottom handling is needed here.
+ */
+export function positionOnePageVertically(
+  fromRect: DOMRect,
+  goalX: number,
+  direction: VerticalDirection,
+  viewportHeight: number,
+  root: HTMLElement,
+  docModel?: DocxDocument,
+): Position | null {
+  const targetY = direction === 'down' ? fromRect.top + viewportHeight : fromRect.top - viewportHeight
+  return positionFromClientPoint(goalX, targetY, root, docModel)
+}
+
 export function findPositionAtClientPoint(
   x: number,
   y: number,

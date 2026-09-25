@@ -24,6 +24,7 @@ import { applyCommand } from '../editor'
 import type { Position } from '../editor'
 import { loadDocx, saveDocx } from '../index'
 import type { DocxBundle } from '../index'
+import type { Paragraph } from '../model'
 import {
   documentStructuralCounts,
   documentXmlOf,
@@ -284,57 +285,111 @@ describe('DOCX round-trip fidelity corpus (P0.5 / QA-09 / DXS-17)', () => {
     }
   })
 
-  // FINDING (phase4/b4-corpus-tests, TEST-1) — discovered while giving each
-  // corpus fixture its own trivial-edit position: `applyInsertText`'s
-  // `getEditableRuns` (src/docx/editor/commands.ts) rejects a paragraph
-  // outright — `applyCommand` throws, not just no-ops — the instant *any* of
-  // its children is a bookmark, a comment range/reference, a footnote/
-  // endnote reference, a field, or a bare `w:oMath` (parsed as an
-  // `UnknownNode`). This is why `comments-with-reply`, `footnotes-endnotes`,
-  // and `math-omml` fall back to `INTRO_PARAGRAPH_START` in EDIT_POSITIONS
-  // above instead of a position inside the paragraph each fixture actually
-  // exists to test — there is no such position `insert-text` can reach. Not
-  // fixed here per this task's scope (tests only); reported as a finding:
-  // typing in a paragraph that merely contains a comment or a formula is a
-  // plausible everyday action, and today it throws instead of either
-  // inserting text around the construct or being disabled/no-op in the UI.
-  describe("insert-text can't reach every construct (documented editor limitation)", () => {
-    const unreachableParagraphs: ReadonlyArray<{
-      readonly fixtureId: FixtureId
-      readonly paragraphPath: ReadonlyArray<number>
-      readonly description: string
-    }> = [
-      {
-        fixtureId: 'comments-with-reply',
-        paragraphPath: [0, 1],
-        description: 'a paragraph containing a w:commentRangeStart/End',
-      },
-      {
-        fixtureId: 'footnotes-endnotes',
-        paragraphPath: [0, 1],
-        description: 'a paragraph containing a footnote/endnote reference run',
-      },
-      {
-        fixtureId: 'math-omml',
-        paragraphPath: [0, 1],
-        description: 'a paragraph that is a bare w:oMath (parsed as UnknownNode)',
-      },
-    ]
+  // FINDING (phase4/b4-corpus-tests, TEST-1), FIXED (INSERT-TEXT-THROWS-1) —
+  // discovered while giving each corpus fixture its own trivial-edit
+  // position: `applyInsertText`'s `getEditableRuns` (src/docx/editor/
+  // commands.ts) used to reject a paragraph outright — `applyCommand` threw,
+  // not just no-opped — the instant *any* of its children was a bookmark, a
+  // comment range/reference, a footnote/endnote reference, or a bare
+  // `w:oMath` (parsed as an `UnknownNode`). Typing in a paragraph that merely
+  // contains a comment or a formula is a plausible everyday action, and it
+  // used to throw (every caller `preventDefault()`s on a throw, so in the
+  // real app this was a silently-discarded keystroke) instead of inserting
+  // text around the construct. `applyInsertText` now partitions such a
+  // paragraph via `chunkParagraphForInsert` into these inert markers (kept
+  // byte-identical, never split or rewritten) and the genuinely editable
+  // text around them, so typing elsewhere in the paragraph works and the
+  // marker itself is untouched. These three tests, which used to assert the
+  // throw (pinning the bug — see FIX-RULES.md's "never weaken a test"; this
+  // corrects rather than weakens them), now assert the fixed behaviour:
+  // insertion succeeds, the typed text lands where expected, and the
+  // construct under test survives byte-for-byte.
+  describe('insert-text reaches every construct, without disturbing it', () => {
+    it("comments-with-reply: typing inside the commented run doesn't disturb the comment range/reference", async () => {
+      const originalBuffer = await readCorpusFixture('comments-with-reply')
+      const bundle = await loadDocx(originalBuffer)
+      const before = (bundle.document.sections[0].blocks[1] as Paragraph).children
 
-    for (const { fixtureId, paragraphPath, description } of unreachableParagraphs) {
-      it(`throws for ${fixtureId}'s ${description}`, async () => {
-        const originalBuffer = await readCorpusFixture(fixtureId)
-        const bundle = await loadDocx(originalBuffer)
-
-        expect(() =>
-          applyCommand(bundle.document, {
-            kind: 'insert-text',
-            at: { paragraphPath, runIndex: 0, charOffset: 0 },
-            text: 'X',
-          }),
-        ).toThrow()
+      // Editable-run index 1 is "commented phrase" (index 0 is the plain
+      // lead-in run) — the `w:commentRangeStart`/`w:commentRangeEnd`/
+      // `w:commentReference` markers around it are paragraph-level siblings,
+      // not part of the flattened editable-run list.
+      const result = applyCommand(bundle.document, {
+        kind: 'insert-text',
+        at: { paragraphPath: [0, 1], runIndex: 1, charOffset: 3 },
+        text: 'X',
       })
-    }
+
+      const after = (result.document.sections[0].blocks[1] as Paragraph).children
+      expect(after.filter((c) => c.kind === 'comment-range')).toEqual(before.filter((c) => c.kind === 'comment-range'))
+      expect(after.filter((c) => c.kind === 'comment-reference')).toEqual(
+        before.filter((c) => c.kind === 'comment-reference'),
+      )
+      const editedRun = after.find(
+        (c) => c.kind === 'run' && c.children.some((rc) => rc.kind === 'text' && rc.value.includes('X')),
+      )
+      expect(editedRun).toMatchObject({ children: [{ kind: 'text', value: 'comXmented phrase' }] })
+
+      // Against the saved bytes, not just the in-memory model.
+      const savedBytes = await saveDocx({ ...bundle, document: result.document })
+      const savedPkg = await loadRawPackage(savedBytes)
+      const savedXml = documentXmlOf(savedPkg)
+      expect(savedXml).toContain('comXmented phrase')
+      expect(savedXml).toMatch(/<w:commentRangeStart[^>]*w:id="1"/)
+      expect(savedXml).toMatch(/<w:commentRangeEnd[^>]*w:id="1"/)
+      expect(savedXml).toMatch(/<w:commentReference[^>]*w:id="1"/)
+    })
+
+    it("footnotes-endnotes: typing right after the footnote reference doesn't disturb it", async () => {
+      const originalBuffer = await readCorpusFixture('footnotes-endnotes')
+      const bundle = await loadDocx(originalBuffer)
+      const before = (bundle.document.sections[0].blocks[1] as Paragraph).children
+      const footnoteRefRunBefore = before[1]
+
+      // Editable-run index 1 is the atomic run whose only child is the
+      // `footnote-reference` — inserting at charOffset 0 there splices the
+      // new text in as its own run immediately after it (the same
+      // atomic-boundary-splice path an inline image already uses).
+      const result = applyCommand(bundle.document, {
+        kind: 'insert-text',
+        at: { paragraphPath: [0, 1], runIndex: 1, charOffset: 0 },
+        text: 'X',
+      })
+
+      const after = (result.document.sections[0].blocks[1] as Paragraph).children
+      expect(after[1]).toEqual(footnoteRefRunBefore)
+      expect(after[2]).toMatchObject({ kind: 'run', children: [{ kind: 'text', value: 'X' }] })
+
+      const savedBytes = await saveDocx({ ...bundle, document: result.document })
+      const savedPkg = await loadRawPackage(savedBytes)
+      const savedXml = documentXmlOf(savedPkg)
+      expect(savedXml).toMatch(/<w:footnoteReference[^>]*w:id="1"/)
+      expect(savedXml).toContain('>X<')
+    })
+
+    it('math-omml: typing in an oMath-only paragraph appends text after the equation instead of dropping it', async () => {
+      const originalBuffer = await readCorpusFixture('math-omml')
+      const bundle = await loadDocx(originalBuffer)
+      const before = (bundle.document.sections[0].blocks[1] as Paragraph).children
+      expect(before).toHaveLength(1)
+      expect(before[0].kind).toBe('unknown')
+
+      const result = applyCommand(bundle.document, {
+        kind: 'insert-text',
+        at: { paragraphPath: [0, 1], runIndex: 0, charOffset: 0 },
+        text: 'X',
+      })
+
+      const after = (result.document.sections[0].blocks[1] as Paragraph).children
+      expect(after[0]).toEqual(before[0])
+      expect(after[1]).toMatchObject({ kind: 'run', children: [{ kind: 'text', value: 'X' }] })
+
+      const savedBytes = await saveDocx({ ...bundle, document: result.document })
+      const savedPkg = await loadRawPackage(savedBytes)
+      const savedXml = documentXmlOf(savedPkg)
+      expect(savedXml).toContain('<m:oMath>')
+      expect(savedXml).toContain('>X<')
+    })
   })
 
   // D7 / DXP-06, DXL-08, DXS-05: the corpus's generic structural fingerprint

@@ -863,6 +863,57 @@ describe('DocxViewer editor', () => {
     expect(request.existingPath).toBeUndefined()
   })
 
+  // DOCX-3 — the native OS Save dialog Save As opens takes focus away from
+  // the whole Electron window; nothing gave it back to the editor once the
+  // dialog closed, so `document.activeElement` was left as `<body>` and
+  // every keystroke typed right after Save As vanished silently. This test
+  // exercises DocxViewer in isolation (no ViewerRouter/shell wrapping it,
+  // matching every other test in this file), which is exactly the part of
+  // the fix that lives in this component: `handleSaveInternal`'s
+  // `forceDialog` branch now re-focuses `editorRootRef` and resyncs the
+  // selection once `saveBinaryFile` resolves. NOTE: driving the real app
+  // end-to-end (tests/e2e/docx-editor.spec.ts's "DOCX-3" test) additionally
+  // found that `src/components/ViewerRouter.tsx` keys the viewer subtree by
+  // `file.path` (`<ViewerErrorBoundary key={file.path}>`), so the moment
+  // Save As changes the active tab's path, the shell remounts a BRAND NEW
+  // DocxViewer instance a moment later that has no memory of this restored
+  // focus — undoing it. That remount doesn't happen in this unit test
+  // (there is no ViewerRouter here), so this test alone can't catch that
+  // half of the bug; see the final report for the ViewerRouter-side finding.
+  it('DOCX-3: focus and the caret return to the editor once Save As resolves to a new path', async () => {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+
+    const editor = await screen.findByRole('textbox', { name: 'Document editor' })
+    fireEvent.mouseDown(editor, { button: 0 })
+    expect(document.activeElement).toBe(editor)
+
+    window.electronAPI!.saveBinaryFile = vi.fn().mockResolvedValue({
+      saved: true,
+      path: 'C:/docs/sample-copy.docx',
+      name: 'sample-copy.docx',
+    })
+
+    // Simulate the OS dialog taking focus away, exactly like a real save
+    // dialog does — jsdom doesn't do this on its own.
+    editor.blur()
+    expect(document.activeElement).not.toBe(editor)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save As' }))
+
+    await waitFor(() => {
+      expect(window.electronAPI!.saveBinaryFile).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(document.activeElement).toBe(editor)
+    })
+  })
+
   it('DXE-25: a save failure stays visible until dismissed or a save succeeds, not cleared by the next edit', async () => {
     window.electronAPI!.saveBinaryFile = vi.fn().mockResolvedValue({ saved: false, error: 'Disk is full' })
 
@@ -1691,5 +1742,322 @@ describe('DocxViewer editor', () => {
 
     const savedDocument = saveDocxMock.mock.calls[0][0].document as DocxDocument
     expect(insRevisionTexts(savedDocument)).toContain('Pasted text')
+  })
+})
+
+// ─── DOCX-1 — vertical caret movement ──────────────────────────────────────
+//
+// The mocked `PageStack` above always renders one fixed line, so — exactly
+// like `placeSelectionInsideSurfaceTableCell` above does for the table-cell
+// tests — three real `.docx-page__line` elements are appended to the surface
+// directly, each with a stubbed `getBoundingClientRect` (jsdom never lays
+// anything out), matching the same fixture shape `Cursor.test.ts`'s own
+// DOCX-1 geometry tests use. Ordinary-paragraph position resolution reads
+// `data-paragraph-path` straight off the DOM, so it works without the mocked
+// document model needing to actually contain these paragraphs.
+describe('DocxViewer editor — DOCX-1 vertical caret movement', () => {
+  beforeEach(() => {
+    loadDocxMock.mockResolvedValue(createBundle())
+    saveDocxMock.mockResolvedValue(new Uint8Array([1, 2, 3]))
+    paginateMock.mockResolvedValue([
+      {
+        sectionIndex: 0,
+        pageIndex: 0,
+        sizePt: { width: 400, height: 300 },
+        marginsPt: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0, gutter: 0 },
+        columns: [],
+        headerLines: [],
+        footerLines: [],
+      },
+    ])
+    window.electronAPI = {
+      getInitialFile: vi.fn(),
+      openFileDialog: vi.fn(),
+      openFileByPath: vi.fn(),
+      saveFile: vi.fn(),
+      saveBinaryFile: vi.fn().mockResolvedValue({ saved: true, path: 'C:/docs/sample.docx', name: 'sample.docx' }),
+      onFileOpened: vi.fn(),
+      setTheme: vi.fn(),
+      openFileBinary: vi.fn(),
+      newDocument: vi.fn(),
+      readBinaryByPath: vi.fn(),
+      onFileOpenedPath: vi.fn(),
+      getPathForFile: vi.fn(),
+      registerDroppedPath: vi.fn().mockResolvedValue({ ok: true }),
+      requestOpenRecent: vi.fn().mockResolvedValue({ ok: true }),
+      revealInFolder: vi.fn().mockResolvedValue({ ok: true }),
+      image: { pick: vi.fn() },
+      spellcheck: {
+        onContextMenu: vi.fn(() => () => {}),
+        replaceMisspelling: vi.fn(),
+        addWord: vi.fn(),
+        getLanguages: vi.fn().mockResolvedValue({ available: [], enabled: [] }),
+        setLanguages: vi.fn().mockResolvedValue({ ok: true }),
+      },
+    }
+  })
+
+  // jsdom's own `Range.getClientRects()` always returns an empty list (no
+  // layout engine), so `caretClientRect`'s primary code path — a zero-width
+  // Range at the exact caret point, which is what a real browser uses to
+  // report the caret's TRUE x position within a run — never gets exercised,
+  // only its whole-element fallback. Stubbed here to interpolate a caret x
+  // from the character offset across the containing element's own stubbed
+  // rect, so these tests exercise the same "real per-character x" path a
+  // real browser takes (needed to test that the goal x survives a short
+  // intermediate line at the correct column, not just to whatever the DOM
+  // happens to fall back to).
+  const originalGetClientRects = Range.prototype.getClientRects
+  beforeEach(() => {
+    Range.prototype.getClientRects = function (this: Range) {
+      const node = this.startContainer
+      const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element | null)
+      if (element === null || typeof element.getBoundingClientRect !== 'function') {
+        return [] as unknown as ReturnType<Range['getClientRects']>
+      }
+      const elementRect = element.getBoundingClientRect()
+      const textLength = node.textContent?.length ?? 0
+      const charWidth = textLength > 0 ? elementRect.width / textLength : 0
+      const left = elementRect.left + this.startOffset * charWidth
+      return [
+        {
+          left,
+          top: elementRect.top,
+          right: left,
+          bottom: elementRect.bottom,
+          width: 0,
+          height: elementRect.height,
+          x: left,
+          y: elementRect.top,
+          toJSON: () => ({}),
+        },
+      ] as unknown as ReturnType<Range['getClientRects']>
+    }
+  })
+
+  afterEach(() => {
+    vi.clearAllMocks()
+    Range.prototype.getClientRects = originalGetClientRects
+  })
+
+  function rect(left: number, top: number, width: number, height: number): DOMRect {
+    return {
+      left,
+      top,
+      right: left + width,
+      bottom: top + height,
+      width,
+      height,
+      x: left,
+      y: top,
+      toJSON: () => ({}),
+    }
+  }
+
+  /** Three real lines appended to the surface: line 0 (y=[0,20)) and line 2
+   * (y=[80,100)) span x=[20,170) ("long" lines); line 1 (y=[40,60)) only
+   * spans x=[20,40) (a "short" line), to tell apart "goal x reused across a
+   * short line" from "goal x reset to whatever the short line clamped to". */
+  function mountVerticalCaretLines(): { surface: HTMLElement; lines: ReadonlyArray<HTMLElement> } {
+    const surface = document.querySelector('.docx-viewer__surface') as HTMLElement
+    const specs: ReadonlyArray<{ path: string; top: number; width: number; text: string }> = [
+      { path: '10', top: 0, width: 150, text: 'zero zero zero' },
+      { path: '11', top: 40, width: 20, text: 'hi' },
+      { path: '12', top: 80, width: 150, text: 'two two two two' },
+    ]
+    const lines = specs.map((spec) => {
+      const line = document.createElement('div')
+      line.className = 'docx-page__line'
+      line.setAttribute('data-paragraph-path', spec.path)
+      const span = document.createElement('span')
+      span.setAttribute('data-run-index', '0')
+      span.setAttribute('data-char-start', '0')
+      span.setAttribute('data-char-end', String(spec.text.length))
+      span.textContent = spec.text
+      line.appendChild(span)
+      surface.appendChild(line)
+
+      line.getBoundingClientRect = () => rect(20, spec.top, spec.width, 20)
+      span.getBoundingClientRect = () => rect(20, spec.top, spec.width, 20)
+      return line
+    })
+    return { surface, lines }
+  }
+
+  function clickLineStart(surface: HTMLElement, line: HTMLElement): void {
+    const rect = line.getBoundingClientRect()
+    fireEvent.mouseDown(surface, { button: 0, clientX: rect.left, clientY: rect.top + rect.height / 2 })
+  }
+
+  function selectionParagraphPath(): string | null {
+    const anchorNode = window.getSelection()?.anchorNode ?? null
+    const element = anchorNode?.nodeType === Node.TEXT_NODE ? anchorNode.parentElement : (anchorNode as HTMLElement | null)
+    return element?.closest<HTMLElement>('.docx-page__line')?.dataset.paragraphPath ?? null
+  }
+
+  async function renderEditor(): Promise<HTMLElement> {
+    render(
+      <ViewerProvider filePath="C:/docs/sample.docx">
+        <DocxViewer
+          file={{ kind: 'binary', content: new Uint8Array([1, 2, 3]).buffer, path: 'C:/docs/sample.docx', format: 'docx' }}
+        />
+      </ViewerProvider>,
+    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+    return screen.findByRole('textbox', { name: 'Document editor' })
+  }
+
+  it('ArrowDown moves the caret to the line below, not to the end of the document', async () => {
+    const editor = await renderEditor()
+    const { surface, lines } = mountVerticalCaretLines()
+    clickLineStart(surface, lines[0])
+    expect(selectionParagraphPath()).toBe('10')
+
+    fireEvent.keyDown(editor, { key: 'ArrowDown' })
+
+    expect(selectionParagraphPath()).toBe('11')
+  })
+
+  it('ArrowUp moves the caret to the line above, not to the start of the document', async () => {
+    const editor = await renderEditor()
+    const { surface, lines } = mountVerticalCaretLines()
+    clickLineStart(surface, lines[2])
+    expect(selectionParagraphPath()).toBe('12')
+
+    fireEvent.keyDown(editor, { key: 'ArrowUp' })
+
+    expect(selectionParagraphPath()).toBe('11')
+  })
+
+  it('ArrowUp on the first line does not move past it or throw', async () => {
+    const editor = await renderEditor()
+    const { surface, lines } = mountVerticalCaretLines()
+    clickLineStart(surface, lines[0])
+
+    expect(() => fireEvent.keyDown(editor, { key: 'ArrowUp' })).not.toThrow()
+    expect(selectionParagraphPath()).toBe('10')
+  })
+
+  it('ArrowDown on the last line does not move past it or throw', async () => {
+    const editor = await renderEditor()
+    const { surface, lines } = mountVerticalCaretLines()
+    clickLineStart(surface, lines[2])
+
+    expect(() => fireEvent.keyDown(editor, { key: 'ArrowDown' })).not.toThrow()
+    expect(selectionParagraphPath()).toBe('12')
+  })
+
+  it('keeps the goal x across a short intermediate line: two ArrowDowns land back on the long line at the same column as the click', async () => {
+    const editor = await renderEditor()
+    const { surface, lines } = mountVerticalCaretLines()
+    // Click at line 0's RIGHT edge (x=170) — resolves to end-of-line (14 chars).
+    const rect0 = lines[0].getBoundingClientRect()
+    fireEvent.mouseDown(surface, { button: 0, clientX: rect0.right, clientY: rect0.top + rect0.height / 2 })
+    expect(selectionParagraphPath()).toBe('10')
+
+    fireEvent.keyDown(editor, { key: 'ArrowDown' }) // -> short line 1, clamped to its own end (2 chars)
+    expect(selectionParagraphPath()).toBe('11')
+
+    fireEvent.keyDown(editor, { key: 'ArrowDown' }) // -> long line 2 again, should reuse x=170, not line 1's clamped x
+    expect(selectionParagraphPath()).toBe('12')
+    const anchorOffset = window.getSelection()?.anchorOffset ?? -1
+    // Line 2 is exactly as long as line 0 (14 chars) and the goal x (170,
+    // line 0's own right edge) is past its end too — landing at its end
+    // proves the ORIGINAL goal x carried through the short line, not "reset
+    // to wherever line 1 clamped to" (which would land at line 2's start
+    // instead, since line 1's clamped x=40 sits at line 2's own left edge).
+    expect(anchorOffset).toBe('two two two two'.length)
+  })
+
+  it('a click resets the goal x used by the next vertical move', async () => {
+    const editor = await renderEditor()
+    const { surface, lines } = mountVerticalCaretLines()
+    const rect0 = lines[0].getBoundingClientRect()
+    fireEvent.mouseDown(surface, { button: 0, clientX: rect0.right, clientY: rect0.top + rect0.height / 2 })
+    fireEvent.keyDown(editor, { key: 'ArrowDown' }) // goal x = 170, now on short line 1
+
+    // Click line 1's own start (x=20) — a fresh goal x, not the carried-over 170.
+    clickLineStart(surface, lines[1])
+    fireEvent.keyDown(editor, { key: 'ArrowDown' }) // -> line 2, should land at its START now, not its end
+    expect(selectionParagraphPath()).toBe('12')
+    expect(window.getSelection()?.anchorOffset ?? -1).toBe(0)
+  })
+
+  it('Shift+ArrowDown extends the selection instead of collapsing it', async () => {
+    const editor = await renderEditor()
+    const { surface, lines } = mountVerticalCaretLines()
+    clickLineStart(surface, lines[0])
+
+    fireEvent.keyDown(editor, { key: 'ArrowDown', shiftKey: true })
+
+    const selection = window.getSelection()
+    expect(selection?.isCollapsed).toBe(false)
+    // Anchor stayed on line 0 (unmoved); focus moved to line 1.
+    const anchorLine = (selection?.anchorNode?.nodeType === Node.TEXT_NODE
+      ? selection.anchorNode.parentElement
+      : (selection?.anchorNode as HTMLElement | null))?.closest<HTMLElement>('.docx-page__line')
+    const focusLine = (selection?.focusNode?.nodeType === Node.TEXT_NODE
+      ? selection.focusNode.parentElement
+      : (selection?.focusNode as HTMLElement | null))?.closest<HTMLElement>('.docx-page__line')
+    expect(anchorLine?.dataset.paragraphPath).toBe('10')
+    expect(focusLine?.dataset.paragraphPath).toBe('11')
+  })
+
+  it('a non-Shift ArrowDown on an existing selection collapses it to its end without moving further on the same keystroke', async () => {
+    const editor = await renderEditor()
+    const { surface, lines } = mountVerticalCaretLines()
+    clickLineStart(surface, lines[0])
+    fireEvent.keyDown(editor, { key: 'ArrowDown', shiftKey: true }) // selects line 0 start -> line 1 start
+    expect(window.getSelection()?.isCollapsed).toBe(false)
+
+    fireEvent.keyDown(editor, { key: 'ArrowDown' }) // collapses to the selection's end (line 1), doesn't also move to line 2
+
+    const selection = window.getSelection()
+    expect(selection?.isCollapsed).toBe(true)
+    expect(selectionParagraphPath()).toBe('11')
+  })
+
+  // DOCX-2 — a click that lands outside the `.docx-viewer__surface` subtree
+  // entirely (e.g. because the page renders wider than the surface's own
+  // visible column, a real layout condition confirmed against the actual app
+  // with the Comments panel open) never reached `handleSurfaceMouseDown`
+  // (its `onMouseDown` only fires for a target that is the surface or one of
+  // its DESCENDANTS), so `range` was left stale/null while focus and the
+  // native selection looked perfectly normal — every following keystroke
+  // then silently no-opped behind `Input.ts`'s `range === null` guard. Fixed
+  // by a native `mousedown` listener on the outer `.docx-viewer` container
+  // (see its own doc comment in DocxViewer.tsx), which still resolves the
+  // click via the exact same geometry-based `positionFromClientPoint` a
+  // normal click uses.
+  it('DOCX-2: a mousedown whose target is the outer .docx-viewer (not a descendant of the surface) still places the caret', async () => {
+    const editor = await renderEditor()
+    const { lines } = mountVerticalCaretLines()
+    const container = editor.closest('.docx-viewer') as HTMLElement
+    expect(container).not.toBeNull()
+    expect(container.contains(editor)).toBe(true)
+
+    const rect0 = lines[0].getBoundingClientRect()
+    // Fired on `container` itself, not `editor` (the surface) — the event's
+    // native `target` is `container`, exactly the CSS dead-zone shape: a
+    // click whose target is an ANCESTOR of the surface, not a descendant.
+    fireEvent.mouseDown(container, { button: 0, clientX: rect0.left, clientY: rect0.top + rect0.height / 2 })
+
+    expect(selectionParagraphPath()).toBe('10')
+    expect(document.activeElement).toBe(editor)
+  })
+
+  it("DOCX-2: a mousedown on the outer container's own Save button is left alone (not hijacked into a caret placement)", async () => {
+    const editor = await renderEditor()
+    mountVerticalCaretLines()
+    const container = editor.closest('.docx-viewer') as HTMLElement
+    const saveButton = screen.getByRole('button', { name: 'Save' })
+    expect(container.contains(saveButton)).toBe(true)
+
+    fireEvent.mouseDown(saveButton, { button: 0, clientX: 1, clientY: 1 })
+
+    // No selection was created from this click landing on a real control.
+    expect(selectionParagraphPath()).toBeNull()
   })
 })
