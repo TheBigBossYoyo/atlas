@@ -4,6 +4,7 @@ import path from 'node:path'
 import { execSync } from 'node:child_process'
 
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
+import { expectDomFocused } from './helpers/domFocus'
 
 /**
  * NIGHT/text-roundtrip — text-class files (markdown, code/text, CSV/TSV)
@@ -170,7 +171,7 @@ async function editFirstCell(page: Page, text: string): Promise<void> {
   const box = (await page.locator('.csv-viewer__grid canvas').first().boundingBox())!
   await page.mouse.click(box.x + ROW_MARKER_WIDTH + COLUMN_WIDTH / 2, box.y + HEADER_HEIGHT + ROW_HEIGHT / 2)
   await page.keyboard.type(text.slice(0, 1))
-  await expect(page.locator('#portal textarea')).toBeFocused()
+  await expectDomFocused(page, '#portal textarea')
   await page.keyboard.type(text.slice(1), { delay: 20 })
   await page.keyboard.press('Enter')
   await expect(page.locator('#portal textarea')).toHaveCount(0)

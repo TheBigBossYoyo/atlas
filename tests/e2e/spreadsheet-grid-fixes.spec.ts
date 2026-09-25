@@ -6,6 +6,7 @@ import { execSync } from 'node:child_process'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import JSZip from 'jszip'
 import * as XLSX from 'xlsx'
+import { expectDomFocused } from './helpers/domFocus'
 
 /**
  * Night sweep findings SHEET-1 (Ctrl+End overshoots the used range), SHEET-2
@@ -51,7 +52,7 @@ async function clickCell(page: Page, col: number, row: number): Promise<void> {
 async function typeAt(page: Page, col: number, row: number, text: string): Promise<void> {
   await clickCell(page, col, row)
   await page.keyboard.type(text.slice(0, 1))
-  await expect(page.locator('#portal textarea')).toBeFocused()
+  await expectDomFocused(page, '#portal textarea')
   if (text.length > 1) await page.keyboard.type(text.slice(1), { delay: 20 })
   await page.keyboard.press('Enter')
   await expect(page.locator('#portal textarea')).toHaveCount(0)
@@ -100,7 +101,7 @@ test('SHEET-1: Ctrl+End lands on the real last used cell, not the blank margin',
     // this fixture's shape, mirroring the manually-verified Z20051 on the
     // 20,001-row repro).
     await page.keyboard.type('9')
-    await expect(page.locator('#portal textarea')).toBeFocused()
+    await expectDomFocused(page, '#portal textarea')
     await page.keyboard.type('99999', { delay: 20 })
     await page.keyboard.press('Enter')
     await expect(page.locator('#portal textarea')).toHaveCount(0)
