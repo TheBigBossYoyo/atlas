@@ -577,6 +577,17 @@ SHEET-1/3/4/5/9 (`17f0a1a`), SHELL-3/5 + FIXTURE-1 (`35a8ec3`), SHELL-6 crash dr
 relaunch (`89303cd`), DOCX-1 vertical caret, DOCX-2 margin-click dead caret, INSERT-TEXT-THROWS-1
 (docx merge). Every fix has a test shown to fail before and pass after.
 
+**Found by CI's smaller window (after the merge):** DOCX-2 and DOCX-1's page crossing both failed on
+e2e-windows and reproduced locally just by forcing a 1024x768 window (local default is 1202x802). Both
+were real product bugs: `align-items: center` on a page wider than its scroll container made its left edge
+unreachable (fixed: `safe center`); ArrowDown couldn't cross into a page virtualization hadn't mounted yet
+(fixed: pin the page and retry the move in the same commit). Both specs now run at 1024x768 and 1400x900.
+Lesson: geometry-sensitive e2e specs should pin their window size and cover a small one.
+
+**CI-environment flake fixed in the tests:** `toBeFocused()` also requires the window to have OS focus,
+which a fresh window on the runner sometimes lacks ("inactive"); replaced with a DOM-focus check
+(`tests/e2e/helpers/domFocus.ts`) where the saved file is asserted afterwards anyway.
+
 **Rejected finding:** SHEET-2 (frozen-pane click off by one) was the sweep harness's own bug; regression
 tests now pin the correct mapping.
 
@@ -591,9 +602,7 @@ tests now pin the correct mapping.
   state audit that file's own comment describes. Pinned by a `test.fail()` e2e test.
 - **CI-only flakes to watch:** the 24x "Ctrl+S straight after typing" test failed once (`35a8ec3`) and
   passed on later runs; the in-flight bound was raised 5s→30s (`0c48ffb`), not proven to be the cause.
-  `spreadsheet-grid-fixes.spec.ts` SHEET-4/5 failed once on a `toBeFocused` readiness check reporting
-  "inactive" (document without OS focus on the runner); passed on re-run. The two markdown Ctrl+2
-  specs now self-diagnose.
+  The two markdown Ctrl+2 specs now self-diagnose.
 - Windows-1252 save that can't be represented falls back to UTF-8 and reports `encodingFallback`; no UI
   surfaces it yet (needs an i18n string).
 - PageUp/PageDown move by about one screen (no paginator is wired to the editor), not an exact page.
