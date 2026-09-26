@@ -49,9 +49,27 @@ async function clickCell(page: Page, col: number, row: number): Promise<void> {
   await page.mouse.click(box.x + 48 + COLUMN_WIDTH * col + COLUMN_WIDTH / 2, box.y + HEADER_HEIGHT + ROW_HEIGHT * row + ROW_HEIGHT / 2)
 }
 
+/**
+ * The intermediate `#portal textarea` waits here are SYNCHRONIZATION, not
+ * verification — each test's real assertion is on the saved file bytes further
+ * down. Waiting for the overlay to EXIST before asking whether it is focused
+ * matters: `expectDomFocused` polling `document.activeElement` against a selector
+ * that has not mounted yet can only fail, never wait usefully.
+ *
+ * **These waits can still fail, and when they do it is a real bug, not a flake.**
+ * SHEET-4/5 below failed once in a full e2e run; investigating it turned up F6c —
+ * committing a cell edit leaves DOM focus on a `<td>` of glide-data-grid's
+ * accessibility table instead of the canvas, so the SECOND cell edit of a session
+ * silently does not take and the Ctrl+S after it never writes the file. See
+ * `spreadsheet-second-cell-edit.spec.ts` for the full mechanism, the measured
+ * frequency, and the three fix attempts that did not work. Generous timeouts do
+ * NOT paper over it (it was reproduced with a 20s budget), so they are left at the
+ * default here; if this test goes red, read that file before calling it noise.
+ */
 async function typeAt(page: Page, col: number, row: number, text: string): Promise<void> {
   await clickCell(page, col, row)
   await page.keyboard.type(text.slice(0, 1))
+  await expect(page.locator('#portal textarea')).toHaveCount(1)
   await expectDomFocused(page, '#portal textarea')
   if (text.length > 1) await page.keyboard.type(text.slice(1), { delay: 20 })
   await page.keyboard.press('Enter')

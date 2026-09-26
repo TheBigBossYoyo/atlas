@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ViewerProps } from '../formats/types'
+import { useTranslate } from '../i18n'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
 import { DOCUMENT_RENDER_TIMEOUT_MS, DOCUMENT_SIZE_CAP_BYTES, formatSizeCapMessage, withRenderTimeout } from './shared/documentGuard'
 import { estimatePageCount, parseLengthToPx } from './shared/pageEstimate'
@@ -32,6 +33,7 @@ async function renderOdt(bytes: Uint8Array): Promise<OdtRenderResult> {
 }
 
 function OdtViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -107,7 +109,7 @@ function OdtViewerBase({ file }: ViewerProps) {
   if (error !== null) {
     return (
       <div className="odt-viewer odt-viewer--error">
-        Failed to render ODT: {error}
+        {t('viewer.odt.renderFailed', { detail: error })}
       </div>
     )
   }
@@ -116,7 +118,7 @@ function OdtViewerBase({ file }: ViewerProps) {
     <div className="odt-viewer">
       {hasTrackedChanges && (
         <div className="odt-viewer__tracked-changes-banner" role="status">
-          This document has tracked changes — insertions and deletions are shown inline.
+          {t('viewer.odt.trackedChangesBanner')}
         </div>
       )}
       <div ref={containerRef} className="odt-viewer__body" />

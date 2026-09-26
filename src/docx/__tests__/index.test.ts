@@ -30,7 +30,7 @@ import JSZip from 'jszip'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { loadDocx, saveDocx, type DocxBundle } from '..'
-import { addCommentToDocument } from '../editor/commentMutations'
+import { addCommentToDocument, setCommentResolved } from '../editor/commentMutations'
 import type { Block } from '../model'
 
 // `Packer.toBuffer` returns a Node `Buffer`, and `saveDocx` returns whatever
@@ -228,6 +228,38 @@ describe('loadDocx / saveDocx integration', () => {
     const reloaded = await loadDocx(toArrayBuffer(saved))
     const reloadedComment = [...reloaded.document.comments.values()][0]
     expect(reloadedComment?.resolved).toBe(true)
+  })
+
+  // The test above hand-rolls `{ ...comment, resolved: true }`, which proved the
+  // SERIALIZER worked while nothing in the app actually set that flag: the
+  // comments pane kept resolution in session state, so resolving in Atlas was
+  // forgotten on reopen and a thread resolved in Word showed as open. This one
+  // goes through `setCommentResolved` — the path the pane now uses — so the
+  // user-visible promise ("resolving sticks") is what is under test.
+  it('a resolve made through setCommentResolved survives save and reload (2026-09-26)', async () => {
+    const bundle = await loadDocx(fixtureBuffer)
+    const { document: withComment, commentId } = addCommentToDocument(
+      bundle.document,
+      {
+        anchor: { paragraphPath: [0, 0], runIndex: 0, charOffset: 0 },
+        focus: { paragraphPath: [0, 0], runIndex: 0, charOffset: 4 },
+      },
+      'Please fix this',
+      'Reviewer',
+    )
+
+    const resolved = setCommentResolved(withComment, commentId, true)
+    expect(resolved.comments.get(commentId)?.resolved).toBe(true)
+
+    const saved = await saveDocx({ ...bundle, document: resolved })
+    const reloaded = await loadDocx(toArrayBuffer(saved))
+    expect([...reloaded.document.comments.values()][0]?.resolved).toBe(true)
+
+    // ...and un-resolving it again round-trips too, rather than sticking at true.
+    const unresolved = setCommentResolved(reloaded.document, [...reloaded.document.comments.keys()][0], false)
+    const savedAgain = await saveDocx({ ...reloaded, document: unresolved })
+    const reloadedAgain = await loadDocx(toArrayBuffer(savedAgain))
+    expect([...reloadedAgain.document.comments.values()][0]?.resolved).toBe(false)
   })
 
   it('removes stale comments.xml/commentsExtended.xml once every comment is deleted (wave 1 follow-up)', async () => {

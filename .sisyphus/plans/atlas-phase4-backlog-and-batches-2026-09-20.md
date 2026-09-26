@@ -631,7 +631,9 @@ checked against saved bytes. Results:
 
 ### New items found while executing batch 3
 
-**QUIT-DRAFT-1 · medium** — a discard at *quit* still leaves the autosave draft behind.
+**QUIT-DRAFT-1 · medium · RESOLVED** (verified against the code 2026-09-26) — `electron/main.cjs` now has `notifyRendererDiscardThenClose`, which sends the discard notification and races the renderer's acknowledgement against a bounded `DISCARD_ACK_TIMEOUT_MS` before destroying the window; its comment names QUIT-DRAFT-1 and explains why a fire-and-forget send was rejected. Original entry below, kept for the record.
+
+~~a discard at *quit* still leaves the autosave draft behind.~~
 `electron/main.cjs`'s `handleWindowCloseRequest` shows its own native message box and, on
 Discard, calls `mainWindow.destroy()` with no IPC round-trip to the renderer — unlike the
 Save path, which does round-trip. So DRAFT-1's fix (clearing the draft in
@@ -643,14 +645,27 @@ notification in `electron/main.cjs` + `electron/preload.cjs`.
 bypassing `TabBar`'s new `handleClose`, so that one route still does not move focus to the
 neighbouring tab. Fixable only from `App.tsx`.
 
-**I18N-TEXT-1 · medium** — the inverted i18n guard now scans 83 files for literal
-`title=` / `aria-label=` / `placeholder=` attributes, including the `{'...'}` and
-`` {`...`} `` forms. But raw JSX **text** is still only caught by a short exact-phrase
-list (`BANNED_LITERAL_TEXT`). `RawEditor`'s `<span>Markdown Source</span>` was caught via
-its sibling placeholder, not on its own merits — so an untranslated text node in a new
-component would still ship silently.
+**I18N-TEXT-1 · medium · FIXED** (2026-09-26) — the guard now walks the real TypeScript
+AST for `JsxText` nodes across all 83 surface files, with a five-entry allowlist for text
+that is identical in every locale (`/`, `%`, `●`, `A`, `Atlas`). Regex could not do this
+job; TypeScript was already a devDependency, so no new tooling.
 
-**FROZENROWS-I18N-1 · low** — `src/viewers/spreadsheet/FrozenRowsStrip.tsx` has a hardcoded
+**It was not a hypothetical gap.** On the day the check was written it found **twelve
+user-facing strings shipping in English in every locale**: `viewer.odp.expectedBinary`,
+`viewer.odp.renderFailed`, `viewer.odp.loading`, `viewer.odt.renderFailed`,
+`viewer.odt.trackedChangesBanner`, `viewer.pdf.renderFailed`, `viewer.pdf.preparingPrint`,
+`viewer.pptx.expectedBinary`, `viewer.pptx.renderFailed`, `viewer.pptx.loading`,
+`viewer.rtf.renderFailed` and `docx.render.drawingPlaceholder` — all now translated in both
+catalogues. A French user saw every one of them in English.
+
+Worth recording why they were missed: an earlier measurement reported "zero literal text
+children" but had only looked inside `<button>`/`<label>`/`<option>`/`<th>`/`<summary>`.
+Every one of these twelve lives in a `<div>` or `<span>`. Verified the guard actually bites
+by reintroducing one literal (it failed with the file, line and text) and restoring it.
+
+**FROZENROWS-I18N-1 · low · RESOLVED** (2026-09-26) — now `t('spreadsheet.frozenRowCellAria', { row, col })`, with the French string added and the guard's opt-out entry removed, so the file is scanned like every other one. Covered by `FrozenRowsStrip.test.tsx` (including a French-locale assertion).
+
+~~`src/viewers/spreadsheet/FrozenRowsStrip.tsx` has a hardcoded~~
 `Frozen row {r}, column {c}` aria-label. Opted out of the guard with a TODO during batch 3
 because a sibling agent owned the file. The **only** genuine i18n gap the inverted guard
 found across all 83 files.
@@ -673,11 +688,75 @@ SHEET-5 all landed. Gate: tsc clean, eslint clean, 3434 unit tests, bundle gate 
 
 ### New items found while executing (verified, not yet scheduled)
 
-**ZIP64-1 · medium** — the new synchronous zip budget in `spreadsheetZipBudget.ts`
-(`checkWorkbookZipBudgetSync`) reads declared sizes off the zip central directory, but
-**deliberately skips Zip64 archives** rather than risk misreading a 32-bit sentinel. It
-fails open there. Honest, and no worse than before the guard existed — but an attacker
-choosing Zip64 bypasses it entirely, which is not a property a security guard should have.
+> **Reconciled 2026-09-26.** Five entries in this section were already fixed in the
+> code and are now marked RESOLVED with the evidence inline: QUIT-DRAFT-1, TEST-9,
+> FIXTURE-1, ARROW-VERT-1 and FROZENROWS-I18N-1. FIXTURE-1's fix was even recorded
+> in the batch log higher up this very file (`35a8ec3`) without this entry being
+> updated, which is the drift mechanism in miniature: fixes land and get logged
+> chronologically, but the item list is never re-read against the code.
+>
+> That cost real time — two separate sessions re-investigated ARROW-VERT-1 and
+> TEST-9 from scratch. **If you fix something listed here, mark it here**, or
+> re-verify this section against the code before planning off it. Everything left
+> below was checked on 2026-09-26 and is genuinely open, except where noted.
+
+**ZIP64-1 · medium · FIXED** (2026-09-26) — now fails CLOSED wherever there is positive
+evidence of Zip64: a sentinel in the EOCD entry count, in the central-directory offset, or
+in an entry's declared size all raise `SpreadsheetZipBombError` instead of skipping the
+budget. Refusing costs nothing real — Zip64 only exists for an archive over 4GB or with
+more than 65,535 entries, both orders of magnitude past the 200 MiB/500 MiB budgets, so
+such a file would be refused the moment its sizes could be read anyway. The one case that
+still returns quietly is "no plain EOCD found at all", which is NOT evidence of Zip64 (it is
+what a non-zip or truncated file looks like) and where failing closed would report a merely
+corrupt workbook as "too large". Four new tests in `spreadsheetZipBudget.test.ts` cover all
+three refusals plus that deliberate exemption.
+
+~~the new synchronous zip budget… deliberately skips Zip64 archives… It fails open there.~~
+
+**F6c · HIGH · SILENT DATA LOSS · OPEN** (found 2026-09-27) — **the second cell edit of a
+session is lost, and the Ctrl+S after it silently does not save.** Reachable by hand: click a
+cell and type at once, Enter, click another cell and type at once, Enter, Ctrl+S. The second
+cell keeps its old value and the file is never written — `mtime` unchanged 20s later. Nothing
+is shown to the user.
+
+Frequency (this laptop, `Emulation.setCPUThrottlingRate`, n=6 per rate): **5/6 at 8x, 1/6
+unthrottled.** It reproduces without throttling, so a slow machine is not a precondition.
+
+Mechanism, from `document.activeElement` sampled at each step: committing an edit leaves
+focus on a `<td>` of glide-data-grid's own accessibility table instead of
+`canvas[data-testid="data-grid-canvas"]`. `KeyHold` then replays its held keystrokes to
+`document.activeElement` — that `<td>` — so they do nothing. The overlay opens (glide's `<td>`
+handler sees the key) but never receives the text, so Enter cannot commit it; and because
+`KeyHold` holds chords while an edit is in flight, the Ctrl+S queues behind an edit that can
+never commit and is never replayed. That is why the file is not written rather than written
+with stale text.
+
+Three fixes were attempted in `KeyHold.release`/`drain`, measured, and all reverted —
+recorded so they are not retried: (1) guard on "is the canvas focused" rather than "does the
+grid contain focus" (necessary and logically right, but only 3/3 -> 1/3 at 8x); (2) also
+treat focus moving between elements inside the grid as not-moved-away (no measurable change);
+(3) re-assert canvas focus immediately before every replay (still 5/6 at 8x, n=6 — glide
+appears to re-take focus after the replay as well). **The fix probably belongs in how the
+edit overlay returns focus on commit (`SpreadsheetDataEditor.tsx`), not in `KeyHold`, which
+is downstream of a focus target that is already wrong.**
+
+Repro kept executable as `tests/e2e/spreadsheet-second-cell-edit.spec.ts`, marked
+`test.fixme` — un-fixme it to verify a fix. This is also why
+`spreadsheet-grid-fixes.spec.ts`'s SHEET-4/5 test occasionally goes red: that is TRUE SIGNAL,
+not flake. **Do not cut a release until this is fixed.**
+
+**SHEET45-FLAKE-1 · low · FIXED** (2026-09-26) — `spreadsheet-grid-fixes.spec.ts`'s
+`typeAt` helper failed once in a full e2e run (`#portal textarea` still present 5s after
+Enter) while passing 4/4 in isolation. Investigated rather than retried, because this path
+has a 2-for-2 record of load-dependent failures being real (F6, F6b). A CPU-throttled probe
+split the question: asserting the SCREEN failed 3/3 at 8x, but asserting the SAVED BYTES
+passed 6/6 at both 1x and 8x. So the data path is correct and only the helper's intermediate
+screen checks were racing glide-data-grid's overlay lifecycle — exactly what
+`spreadsheet-keystroke-seed.spec.ts`'s header warns about, and what `helpers/domFocus.ts`
+already recorded this spec flaking on twice. `typeAt` now waits for the overlay to exist
+before asking whether it is focused, and gives all three waits a 20s budget (overlay mount
+was measured at 2.45s at 24x, so the 5s default was marginal). The end-of-test byte
+assertions were always the real verification and are unchanged.
 
 **RPR-STYLES-1 · medium** — the general unknown-`w:rPr`-child passthrough covers
 `document.xml` (and, through `partWriterSupport.ts`, headers/footers/notes/comments) but
@@ -685,7 +764,9 @@ choosing Zip64 bypasses it entirely, which is not a property a security guard sh
 an equivalent passthrough there is a separate, larger change. Unknown run properties in
 `w:docDefaults` and named styles are still dropped on save. Theme fonts *are* fixed there.
 
-**TEST-9 · medium** — `src/__tests__/App.dirtyState.characterization.test.tsx` **passes in
+**TEST-9 · medium · RESOLVED** (verified 2026-09-26) — ran the exact command this entry names, `npx vitest run --maxWorkers=1 src/__tests__/App.dirtyState.characterization.test.tsx`: it passes. The file's `waitFor` for `.markdown-body` was reworked when `MarkdownRenderer` became `React.lazy()` (PERF-01), and the suite-wide `asyncUtilTimeout` was raised from Testing Library's 1s default to 5s in `src/__tests__/setup.ts`. Note the failure direction had ALSO inverted at one point — it failed inside the full suite and passed alone — which is what the `asyncUtilTimeout` change fixed.
+
+~~`src/__tests__/App.dirtyState.characterization.test.tsx` **passes in~~
 the full suite and fails when run alone** (`npx vitest run --maxWorkers=1 <that file>`),
 confirmed on clean `main` at `952a61e`. It depends on state or timing from other tests, so
 it cannot be trusted as a regression signal, and it silently costs nothing when it breaks.
@@ -696,7 +777,9 @@ level at all; only `documentWriter.ts`'s private copy did. A `w:sdt` wrapping a 
 paragraph or table in a footnote could never have round-tripped, independently of DOCX-2's
 threading gap. Found and fixed by the DOCX-2 agent.
 
-**FIXTURE-1 · low** — `tests/e2e/fixtures/generate.mjs:407` produces a non-conforming
+**FIXTURE-1 · low · RESOLVED** — fixed in `35a8ec3` (already recorded in the batch log above at "SHELL-3/5 + FIXTURE-1"; this entry was simply never reconciled). Verified 2026-09-26: `generate.mjs` has a reordering helper whose header cites FIXTURE-1, and every ODF fixture writes `mimetype` first with `{ compression: 'STORE' }`.
+
+~~`tests/e2e/fixtures/generate.mjs:407` produces a non-conforming~~
 `.ods`: `mimetype` is not the first zip entry (`odf-mimetype-not-first`, reproduced on
 `main`). The save-path fix for this landed in an earlier wave; the *fixture generator* never
 did. So every test asserting "Atlas opens `.ods`" proves it against a file no real tool
@@ -707,7 +790,9 @@ addressable paragraph *after* the table, because cells were unreachable at the t
 are now addressable, so moving it into the first cell (Word's actual behaviour) is a small
 follow-up plus a test update.
 
-**ARROW-VERT-1 · medium — promoted out of §4** — ArrowUp/ArrowDown misbehaviour is now
+**ARROW-VERT-1 · medium · RESOLVED** (verified against the code 2026-09-26) — both halves of this entry's root cause are gone. `DocxViewer.tsx` intercepts `VERTICAL_MOVE_KEYS` (ArrowUp/ArrowDown/PageUp/PageDown) and **always** `preventDefault()`s before anything else, so the keys never fall through to native caret movement; `Input.ts`'s null return is now documented as a deliberate handover to that interception, which resolves the move via `Cursor.ts`'s line geometry. Covered end to end by `tests/e2e/docx-vertical-caret.spec.ts`, and a deferred-retry path for a target page virtualization has not mounted yet lives in `src/docx/render/useDocxVerticalCaret.ts` (DOCX-SMALL-WINDOW-2). The CHANGELOG's 2026-09-25 night-run section records the user-visible fix.
+
+~~ArrowUp/ArrowDown misbehaviour is now~~
 **confirmed by running the app**: in a plain three-paragraph document with **no tables**,
 ArrowDown from paragraph 0 jumps to paragraph 2, and a second press does not move. Separate
 root cause from the table-caret bug: `Input.ts:696-700` returns `null` for vertical movement

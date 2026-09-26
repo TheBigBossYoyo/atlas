@@ -330,6 +330,21 @@ export const messages = {
   // src/hooks/useFileHandler.ts
   'errors.browserModeUnavailable': 'Cette fonctionnalité nécessite l’application de bureau Atlas — l’accès aux fichiers n’est pas disponible dans un simple onglet de navigateur.',
   'errors.fileNotFound': 'Ce fichier est introuvable — il a peut-être été déplacé, renommé ou supprimé.',
+  'viewer.odp.expectedBinary':
+    'OdpViewer a reçu un fichier texte ; un fichier binaire était attendu.',
+  'viewer.odp.renderFailed': 'Impossible d’afficher cette présentation : {detail}',
+  'viewer.odp.loading': 'Chargement des diapositives…',
+  'viewer.odt.renderFailed': 'Impossible d’afficher le fichier ODT : {detail}',
+  'viewer.odt.trackedChangesBanner':
+    'Ce document contient des modifications suivies — les insertions et les suppressions sont affichées dans le texte.',
+  'viewer.pdf.renderFailed': 'Impossible d’afficher le PDF : {detail}',
+  'viewer.pdf.preparingPrint': 'Préparation du document pour l’impression…',
+  'viewer.pptx.expectedBinary':
+    'PptxViewer a reçu un fichier texte ; un fichier binaire était attendu.',
+  'viewer.pptx.renderFailed': 'Impossible d’afficher le fichier PPTX : {detail}',
+  'viewer.pptx.loading': 'Chargement des diapositives PPTX…',
+  'viewer.rtf.renderFailed': 'Impossible d’afficher le fichier RTF : {detail}',
+  'docx.render.drawingPlaceholder': '[Dessin]',
   'errors.unexpected': 'Une erreur est survenue : {detail}',
 
   // src/utils/friendlyLibraryError.ts

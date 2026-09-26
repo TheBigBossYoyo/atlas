@@ -97,6 +97,43 @@ export function deleteCommentFromDocument(document: Document, commentId: string)
   }
 }
 
+/**
+ * Marks a comment thread resolved (or unresolved), which is a real document
+ * change and not a view state.
+ *
+ * Resolving used to be session-only: the pane filtered a local set of ids and
+ * nothing was written, so a thread resolved in Word showed as open in Atlas and
+ * one resolved in Atlas was forgotten on reopen. `Comment.resolved` is parsed
+ * from `word/commentsExtended.xml`'s `w15:done` and written back by
+ * `serializer/commentsExtendedWriter.ts` — which `docx/index.ts` registers as a
+ * new part (with its rels and content-type) when any comment carries resolved
+ * state, so this works even for a document that had no such part before.
+ *
+ * Applied to the thread's ROOT only. A reply has no independent resolved state
+ * in the format; the pane hides replies whose parent is resolved.
+ */
+export function setCommentResolved(document: Document, commentId: string, resolved: boolean): Document {
+  const existing = document.comments.get(commentId)
+  if (existing === undefined) {
+    return document
+  }
+
+  // `undefined` already MEANS not-resolved, so comparing on the boolean rather
+  // than on `existing.resolved` directly is what keeps un-resolving an
+  // already-unresolved thread a genuine no-op. Writing `false` where there was
+  // `undefined` would look harmless and is not: `docx/index.ts` emits
+  // `commentsExtended.xml` (plus its relationship and content-type) for any
+  // comment whose `resolved !== undefined`, so it would add a part to a document
+  // that never had one, on nothing more than a reply to an open thread.
+  if ((existing.resolved === true) === resolved) {
+    return document
+  }
+
+  const comments = new Map(document.comments)
+  comments.set(commentId, { ...existing, resolved })
+  return { ...document, comments }
+}
+
 function createComment(input: {
   readonly id: string
   readonly author: string

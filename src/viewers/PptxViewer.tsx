@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { ViewerProps } from '../formats/types'
+import { useTranslate } from '../i18n'
 import { SlideDeck } from './shared/SlideDeck'
 import type { SlideDeckEditor } from './shared/SlideEditToolbar'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
@@ -12,6 +13,7 @@ const NEW_TEXT_BOX_WIDTH = 0.5
 const NEW_TEXT_BOX_HEIGHT_PX = 60
 
 function PptxViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
   const [activeIndex, setActiveIndex] = useState(0)
@@ -118,7 +120,7 @@ function PptxViewerBase({ file }: ViewerProps) {
   if (file.kind !== 'binary') {
     return (
       <div className="pptx-viewer pptx-viewer--error">
-        PptxViewer received a text file; expected binary.
+        {t('viewer.pptx.expectedBinary')}
       </div>
     )
   }
@@ -126,13 +128,13 @@ function PptxViewerBase({ file }: ViewerProps) {
   if (editor.status === 'error') {
     return (
       <div className="pptx-viewer pptx-viewer--error">
-        Failed to render PPTX: {editor.error}
+        {t('viewer.pptx.renderFailed', { detail: editor.error ?? '' })}
       </div>
     )
   }
 
   if (editor.status === 'loading') {
-    return <div className="pptx-viewer">Loading PPTX slides…</div>
+    return <div className="pptx-viewer">{t('viewer.pptx.loading')}</div>
   }
 
   return (

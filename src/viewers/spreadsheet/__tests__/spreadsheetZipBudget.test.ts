@@ -41,6 +41,30 @@ function withDeclaredUncompressedSize(buffer: ArrayBuffer, declaredSize: number)
   return bytes.buffer
 }
 
+/** Locates the End Of Central Directory record's signature (`PK`). */
+function findEocdOffset(bytes: Uint8Array): number {
+  for (let i = bytes.length - 22; i >= 0; i--) {
+    if (bytes[i] === 0x50 && bytes[i + 1] === 0x4b && bytes[i + 2] === 0x05 && bytes[i + 3] === 0x06) {
+      return i
+    }
+  }
+  throw new Error('EOCD record not found in test fixture')
+}
+
+/** Pins the EOCD's entry count at the 16-bit Zip64 sentinel (`0xFFFF`). */
+function withZip64EntryCountSentinel(buffer: ArrayBuffer): ArrayBuffer {
+  const bytes = new Uint8Array(buffer.slice(0))
+  new DataView(bytes.buffer).setUint16(findEocdOffset(bytes) + 10, 0xffff, true)
+  return bytes.buffer
+}
+
+/** Pins the EOCD's central-directory offset at the 32-bit Zip64 sentinel. */
+function withZip64CentralDirOffsetSentinel(buffer: ArrayBuffer): ArrayBuffer {
+  const bytes = new Uint8Array(buffer.slice(0))
+  new DataView(bytes.buffer).setUint32(findEocdOffset(bytes) + 16, 0xffffffff, true)
+  return bytes.buffer
+}
+
 describe('loadWorkbookZip', () => {
   it('loads a normal-sized file exactly like plain JSZip.loadAsync', async () => {
     const buffer = await buildZip(1024)
@@ -96,5 +120,33 @@ describe('checkWorkbookZipBudgetSync — SHEET-1 (parseWorkbookBuffer\'s synchro
   it('does not reject at the default (large) budgets for a real, small workbook-shaped zip', async () => {
     const buffer = await buildZip(10_000)
     expect(() => checkWorkbookZipBudgetSync(buffer)).not.toThrow()
+  })
+})
+
+describe('checkWorkbookZipBudgetSync — ZIP64-1 (a Zip64 marker must not bypass the budget)', () => {
+  // Before this fix the guard returned early on each of these, so an attacker
+  // could skip the whole size budget by setting one flag. Zip64 only exists for
+  // an archive over 4GB or with more than 65,535 entries, both far past the
+  // budgets here, so refusing costs nothing a real spreadsheet needs.
+  it('refuses an archive whose EOCD entry count is the Zip64 sentinel', async () => {
+    const buffer = withZip64EntryCountSentinel(await buildZip(1024))
+    expect(() => checkWorkbookZipBudgetSync(buffer)).toThrow(SpreadsheetZipBombError)
+  })
+
+  it('refuses an archive whose EOCD central-directory offset is the Zip64 sentinel', async () => {
+    const buffer = withZip64CentralDirOffsetSentinel(await buildZip(1024))
+    expect(() => checkWorkbookZipBudgetSync(buffer)).toThrow(SpreadsheetZipBombError)
+  })
+
+  it("refuses an entry whose declared size is the Zip64 sentinel, instead of skipping that entry's budget", async () => {
+    const buffer = withDeclaredUncompressedSize(await buildZip(1024), 0xffffffff)
+    expect(() => checkWorkbookZipBudgetSync(buffer)).toThrow(SpreadsheetZipBombError)
+  })
+
+  it('still returns quietly for a buffer with no EOCD at all, so a corrupt file reports as corrupt and not as too large', () => {
+    // NOT evidence of Zip64 — this is what a non-zip/truncated file looks like,
+    // and XLSX.read gives the accurate error for it.
+    const notAZip = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer
+    expect(() => checkWorkbookZipBudgetSync(notAZip)).not.toThrow()
   })
 })

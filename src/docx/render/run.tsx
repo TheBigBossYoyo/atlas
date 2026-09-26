@@ -4,6 +4,7 @@ import type { Theme } from '../parser/theme';
 import { runStyleToCss } from './style';
 import { resolveRunProps } from '../parser/cascade';
 import { useMediaResolver } from './mediaContext';
+import { useTranslate } from '../../i18n'
 
 const EMU_PER_POINT = 12700;
 
@@ -51,6 +52,7 @@ function DrawingChild({
   drawing: Drawing;
   resolver: ReturnType<typeof useMediaResolver>;
 }) {
+  const t = useTranslate();
   const url = drawing.relationshipId !== undefined ? resolver.resolve(drawing.relationshipId) : null;
   const widthPt = drawing.extent !== undefined ? drawing.extent.cx / EMU_PER_POINT : undefined;
   const heightPt = drawing.extent !== undefined ? drawing.extent.cy / EMU_PER_POINT : undefined;
@@ -58,7 +60,7 @@ function DrawingChild({
   if (url === null) {
     return (
       <figure className="docx-drawing docx-drawing--placeholder">
-        [Drawing]
+        {t('docx.render.drawingPlaceholder')}
       </figure>
     );
   }

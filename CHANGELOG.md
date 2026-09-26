@@ -31,6 +31,27 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   nothing. Anything the app did not anticipate used to vanish silently; it now
   raises the same kind of notification every other failure does.
 
+### Fixed — translation
+
+- **Twelve messages appeared in English even with Atlas set to French.** Every
+  "failed to render" message for PDF, PPTX, ODP, ODT and RTF, the "loading
+  slides" and "preparing document for print" notices, ODT's tracked-changes
+  banner, and the placeholder shown in place of a Word drawing Atlas cannot
+  display. All now translated. A new check reads the real code structure rather
+  than pattern-matching text, so the next one cannot slip through the same way.
+
+### Added
+
+- **Word documents: resolving a comment now sticks.** Resolving a thread used to
+  hide it for the current session only — reopen the file and it was back — and a
+  thread you had already resolved in Word showed up as unresolved in Atlas. Both
+  directions now work: Atlas reads the resolved state the file carries, and a
+  thread you resolve here is written into the file when you save. Replying to a
+  resolved thread re-opens it, since the reply would otherwise be hidden.
+  Note the consequence: because it now persists, resolving is no longer undone by
+  reopening the file, and Ctrl+Z does not reach it yet either — replying to the
+  thread is currently the way back. See `docs/KNOWN_LIMITATIONS.md`.
+
 ### Security
 
 - Four **spellcheck** channels, the **title-bar theme** channel and the
@@ -41,6 +62,13 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   and consuming the file queued at launch now all require the real renderer.
 - A **Save As** dialog is no longer handed unchecked file-type filters, so a
   malformed request fails as a refused save instead of an unhandled error.
+- The spreadsheet **decompression limit could be bypassed** by one flag. A
+  workbook that declared itself Zip64 made the size check skip the file entirely
+  rather than risk misreading a marker value, so a crafted file could sidestep the
+  limit that exists to stop a small archive from expanding to gigabytes. Zip64
+  only exists for archives over 4GB or with more than 65,535 entries — far past
+  what Atlas will open at all — so such a file is now refused outright instead of
+  waved through.
 
 ### Housekeeping
 
@@ -51,6 +79,19 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 - The coverage floor had been left at wave 2's measurement while five more
   waves of tests landed, leaving ~6 points of slack a regression could hide in.
   Re-measured and raised to 82/70/84/84.
+- An e2e test failed once in a full run and passed on its own. Investigating it
+  instead of retrying turned up a **real, unreleased bug** (F6c): after committing
+  one cell edit, a second cell edit can be silently lost and the Ctrl+S after it
+  can silently not save. It reproduces 5 times in 6 with the renderer slowed 8x,
+  and 1 in 6 at normal speed. It is **not fixed** — three attempts were measured
+  and reverted — but the cause is now known and written up, the reproduction is
+  kept as a ready-to-enable test, and it is recorded in
+  `docs/KNOWN_LIMITATIONS.md` with a workaround. No release should go out before
+  it is fixed.
+- Five items the backlog listed as open were already fixed in the code; they are
+  now marked resolved with the evidence, and the list carries a note about why the
+  drift happens. Two of them had been re-investigated from scratch by separate
+  sessions.
 - The three least-tested files in the tree now have tests: the slide-editor core
   both the PowerPoint and OpenDocument editors share (12% of its branches were
   checked, and it had no test file of its own), the spreadsheet editing toolbar,

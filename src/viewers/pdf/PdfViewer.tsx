@@ -29,6 +29,7 @@ import { PdfFindBar } from './PdfFindBar'
 import { PdfPasswordDialog } from './PdfPasswordDialog'
 import { PdfThumbnailRail } from './PdfThumbnailRail'
 import type { PageGeometry, PageRotation, PdfDocument, PdfOutlineNode, PdfjsRuntime, ZoomMode } from './types'
+import { useTranslate } from '../../i18n'
 
 type PasswordPromptState = { readonly isIncorrect: boolean }
 
@@ -40,6 +41,7 @@ const OBSERVER_THRESHOLDS = [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]
 const PDF_POINTS_TO_CSS_PX = 96 / 72
 
 function PdfViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const viewerRef = useRef<HTMLDivElement | null>(null)
   const printRootRef = useRef<HTMLDivElement | null>(null)
@@ -541,7 +543,7 @@ function PdfViewerBase({ file }: ViewerProps) {
         })()
 
   if (errorMessage !== null) {
-    return <div className="pdf-viewer__error">Failed to render PDF: {errorMessage}</div>
+    return <div className="pdf-viewer__error">{t('viewer.pdf.renderFailed', { detail: errorMessage })}</div>
   }
 
   return (
@@ -631,7 +633,7 @@ function PdfViewerBase({ file }: ViewerProps) {
       </div>
 
       <div ref={printRootRef} className="pdf-viewer__print-root" aria-hidden="true" />
-      {isPrinting && <div className="pdf-viewer__print-status" role="status">Preparing document for print…</div>}
+      {isPrinting && <div className="pdf-viewer__print-status" role="status">{t('viewer.pdf.preparingPrint')}</div>}
 
       <PdfPasswordDialog
         key={passwordAttemptId}

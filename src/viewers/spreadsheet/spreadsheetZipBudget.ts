@@ -138,20 +138,30 @@ function findEndOfCentralDirectory(view: DataView): number | undefined {
  * the buffer.
  *
  * Deliberately narrower than `loadWorkbookZip`, on top of everything that
- * module's own header already documents as out of scope: NO Zip64 support.
- * An End Of Central Directory record that can't be found, or one whose
- * entry count or central-directory offset is pinned at its 32-bit sentinel
- * value (`0xFFFFFFFF`/`0xFFFF`, meaning "see the Zip64 extra field
- * instead"), means "can't determine this from the plain 32-bit fields" —
- * that archive (or, per-entry, that one entry's declared size) is skipped
- * rather than misread as literally 4GB. `XLSX.read` still runs afterwards
- * and reports its own error for a genuinely malformed file, exactly as it
- * did before this guard existed. A real Zip64 workbook is vanishingly rare
- * — that variant only exists for a >4GB archive or >65,535 entries, far
- * outside anything a spreadsheet produces — and skipping the check for one
- * leaves it exactly as safe as every xlsx/ods file was before this guard:
- * failing open on the format's edge case, not on the small-file/huge-
- * declared-size shape this guard exists to catch.
+ * module's own header already documents as out of scope: this reads only the
+ * plain 32-bit central-directory fields and does not parse Zip64 records.
+ *
+ * ZIP64-1 (2026-09-26) — it used to FAIL OPEN on Zip64: a sentinel value
+ * (`0xFFFFFFFF`/`0xFFFF`, meaning "see the Zip64 extra field instead") in the
+ * entry count, the central-directory offset or an entry's declared size made
+ * the check skip that archive (or that one entry) rather than risk misreading
+ * a sentinel as literally 4GB. Honest, and no worse than before the guard
+ * existed — but it handed an attacker a one-flag bypass of the whole budget,
+ * which is not a property a size guard may have.
+ *
+ * It now fails CLOSED wherever there is positive evidence of Zip64, because
+ * refusing such a file costs nothing real: Zip64 only exists for an archive
+ * over 4GB or with more than 65,535 entries, and both are already orders of
+ * magnitude past the 200 MiB per-entry / 500 MiB total budgets this guard
+ * enforces. A genuinely Zip64 workbook would be refused by the budget anyway
+ * the moment its sizes could be read — so refusing it unread is the same
+ * answer, reached sooner.
+ *
+ * The one case that still returns without refusing is "no plain EOCD record
+ * found at all", which is NOT evidence of Zip64: it is what a non-zip file, a
+ * truncated file or a corrupt file looks like. Failing closed there would
+ * report "too large to process" for a merely corrupt spreadsheet. `XLSX.read`
+ * runs afterwards and reports that properly, exactly as before this guard.
  */
 export function checkWorkbookZipBudgetSync(
   buffer: ArrayBuffer | Uint8Array,
@@ -167,7 +177,14 @@ export function checkWorkbookZipBudgetSync(
   const totalEntries = view.getUint16(eocdOffset + 10, true)
   const centralDirSize = view.getUint32(eocdOffset + 12, true)
   const centralDirOffset = view.getUint32(eocdOffset + 16, true)
-  if (totalEntries === 0xffff || centralDirOffset === ZIP64_SENTINEL) return // Zip64 — see header
+  // ZIP64-1 — a sentinel here is positive evidence of Zip64, so refuse rather
+  // than skip the budget. See this module's header for why that costs nothing.
+  if (totalEntries === 0xffff || centralDirOffset === ZIP64_SENTINEL) {
+    throw new SpreadsheetZipBombError(
+      'This archive uses the Zip64 format, which only exists for archives over 4GB or with more ' +
+        'than 65,535 entries — far past the size this app will open. Refusing to open it.',
+    )
+  }
 
   const centralDirEnd = Math.min(bytes.byteLength, centralDirOffset + centralDirSize)
   let total = 0
@@ -187,7 +204,16 @@ export function checkWorkbookZipBudgetSync(
     // excludes `entry.dir`.
     const isDirectory = nameLength > 0 && bytes[nameStart + nameLength - 1] === 0x2f
 
-    if (uncompressedSize !== ZIP64_SENTINEL && !isDirectory) {
+    // ZIP64-1 — same reasoning as the EOCD check above: a per-entry sentinel is
+    // positive evidence of a Zip64 entry, and refusing beats skipping its budget.
+    if (uncompressedSize === ZIP64_SENTINEL && !isDirectory) {
+      throw new SpreadsheetZipBombError(
+        'A zip entry uses the Zip64 format for its size, which means it declares more than 4GB ' +
+          'uncompressed — far past the per-entry limit. Refusing to open it.',
+      )
+    }
+
+    if (!isDirectory) {
       if (uncompressedSize > maxEntryUncompressedBytes) {
         throw new SpreadsheetZipBombError(
           `A zip entry declares ${uncompressedSize.toLocaleString()} bytes uncompressed, over the ` +
