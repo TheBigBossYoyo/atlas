@@ -26,7 +26,6 @@ import {
   type LossySaveWarningCategory,
 } from '../docx'
 import type { Page } from '../docx/layout'
-import { collectReferencedFontFamilies, FONT_FAMILIES } from '../docx/fonts'
 import { useDocxPagination } from '../docx/render/useDocxPagination'
 import {
   collectBookmarkMaps,
@@ -53,16 +52,11 @@ import {
   History,
   SpellCheckMenu,
   applyCommand,
-  buildReplaceAllCommands,
-  buildReplaceCommands,
   buildSpellCheckReplacement,
   decodeImageNaturalSizePt,
   ensureListNumbering,
-  findAll,
-  findNext,
   findEnclosingTable,
   findParagraph,
-  findPrev,
   extendOrCollapse,
   handleBeforeInput,
   handleKeyDown,
@@ -82,7 +76,6 @@ import {
   useSpellCheck,
   type Command,
   type EnclosingTable,
-  type FindOptions,
   type ImageMimeType,
   type PasteBlock,
   type Position,
@@ -95,16 +88,19 @@ import {
   buildRemoveHeaderFooterParagraph,
   type HeaderFooterKind,
 } from '../docx/editor'
-import { getSelectionFromDom, paintSelectionHighlight, syncSelectionToDom } from '../docx/render/selectionDom'
+import { getSelectionFromDom, syncSelectionToDom } from '../docx/render/selectionDom'
+import { useDocxSelectionPainting } from '../docx/render/useDocxSelectionPainting'
+import { useDocxFind } from '../docx/render/useDocxFind'
+import { useDocxFontChoices } from '../docx/render/useDocxFontChoices'
+import { MAX_ZOOM, MIN_ZOOM, useDocxZoom } from '../docx/render/useDocxZoom'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
-import { comparePositions, isRangeCollapsed, normalizeRange } from '../docx/editor/Selection'
+import { isRangeCollapsed, normalizeRange, rangeEquals } from '../docx/editor/Selection'
 import {
   caretClientRect,
   paragraphRangeFromClientPoint,
   positionFromClientPoint,
   positionOnAdjacentLine,
   positionOnePageVertically,
-  positionToDomRange,
   wordRangeFromClientPoint,
   type VerticalDirection,
 } from '../docx/editor/Cursor'
@@ -136,32 +132,10 @@ type HeadingNavSeed = {
  * fresh `Set` object every time (see `PageStack`'s own `memo` doc comment). */
 const EMPTY_PINNED_PAGE_INDICES: ReadonlySet<number> = new Set()
 
-const DEFAULT_FIND_OPTIONS: FindOptions = {
-  caseSensitive: false,
-  wholeWord: false,
-  useRegex: false,
-}
-
 // D24/DXL-19
-const MIN_ZOOM = 0.25
-const MAX_ZOOM = 3
-const ZOOM_STEP = 0.1
-
-function clampZoom(zoom: number): number {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
-}
-
 /** D12/DXE-03 — keys whose native contentEditable behavior always mutates
  * content; see handleKeyDownEvent's preventDefault-safety comment. */
 const MUTATING_KEYS: ReadonlySet<string> = new Set(['Backspace', 'Delete', 'Enter', 'Tab'])
-
-/** USR-11 — always offered in the font picker, even before (or without)
- * system font enumeration. */
-const COMMON_OFFICE_FONTS: ReadonlyArray<string> = [
-  'Aptos', 'Arial', 'Calibri', 'Cambria', 'Candara', 'Century Gothic', 'Comic Sans MS', 'Consolas', 'Constantia',
-  'Corbel', 'Courier New', 'Franklin Gothic Medium', 'Garamond', 'Georgia', 'Impact', 'Lucida Console',
-  'Palatino Linotype', 'Segoe UI', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana',
-]
 
 /** DOCX-1 — vertical-caret keys, resolved entirely by `handleKeyDownEvent`
  * itself (via `Cursor.ts`'s line-geometry helpers) before `Input.ts` ever
@@ -325,26 +299,6 @@ function createToolbarState(
   }
 }
 
-function rangeEquals(left: Range | null, right: Range | null): boolean {
-  if (left === null || right === null) {
-    return left === right
-  }
-
-  return (
-    comparePositions(left.anchor, right.anchor) === 0 &&
-    comparePositions(left.focus, right.focus) === 0
-  )
-}
-
-function getCurrentMatchIndex(matches: ReadonlyArray<{ range: Range }>, range: Range | null): number | null {
-  if (range === null) {
-    return null
-  }
-
-  const index = matches.findIndex(match => rangeEquals(match.range, range))
-  return index >= 0 ? index : null
-}
-
 function visitBlock(
   block: DocxDocument['sections'][number]['blocks'][number],
   visitor: (paragraph: Paragraph, paragraphIndex: number) => void,
@@ -431,15 +385,6 @@ type DocxPromptRequest =
   | { readonly kind: 'hyperlink'; readonly id: number; readonly selection: Range }
   | { readonly kind: 'comment'; readonly id: number; readonly selection: Range }
   | { readonly kind: 'reply'; readonly id: number; readonly commentId: string; readonly range: Range | null }
-
-function getReplaceValue(root: HTMLElement | null): string {
-  if (root === null) {
-    return ''
-  }
-
-  const input = root.querySelector<HTMLInputElement>('.docx-find__input--replace')
-  return input?.value ?? ''
-}
 
 /**
  * DEFER-5 / DXS-20 — builds a `(sectionIndex, blockIndex) -> 1-based page`
@@ -553,9 +498,6 @@ function DocxEditor({
   // USR-05 — pointer selection is driven from the model (see
   // handleSurfaceMouseDown): the anchor of an in-progress drag selection.
   const dragAnchorRef = useRef<Range['anchor'] | null>(null)
-  // USR-06 — set by Find next/prev so the post-render selection sync scrolls
-  // the match into view.
-  const revealSelectionRef = useRef(false)
   // DOCX-1 — the client-x "goal column" ArrowUp/ArrowDown/PageUp/PageDown
   // keep across consecutive presses, so moving down through a run of short
   // lines stays under the same visual column instead of snapping to each
@@ -655,6 +597,16 @@ function DocxEditor({
   // see that hook for why passing the live `documentModel` instead re-rendered
   // every page twice per keystroke.
   const { pages, pagesDocument, paginationProgress, paginationError } = useDocxPagination(documentModel, bundle)
+
+  // Paints `range` onto the DOM after every commit that could have moved the
+  // selection or replaced the pages under it, and owns the "scroll the next
+  // painted selection into view" flag that Find/outline navigation set.
+  const { revealSelectionOnNextPaint } = useDocxSelectionPainting(
+    editorRootRef,
+    range,
+    documentModelRef,
+    pages,
+  )
   // D23-PERF-2 — bypasses PageStack's page virtualization while true, so
   // print (`handlePrint`) and PDF export (the `atlas:docx-*-full-render`
   // window events below, dispatched by `exportDocxPdf`) always see every
@@ -662,9 +614,6 @@ function DocxEditor({
   // view. See `PageStack.tsx`'s `forceRenderAll` prop doc comment.
   const [forceRenderAll, setForceRenderAll] = useState(false)
   const [savePath, setSavePath] = useState(file.path)
-  const [findOpen, setFindOpen] = useState(false)
-  const [findQuery, setFindQuery] = useState('')
-  const [findOptions, setFindOptions] = useState<FindOptions>(DEFAULT_FIND_OPTIONS)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [commentsPaneOpen, setCommentsPaneOpen] = useState(bundle.document.comments.size > 0)
   const [resolvedCommentIds, setResolvedCommentIds] = useState<ReadonlySet<string>>(new Set())
@@ -681,10 +630,6 @@ function DocxEditor({
   // `saveDocx` persists it via `writeSettingsXml` instead of losing it to
   // the passthrough copy of the original part.
   const [trackChangesEnabled, setTrackChangesEnabled] = useState(bundle.settings?.trackChanges ?? false)
-  // D24/DXL-19 — PageView already fully supports a CSS-transform zoom (its
-  // `zoom` prop); this was simply never wired to anything, hardcoded to 1
-  // below. Percent steps match the common Word/most-viewers convention.
-  const [zoom, setZoom] = useState(1)
   // DXE-11 — the context threaded into Input.ts so a genuine typed
   // insertion/deletion (never History's own undo/redo replay — see
   // `InputContext`'s own doc comment) is recorded as `w:ins`/`w:del`.
@@ -737,15 +682,6 @@ function DocxEditor({
   const registerSaveAs = useRegisterViewerSaveAs()
   const reportSavedPath = useReportSavedPath()
 
-  const matches = useMemo(() => {
-    if (findQuery.length === 0) {
-      return []
-    }
-
-    return findAll(documentModel, findQuery, findOptions)
-  }, [documentModel, findOptions, findQuery])
-
-  const currentMatchIndex = useMemo(() => getCurrentMatchIndex(matches, range), [matches, range])
 
   // D23-PERF-2 — pages that must stay mounted no matter where the viewport
   // currently is: whichever page(s) hold the caret/selection. Computed
@@ -823,27 +759,8 @@ function DocxEditor({
   // USR-11 — fonts the document uses first, then every installed system font
   // (via the main process), the bundled metric-compatible substitutes and
   // common Office fonts.
-  const documentFonts = useMemo(() => collectReferencedFontFamilies(documentModel), [documentModel])
-  const [systemFonts, setSystemFonts] = useState<ReadonlyArray<string>>([])
-  useEffect(() => {
-    let cancelled = false
-    const listFonts = window.electronAPI?.fonts?.list
-    if (listFonts === undefined) {
-      return undefined
-    }
-    listFonts()
-      .then((families) => {
-        if (!cancelled) setSystemFonts(families)
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  const availableFonts = useMemo(() => {
-    const merged = new Set<string>([...COMMON_OFFICE_FONTS, ...FONT_FAMILIES.map((family) => family.wordName), ...systemFonts])
-    return Array.from(merged).sort((a, b) => a.localeCompare(b))
-  }, [systemFonts])
+  const { documentFonts, availableFonts } = useDocxFontChoices(documentModel)
+  const { zoom, handleZoomIn, handleZoomOut, handleZoomReset } = useDocxZoom()
 
   // DXE-25 — save-failure feedback used to be cleared by commitState, which
   // runs on every single edit, so the banner vanished the instant the user
@@ -949,6 +866,22 @@ function DocxEditor({
     },
     [commitState, documentModel],
   )
+
+  // Find & replace (see `docx/render/useDocxFind.ts`). It needs the selection
+  // to start from and to move, the command applier for the two replace actions,
+  // and the reveal request so a match on a not-yet-mounted virtualized page is
+  // scrolled to once it renders.
+  const {
+    findOpen,
+    setFindOpen,
+    matches,
+    currentMatchIndex,
+    handleFind,
+    handleFindNext,
+    handleFindPrev,
+    handleReplace,
+    handleReplaceAll,
+  } = useDocxFind(documentModel, range, setRange, containerRef, applyEditorCommands, revealSelectionOnNextPaint)
 
   // D29 follow-up — a header/footer field commits its edit as ONE undo step
   // on blur, not per keystroke, so its `onChange` (further below) only
@@ -1715,7 +1648,7 @@ function DocxEditor({
         event.preventDefault()
       }
     },
-    [applyResult, containerRef, documentModel, getTrackChanges, pages, pinnedPageIndices, range],
+    [applyResult, containerRef, documentModel, getTrackChanges, pages, pinnedPageIndices, range, setFindOpen],
   )
 
   const handleCompositionStart = useCallback((event: FormEvent<HTMLDivElement>) => {
@@ -1745,71 +1678,6 @@ function DocxEditor({
     [applyResult, composition.handlers, documentModel, getTrackChanges, range],
   )
 
-  const handleFind = useCallback((query: string, options: FindOptions) => {
-    setFindQuery(query)
-    setFindOptions(options)
-
-    if (query.length === 0) {
-      return
-    }
-
-    const nextMatch = findNext(documentModel, query, options, null)
-    if (nextMatch !== null) {
-      revealSelectionRef.current = true
-      setRange(nextMatch.range)
-    }
-  }, [documentModel])
-
-  const handleFindNext = useCallback(() => {
-    if (findQuery.length === 0) {
-      return
-    }
-
-    const nextMatch = findNext(documentModel, findQuery, findOptions, range?.focus ?? null)
-    if (nextMatch !== null) {
-      revealSelectionRef.current = true
-      setRange(nextMatch.range)
-    }
-  }, [documentModel, findOptions, findQuery, range])
-
-  const handleFindPrev = useCallback(() => {
-    if (findQuery.length === 0) {
-      return
-    }
-
-    const prevMatch = findPrev(documentModel, findQuery, findOptions, range?.anchor ?? null)
-    if (prevMatch !== null) {
-      revealSelectionRef.current = true
-      setRange(prevMatch.range)
-    }
-  }, [documentModel, findOptions, findQuery, range])
-
-  const handleReplace = useCallback(() => {
-    if (findQuery.length === 0 || currentMatchIndex === null) {
-      return
-    }
-
-    const replacement = getReplaceValue(containerRef.current)
-    const match = matches[currentMatchIndex]
-    const commands = buildReplaceCommands(match, replacement)
-    const nextPos = {
-      paragraphPath: match.range.anchor.paragraphPath,
-      runIndex: match.range.anchor.runIndex,
-      charOffset: match.range.anchor.charOffset + replacement.length,
-    }
-
-    applyEditorCommands(commands, { anchor: nextPos, focus: nextPos })
-  }, [applyEditorCommands, containerRef, currentMatchIndex, findQuery, matches])
-
-  const handleReplaceAll = useCallback(() => {
-    if (findQuery.length === 0) {
-      return
-    }
-
-    const replacement = getReplaceValue(containerRef.current)
-    const commands = buildReplaceAllCommands(documentModel, findQuery, findOptions, replacement)
-    applyEditorCommands(commands, range)
-  }, [applyEditorCommands, containerRef, documentModel, findOptions, findQuery, range])
 
   // D23-PERF-2 — outline/heading navigation addresses a paragraph by its
   // running position among every `.docx-page__line[data-paragraph-path]` in
@@ -2116,6 +1984,7 @@ function DocxEditor({
       handleToggleList,
       onBundleChange,
       range,
+      setFindOpen,
     ],
   )
 
@@ -2556,57 +2425,10 @@ function DocxEditor({
     [applyEditorCommand, documentModel],
   )
 
-  // D24/DXL-19
-  const handleZoomIn = useCallback(() => {
-    setZoom((current) => clampZoom(current + ZOOM_STEP))
-  }, [])
-  const handleZoomOut = useCallback(() => {
-    setZoom((current) => clampZoom(current - ZOOM_STEP))
-  }, [])
-  const handleZoomReset = useCallback(() => {
-    setZoom(1)
-  }, [])
-
   useEffect(() => {
     handleToolbarCommandRef.current = handleToolbarCommand
   }, [handleToolbarCommand])
 
-
-  useLayoutEffect(() => {
-    const root = editorRootRef.current
-    if (root === null) {
-      return
-    }
-
-    // USR-06 — placing the DOM selection inside a contentEditable moves
-    // keyboard focus into it in Chromium, which stole focus from the Find
-    // box after the first match (Enter then edited the document). While a
-    // form field outside the editor has focus, paint the model selection with
-    // the CSS Custom Highlight API instead of moving the DOM selection.
-    const activeElement = root.ownerDocument.activeElement
-    const fieldHasFocus =
-      activeElement !== null &&
-      !root.contains(activeElement) &&
-      activeElement.matches('input, textarea, select, [contenteditable="true"]')
-    if (fieldHasFocus) {
-      paintSelectionHighlight(root, range, documentModelRef.current)
-    } else {
-      paintSelectionHighlight(root, null)
-      syncSelectionToDom(root, range, documentModelRef.current)
-    }
-
-    if (revealSelectionRef.current && range !== null) {
-      revealSelectionRef.current = false
-      const point = positionToDomRange(range.focus, root, documentModelRef.current)
-      const node = point?.node ?? null
-      const element = node === null ? null : node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
-      if (element !== null && typeof element.scrollIntoView === 'function') {
-        element.scrollIntoView({ block: 'center', inline: 'nearest' })
-      }
-    }
-  }, [pages, range])
-
-  useEffect(() => () => paintSelectionHighlight(null, null), [])
 
   useEffect(() => {
     onPageCountChange?.(pages?.length ?? 1)

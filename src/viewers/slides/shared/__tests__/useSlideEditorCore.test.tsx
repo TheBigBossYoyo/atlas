@@ -393,7 +393,15 @@ describe('useSlideEditorCore — dirty tracking and save', () => {
     await act(async () => {
       expect(await core().save()).toBe(true)
     })
-    await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('false'))
+    // An explicit budget on this one wait, unlike the other 400-odd in the suite
+    // that take the global 5s from `setup.ts`. This is the only test that chains
+    // three waits AND a real DEFLATE round trip through `writeOfficePackage`: it
+    // runs in ~50ms alone, but it is the first thing to starve when the whole
+    // suite runs in parallel on a loaded machine (observed twice here, at just
+    // over 5s, while every other test passed). CI has less headroom than a dev
+    // box, so the slowest genuinely-correct path gets room rather than a
+    // periodic red build.
+    await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('false'), { timeout: 15_000 })
   })
 
   it('saves in place: the opened path is passed as existingPath, with the format filter', async () => {

@@ -59,9 +59,11 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 - The bundle-size gate had only a *relative* limit, which a deliberate baseline
   refresh moves; it now also has absolute ceilings that a refresh cannot.
 - `DocxViewer.tsx` was ~3,600 lines, most of it one component. Font
-  registration, pagination and DOM-selection translation moved into three
-  modules of their own with no behaviour change. Still the largest component in
-  the tree — this is a dent, not a finish.
+  registration, pagination, selection painting, find/replace, zoom and the font
+  picker's choices moved into six modules of their own, with no behaviour
+  change: 3,611 lines down to ~3,010, and 13 `useState`/23 `useEffect` down to
+  9/19. Still the largest component in the tree — `docs/ARCHITECTURE.md`
+  records which clusters are left and why they need a different change first.
 
 ### Fixed — found by driving the app overnight (2026-09-25)
 

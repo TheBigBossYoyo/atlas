@@ -98,3 +98,20 @@ export function syncSelectionToDom(root: HTMLElement, range: Range | null, docMo
   selection.removeAllRanges()
   selection.addRange(domRange)
 }
+
+/**
+ * The Find bar's replace field, read straight out of the DOM.
+ *
+ * That field is uncontrolled, so its value lives only in the DOM and is read at
+ * the moment a replace action fires rather than mirrored into React state - a
+ * `null` root (viewer not mounted) or a closed Find bar both read as "replace
+ * with nothing", which is the same thing an empty field means.
+ */
+export function getReplaceValue(root: HTMLElement | null): string {
+  if (root === null) {
+    return ''
+  }
+
+  const input = root.querySelector<HTMLInputElement>('.docx-find__input--replace')
+  return input?.value ?? ''
+}
