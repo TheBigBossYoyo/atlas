@@ -58,14 +58,15 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   they cannot quietly slide back.
 - The bundle-size gate had only a *relative* limit, which a deliberate baseline
   refresh moves; it now also has absolute ceilings that a refresh cannot.
-- `DocxViewer.tsx` was ~3,600 lines, most of it one component. Font
-  registration, pagination, selection painting, find/replace, zoom, the font
-  picker, the comments pane, header/footer editing and saving moved into nine
-  modules of their own, with no behaviour change: 3,611 lines down to ~2,620,
-  and 29 state declarations/23 effects/51 callbacks down to 14/14/35. What
-  remains is the document model, the selection, the undo history and the DOM
-  input handlers that drive them — one component's actual job.
-  `docs/ARCHITECTURE.md` records what is left and why.
+- `DocxViewer.tsx` was ~3,600 lines, most of it one component. Fourteen modules
+  came out of it — font registration, pagination, selection painting,
+  find/replace, zoom, the font picker, the comments pane, header/footer editing,
+  saving, the prompt dialog, hyperlink insertion, field updates, print/export
+  full-render and the deferred vertical-caret retry — with no behaviour change:
+  3,611 lines down to 2,380, and 29 state declarations/23 effects/51 callbacks
+  down to 10/13/31. What remains is the document, the selection, the undo history
+  and the DOM input handlers that drive them: one component's actual job.
+  `docs/ARCHITECTURE.md` records why each piece went where it did.
 
 ### Fixed — found by driving the app overnight (2026-09-25)
 

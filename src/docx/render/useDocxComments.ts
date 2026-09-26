@@ -31,7 +31,7 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 
-import { deleteCommentFromDocument } from '../editor/commentMutations'
+import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../editor/commentMutations'
 import type { Range } from '../editor'
 import type { Document as DocxDocument } from '../model'
 
@@ -42,6 +42,15 @@ export type DocxComments = {
   readonly commentsDocument: DocxDocument
   readonly handleResolveComment: (commentId: string) => void
   readonly handleDeleteComment: (commentId: string) => void
+  /**
+   * Adds a comment on `selection` with the text the prompt dialog collected.
+   * Lives here rather than in the viewer's prompt handler because it needs
+   * exactly what this hook already holds, and because "add a comment" is a
+   * comment operation, not a dialog one.
+   */
+  readonly confirmComment: (selection: Range, text: string) => void
+  /** Replies to `commentId` with the text the prompt dialog collected. */
+  readonly confirmReply: (commentId: string, range: Range | null, text: string) => void
   /**
    * Call after a new comment or reply lands on `commentId`: opens the pane and
    * clears any stale resolved flag, so a thread the reader had resolved comes
@@ -62,6 +71,9 @@ export type DocxComments = {
  * @param documentCommentCount - `bundle.document.comments.size`. Changing it
  *                         means a different file was opened, which resets both
  *                         the pane's default state and the resolved set.
+ * @param setSaveError   - the viewer's shared error banner. Despite the name it
+ *                         is not save-specific; it is where every failed editor
+ *                         action in this viewer reports itself.
  */
 export function useDocxComments(
   documentModel: DocxDocument,
@@ -69,6 +81,7 @@ export function useDocxComments(
   commitState: (nextDocument: DocxDocument, nextRange: Range | null) => void,
   bumpRevision: () => void,
   documentCommentCount: number,
+  setSaveError: (message: string | null) => void,
 ): DocxComments {
   const [commentsPaneOpen, setCommentsPaneOpen] = useState(documentCommentCount > 0)
   const [resolvedCommentIds, setResolvedCommentIds] = useState<ReadonlySet<string>>(new Set())
@@ -116,6 +129,29 @@ export function useDocxComments(
     [unresolve],
   )
 
+  const confirmComment = useCallback(
+    (selection: Range, text: string) => {
+      try {
+        const result = addCommentToDocument(documentModel, selection, text, 'Atlas')
+        bumpRevision()
+        commitState(result.document, selection)
+        revealCommentThread(result.commentId)
+      } catch (error) {
+        setSaveError(error instanceof Error ? error.message : String(error))
+      }
+    },
+    [bumpRevision, commitState, documentModel, revealCommentThread, setSaveError],
+  )
+
+  const confirmReply = useCallback(
+    (commentId: string, range: Range | null, text: string) => {
+      bumpRevision()
+      commitState(replyToComment(documentModel, commentId, text, 'Atlas'), range)
+      revealCommentThread(commentId)
+    },
+    [bumpRevision, commitState, documentModel, revealCommentThread],
+  )
+
   const commentsDocument = useMemo<DocxDocument>(() => {
     if (resolvedCommentIds.size === 0) {
       return documentModel
@@ -145,5 +181,7 @@ export function useDocxComments(
     handleResolveComment,
     handleDeleteComment,
     revealCommentThread,
+    confirmComment,
+    confirmReply,
   }
 }

@@ -2,7 +2,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,7 +10,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { flushSync } from 'react-dom'
 
 import { ListTree, PanelTop, Printer, RefreshCw, Save, SaveAll, X, ZoomIn, ZoomOut } from 'lucide-react'
 
@@ -21,15 +19,7 @@ import {
   loadDocx,
   type DocxBundle,
 } from '../docx'
-import type { Page } from '../docx/layout'
 import { useDocxPagination } from '../docx/render/useDocxPagination'
-import {
-  collectBookmarkMaps,
-  parseCoreProps,
-  updateFields,
-  updateTableOfContents,
-  type FieldEvaluationContext,
-} from '../docx/fields'
 import { type Document as DocxDocument, type Paragraph, type ParagraphChild, type Run, type RunChild } from '../docx/model'
 import { resolveParaProps } from '../docx/parser/cascade'
 import { MediaContext, PageStack } from '../docx/render'
@@ -58,7 +48,6 @@ import {
   handleKeyDown,
   moveCursorToLineEnd,
   moveCursorToLineStart,
-  insertHyperlinkIntoBundle,
   insertImageIntoBundle,
   buildPasteCommands,
   buildRichPasteCommands,
@@ -83,10 +72,14 @@ import { useDocxSelectionPainting } from '../docx/render/useDocxSelectionPaintin
 import { useDocxComments } from '../docx/render/useDocxComments'
 import { useDocxHeaderFooter } from '../docx/render/useDocxHeaderFooter'
 import { useDocxSave } from '../docx/render/useDocxSave'
+import { useDocxPrompt } from '../docx/render/useDocxPrompt'
+import { useDocxHyperlink } from '../docx/render/useDocxHyperlink'
+import { useDocxFields } from '../docx/render/useDocxFields'
+import { useDocxFullRender } from '../docx/render/useDocxFullRender'
+import { useDocxVerticalCaret } from '../docx/render/useDocxVerticalCaret'
 import { useDocxFind } from '../docx/render/useDocxFind'
 import { useDocxFontChoices } from '../docx/render/useDocxFontChoices'
 import { MAX_ZOOM, MIN_ZOOM, useDocxZoom } from '../docx/render/useDocxZoom'
-import { addCommentToDocument, replyToComment } from '../docx/editor/commentMutations'
 import { isRangeCollapsed, normalizeRange, rangeEquals } from '../docx/editor/Selection'
 import {
   caretClientRect,
@@ -356,55 +349,6 @@ function collectDocxMetrics(document: DocxDocument): {
   return { words, navSeeds }
 }
 
-// F1 — a pending DocxPromptDialog open request. `id` is a monotonically
-// increasing token (see `promptIdRef`) used as the dialog's React `key` so
-// it remounts fresh for every open instead of reusing a previous prompt's
-// leftover input value. `selection`/`range` are captured at the moment the
-// user triggers the action (matching the old, synchronous `window.prompt`
-// call's timing) rather than re-read from the `range` state when the dialog
-// is confirmed, since the dialog itself doesn't keep the document selection
-// current while it's open.
-type DocxPromptRequest =
-  | { readonly kind: 'hyperlink'; readonly id: number; readonly selection: Range }
-  | { readonly kind: 'comment'; readonly id: number; readonly selection: Range }
-  | { readonly kind: 'reply'; readonly id: number; readonly commentId: string; readonly range: Range | null }
-
-/**
- * DEFER-5 / DXS-20 — builds a `(sectionIndex, blockIndex) -> 1-based page`
- * lookup from the already-computed pagination result, for PAGE/NUMPAGES
- * field evaluation and TOC page numbers. Reads only `Page`'s already-public
- * shape (`PageLineRef.paragraphPath`'s first element is the paragraph's
- * index among its section's direct blocks, matching the addressing
- * `updateFields`/`collectTocEntries` use) — this stays a read-only consumer
- * of pagination's output, not a change to pagination itself (paginate.ts/
- * breakLines.ts are out of this branch's scope). A paragraph spanning
- * several pages resolves to the EARLIEST page it appears on.
- */
-function buildPageOfParagraph(
-  pages: ReadonlyArray<Page>,
-): (sectionIndex: number, blockIndex: number) => number | undefined {
-  const pageByKey = new Map<string, number>()
-
-  for (const page of pages) {
-    const pageNumber = page.pageIndex + 1
-    for (const column of page.columns) {
-      for (const line of column.lines) {
-        const blockIndex = line.paragraphPath[0]
-        if (blockIndex === undefined) {
-          continue
-        }
-        const key = `${page.sectionIndex}:${blockIndex}`
-        const existing = pageByKey.get(key)
-        if (existing === undefined || pageNumber < existing) {
-          pageByKey.set(key, pageNumber)
-        }
-      }
-    }
-  }
-
-  return (sectionIndex, blockIndex) => pageByKey.get(`${sectionIndex}:${blockIndex}`)
-}
-
 // i18n — `docx/editor/headerFooter.ts` labels read-only header/footer
 // content with a handful of fixed `[Bracketed]` English tags (`[Image]`,
 // `[Table]`, `[Link: text]`, …). That module stays English-only and
@@ -475,24 +419,13 @@ function DocxEditor({
   // pinning it (via `pinnedPageIndices` below) forces `PageStack` to mount
   // it, and the `useLayoutEffect` further below retries the exact same move
   // once that DOM exists.
-  const [pendingVerticalMove, setPendingVerticalMove] = useState<{
-    readonly direction: VerticalDirection
-    readonly goalX: number
-    readonly isPageMove: boolean
-    readonly fromRect: DOMRect
-    readonly viewportHeight: number
-    readonly shift: boolean
-    readonly baseRange: Range
-    readonly mountPageIndex: number
-  } | null>(null)
-  const historyRef = useRef(new History())
+   const historyRef = useRef(new History())
   // DEFER-5 / DXS-20 — feedback for "Update Fields"/"Update TOC" below.
   // Not the shared app-wide toast system (`useToast`): that requires a
   // `<ToastProvider>` ancestor the isolated viewer-level tests that mount
   // `DocxEditor`/`DocxViewer` directly don't set up, and this file already
   // has its own established pattern (see `saveError`) for a dismissible
   // inline status message instead.
-  const [fieldUpdateMessage, setFieldUpdateMessage] = useState<string | null>(null)
   // Round-trip fidelity audit, DXS round 2 follow-up — the same dismissible
   // inline-status pattern as `fieldUpdateMessage`, for
   // `detectLossySaveWarnings`' findings after a save. `warnedAboutFidelityRef`
@@ -555,19 +488,13 @@ function DocxEditor({
     documentModelRef,
     pages,
   )
-  // D23-PERF-2 — bypasses PageStack's page virtualization while true, so
-  // print (`handlePrint`) and PDF export (the `atlas:docx-*-full-render`
-  // window events below, dispatched by `exportDocxPdf`) always see every
-  // page in the live DOM instead of whatever happened to be scrolled into
-  // view. See `PageStack.tsx`'s `forceRenderAll` prop doc comment.
-  const [forceRenderAll, setForceRenderAll] = useState(false)
+  const { forceRenderAll, handlePrint, forceAllPagesNow, releaseAllPages } = useDocxFullRender()
   const [saveError, setSaveError] = useState<string | null>(null)
   // F1 — the single-line text prompt backing Insert Hyperlink/Add Comment/
   // Reply (see DocxPromptDialog.tsx and handlePromptConfirm below). `id` is
   // bumped on every open so the dialog remounts instead of reusing stale
   // input state from a previous prompt.
-  const [promptRequest, setPromptRequest] = useState<DocxPromptRequest | null>(null)
-  const promptIdRef = useRef(0)
+  const { promptRequest, requestPrompt, closePrompt } = useDocxPrompt()
   // DXE-11/D17 — seeded from the source document's real `word/settings.xml`
   // `<w:trackChanges/>` setting (parsed by `docx/parser/settings.ts`) rather
   // than always starting `false`, and every toggle writes back into
@@ -631,59 +558,31 @@ function DocxEditor({
   // real DOM — the selection-sync `useLayoutEffect` further below runs
   // immediately after that commit and needs `positionToDomRange` to find a
   // real node, not a placeholder.
+  // DOCX-SMALL-WINDOW-2 — a vertical caret move that had to wait for its target
+  // page to mount (see `docx/render/useDocxVerticalCaret.ts`).
+  const { pendingMountPageIndex, requestVerticalMove } = useDocxVerticalCaret(
+    documentModel,
+    editorRootRef,
+    setRange,
+  )
+
   const pinnedPageIndices = useMemo(() => {
     if (pages === null || range === null) {
-      return pendingVerticalMove === null ? EMPTY_PINNED_PAGE_INDICES : new Set([pendingVerticalMove.mountPageIndex])
+      return pendingMountPageIndex === null ? EMPTY_PINNED_PAGE_INDICES : new Set([pendingMountPageIndex])
     }
     const anchorPages = findPagesForParagraphPath(pages, range.anchor.paragraphPath)
     const focusPages = findPagesForParagraphPath(pages, range.focus.paragraphPath)
-    if (anchorPages.length === 0 && focusPages.length === 0 && pendingVerticalMove === null) {
+    if (anchorPages.length === 0 && focusPages.length === 0 && pendingMountPageIndex === null) {
       return EMPTY_PINNED_PAGE_INDICES
     }
     const indices = new Set([...anchorPages, ...focusPages])
     // DOCX-SMALL-WINDOW-2 — see `pendingVerticalMove`'s own doc comment: force
     // the target page to mount so the retry below has real DOM to search.
-    if (pendingVerticalMove !== null) {
-      indices.add(pendingVerticalMove.mountPageIndex)
+    if (pendingMountPageIndex !== null) {
+      indices.add(pendingMountPageIndex)
     }
     return indices
-  }, [pages, range, pendingVerticalMove])
-
-  // DOCX-SMALL-WINDOW-2 — retries the vertical move `handleKeyDownEvent`
-  // deferred once `pendingVerticalMove.mountPageIndex` is pinned (above) and
-  // has had a chance to mount real `.docx-page__line` DOM. Runs as a layout
-  // effect (not a plain effect) so it fires in the SAME paint as the newly
-  // mounted page, before the user sees any intermediate state. If the
-  // target page's content still doesn't yield a line to land on (a
-  // genuinely short/empty page, or content that failed to mount for some
-  // other reason), falls back to the same line-start/end clamp
-  // `handleKeyDownEvent` itself uses — this must never leave the caret
-  // stuck with no visible response to the keypress.
-  useLayoutEffect(() => {
-    if (pendingVerticalMove === null) {
-      return
-    }
-    const root = editorRootRef.current
-    if (root === null) {
-      setPendingVerticalMove(null)
-      return
-    }
-
-    const { direction, goalX, isPageMove, fromRect, viewportHeight, shift, baseRange } = pendingVerticalMove
-
-    const target = isPageMove
-      ? positionOnePageVertically(fromRect, goalX, direction, viewportHeight, root, documentModel)
-      : positionOnAdjacentLine(baseRange.focus, goalX, direction, root, documentModel)
-
-    const newFocus =
-      target ??
-      (direction === 'up'
-        ? moveCursorToLineStart(baseRange.focus, documentModel)
-        : moveCursorToLineEnd(baseRange.focus, documentModel))
-
-    setRange(extendOrCollapse(baseRange, newFocus, shift))
-    setPendingVerticalMove(null)
-  }, [pendingVerticalMove, documentModel])
+  }, [pages, range, pendingMountPageIndex])
 
   const toolbarState = useMemo(
     () => createToolbarState(documentModel, range, { spellCheck: spellCheckEnabled, trackChanges: trackChangesEnabled }),
@@ -732,8 +631,31 @@ function DocxEditor({
     commentsDocument,
     handleResolveComment,
     handleDeleteComment,
-    revealCommentThread,
-  } = useDocxComments(documentModel, range, commitState, bumpCommentRevision, bundle.document.comments.size)
+    confirmComment,
+    confirmReply,
+  } = useDocxComments(
+    documentModel,
+    range,
+    commitState,
+    bumpCommentRevision,
+    bundle.document.comments.size,
+    setSaveError,
+  )
+
+  // "Update field(s)" / "Update table of contents" (see
+  // `docx/render/useDocxFields.ts`). `applyFieldUpdate` rather than
+  // `commitState`: both actions bypass History and must not move the selection.
+  const applyFieldUpdate = useCallback((next: DocxDocument) => {
+    historyRef.current.bumpRevision()
+    setDocumentModel(next)
+    setDocumentRevision(historyRef.current.getRevision())
+  }, [])
+  const {
+    fieldUpdateMessage,
+    dismissFieldUpdateMessage,
+    handleUpdateFields,
+    handleUpdateTableOfContents,
+  } = useDocxFields(bundle, documentModel, pages, applyFieldUpdate)
 
   const applyResult = useCallback(
     (result: { document: DocxDocument; range: Range | null } | null): boolean => {
@@ -1142,21 +1064,20 @@ function DocxEditor({
     }
   }, [bundle, commitState, documentModel, onBundleChange, range, t])
 
-  // F1 — Electron doesn't implement `window.prompt` (it throws), so this used
-  // to silently do nothing at all in the packaged app. Opens the shared
-  // DocxPromptDialog instead; the actual insertion happens in
-  // `handlePromptConfirm` once the user submits it (see that callback for
-  // the rest of this logic, preserved as-is from the old synchronous flow).
-  const handleInsertHyperlink = useCallback(() => {
-    const selection = range
-    if (selection === null) {
-      setSaveError(t('docx.viewer.selectBeforeHyperlink'))
-      return
-    }
-
-    promptIdRef.current += 1
-    setPromptRequest({ kind: 'hyperlink', id: promptIdRef.current, selection })
-  }, [range, t])
+  // Hyperlink insert (see `docx/render/useDocxHyperlink.ts`) — the one editor
+  // action that mutates the BUNDLE as well as the document, since a link needs a
+  // relationship id.
+  const { handleInsertHyperlink, confirmHyperlink } = useDocxHyperlink(
+    bundle,
+    documentModel,
+    range,
+    commitState,
+    onBundleChange,
+    pushUndo,
+    requestPrompt,
+    setSaveError,
+    t,
+  )
 
   const handleToggleList = useCallback(
     (kind: 'bullet' | 'number') => {
@@ -1435,7 +1356,7 @@ function DocxEditor({
             const currentPageIndex = direction === 'down' ? Math.max(...focusPageIndices) : Math.min(...focusPageIndices)
             const mountPageIndex = direction === 'down' ? currentPageIndex + 1 : currentPageIndex - 1
             if (mountPageIndex >= 0 && mountPageIndex < pages.length && !pinnedPageIndices.has(mountPageIndex)) {
-              setPendingVerticalMove({ direction, goalX, isPageMove, fromRect, viewportHeight, shift, baseRange: range, mountPageIndex })
+              requestVerticalMove({ direction, goalX, isPageMove, fromRect, viewportHeight, shift, baseRange: range, mountPageIndex })
               return
             }
           }
@@ -1553,7 +1474,7 @@ function DocxEditor({
         event.preventDefault()
       }
     },
-    [applyResult, containerRef, documentModel, getTrackChanges, pages, pinnedPageIndices, range, setFindOpen],
+    [applyResult, containerRef, documentModel, getTrackChanges, pages, pinnedPageIndices, range, requestVerticalMove, setFindOpen],
   )
 
   const handleCompositionStart = useCallback((event: FormEvent<HTMLDivElement>) => {
@@ -1617,10 +1538,12 @@ function DocxEditor({
       return
     }
 
-    flushSync(() => setForceRenderAll(true))
+    forceAllPagesNow()
     tryScroll()
-    requestAnimationFrame(() => setForceRenderAll(false))
-  }, [])
+    // Released next frame, not now: the smooth scroll above needs its target to
+    // stay mounted while it animates.
+    requestAnimationFrame(releaseAllPages)
+  }, [forceAllPagesNow, releaseAllPages])
 
   // DXE-08 — accepting a suggestion used to only call Electron's native
   // replaceMisspelling bridge, which mutates the contentEditable DOM
@@ -1665,16 +1588,14 @@ function DocxEditor({
       return
     }
 
-    promptIdRef.current += 1
-    setPromptRequest({ kind: 'comment', id: promptIdRef.current, selection })
-  }, [range, t])
+    requestPrompt({ kind: 'comment', selection })
+  }, [range, requestPrompt, t])
 
   const handleReplyToComment = useCallback(
     (commentId: string) => {
-      promptIdRef.current += 1
-      setPromptRequest({ kind: 'reply', id: promptIdRef.current, commentId, range })
+      requestPrompt({ kind: 'reply', commentId, range })
     },
-    [range],
+    [range, requestPrompt],
   )
 
   // F1 — applies whichever DocxPromptDialog request is pending once the user
@@ -1682,65 +1603,25 @@ function DocxEditor({
   // `window.prompt(...)` callers ran right after reading a non-null result;
   // only the "how do we get the string" part changed (a real dialog instead
   // of a call Electron doesn't support), not the mutation logic itself.
+  // Each branch's work lives with the feature that owns it — see
+  // `useDocxHyperlink` and `useDocxComments`. This is only the dispatch, and it
+  // closes the dialog first, as the previous single handler did.
   const handlePromptConfirm = useCallback(
     (value: string) => {
       const request = promptRequest
-      setPromptRequest(null)
+      closePrompt()
       if (request === null) return
 
       if (request.kind === 'hyperlink') {
-        // Matches the old `url === null` (Cancel) vs. empty-after-trim
-        // handling: both are silent no-ops, never an insertion.
-        const trimmedUrl = value.trim()
-        if (trimmedUrl.length === 0) {
-          return
-        }
-
-        try {
-          const insertResult = insertHyperlinkIntoBundle(
-            { ...bundle, document: documentModel },
-            request.selection,
-            trimmedUrl,
-          )
-          historyRef.current.push(insertResult.inverse)
-          onBundleChange(insertResult.bundle)
-          commitState(insertResult.document, insertResult.range)
-        } catch (error) {
-          setSaveError(error instanceof Error ? error.message : String(error))
-        }
-        return
+        confirmHyperlink(request.selection, value)
+      } else if (request.kind === 'comment') {
+        confirmComment(request.selection, value)
+      } else {
+        confirmReply(request.commentId, request.range, value)
       }
-
-      if (request.kind === 'comment') {
-        try {
-          const result = addCommentToDocument(documentModel, request.selection, value, 'Atlas')
-          // DIRTY-1 — comments are not undoable through `historyRef` (no
-          // push/coalesce call here), so `commitState`'s revision read would
-          // otherwise stay unchanged and this edit would be silently missed by
-          // the dirty check; `bumpRevision` allocates a fresh one for it.
-          historyRef.current.bumpRevision()
-          commitState(result.document, request.selection)
-          revealCommentThread(result.commentId)
-        } catch (error) {
-          setSaveError(error instanceof Error ? error.message : String(error))
-        }
-        return
-      }
-
-      // request.kind === 'reply'
-      //
-      // DIRTY-1 — see the 'comment' branch above: not undoable through
-      // History, so the revision must be bumped explicitly.
-      historyRef.current.bumpRevision()
-      commitState(replyToComment(documentModel, request.commentId, value, 'Atlas'), request.range)
-      revealCommentThread(request.commentId)
     },
-    [bundle, commitState, documentModel, onBundleChange, promptRequest, revealCommentThread],
+    [closePrompt, confirmComment, confirmHyperlink, confirmReply, promptRequest],
   )
-
-  const handlePromptCancel = useCallback(() => {
-    setPromptRequest(null)
-  }, [])
 
   const handleToolbarCommand = useCallback(
     (toolbarCommand: ToolbarCommand) => {
@@ -1903,131 +1784,11 @@ function DocxEditor({
     }, []),
   )
 
-  const handlePrint = useCallback(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-    // D23-PERF-2 — `window.print()`'s `@media print` pass reads whatever is
-    // ACTUALLY in the DOM at the moment it's called; a virtualized page
-    // that's currently a placeholder would print blank. `flushSync` forces
-    // the `forceRenderAll` state update (and PageStack's resulting mount of
-    // every page) to commit synchronously, so every page is real before
-    // `window.print()` ever runs — a plain `setForceRenderAll(true)` would
-    // only schedule that render, racing the synchronous print call right
-    // after it.
-    flushSync(() => setForceRenderAll(true))
-    // Print uses native browser print dialog. The print stylesheet in
-    // viewer-docx.css hides toolbar/comments/save UI and forces a page
-    // break after each .docx-page so output matches on-screen pagination.
-    document.body.classList.add('atlas-printing')
-    try {
-      window.print()
-    } finally {
-      document.body.classList.remove('atlas-printing')
-      setForceRenderAll(false)
-    }
-  }, [])
-
-  // D23-PERF-2 — `src/utils/export/pdf.ts`'s `exportDocxPdf` clones the live
-  // `.docx-page-stack` from OUTSIDE this component (it's invoked generically
-  // by element id from `App.tsx`'s export menu, with no reference into this
-  // viewer's own state), so it can't call `setForceRenderAll` directly. It
-  // instead dispatches these two `window` events immediately before/after
-  // reading the DOM; `dispatchEvent` invokes listeners synchronously, and
-  // `flushSync` below forces the resulting full-mount render to actually
-  // commit before `dispatchEvent` returns — so by the time `exportDocxPdf`
-  // resumes and queries `.docx-page-stack`, every page is real, not a
-  // placeholder. See that file's own doc comment.
-  useEffect(() => {
-    const handleForceFullRender = (): void => {
-      flushSync(() => setForceRenderAll(true))
-    }
-    const handleReleaseFullRender = (): void => {
-      setForceRenderAll(false)
-    }
-    window.addEventListener('atlas:docx-force-full-render', handleForceFullRender)
-    window.addEventListener('atlas:docx-release-full-render', handleReleaseFullRender)
-    return () => {
-      window.removeEventListener('atlas:docx-force-full-render', handleForceFullRender)
-      window.removeEventListener('atlas:docx-release-full-render', handleReleaseFullRender)
-    }
-  }, [])
 
   useEffect(() => {
     handlePrintRef.current = handlePrint
   }, [handlePrint])
 
-  /**
-   * DEFER-5 / DXS-20 — "Update field(s)": recalculates every resolvable
-   * field's cached display text (DATE/TIME/AUTHOR/TITLE/REF/PAGEREF/SEQ/
-   * PAGE/NUMPAGES; HYPERLINK/TOC/unknown fields are never touched here —
-   * see `updateFields`'s doc comment). Author/title come from a light
-   * regex read of `docProps/core.xml` (`parseCoreProps`) — Atlas has no
-   * broader docProps model to draw on. Bookmark text/page maps come from
-   * `collectBookmarkMaps` walking the current `documentModel` (see that
-   * module's doc comment on scope — a bookmark inside a table cell or a
-   * header/footer/footnote/endnote gets its text but no page). Applied
-   * directly to `documentModel`, bypassing History/undo: a follow-up could
-   * route it through a `replace-blocks`-shaped command instead, but wiring
-   * into the shared editor Command/History system
-   * (`docx/editor/commandTypes.ts`) is left to wave3/docx-editing's scope.
-   */
-  const handleUpdateFields = useCallback(() => {
-    const coreXmlBytes = bundle.rawArchive?.get('docProps/core.xml')
-    const coreXml = coreXmlBytes !== undefined ? new TextDecoder().decode(coreXmlBytes) : undefined
-    const { author, title } = parseCoreProps(coreXml)
-    const pageOfParagraph = pages !== null ? buildPageOfParagraph(pages) : undefined
-    const { bookmarkText, bookmarkPage } = collectBookmarkMaps(documentModel, pageOfParagraph)
-
-    const context: FieldEvaluationContext = {
-      ...(author !== undefined ? { author } : {}),
-      ...(title !== undefined ? { title } : {}),
-      bookmarkText,
-      bookmarkPage,
-      ...(pages !== null ? { pageCount: pages.length } : {}),
-      ...(pageOfParagraph !== undefined
-        ? { currentPageOf: (path: ReadonlyArray<number>) => (path[1] !== undefined ? pageOfParagraph(path[0], path[1]) : undefined) }
-        : {}),
-      sequenceCounters: new Map(),
-    }
-
-    const { document: updated, updatedCount } = updateFields(documentModel, context)
-    if (updatedCount === 0) {
-      setFieldUpdateMessage(t('docx.viewer.noFieldsToUpdate'))
-      return
-    }
-
-    // DIRTY-1 — bypasses History same as `setDocumentModel` above, so the
-    // revision must be bumped by hand for the dirty check to notice.
-    historyRef.current.bumpRevision()
-    setDocumentModel(updated)
-    setDocumentRevision(historyRef.current.getRevision())
-    setFieldUpdateMessage(t('docx.viewer.fieldsUpdated', { count: updatedCount }))
-  }, [bundle.rawArchive, documentModel, pages, t])
-
-  /**
-   * DEFER-5 / DXS-20 — "Update table of contents": regenerates a
-   * single-paragraph TOC field's entries from the document's current
-   * headings (see `toc.ts`'s doc comment on that scope). No-ops with a
-   * status message when the document has no such field, matching Word's
-   * own behavior of the command doing nothing without a TOC.
-   */
-  const handleUpdateTableOfContents = useCallback(() => {
-    const pageOfParagraph = pages !== null ? buildPageOfParagraph(pages) : undefined
-    const { document: updated, updated: didUpdate } = updateTableOfContents(documentModel, pageOfParagraph)
-
-    if (!didUpdate) {
-      setFieldUpdateMessage(t('docx.viewer.noTocFound'))
-      return
-    }
-
-    // DIRTY-1 — see handleUpdateFields's comment: bypasses History, so bump
-    // the revision by hand.
-    historyRef.current.bumpRevision()
-    setDocumentModel(updated)
-    setDocumentRevision(historyRef.current.getRevision())
-    setFieldUpdateMessage(t('docx.viewer.tocUpdated'))
-  }, [documentModel, pages, t])
 
   // D29 — headers and footers are edited one plain-text paragraph at a time
   // (see docx/editor/headerFooter.ts for why: rewriting a whole part used to
@@ -2451,7 +2212,7 @@ function DocxEditor({
           initialValue={promptDialogCopy.initialValue}
           confirmLabel={promptDialogCopy.confirmLabel}
           onConfirm={handlePromptConfirm}
-          onCancel={handlePromptCancel}
+          onCancel={closePrompt}
         />
       </div>
       {saveError !== null ? (
@@ -2473,7 +2234,7 @@ function DocxEditor({
           <button
             type="button"
             className="docx-viewer__error-dismiss"
-            onClick={() => setFieldUpdateMessage(null)}
+            onClick={dismissFieldUpdateMessage}
             aria-label={t('docx.viewer.dismissMessage')}
           >
             <X size={14} aria-hidden="true" />
