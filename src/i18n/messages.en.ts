@@ -338,6 +338,12 @@ export const messages = {
   'errors.browserModeUnavailable': 'This feature requires the Atlas desktop app — file access is unavailable in a plain browser tab.',
   'errors.fileNotFound': 'This file could not be found — it may have been moved, renamed, or deleted.',
 
+  // src/hooks/useUnhandledErrorReporter.ts — the last-resort message for a
+  // failure no specific path caught. Deliberately generic (nobody anticipated
+  // this one) but it still carries the detail, since that is the only clue
+  // either the user or a bug report will have.
+  'errors.unexpected': 'Something went wrong: {detail}',
+
   // src/utils/friendlyLibraryError.ts
   'errors.library.corruptZip': 'the file could not be read as a valid Office document (it may be corrupted or not a real Office file)',
   'errors.library.unsupportedFormat': 'the file is not in a format this app recognizes',

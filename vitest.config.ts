@@ -60,6 +60,15 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/__tests__/setup.ts'],
+    // Must stay comfortably ABOVE `setup.ts`'s `asyncUtilTimeout` (5s), which is
+    // the budget every `waitFor` in the suite shares. With both at 5s they raced:
+    // a genuinely-failing `waitFor` was killed by the test timeout first, so the
+    // report was a bare "Test timed out in 5000ms" pointing at the `it(...)` line
+    // instead of Testing Library's actual "expected X to have text content Y" with
+    // the element's real contents. That cost real debugging time on a failure that
+    // had nothing to do with timing — raise this alongside `asyncUtilTimeout` if
+    // that ever changes, and keep the gap.
+    testTimeout: 15_000,
     // `scripts/**` is included so `scripts/lib/officeValidator.mjs`'s own
     // datatype tests actually run in CI. They were first added under a
     // separate scoped config, which nothing invoked -- a test suite that
@@ -159,6 +168,22 @@ export default defineConfig({
         'src/viewers/pdf/PdfToolbar.tsx': { statements: 99, branches: 90, functions: 99, lines: 99 },
         'src/viewers/pdf/PdfThumbnailRail.tsx': { statements: 91, branches: 69, functions: 99, lines: 96 },
         'src/viewers/pdf/PdfPasswordDialog.tsx': { statements: 99, branches: 99, functions: 99, lines: 99 },
+        // Same treatment, 2026-09-26, for the three files an audit of the tree
+        // found at the bottom of the distribution — the only ones left under
+        // 65% statements. The P4.7 sweep above covered `src/viewers/pdf` and
+        // never came back for the wave 6-8 additions:
+        //   useSlideEditorCore.ts   49.05/12.50/52.17/52.08, no test file at all
+        //   SpreadsheetEditToolbar  35.00/35.00/36.36/38.88, no test file at all
+        //   FrozenRowsStrip.tsx     63.63/37.50/60.00/70.00
+        // `useSlideEditorCore` mattered most of the three: it is the ONE core
+        // both the PPTX and ODP editors delegate to, so anything that breaks in
+        // it breaks two formats at once, and 12.5% branch coverage meant almost
+        // none of its queue/undo/save branching was checked. New behavioural
+        // tests bring them to 96.19/84.44/95.65/97.87 and 100/100/100/100 twice
+        // (per `coverage-summary.json`, same authoritative source as above).
+        'src/viewers/slides/shared/useSlideEditorCore.ts': { statements: 96, branches: 84, functions: 95, lines: 97 },
+        'src/viewers/spreadsheet/SpreadsheetEditToolbar.tsx': { statements: 99, branches: 99, functions: 99, lines: 99 },
+        'src/viewers/spreadsheet/FrozenRowsStrip.tsx': { statements: 99, branches: 99, functions: 99, lines: 99 },
       },
     },
   },

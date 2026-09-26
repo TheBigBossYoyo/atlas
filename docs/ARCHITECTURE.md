@@ -278,6 +278,19 @@ flowchart LR
   (measured on a 35-page document: React commit dropped from ~40-50ms to
   ~4-10ms and browser paint from ~50-60ms to ~10-20ms per keystroke once
   this landed).
+  Two pieces of `DocxViewer.tsx` live here rather than in the viewer, moved
+  out on 2026-09-26 when an audit flagged that file as a ~3,600-line module
+  whose bulk was one component: `useDocxPagination.ts` owns the laid-out
+  pages plus the font registration they must not race (`embeddedFonts`,
+  `fontResolver` and the readiness promise had no other reader in the file,
+  so the ordering invariant between "register a font" and "measure with it"
+  is now stated in one place), and `selectionDom.ts` holds the stateless
+  model-`Range` ↔ DOM-selection translation. The `FontFace` registration and
+  `FontResolver` construction those need moved alongside them, into
+  `src/docx/fonts/register.ts`. None of this changed behaviour — same
+  effects, same dependency arrays — and `DocxViewer.tsx` is ~3,190 lines as
+  a result; it is still the largest component in the tree and still holds
+  twelve `useState`s, so the remaining decomposition is open work, not done.
 - **Editor** (`src/docx/editor/`) implements editing as a command pattern
   with bounded undo/redo history, plus the spellcheck bridge
   (`useSpellCheck.ts` — see Section 6's `atlas-phase2-docx.md` note on why

@@ -107,8 +107,34 @@ function discoverSurfaceFiles(): string[] {
  * double/single-quoted, and brace-wrapped string/template-literal — while
  * still not matching a real expression (`attr={t('key')}`, `attr={variable}`),
  * since neither starts with a quote or backtick.
+ *
+ * The attribute list was widened on 2026-09-26 (an audit of the tree pointed
+ * out that the describe block promises "no hard-coded UI strings" while the
+ * pattern only ever looked at three attributes). Every attribute below carries
+ * text a screen reader or the user reads directly, so a literal in any of them
+ * is the same bug as a literal `aria-label`. The widening caught nothing on the
+ * day it landed - it was verified to be a no-op against the whole surface
+ * first - so it is purely a guard against the next one, not a cleanup.
+ *
+ * Still deliberately out of scope: literal JSX TEXT children
+ * (`<button>Save</button>`). No regex separates a translatable label from the
+ * punctuation, separators and `{expression}` wrappers that make up most JSX
+ * text, and a guard that cries wolf gets opted out of rather than fixed. It was
+ * measured before being skipped: zero literal-text `<button>`/`<label>`/
+ * `<option>`/`<th>`/`<summary>` children exist across the surface today, so
+ * nothing is currently hiding there - the honest position is that this guard
+ * covers attributes, and a text-child gap would be caught by translation
+ * review, not by this test.
+ *
+ * The leading guard is `(?<![\w-])`, not `\b`. `\b` matches between `-` and a
+ * letter, so the original pattern also reported `data-title="internal"` as a
+ * `title` violation - a false positive on an attribute nothing user-facing ever
+ * reads. Nothing on the surface hit it (the full scan passed before and after),
+ * but widening the list multiplies the chances one lands, and a guard that
+ * reports a non-bug is the kind that gets opted out of instead of obeyed.
  */
-const LITERAL_ATTR_PATTERN = /\b(title|aria-label|placeholder)\s*=\s*(\{\s*)?["'`]/;
+const LITERAL_ATTR_PATTERN =
+  /(?<![\w-])(title|aria-label|aria-description|aria-placeholder|aria-roledescription|aria-valuetext|placeholder|alt)\s*=\s*(\{\s*)?["'`]/;
 
 interface LiteralAttrViolation {
   readonly attr: string;
@@ -141,7 +167,7 @@ describe('no hard-coded UI strings in component/viewer surfaces (TEST-6)', () =>
     expect(uncommented.map((entry) => entry.file)).toEqual([]);
   });
 
-  it.each(scannedFiles)('%s has no literal title/aria-label/placeholder attribute', (relPath) => {
+  it.each(scannedFiles)('%s has no literal user-facing text attribute', (relPath) => {
     const content = readFileSync(resolve(REPO_ROOT, relPath), 'utf-8');
     const violation = findLiteralAttrViolation(content);
     expect(violation, `found a literal ${violation?.attr} in ${relPath}: ${violation?.snippet}`).toBeNull();
@@ -170,6 +196,31 @@ describe('no hard-coded UI strings in component/viewer surfaces (TEST-6)', () =>
     // `t(...)` looks like, and must keep passing.
     expect(findLiteralAttrViolation(`<input placeholder={t('x.y')} />`)).toBeNull();
     expect(findLiteralAttrViolation(`<input aria-label={label} />`)).toBeNull();
+  });
+
+  it('covers every user-facing text attribute, not just the original three', () => {
+    // One case per attribute the pattern names, so a future edit to the regex
+    // cannot silently narrow it back again.
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['title', `<b title="Tooltip" />`],
+      ['aria-label', `<b aria-label="Label" />`],
+      ['aria-description', `<b aria-description="Described" />`],
+      ['aria-placeholder', `<b aria-placeholder="Hint" />`],
+      ['aria-roledescription', `<b aria-roledescription="Slide" />`],
+      ['aria-valuetext', `<b aria-valuetext="Half way" />`],
+      ['placeholder', `<input placeholder="Search..." />`],
+      ['alt', `<img alt="A chart of sales" />`],
+    ];
+    for (const [attr, source] of cases) {
+      expect(findLiteralAttrViolation(source)?.attr, `${attr} should be guarded`).toBe(attr);
+    }
+  });
+
+  it('does not mistake an attribute that merely ends with a guarded name', () => {
+    // The leading `\b` anchors the match, so a hyphenated `data-title` is not a
+    // `title` violation - it never reaches a screen reader or the user.
+    expect(findLiteralAttrViolation(`<b data-title="internal" />`)).toBeNull();
+    expect(findLiteralAttrViolation(`<b data-placeholder="internal" />`)).toBeNull();
   });
 
   // I18N-1 / acceptance criterion: "the inverted guard fails on today's

@@ -27,6 +27,9 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 - **Spreadsheets: a screen reader announces a frozen row's cells in French**
   when Atlas is in French. Those cells were the one place still named in
   English.
+- **An action that fails unexpectedly now says so** instead of appearing to do
+  nothing. Anything the app did not anticipate used to vanish silently; it now
+  raises the same kind of notification every other failure does.
 
 ### Security
 
@@ -48,6 +51,17 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 - The coverage floor had been left at wave 2's measurement while five more
   waves of tests landed, leaving ~6 points of slack a regression could hide in.
   Re-measured and raised to 82/70/84/84.
+- The three least-tested files in the tree now have tests: the slide-editor core
+  both the PowerPoint and OpenDocument editors share (12% of its branches were
+  checked, and it had no test file of its own), the spreadsheet editing toolbar,
+  and the frozen-rows strip. All three are pinned by per-file coverage floors so
+  they cannot quietly slide back.
+- The bundle-size gate had only a *relative* limit, which a deliberate baseline
+  refresh moves; it now also has absolute ceilings that a refresh cannot.
+- `DocxViewer.tsx` was ~3,600 lines, most of it one component. Font
+  registration, pagination and DOM-selection translation moved into three
+  modules of their own with no behaviour change. Still the largest component in
+  the tree — this is a dent, not a finish.
 
 ### Fixed — found by driving the app overnight (2026-09-25)
 

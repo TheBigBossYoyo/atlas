@@ -330,6 +330,7 @@ export const messages = {
   // src/hooks/useFileHandler.ts
   'errors.browserModeUnavailable': 'Cette fonctionnalité nécessite l’application de bureau Atlas — l’accès aux fichiers n’est pas disponible dans un simple onglet de navigateur.',
   'errors.fileNotFound': 'Ce fichier est introuvable — il a peut-être été déplacé, renommé ou supprimé.',
+  'errors.unexpected': 'Une erreur est survenue : {detail}',
 
   // src/utils/friendlyLibraryError.ts
   'errors.library.corruptZip': 'le fichier n’a pas pu être lu comme un document Office valide (il est peut-être corrompu ou n’est pas un véritable fichier Office)',
