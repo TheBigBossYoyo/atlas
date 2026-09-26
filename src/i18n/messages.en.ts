@@ -338,6 +338,23 @@ export const messages = {
   'errors.browserModeUnavailable': 'This feature requires the Atlas desktop app — file access is unavailable in a plain browser tab.',
   'errors.fileNotFound': 'This file could not be found — it may have been moved, renamed, or deleted.',
 
+  // I18N-TEXT-1 — user-facing JSX TEXT nodes (not attributes), found by the
+  // AST-based half of the hard-coded-string guard. The regex half only ever
+  // looked at attributes, so these twelve shipped in English in every locale.
+  'viewer.odp.expectedBinary': 'OdpViewer received a text file; expected binary.',
+  'viewer.odp.renderFailed': 'Failed to render this presentation: {detail}',
+  'viewer.odp.loading': 'Loading slides…',
+  'viewer.odt.renderFailed': 'Failed to render ODT: {detail}',
+  'viewer.odt.trackedChangesBanner':
+    'This document has tracked changes — insertions and deletions are shown inline.',
+  'viewer.pdf.renderFailed': 'Failed to render PDF: {detail}',
+  'viewer.pdf.preparingPrint': 'Preparing document for print…',
+  'viewer.pptx.expectedBinary': 'PptxViewer received a text file; expected binary.',
+  'viewer.pptx.renderFailed': 'Failed to render PPTX: {detail}',
+  'viewer.pptx.loading': 'Loading PPTX slides…',
+  'viewer.rtf.renderFailed': 'Failed to render RTF: {detail}',
+  'docx.render.drawingPlaceholder': '[Drawing]',
+
   // src/hooks/useUnhandledErrorReporter.ts — the last-resort message for a
   // failure no specific path caught. Deliberately generic (nobody anticipated
   // this one) but it still carries the detail, since that is the only clue

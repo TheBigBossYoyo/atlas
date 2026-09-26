@@ -20,6 +20,7 @@ import type {
   UnknownNode,
 } from '../../model/document'
 import { extractCommentText, findCommentAnchors } from '../comments'
+import { setCommentResolved } from '../commentMutations'
 import { parseComments } from '../../parser/comments'
 
 // ---------------------------------------------------------------------------
@@ -289,5 +290,62 @@ describe('findCommentAnchors', () => {
     ])
 
     expect(findCommentAnchors(document).get('10')).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// setCommentResolved — resolving is a document edit that round-trips through
+// `w15:done`, not a session-only view (fixed 2026-09-26; see
+// `docx/render/useDocxComments.ts`'s header for what it used to be).
+// ---------------------------------------------------------------------------
+
+describe('setCommentResolved', () => {
+  function docWithComment(resolved?: boolean): DocxDocument {
+    const comment = {
+      kind: 'comment',
+      id: 'c1',
+      author: 'Someone',
+      body: [makeParagraph([{ kind: 'run', children: [{ kind: 'text', value: 'a note' }] }])],
+      ...(resolved === undefined ? {} : { resolved }),
+    } as unknown as CommentNode
+    return makeDocument([makeSection([])], new Map([['c1', comment]]))
+  }
+
+  it('marks a thread resolved, so the serializer writes w15:done for it', () => {
+    const next = setCommentResolved(docWithComment(), 'c1', true)
+    expect(next.comments.get('c1')?.resolved).toBe(true)
+  })
+
+  it('un-resolves a resolved thread', () => {
+    const next = setCommentResolved(docWithComment(true), 'c1', false)
+    expect(next.comments.get('c1')?.resolved).toBe(false)
+  })
+
+  it('returns the SAME document when the state already matches, so nothing is marked dirty for a no-op', () => {
+    const document = docWithComment(true)
+    expect(setCommentResolved(document, 'c1', true)).toBe(document)
+  })
+
+  it('returns the same document for an unknown comment id', () => {
+    const document = docWithComment()
+    expect(setCommentResolved(document, 'nope', true)).toBe(document)
+  })
+
+  it('does not stamp `resolved` onto a comment that has none when un-resolving', () => {
+    // A fresh comment has `resolved: undefined`. Writing `false` would make
+    // `comment.resolved !== undefined` true and make the save path emit a
+    // commentsExtended.xml part for a document that never had one — so an
+    // un-resolve of an already-unresolved thread must be a no-op.
+    const document = docWithComment()
+    const next = setCommentResolved(document, 'c1', false)
+    expect(next.comments.get('c1')?.resolved).toBeUndefined()
+    expect(next).toBe(document)
+  })
+
+  it('leaves every other comment untouched', () => {
+    const document = docWithComment()
+    const next = setCommentResolved(document, 'c1', true)
+    expect(next.sections).toBe(document.sections)
+    expect(next.styles).toBe(document.styles)
   })
 })

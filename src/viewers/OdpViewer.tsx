@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { ViewerProps } from '../formats/types'
+import { useTranslate } from '../i18n'
 import { SlideDeck } from './shared/SlideDeck'
 import type { SlideDeckEditor } from './shared/SlideEditToolbar'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
@@ -12,6 +13,7 @@ const NEW_TEXT_BOX_WIDTH = 0.5
 const NEW_TEXT_BOX_HEIGHT_PX = 60
 
 function OdpViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
   const [activeIndex, setActiveIndex] = useState(0)
@@ -118,7 +120,7 @@ function OdpViewerBase({ file }: ViewerProps) {
   if (file.kind !== 'binary') {
     return (
       <div className="odp-viewer odp-viewer--error">
-        OdpViewer received a text file; expected binary.
+        {t('viewer.odp.expectedBinary')}
       </div>
     )
   }
@@ -126,13 +128,13 @@ function OdpViewerBase({ file }: ViewerProps) {
   if (editor.status === 'error') {
     return (
       <div className="odp-viewer odp-viewer--error">
-        Failed to render this presentation: {editor.error}
+        {t('viewer.odp.renderFailed', { detail: editor.error ?? '' })}
       </div>
     )
   }
 
   if (editor.status === 'loading') {
-    return <div className="odp-viewer">Loading slides…</div>
+    return <div className="odp-viewer">{t('viewer.odp.loading')}</div>
   }
 
   return (

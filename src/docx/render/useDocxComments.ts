@@ -9,19 +9,20 @@
  * `bumpRevision` below, which is the one narrow slice of the undo history this
  * needs instead of the whole `History` instance.
  *
- * **Resolved is a session view, not a document edit.** Resolving hides a thread
- * from the pane; it writes nothing to the file, which is why `resolvedCommentIds`
- * is local state and `commentsDocument` is a filtered *view* of the model handed
- * to the pane rather than a mutation of the model itself.
+ * **Resolved is a document edit, not a session view** (fixed 2026-09-26). It used
+ * to be the opposite: the pane filtered a local set of ids and wrote nothing, so
+ * a thread resolved in Word showed as open in Atlas and one resolved in Atlas was
+ * forgotten the moment the file was reopened — even though the parser already read
+ * `w15:done` into `Comment.resolved` and the serializer already wrote it back.
  *
- * This is deliberately NOT connected to Word's own resolved flag, and the
- * disconnect runs both ways (verified while extracting this, and now recorded in
- * docs/KNOWN_LIMITATIONS.md): `w15:done` is parsed into `Comment.resolved` by
- * `docx/parser/commentsExtended.ts` and written back by
- * `serializer/commentsExtendedWriter.ts`, so a file's flags survive a round trip
- * — but nothing reads `Comment.resolved` to filter the pane, and resolving here
- * never sets it. A thread resolved in Word therefore shows as open in Atlas, and
- * one resolved in Atlas is forgotten when the file is reopened.
+ * Resolving now goes through `setCommentResolved`, so it round-trips: the pane
+ * filters on `Comment.resolved` (whatever its source — this document's own
+ * `commentsExtended.xml`, or a resolve done here), and `docx/index.ts` registers
+ * the part, its relationship and its content-type on save when any comment
+ * carries resolved state, so it works for a document that never had one.
+ *
+ * It follows that resolving marks the document dirty, which is correct — it is a
+ * change that needs saving, and Word behaves the same way.
  *
  * The three writes below all share one non-obvious requirement, marked DIRTY-1
  * at each site in the original: a comment edit is NOT undoable through the
@@ -31,7 +32,12 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 
-import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../editor/commentMutations'
+import {
+  addCommentToDocument,
+  deleteCommentFromDocument,
+  replyToComment,
+  setCommentResolved,
+} from '../editor/commentMutations'
 import type { Range } from '../editor'
 import type { Document as DocxDocument } from '../model'
 
@@ -51,12 +57,6 @@ export type DocxComments = {
   readonly confirmComment: (selection: Range, text: string) => void
   /** Replies to `commentId` with the text the prompt dialog collected. */
   readonly confirmReply: (commentId: string, range: Range | null, text: string) => void
-  /**
-   * Call after a new comment or reply lands on `commentId`: opens the pane and
-   * clears any stale resolved flag, so a thread the reader had resolved comes
-   * back into view when it gets new activity.
-   */
-  readonly revealCommentThread: (commentId: string) => void
 }
 
 /**
@@ -84,7 +84,6 @@ export function useDocxComments(
   setSaveError: (message: string | null) => void,
 ): DocxComments {
   const [commentsPaneOpen, setCommentsPaneOpen] = useState(documentCommentCount > 0)
-  const [resolvedCommentIds, setResolvedCommentIds] = useState<ReadonlySet<string>>(new Set())
   const [lastCommentCount, setLastCommentCount] = useState(documentCommentCount)
 
   // setState-during-render reset, the same idiom `viewers/shared/ViewerContext.tsx`
@@ -97,37 +96,27 @@ export function useDocxComments(
   if (lastCommentCount !== documentCommentCount) {
     setLastCommentCount(documentCommentCount)
     setCommentsPaneOpen(documentCommentCount > 0)
-    setResolvedCommentIds(new Set())
   }
 
-  const unresolve = useCallback((commentId: string) => {
-    setResolvedCommentIds((current) => {
-      const next = new Set(current)
-      next.delete(commentId)
-      return next
-    })
-  }, [])
-
-  const handleResolveComment = useCallback((commentId: string) => {
-    setResolvedCommentIds((current) => new Set(current).add(commentId))
-  }, [])
+  const handleResolveComment = useCallback(
+    (commentId: string) => {
+      const next = setCommentResolved(documentModel, commentId, true)
+      if (next === documentModel) return
+      bumpRevision()
+      commitState(next, range)
+    },
+    [bumpRevision, commitState, documentModel, range],
+  )
 
   const handleDeleteComment = useCallback(
     (commentId: string) => {
       bumpRevision()
       commitState(deleteCommentFromDocument(documentModel, commentId), range)
-      unresolve(commentId)
     },
-    [bumpRevision, commitState, documentModel, range, unresolve],
+    [bumpRevision, commitState, documentModel, range],
   )
 
-  const revealCommentThread = useCallback(
-    (commentId: string) => {
-      setCommentsPaneOpen(true)
-      unresolve(commentId)
-    },
-    [unresolve],
-  )
+
 
   const confirmComment = useCallback(
     (selection: Range, text: string) => {
@@ -135,36 +124,48 @@ export function useDocxComments(
         const result = addCommentToDocument(documentModel, selection, text, 'Atlas')
         bumpRevision()
         commitState(result.document, selection)
-        revealCommentThread(result.commentId)
+        setCommentsPaneOpen(true)
       } catch (error) {
         setSaveError(error instanceof Error ? error.message : String(error))
       }
     },
-    [bumpRevision, commitState, documentModel, revealCommentThread, setSaveError],
+    [bumpRevision, commitState, documentModel, setSaveError],
   )
 
   const confirmReply = useCallback(
     (commentId: string, range: Range | null, text: string) => {
+      // A reply on a resolved thread re-opens it — leaving it filtered out would
+      // hide the activity just added. Composed into the SAME document as the
+      // reply and committed once, rather than as a second `commitState`: a
+      // follow-up call would close over the pre-reply `documentModel` (this
+      // render's copy, since setState has not re-rendered yet) and commit that,
+      // silently discarding the reply. That is a bug this shape prevents, and it
+      // is exactly what a second commit caused when it was written that way.
+      const replied = replyToComment(documentModel, commentId, text, 'Atlas')
       bumpRevision()
-      commitState(replyToComment(documentModel, commentId, text, 'Atlas'), range)
-      revealCommentThread(commentId)
+      commitState(setCommentResolved(replied, commentId, false), range)
+      setCommentsPaneOpen(true)
     },
-    [bumpRevision, commitState, documentModel, revealCommentThread],
+    [bumpRevision, commitState, documentModel],
   )
 
   const commentsDocument = useMemo<DocxDocument>(() => {
-    if (resolvedCommentIds.size === 0) {
+    const comments = documentModel.comments
+    const hasResolved = [...comments.values()].some((comment) => comment.resolved === true)
+    if (!hasResolved) {
       return documentModel
     }
 
     const filtered = new Map(
-      [...documentModel.comments.entries()].filter(([id, comment]) => {
-        if (resolvedCommentIds.has(id)) {
+      [...comments.entries()].filter(([, comment]) => {
+        if (comment.resolved === true) {
           return false
         }
-        // A reply whose parent thread is resolved goes with it, even though the
-        // reply's own id was never resolved.
-        return comment.parentId === undefined || !resolvedCommentIds.has(comment.parentId)
+        // A reply whose parent thread is resolved goes with it. Replies have no
+        // independent resolved state in the format, so the parent is the only
+        // place to look.
+        if (comment.parentId === undefined) return true
+        return comments.get(comment.parentId)?.resolved !== true
       }),
     )
 
@@ -172,7 +173,7 @@ export function useDocxComments(
       ...documentModel,
       comments: filtered,
     }
-  }, [documentModel, resolvedCommentIds])
+  }, [documentModel])
 
   return {
     commentsPaneOpen,
@@ -180,7 +181,6 @@ export function useDocxComments(
     commentsDocument,
     handleResolveComment,
     handleDeleteComment,
-    revealCommentThread,
     confirmComment,
     confirmReply,
   }

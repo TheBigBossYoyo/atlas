@@ -1,4 +1,5 @@
 import { readFileSync, readdirSync, type Dirent } from 'node:fs';
+import ts from 'typescript';
 import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -299,5 +300,85 @@ describe('no known pre-conversion English literals left as raw JSX text', () => 
       return content.includes(text);
     });
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * I18N-TEXT-1 — the attribute guard above and the exact-phrase list below both
+ * miss the general case: an untranslated JSX TEXT node in a new component.
+ *
+ * That was not hypothetical. This check, on the day it was written, found twelve
+ * user-facing strings shipping in English in every locale — "Failed to render
+ * PDF:", "Loading slides…", "Preparing document for print…", ODT's tracked-changes
+ * banner and so on. A French user saw all of them in English. The earlier
+ * measurement that reported "zero literal text children" had only looked inside
+ * `<button>`/`<label>`/`<option>`/`<th>`/`<summary>`; every one of these lives in a
+ * `<div>` or `<span>`.
+ *
+ * Regex cannot do this job — JSX text is interleaved with `{expressions}`,
+ * punctuation and separators — so this walks the real TypeScript AST and looks at
+ * `JsxText` nodes only. TypeScript is already a devDependency; no new tooling.
+ *
+ * `ALLOWED_LITERAL_TEXT` is for text that is genuinely identical in every locale.
+ * Keep it short and keep each entry obvious: a separator, a unit symbol, a brand
+ * name, a single letter used as an icon. Prose never belongs here.
+ */
+const ALLOWED_LITERAL_TEXT: ReadonlySet<string> = new Set([
+  '/', // page-of-pages and shortcut separators
+  '%', // zoom and percentage units
+  '●', // dirty/status dot
+  'A', // the font-COLOR picker's glyph (ColorPickerPopover's icon in docx/editor/toolbar/Toolbar.tsx)
+  'Atlas', // product name
+]);
+
+function literalJsxTextNodes(file: string, source: string): ReadonlyArray<{ line: number; text: string }> {
+  const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const found: { line: number; text: string }[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isJsxText(node)) {
+      const text = node.getText().replace(/\s+/g, ' ').trim();
+      if (text.length > 0 && !ALLOWED_LITERAL_TEXT.has(text)) {
+        found.push({ line: parsed.getLineAndCharacterOfPosition(node.getStart()).line + 1, text });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed);
+  return found;
+}
+
+describe('no hard-coded JSX text in component/viewer surfaces (I18N-TEXT-1)', () => {
+  // Recomputed here rather than shared: `scannedFiles` is scoped to the attribute
+  // guard's own describe block. Same discovery, same opt-outs.
+  const textScannedFiles = discoverSurfaceFiles().filter((file) => !OPT_OUT_FILES.has(file));
+
+  it.each(textScannedFiles)('%s has no untranslated JSX text', (relPath) => {
+    const source = readFileSync(resolve(REPO_ROOT, relPath), 'utf-8');
+    const offenders = literalJsxTextNodes(relPath, source);
+    expect(
+      offenders,
+      `untranslated JSX text in ${relPath}: ${offenders.map((o) => `line ${o.line}: ${JSON.stringify(o.text)}`).join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('catches an untranslated text node in a brand-new component', () => {
+    // Same standard as the attribute guard's own synthetic case: not read from
+    // disk, not listed anywhere, so passing cannot be explained by an allowlist.
+    const brandNew = `
+      export function RawBanner() {
+        return <div className="banner">Something went wrong, try again</div>;
+      }
+    `;
+    const offenders = literalJsxTextNodes('RawBanner.tsx', brandNew);
+    expect(offenders).toHaveLength(1);
+    expect(offenders[0].text).toBe('Something went wrong, try again');
+  });
+
+  it('does not flag an expression, or text that is identical in every locale', () => {
+    expect(literalJsxTextNodes('x.tsx', `const a = <span>{t('k')}</span>`)).toEqual([]);
+    expect(literalJsxTextNodes('x.tsx', `const a = <span>{count} / {total}</span>`)).toEqual([]);
+    expect(literalJsxTextNodes('x.tsx', `const a = <span>{zoom}%</span>`)).toEqual([]);
+    expect(literalJsxTextNodes('x.tsx', `const a = <h1>Atlas</h1>`)).toEqual([]);
   });
 });

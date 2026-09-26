@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 
 import type { ViewerProps } from '../formats/types'
+import { useTranslate } from '../i18n'
 import { useSetNavItems, useSetViewerStats } from './shared/useViewerContext'
 import { DOCUMENT_RENDER_TIMEOUT_MS, DOCUMENT_SIZE_CAP_BYTES, formatSizeCapMessage, withRenderTimeout } from './shared/documentGuard'
 import { estimatePageCount } from './shared/pageEstimate'
@@ -56,6 +57,7 @@ async function renderRtf(arrayBuffer: ArrayBuffer): Promise<string> {
 }
 
 function RtfViewerBase({ file }: ViewerProps) {
+  const t = useTranslate()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [error, setError] = useState<string | null>(null)
   const setNavItems = useSetNavItems()
@@ -118,7 +120,7 @@ function RtfViewerBase({ file }: ViewerProps) {
   if (error !== null) {
     return (
       <div className="rtf-viewer rtf-viewer--error">
-        Failed to render RTF: {error}
+        {t('viewer.rtf.renderFailed', { detail: error })}
       </div>
     )
   }

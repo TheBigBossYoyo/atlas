@@ -56,7 +56,9 @@ field/hyperlink/etc — that keeps every image/field/tab/formatting the edit
 didn't touch intact; see the "Not supported" note below); find & replace;
 track-changes accept/reject (single and all) with a `trackChanges` on/off
 setting; comments; undo/redo (command-pattern, bounded history); image
-insert; Save and Save As with an atomic, lock-aware write path.
+insert; Save and Save As with an atomic, lock-aware write path. Resolving
+a comment thread round-trips through `w15:done` in
+`word/commentsExtended.xml`, in both directions (2026-09-26).
 
 Also supported as of wave 3: table structural editing (insert/delete row
 and column, horizontal cell merge/split via `gridSpan`, column resize by
@@ -74,21 +76,22 @@ rotation and flip (parsed, serialized, and rendered at the right spot with
 correct z-order).
 
 **Not supported:**
-- **Resolving a comment is a session-only view, disconnected from Word's own
-  resolved flag — in both directions.** Found while extracting
-  `docx/render/useDocxComments.ts` in the 2026-09-26 decomposition, and
-  verified against the parser/serializer rather than assumed. Word records a
-  resolved thread as `w15:done` in `word/commentsExtended.xml`;
-  `docx/parser/commentsExtended.ts` parses it into `Comment.resolved` and
-  `serializer/commentsExtendedWriter.ts` writes it back, so a file's existing
-  flags DO survive a round trip. But nothing reads `Comment.resolved` to
-  filter the comments pane, and resolving a thread in Atlas only adds its id
-  to session state. So: a thread resolved in Word still shows as open in
-  Atlas, and a thread resolved in Atlas is forgotten as soon as the file is
-  reopened. Wiring the two together is a small change (filter on
-  `Comment.resolved` as well, and set it on resolve so the writer persists
-  it), deliberately not made as a drive-by inside a refactor that was
-  supposed to change no behaviour.
+- **A resolved comment cannot be un-resolved from inside Atlas.** Resolving a
+  thread now persists (it writes `w15:done` to `word/commentsExtended.xml`, and
+  reads the flag a file already carries — fixed 2026-09-26), which is the right
+  data model and matches Word. But the comments pane hides resolved threads and
+  offers no "show resolved" toggle, and the resolve is not routed through the
+  editor's Command/History system, so **Ctrl+Z will not undo it either**. Nothing
+  is lost — the comment stays in the file, and replying to the thread re-opens it
+  — but recovering from a mis-click currently means reopening the thread in Word,
+  or replying to it. Before the persistence fix this was self-correcting (the
+  state was session-only, so reopening the file brought every thread back), which
+  is exactly what makes the affordance worth adding now.
+
+  The follow-up is one of: a "show resolved" toggle in the pane with an unresolve
+  action, or a `set-comment-resolved` command kind so undo reaches it. The second
+  is tidier — it would also make resolve part of the normal undo stack like every
+  other edit — and needs a new entry in `docx/editor/commandTypes.ts`.
 - **Header/footer editing is per text SEGMENT, not per character, and a
   table block is still fully read-only.** A paragraph made entirely of
   plain runs (text/tabs/breaks) gets one editable field, as before. A
@@ -226,6 +229,18 @@ print, page rotation, a thumbnail rail, and password-protected PDF support.
 PDF editing or save-back** — Atlas does not write PDF files.
 
 ## Spreadsheets (XLSX/ODS/legacy) and CSV/TSV
+
+> **OPEN, HIGH — F6c: the second cell edit of a session can be silently lost, and
+> the save after it silently does nothing.** Click a cell and type straight away,
+> press Enter, then click a different cell and type straight away: the second
+> cell's text may never reach it, Enter may not commit, and a following Ctrl+S may
+> not write the file at all — with no error shown. Measured 5 times in 6 at 8x CPU
+> throttling and 1 in 6 unthrottled, so it is not limited to slow machines. Cause
+> and the three rejected fix attempts are written up in
+> `tests/e2e/spreadsheet-second-cell-edit.spec.ts` and in the phase-4 backlog under
+> F6c. **Work around it by pausing briefly after clicking a cell before typing**,
+> and by checking the file was actually saved (the title bar's unsaved marker) after
+> editing more than one cell.
 
 View and edit — see "Editing scope, overall" above for what editing covers.
 Formatted cell values (numbers/dates/currency per the workbook's own number
