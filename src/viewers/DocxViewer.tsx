@@ -18,12 +18,8 @@ import { ListTree, PanelTop, Printer, RefreshCw, Save, SaveAll, X, ZoomIn, ZoomO
 import type { NavItem, ViewerProps } from '../formats/types'
 import { useTranslate, type TranslateFn } from '../i18n'
 import {
-  categorizeLossySaveWarnings,
-  detectLossySaveWarnings,
   loadDocx,
-  saveDocx,
   type DocxBundle,
-  type LossySaveWarningCategory,
 } from '../docx'
 import type { Page } from '../docx/layout'
 import { useDocxPagination } from '../docx/render/useDocxPagination'
@@ -81,16 +77,12 @@ import {
   type Position,
   type Range,
   type TrackChangesContext,
-  listHeaderFooterParts,
-  buildHeaderFooterTextEdit,
-  buildHeaderFooterSegmentEdit,
-  buildInsertHeaderFooterParagraph,
-  buildRemoveHeaderFooterParagraph,
-  type HeaderFooterKind,
 } from '../docx/editor'
-import { getSelectionFromDom, syncSelectionToDom } from '../docx/render/selectionDom'
+import { getSelectionFromDom } from '../docx/render/selectionDom'
 import { useDocxSelectionPainting } from '../docx/render/useDocxSelectionPainting'
 import { useDocxComments } from '../docx/render/useDocxComments'
+import { useDocxHeaderFooter } from '../docx/render/useDocxHeaderFooter'
+import { useDocxSave } from '../docx/render/useDocxSave'
 import { useDocxFind } from '../docx/render/useDocxFind'
 import { useDocxFontChoices } from '../docx/render/useDocxFontChoices'
 import { MAX_ZOOM, MIN_ZOOM, useDocxZoom } from '../docx/render/useDocxZoom'
@@ -111,11 +103,7 @@ import type { ToolbarCommand, ToolbarState } from '../docx/editor/toolbar/toolba
 import { DocxPromptDialog } from './DocxPromptDialog'
 import './__styles__/viewer-docx.css'
 import {
-  useRegisterViewerSave,
-  useRegisterViewerSaveAs,
-  useReportSavedPath,
   useSetNavItems,
-  useSetViewerDirty,
   useSetViewerStats,
 } from './shared/useViewerContext'
 import { useViewerShortcuts } from '../hooks/useShortcutManager'
@@ -150,12 +138,6 @@ function normalizeDocxBuffer(content: ArrayBuffer | Uint8Array): ArrayBuffer {
   }
 
   return Uint8Array.from(content).buffer
-}
-
-function getSuggestedFileName(path: string): string {
-  const normalized = path.replace(/\\/g, '/')
-  const parts = normalized.split('/')
-  return parts[parts.length - 1] || 'document.docx'
 }
 
 function extractRunText(run: Run): string {
@@ -451,36 +433,6 @@ function translateHeaderFooterLabel(label: string, t: TranslateFn): string {
   return TAG_TRANSLATIONS.reduce((current, [tag, translated]) => current.split(tag).join(translated), linked)
 }
 
-/**
- * Round-trip fidelity audit, DXS round 2 follow-up — plain-language,
- * non-technical copy for what `detectLossySaveWarnings` found (see
- * `categorizeLossySaveWarnings` in `docx/fidelity/lossySaveWarnings.ts`).
- * Built here rather than in that module because it has (and should keep)
- * no dependency on the i18n layer. Names the feature the user actually
- * recognizes ("content controls", "a text box's fallback drawing"), never
- * the underlying XML element — see `handleSaveInternal`'s doc comment for
- * when/how often this is shown. `null` when there's nothing to say.
- */
-function buildFidelitySaveWarningMessage(
-  categories: ReadonlySet<LossySaveWarningCategory>,
-  t: TranslateFn,
-): string | null {
-  const sentences: string[] = []
-  if (categories.has('content-control')) {
-    sentences.push(t('docx.viewer.fidelityWarningContentControls'))
-  }
-  if (categories.has('shape-fallback')) {
-    sentences.push(t('docx.viewer.fidelityWarningShapeFallback'))
-  }
-  if (categories.has('other')) {
-    sentences.push(t('docx.viewer.fidelityWarningOther'))
-  }
-  if (sentences.length === 0) {
-    return null
-  }
-  return `${t('docx.viewer.fidelityWarningIntro')} ${sentences.join(' ')}`
-}
-
 function DocxEditor({
   bundle,
   file,
@@ -552,8 +504,6 @@ function DocxEditor({
   // `bundle !== null ? <DocxEditor .../> : null`), which is also why this
   // doesn't need to reset when `savePath` changes via "Save As" — that's
   // still the same in-memory document, not a newly opened one.
-  const warnedAboutFidelityRef = useRef(false)
-  const [fidelityWarningMessage, setFidelityWarningMessage] = useState<string | null>(null)
   const [documentModel, setDocumentModel] = useState(bundle.document)
   // DIRTY-1 — `historyRef.current`'s revision counter (see History.ts's own
   // doc comment on `getRevision`/`bumpRevision`) at the moment `documentModel`
@@ -576,7 +526,6 @@ function DocxEditor({
   useEffect(() => {
     documentModelRef.current = documentModel
   }, [documentModel])
-  const [headerFooterOpen, setHeaderFooterOpen] = useState(false)
   // UX — the header/footer panel had no keyboard affordances at all: no
   // Escape-to-close, no focus moved into it on open, no focus restored to
   // the toolbar toggle on close (every other dialog/panel in the shell
@@ -584,8 +533,6 @@ function DocxEditor({
   // FindReplace's own local (not the shared shortcut-dispatcher) Escape
   // handling just above, since this is likewise a plain inline panel, not
   // a modal.
-  const headerFooterPanelRef = useRef<HTMLDivElement>(null)
-  const headerFooterToggleRef = useRef<HTMLButtonElement>(null)
   const [range, setRange] = useState<Range | null>(null)
   // DXE-14 — right-click table-editing context menu; `null` when closed.
   // Screen coordinates only (not which table/cell), since by the time a
@@ -614,7 +561,6 @@ function DocxEditor({
   // page in the live DOM instead of whatever happened to be scrolled into
   // view. See `PageStack.tsx`'s `forceRenderAll` prop doc comment.
   const [forceRenderAll, setForceRenderAll] = useState(false)
-  const [savePath, setSavePath] = useState(file.path)
   const [saveError, setSaveError] = useState<string | null>(null)
   // F1 — the single-line text prompt backing Insert Hyperlink/Add Comment/
   // Reply (see DocxPromptDialog.tsx and handlePromptConfirm below). `id` is
@@ -675,11 +621,6 @@ function DocxEditor({
   // once the save resolves — the effect re-reads `documentRevision` fresh on
   // every render rather than trusting whatever value save()'s own closure
   // captured when it started.
-  const [lastSavedRevision, setLastSavedRevision] = useState(0)
-  const setDirty = useSetViewerDirty()
-  const registerSave = useRegisterViewerSave()
-  const registerSaveAs = useRegisterViewerSaveAs()
-  const reportSavedPath = useReportSavedPath()
 
 
   // D23-PERF-2 — pages that must stay mounted no matter where the viewport
@@ -893,88 +834,42 @@ function DocxEditor({
     handleReplaceAll,
   } = useDocxFind(documentModel, range, setRange, containerRef, applyEditorCommands, revealSelectionOnNextPaint)
 
-  // D29 follow-up — a header/footer field commits its edit as ONE undo step
-  // on blur, not per keystroke, so its `onChange` (further below) only
-  // remembers the latest uncommitted value here rather than applying a
-  // command immediately. This is also what fixes the Ctrl+S-while-focused
-  // bug: the field previously only committed on blur, so saving (which reads
-  // `documentModel`) while the field still had focus wrote the pre-edit
-  // text. `flushHeaderFooterEdits` (used by the save path below) commits
-  // whatever is still pending here — normally at most the one field the user
-  // is still typing in — before the document is serialized. Declared this
-  // early (rather than beside the other header/footer handlers, further
-  // down) so `handleSaveInternal`'s dependency array below can reference it
-  // — a `useCallback` dependency array is evaluated immediately, unlike the
-  // callback body, so a later `const` would still be in its temporal dead
-  // zone at that point.
-  type PendingHeaderFooterEdit = {
-    readonly kind: HeaderFooterKind
-    readonly id: string
-    readonly blockIndex: number
-    /** Present only for a `'mixed'` row's text segment; absent for a plain `'text'` row's single field. */
-    readonly segmentIndex?: number
-    readonly text: string
-  }
-
-  const pendingHeaderFooterEditsRef = useRef(new Map<string, PendingHeaderFooterEdit>())
-
-  /** Builds the right command for a pending edit — a whole-paragraph rewrite
-   * for a plain `'text'` row, or one text segment's rewrite for a `'mixed'`
-   * row — against whatever document is passed in (not necessarily the
-   * latest `documentModel`; see `flushHeaderFooterEdits`, which threads an
-   * up-to-date document through when more than one edit is pending). */
-  const buildPendingHeaderFooterCommand = useCallback((doc: DocxDocument, edit: PendingHeaderFooterEdit) => {
-    return edit.segmentIndex === undefined
-      ? buildHeaderFooterTextEdit(doc, edit.kind, edit.id, edit.blockIndex, edit.text)
-      : buildHeaderFooterSegmentEdit(doc, edit.kind, edit.id, edit.blockIndex, edit.segmentIndex, edit.text)
-  }, [])
-
-  // Commits every still-pending header/footer field edit as one combined
-  // undo step (a no-op, returning `documentModel` unchanged, when nothing is
-  // pending) and returns the resulting document SYNCHRONOUSLY —
-  // `commitState`'s own `setDocumentModel` is async, and the save path below
-  // needs the just-committed text in hand immediately, not on the next
-  // render. Edits are built and applied ONE AT A TIME, each against the
-  // document the previous one just produced (rather than batching every
-  // command's `blocks` payload pre-computed against the same stale
-  // snapshot) — needed now that two DIFFERENT pending edits can target text
-  // segments of the very SAME paragraph (a `'mixed'` row's two inputs):
-  // building both from one stale snapshot would have the second overwrite
-  // the first's change when the composite command replays them.
-  const flushHeaderFooterEdits = useCallback((): DocxDocument => {
-    const pending = pendingHeaderFooterEditsRef.current
-    if (pending.size === 0) {
-      return documentModel
-    }
-
-    const edits = [...pending.values()]
-    pending.clear()
-
-    let workingDocument = documentModel
-    const inverses: Command[] = []
-    for (const edit of edits) {
-      const command = buildPendingHeaderFooterCommand(workingDocument, edit)
-      if (command === null) {
-        continue
-      }
-      try {
-        const result = applyCommand(workingDocument, command)
-        workingDocument = result.document
-        inverses.push(result.inverse)
-      } catch {
-        // Skip this one; keep committing the rest.
-      }
-    }
-    if (inverses.length === 0) {
-      return documentModel
-    }
-
-    inverses.reverse()
-    const inverse: Command = inverses.length === 1 ? inverses[0] : { kind: 'composite', commands: inverses }
+  // Header/footer editing (see `docx/render/useDocxHeaderFooter.ts`). Declared
+  // here, before `handleSaveInternal` below, because that callback's dependency
+  // array references `flushHeaderFooterEdits` — a dependency array is evaluated
+  // immediately, unlike the callback body, so a later `const` would still be in
+  // its temporal dead zone at that point.
+  const pushUndo = useCallback((inverse: Command) => {
     historyRef.current.push(inverse)
-    commitState(workingDocument, range)
-    return workingDocument
-  }, [buildPendingHeaderFooterCommand, commitState, documentModel, range])
+  }, [])
+  const {
+    headerFooterOpen,
+    setHeaderFooterOpen,
+    headerFooterPanelRef,
+    headerFooterToggleRef,
+    headerFooterParts,
+    flushHeaderFooterEdits,
+    handleHeaderFooterFieldChange,
+    handleHeaderFooterFieldBlur,
+    handleAddHeaderFooterParagraph,
+    handleRemoveHeaderFooterParagraph,
+  } = useDocxHeaderFooter(documentModel, range, commitState, applyEditorCommand, pushUndo)
+
+  // Saving (see `docx/render/useDocxSave.ts`). Placed after the header/footer
+  // hook because a save must flush whichever field the user is still typing in
+  // before it reads the document to write.
+  const getRevision = useCallback(() => historyRef.current.getRevision(), [])
+  const { handleSave, handleSaveAs, fidelityWarningMessage, dismissFidelityWarning } = useDocxSave({
+    bundle,
+    documentRevision,
+    range,
+    filePath: file.path,
+    flushHeaderFooterEdits,
+    getRevision,
+    editorRootRef,
+    documentModelRef,
+    setSaveError,
+  })
 
   const syncRangeFromDom = useCallback(() => {
     const root = editorRootRef.current
@@ -1958,183 +1853,11 @@ function DocxEditor({
   // — never by commitState on the next keystroke (see commitState above), so
   // the banner stays visible until the user either fixes the problem and
   // saves again or the save actually succeeds.
-  const handleSaveInternal = useCallback(
-    async (options?: { readonly forceDialog?: boolean }): Promise<boolean> => {
-      setSaveError(null)
-
-      // D29 follow-up — commit any header/footer field the user is still
-      // typing in (Ctrl+S never blurs it) before reading the document to
-      // save; see `flushHeaderFooterEdits`'s own doc comment above.
-      const documentToSave = flushHeaderFooterEdits()
-      // DIRTY-1 — read synchronously, right alongside `documentToSave`, not
-      // from the `documentRevision` state variable: `flushHeaderFooterEdits`
-      // may just have pushed one more command to `historyRef.current`
-      // (a pending field edit) via a `commitState` call whose `setState`s
-      // are still only scheduled, not yet reflected in this render's
-      // closure. `historyRef.current` itself, being a plain mutable ref, is
-      // already up to date the instant that call returns.
-      const revisionToSave = historyRef.current.getRevision()
-
-      try {
-        const nextBytes = await saveDocx({
-          ...bundle,
-          document: documentToSave,
-        })
-
-        const result = await window.electronAPI?.saveBinaryFile?.({
-          content: nextBytes,
-          suggestedName: getSuggestedFileName(savePath),
-          // DXE-24 — omitting `existingPath` makes the main process show the
-          // save dialog instead of silently overwriting `savePath`, which is
-          // exactly "Save As".
-          ...(options?.forceDialog ? {} : { existingPath: savePath }),
-          filters: [{ name: t('docx.viewer.saveAsWordFilter'), extensions: ['docx'] }],
-        })
-
-        if (result?.saved && result.path) {
-          setSavePath(result.path)
-          // Save As: tell the shell where this document now lives, or its tab
-          // keeps pointing at the file it was opened from. `file.path` (this
-          // viewer instance's own identity — ViewerRouter remounts on path
-          // change, so it never changes across this component's lifetime) is
-          // passed through as the path this save started from, so the shell
-          // can route the update to the RIGHT tab even if the user has since
-          // switched away (SAVE-1) — `savePath` itself isn't safe for that:
-          // it's already been reassigned above by the time this fires for a
-          // second save, and (in the spreadsheet editor's legacy-format case)
-          // can be `undefined` before the first save ever completes.
-          if (result.path !== savePath) reportSavedPath(file.path, result.path)
-        }
-
-        if (!result?.saved) {
-          setSaveError(result?.error ?? t('docx.viewer.saveCancelled'))
-          return false
-        }
-
-        // DOCX-3 — Save As (`options?.forceDialog`) shows a native OS save
-        // dialog via the main process; that dialog takes OS-level focus away
-        // from the whole Electron window, and nothing gives it back to
-        // `editorRootRef` once it closes (Chromium doesn't restore focus to
-        // whatever had it before an OS dialog interrupted the page).
-        // `document.activeElement` is left as `<body>`, and the model
-        // `range`/native `Selection` are never resynced because the
-        // selection-sync effect only re-runs when `pages` or `range` change
-        // — neither does just from saving — so the user has to click back
-        // into the document before typing does anything again. Plain Save
-        // never shows a dialog (confirmed against the real app: no observed
-        // focus loss), so this is scoped to the Save As path specifically.
-        //
-        // This is necessary but NOT sufficient end-to-end: confirmed against
-        // the real app that once `reportSavedPath` (above) updates the
-        // active tab's path, `src/components/ViewerRouter.tsx` — which keys
-        // its `ViewerErrorBoundary` (and so this whole component) by
-        // `file.path` — remounts a BRAND NEW `DocxEditor` a render or two
-        // later, discarding the focus this restores along with it. Fixing
-        // that fully needs a change in ViewerRouter.tsx (outside this
-        // component's ownership), described in this task's final report;
-        // this restoration still stands on its own for any Save As that
-        // doesn't trigger that remount, and is the half of the fix that
-        // belongs here.
-        if (options?.forceDialog) {
-          const root = editorRootRef.current
-          if (root !== null) {
-            root.focus({ preventScroll: true })
-            syncSelectionToDom(root, range, documentModelRef.current)
-          }
-        }
-
-        // Record *the revision that was actually written*
-        // (`revisionToSave`, captured alongside `documentToSave` above,
-        // including any header/footer edit `flushHeaderFooterEdits` just
-        // committed) as the new saved baseline. We deliberately do NOT also
-        // call `setDirty(false)` here: if the user kept editing while the
-        // `await`s above were in flight, `documentRevision` may already have
-        // moved on since this snapshot, and the effect below recomputes
-        // dirty from whatever the *current* render's `documentRevision` is
-        // once this state update lands — never from this stale closure.
-        setLastSavedRevision(revisionToSave)
-
-        // Round-trip fidelity audit, DXS round 2 follow-up — tell the user,
-        // once per document, when a save couldn't fully preserve something
-        // (see `buildFidelitySaveWarningMessage`'s doc comment for the
-        // wording rules). Fire-and-forget: the file is already written by
-        // this point (`result.saved` above), so this is purely an
-        // informational follow-up, never something the save itself should
-        // wait on or that should block/undo an already-successful write.
-        // Guarded by `warnedAboutFidelityRef` (see its own doc comment) so
-        // this only ever surfaces once for a given document, not on every
-        // save that happens to still be affected.
-        if (!warnedAboutFidelityRef.current) {
-          void detectLossySaveWarnings(bundle, nextBytes)
-            .then((warnings) => {
-              const message = buildFidelitySaveWarningMessage(categorizeLossySaveWarnings(warnings), t)
-              if (message !== null) {
-                warnedAboutFidelityRef.current = true
-                setFidelityWarningMessage(message)
-              }
-            })
-            .catch(() => {
-              // Best-effort notice only — a failure detecting/describing it
-              // must never surface as a save error; the save already
-              // succeeded.
-            })
-        }
-
-        return true
-      } catch (error) {
-        // RUN-14 — wrap JSZip/fast-xml-parser/DocxSaveError internals in a
-        // friendly, actionable message instead of showing the raw exception.
-        setSaveError(friendlyDocxErrorMessage(error, 'save'))
-        return false
-      }
-    },
-    [bundle, flushHeaderFooterEdits, savePath, file.path, range, reportSavedPath, t],
-  )
-
-  const handleSave = useCallback((): Promise<boolean> => handleSaveInternal(), [handleSaveInternal])
-  const handleSaveAs = useCallback(
-    (): Promise<boolean> => handleSaveInternal({ forceDialog: true }),
-    [handleSaveInternal],
-  )
 
   useEffect(() => {
     handleSaveRef.current = handleSave
   }, [handleSave])
 
-  // P1.1/SHELL-03/DXE-09 — publish dirty state and this viewer's save
-  // implementation to the shared document-session contract.
-  //
-  // DIRTY-1 — compares `documentRevision` (History's own revision counter —
-  // see its doc comment) against `lastSavedRevision`, an O(1) integer
-  // compare, rather than `documentModel !== lastSavedDocument` by reference:
-  // that reference compare used to go wrong specifically after undo/redo,
-  // which rebuild the document from the stored inverse command and so never
-  // hand back the same object twice even when the content is identical to
-  // what was last saved. The revision counter is exactly "how many forward
-  // edits away from the last save/load am I", and undo/redo wind it back and
-  // forward again instead of always incrementing, so it reads 0 whenever the
-  // content is genuinely back to what's on disk. Deriving this from both
-  // pieces of state together (rather than reaching into a ref from inside
-  // handleSave) is what makes it correct even when an edit lands while a
-  // save is still in flight: this effect always compares against the
-  // render's *current* documentRevision, never a snapshot captured before
-  // the save resolved.
-  useEffect(() => {
-    setDirty(documentRevision !== lastSavedRevision)
-  }, [documentRevision, lastSavedRevision, setDirty])
-
-  useEffect(() => {
-    registerSave(handleSave)
-    return () => registerSave(null)
-  }, [registerSave, handleSave])
-
-  // Same registration, for the global Ctrl+Shift+S / App.tsx `saveFileAs()`
-  // — previously unregistered, so that shortcut silently did nothing for a
-  // DOCX document even though the toolbar's own "Save As" button worked.
-  useEffect(() => {
-    registerSaveAs(handleSaveAs)
-    return () => registerSaveAs(null)
-  }, [registerSaveAs, handleSaveAs])
 
   // P2.1/SHELL-08/SHELL-09/UX-03/RUN-02 — claim every combo this viewer's own
   // `handleKeyDownEvent`/commands.ts already recognize at the *active-viewer*
@@ -2311,82 +2034,6 @@ function DocxEditor({
   // flatten away images/fields/tables it held), through the normal command
   // path so each edit is its own undo step and the save path writes the part
   // back out.
-  const headerFooterParts = useMemo(() => listHeaderFooterParts(documentModel), [documentModel])
-
-  // UX — move focus into the panel (its close button) when it opens, and
-  // back to the toolbar toggle that opened it once it closes, matching the
-  // focus-management every other shell dialog/panel already has.
-  useEffect(() => {
-    if (!headerFooterOpen) return
-    const panel = headerFooterPanelRef.current
-    const toggle = headerFooterToggleRef.current
-    panel?.querySelector<HTMLElement>('button, input')?.focus()
-    return () => {
-      toggle?.focus()
-    }
-  }, [headerFooterOpen])
-
-  // `segmentIndex` is omitted for a plain `'text'` row's single field, and
-  // present for one text segment of a `'mixed'` row (see
-  // `PendingHeaderFooterEdit`/`buildPendingHeaderFooterCommand` above) — the
-  // pending-map key folds in `'text'` for the former so the two never
-  // collide with an actual segment 0.
-  const pendingHeaderFooterKey = (kind: HeaderFooterKind, id: string, blockIndex: number, segmentIndex?: number): string =>
-    `${kind}:${id}:${blockIndex}:${segmentIndex ?? 'text'}`
-
-  const handleHeaderFooterFieldChange = useCallback(
-    (kind: HeaderFooterKind, id: string, blockIndex: number, text: string, segmentIndex?: number) => {
-      pendingHeaderFooterEditsRef.current.set(pendingHeaderFooterKey(kind, id, blockIndex, segmentIndex), {
-        kind,
-        id,
-        blockIndex,
-        segmentIndex,
-        text,
-      })
-    },
-    [],
-  )
-
-  const handleHeaderFooterFieldBlur = useCallback(
-    (kind: HeaderFooterKind, id: string, blockIndex: number, text: string, segmentIndex?: number) => {
-      pendingHeaderFooterEditsRef.current.delete(pendingHeaderFooterKey(kind, id, blockIndex, segmentIndex))
-      const command = buildPendingHeaderFooterCommand(documentModel, { kind, id, blockIndex, segmentIndex, text })
-      if (command !== null) {
-        applyEditorCommand(command)
-      }
-    },
-    [applyEditorCommand, buildPendingHeaderFooterCommand, documentModel],
-  )
-
-  const handleAddHeaderFooterParagraph = useCallback(
-    (kind: HeaderFooterKind, id: string) => {
-      const command = buildInsertHeaderFooterParagraph(documentModel, kind, id)
-      if (command !== null) {
-        applyEditorCommand(command)
-      }
-    },
-    [applyEditorCommand, documentModel],
-  )
-
-  const handleRemoveHeaderFooterParagraph = useCallback(
-    (kind: HeaderFooterKind, id: string, blockIndex: number) => {
-      // Clears every pending edit for this paragraph — a `'mixed'` row can
-      // have more than one (one per text segment), unlike a plain `'text'`
-      // row's single field the old exact-key delete assumed.
-      const prefix = `${kind}:${id}:${blockIndex}:`
-      for (const key of pendingHeaderFooterEditsRef.current.keys()) {
-        if (key.startsWith(prefix)) {
-          pendingHeaderFooterEditsRef.current.delete(key)
-        }
-      }
-      const command = buildRemoveHeaderFooterParagraph(documentModel, kind, id, blockIndex)
-      if (command !== null) {
-        applyEditorCommand(command)
-      }
-    },
-    [applyEditorCommand, documentModel],
-  )
-
   useEffect(() => {
     handleToolbarCommandRef.current = handleToolbarCommand
   }, [handleToolbarCommand])
@@ -2839,7 +2486,7 @@ function DocxEditor({
           <button
             type="button"
             className="docx-viewer__error-dismiss"
-            onClick={() => setFidelityWarningMessage(null)}
+            onClick={dismissFidelityWarning}
             aria-label={t('docx.viewer.dismissMessage')}
           >
             <X size={14} aria-hidden="true" />

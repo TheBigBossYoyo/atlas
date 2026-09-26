@@ -295,27 +295,51 @@ flowchart LR
   - `useDocxFind.ts` — find/replace state and its six actions.
   - `useDocxZoom.ts`, `useDocxFontChoices.ts` — the zoom level, and what the
     font picker offers.
+  - `useDocxComments.ts` — the comments pane, the session's resolved-thread set
+    and the filtered document the pane renders. The first of these to mutate the
+    document, so it takes `bumpRevision: () => void` — the one slice of the undo
+    history a comment edit needs — rather than the `History` instance.
+  - `useDocxHeaderFooter.ts` — the panel, and the pending-edit map behind it. A
+    field commits as one undo step on blur, so `flushHeaderFooterEdits()` exists
+    for the save path to call first; without it Ctrl+S while a field has focus
+    writes the pre-edit text.
+  - `useDocxSave.ts` — the write, the path, the dirty state the shell reads and
+    the one-per-document fidelity notice. It consumes the document-session
+    context itself (`useSetViewerDirty` and friends are context hooks), which
+    keeps four parameters off its signature and puts the registration beside the
+    handlers being registered.
   - `selectionDom.ts` — the stateless model-`Range` ↔ DOM-selection
     translation the above share. `FontFace` registration and `FontResolver`
     construction moved alongside, into `src/docx/fonts/register.ts`.
 
   None of it changed behaviour: same effects, same dependency arrays, same
-  batching. `DocxViewer.tsx` went from 3,611 lines to ~3,010, and from 13
-  `useState`/23 `useEffect`/51 `useCallback` to 9/19/43.
+  batching. `DocxViewer.tsx` went from 3,611 lines to ~2,620, and from 29 state
+  declarations/23 `useEffect`/51 `useCallback`/12 `useMemo`/8 `useRef` to
+  14/14/35/5/5. Roughly 530 of the remaining lines are the component's JSX,
+  which is its actual job.
 
-  **Where this stopped, and why.** The clusters that remain — comments and
-  the prompt dialog (they are one cluster: adding or replying to a comment
-  opens a prompt, and the confirm handler resolves all three prompt kinds),
-  header/footer editing, and save — are a different shape from the five
-  above. Each of the five owned its state outright and needed four to six
-  narrow inputs. Each of the three writes into the component's core mutation
-  path (`commitState`, `applyEditorCommand`, `onBundleChange`) and would need
-  seven or more collaborators passed in, which trades one large component for
-  several hooks with wide interfaces — harder to follow, not easier. Pulling
-  them out is worth doing behind a change that first narrows that mutation
-  path (e.g. a single document-mutation object the viewer and its hooks both
-  hold), not as more of the same mechanical extraction. `DocxViewer.tsx` is
-  still the largest component in the tree; this is progress, not a finish.
+  **Where this stopped, and why.** The document-mutating clusters did come out
+  after all, but only once the mutation surface was named instead of handed over:
+  each takes the narrow slice it needs (`commitState`, `applyEditorCommand`,
+  `bumpRevision`, `pushUndo`) rather than `historyRef` or the component's
+  internals. That is the pattern to follow for anything else pulled out of here.
+
+  What is left in `DocxViewer.tsx` is the part that genuinely belongs to one
+  component: the document model and selection, the undo history that owns them,
+  the DOM input handlers (`beforeinput`/`keydown`/composition/paste/pointer)
+  that read and write both, and the JSX. Two smaller clusters could still move —
+  the prompt dialog (hyperlink/comment/reply share one request state and one
+  confirm handler) and field updates — but neither is large, and the prompt
+  dialog's three branches each reach a different collaborator, so splitting it
+  well means making the dialog generic (a `promptForText()` that resolves a
+  promise) rather than moving the switch somewhere else. That is a behaviour
+  change to a carefully-documented remount-key mechanism, so it is deliberately
+  not bundled into a no-behaviour-change refactor.
+
+  `saveError` deliberately stayed in the component: despite the name it is the
+  viewer's general error banner — image insert, hyperlink, list and comment
+  failures all use it — so `useDocxSave` takes `setSaveError` as an input
+  instead of owning it.
 - **Editor** (`src/docx/editor/`) implements editing as a command pattern
   with bounded undo/redo history, plus the spellcheck bridge
   (`useSpellCheck.ts` — see Section 6's `atlas-phase2-docx.md` note on why
