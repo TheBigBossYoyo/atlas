@@ -308,33 +308,61 @@ flowchart LR
     context itself (`useSetViewerDirty` and friends are context hooks), which
     keeps four parameters off its signature and puts the registration beside the
     handlers being registered.
+  - `useDocxPrompt.ts` — the one shared text-prompt dialog's pending request and
+    its per-open remount token. Only the machinery: what to do with a submitted
+    value belongs to whichever feature opened the prompt, so the viewer keeps a
+    four-line dispatch instead of a three-branch handler reaching into three
+    collaborators.
+  - `useDocxHyperlink.ts` — link insertion, the one editor action that mutates the
+    BUNDLE as well as the document (a link needs a relationship id).
+  - `useDocxFields.ts` — "Update field(s)" and "Update table of contents". Takes
+    `applyFieldUpdate` rather than `commitState`: both bypass History and must not
+    move the selection.
+  - `useDocxFullRender.ts` — suspending page virtualization for print and PDF
+    export. `flushSync` is load-bearing in both paths, not a precaution.
+  - `useDocxVerticalCaret.ts` — retrying an Up/Down/PageUp/PageDown move that had
+    to wait for its target page to mount (DOCX-SMALL-WINDOW-2).
   - `selectionDom.ts` — the stateless model-`Range` ↔ DOM-selection
     translation the above share. `FontFace` registration and `FontResolver`
     construction moved alongside, into `src/docx/fonts/register.ts`.
 
   None of it changed behaviour: same effects, same dependency arrays, same
-  batching. `DocxViewer.tsx` went from 3,611 lines to ~2,620, and from 29 state
+  batching. `DocxViewer.tsx` went from 3,611 lines to 2,380, and from 29 state
   declarations/23 `useEffect`/51 `useCallback`/12 `useMemo`/8 `useRef` to
-  14/14/35/5/5. Roughly 530 of the remaining lines are the component's JSX,
-  which is its actual job.
+  10/13/31/5/4 — and 3 of those 10 state values belong to `DocxViewerBase`, the
+  small loader component in the same file, not to the editor. Roughly 530 of the
+  remaining lines are the editor's JSX, which is its actual job. About 2,200
+  lines moved into 14 modules under `docx/render/` and `docx/fonts/`.
 
-  **Where this stopped, and why.** The document-mutating clusters did come out
-  after all, but only once the mutation surface was named instead of handed over:
-  each takes the narrow slice it needs (`commitState`, `applyEditorCommand`,
-  `bumpRevision`, `pushUndo`) rather than `historyRef` or the component's
-  internals. That is the pattern to follow for anything else pulled out of here.
+  **Where this stopped, and why.** It is finished, in the sense that no cluster
+  is left that would be clearer elsewhere. What remains in the editor component
+  is its irreducible core:
 
-  What is left in `DocxViewer.tsx` is the part that genuinely belongs to one
-  component: the document model and selection, the undo history that owns them,
-  the DOM input handlers (`beforeinput`/`keydown`/composition/paste/pointer)
-  that read and write both, and the JSX. Two smaller clusters could still move —
-  the prompt dialog (hyperlink/comment/reply share one request state and one
-  confirm handler) and field updates — but neither is large, and the prompt
-  dialog's three branches each reach a different collaborator, so splitting it
-  well means making the dialog generic (a `promptForText()` that resolves a
-  promise) rather than moving the switch somewhere else. That is a behaviour
-  change to a carefully-documented remount-key mechanism, so it is deliberately
-  not bundled into a no-behaviour-change refactor.
+  - `documentModel`, `documentRevision` and `range` — the document, its revision
+    counter and the selection. This IS the component; every hook above is a
+    collaborator around it.
+  - `historyRef` and the DOM input handlers (`beforeinput`, `keydown`,
+    composition, paste, pointer) that read and write both. These are inherently
+    coupled to the model and to each other.
+  - three single values with no cluster to join: `tableContextMenuAt` (menu screen
+    coords), `trackChangesEnabled` and `spellCheckEnabled`. Each is one value, a
+    toggle and direct use in the toolbar/JSX; a hook around any of them would be
+    a hook wrapping one `useState`.
+  - `saveError`, and the JSX.
+
+  The document-mutating clusters DID come out, contrary to the earlier note here,
+  but only once the mutation surface was named instead of handed over: each hook
+  takes the narrow slice it needs (`commitState`, `applyEditorCommand`,
+  `bumpRevision`, `pushUndo`, `getRevision`, `applyFieldUpdate`) rather than
+  `historyRef` or the component's internals. That is the pattern to follow for
+  anything pulled out of here in future.
+
+  One thing worth knowing if you do more of this: `eslint-plugin-react-hooks` v7
+  runs the React Compiler, and it only reports `set-state-in-effect` and
+  `preserve-manual-memoization` for code it can actually compile. Shrinking this
+  component made the compiler able to analyse parts it had previously skipped, so
+  each extraction surfaced latent warnings in code that had not changed. Expect
+  that, and fix them rather than assuming the extraction caused them.
 
   `saveError` deliberately stayed in the component: despite the name it is the
   viewer's general error banner — image insert, hyperlink, list and comment
