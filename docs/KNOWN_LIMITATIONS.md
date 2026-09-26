@@ -74,6 +74,21 @@ rotation and flip (parsed, serialized, and rendered at the right spot with
 correct z-order).
 
 **Not supported:**
+- **Resolving a comment is a session-only view, disconnected from Word's own
+  resolved flag — in both directions.** Found while extracting
+  `docx/render/useDocxComments.ts` in the 2026-09-26 decomposition, and
+  verified against the parser/serializer rather than assumed. Word records a
+  resolved thread as `w15:done` in `word/commentsExtended.xml`;
+  `docx/parser/commentsExtended.ts` parses it into `Comment.resolved` and
+  `serializer/commentsExtendedWriter.ts` writes it back, so a file's existing
+  flags DO survive a round trip. But nothing reads `Comment.resolved` to
+  filter the comments pane, and resolving a thread in Atlas only adds its id
+  to session state. So: a thread resolved in Word still shows as open in
+  Atlas, and a thread resolved in Atlas is forgotten as soon as the file is
+  reopened. Wiring the two together is a small change (filter on
+  `Comment.resolved` as well, and set it on resolve so the writer persists
+  it), deliberately not made as a drive-by inside a refactor that was
+  supposed to change no behaviour.
 - **Header/footer editing is per text SEGMENT, not per character, and a
   table block is still fully read-only.** A paragraph made entirely of
   plain runs (text/tabs/breaks) gets one editable field, as before. A

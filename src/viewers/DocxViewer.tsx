@@ -90,10 +90,11 @@ import {
 } from '../docx/editor'
 import { getSelectionFromDom, syncSelectionToDom } from '../docx/render/selectionDom'
 import { useDocxSelectionPainting } from '../docx/render/useDocxSelectionPainting'
+import { useDocxComments } from '../docx/render/useDocxComments'
 import { useDocxFind } from '../docx/render/useDocxFind'
 import { useDocxFontChoices } from '../docx/render/useDocxFontChoices'
 import { MAX_ZOOM, MIN_ZOOM, useDocxZoom } from '../docx/render/useDocxZoom'
-import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
+import { addCommentToDocument, replyToComment } from '../docx/editor/commentMutations'
 import { isRangeCollapsed, normalizeRange, rangeEquals } from '../docx/editor/Selection'
 import {
   caretClientRect,
@@ -615,8 +616,6 @@ function DocxEditor({
   const [forceRenderAll, setForceRenderAll] = useState(false)
   const [savePath, setSavePath] = useState(file.path)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [commentsPaneOpen, setCommentsPaneOpen] = useState(bundle.document.comments.size > 0)
-  const [resolvedCommentIds, setResolvedCommentIds] = useState<ReadonlySet<string>>(new Set())
   // F1 — the single-line text prompt backing Insert Hyperlink/Add Comment/
   // Reply (see DocxPromptDialog.tsx and handlePromptConfirm below). `id` is
   // bumped on every open so the dialog remounts instead of reusing stale
@@ -779,10 +778,21 @@ function DocxEditor({
     setRange(nextRange)
   }, [])
 
-  useEffect(() => {
-    setCommentsPaneOpen(bundle.document.comments.size > 0)
-    setResolvedCommentIds(new Set())
-  }, [bundle.document.comments.size])
+  // Comments pane (see `docx/render/useDocxComments.ts`). `bumpRevision` is the
+  // one slice of the undo history it needs: a comment edit is not undoable
+  // through the command history, so without a fresh revision the dirty check
+  // silently misses it (DIRTY-1).
+  const bumpCommentRevision = useCallback(() => {
+    historyRef.current.bumpRevision()
+  }, [])
+  const {
+    commentsPaneOpen,
+    setCommentsPaneOpen,
+    commentsDocument,
+    handleResolveComment,
+    handleDeleteComment,
+    revealCommentThread,
+  } = useDocxComments(documentModel, range, commitState, bumpCommentRevision, bundle.document.comments.size)
 
   const applyResult = useCallback(
     (result: { document: DocxDocument; range: Range | null } | null): boolean => {
@@ -1815,12 +1825,7 @@ function DocxEditor({
           // the dirty check; `bumpRevision` allocates a fresh one for it.
           historyRef.current.bumpRevision()
           commitState(result.document, request.selection)
-          setCommentsPaneOpen(true)
-          setResolvedCommentIds((current) => {
-            const next = new Set(current)
-            next.delete(result.commentId)
-            return next
-          })
+          revealCommentThread(result.commentId)
         } catch (error) {
           setSaveError(error instanceof Error ? error.message : String(error))
         }
@@ -1833,58 +1838,14 @@ function DocxEditor({
       // History, so the revision must be bumped explicitly.
       historyRef.current.bumpRevision()
       commitState(replyToComment(documentModel, request.commentId, value, 'Atlas'), request.range)
-      setCommentsPaneOpen(true)
-      setResolvedCommentIds((current) => {
-        const next = new Set(current)
-        next.delete(request.commentId)
-        return next
-      })
+      revealCommentThread(request.commentId)
     },
-    [bundle, commitState, documentModel, onBundleChange, promptRequest],
+    [bundle, commitState, documentModel, onBundleChange, promptRequest, revealCommentThread],
   )
 
   const handlePromptCancel = useCallback(() => {
     setPromptRequest(null)
   }, [])
-
-  const handleResolveComment = useCallback((commentId: string) => {
-    setResolvedCommentIds((current) => new Set(current).add(commentId))
-  }, [])
-
-  const handleDeleteComment = useCallback(
-    (commentId: string) => {
-      // DIRTY-1 — see handleAddComment's comment: not undoable through
-      // History, so the revision must be bumped explicitly.
-      historyRef.current.bumpRevision()
-      commitState(deleteCommentFromDocument(documentModel, commentId), range)
-      setResolvedCommentIds((current) => {
-        const next = new Set(current)
-        next.delete(commentId)
-        return next
-      })
-    },
-    [commitState, documentModel, range],
-  )
-
-  const commentsDocument = useMemo<DocxDocument>(() => {
-    if (resolvedCommentIds.size === 0) {
-      return documentModel
-    }
-
-    const filtered = new Map(
-      [...documentModel.comments.entries()].filter(([id, comment]) => {
-        if (resolvedCommentIds.has(id)) {
-          return false
-        }
-        return comment.parentId === undefined || !resolvedCommentIds.has(comment.parentId)
-      }),
-    )
-
-    return {
-      ...documentModel,
-      comments: filtered,
-    }
-  }, [documentModel, resolvedCommentIds])
 
   const handleToolbarCommand = useCallback(
     (toolbarCommand: ToolbarCommand) => {
@@ -1984,6 +1945,7 @@ function DocxEditor({
       handleToggleList,
       onBundleChange,
       range,
+      setCommentsPaneOpen,
       setFindOpen,
     ],
   )
