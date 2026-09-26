@@ -758,7 +758,14 @@ before asking whether it is focused, and gives all three waits a 20s budget (ove
 was measured at 2.45s at 24x, so the 5s default was marginal). The end-of-test byte
 assertions were always the real verification and are unchanged.
 
-**RPR-STYLES-1 · medium** — the general unknown-`w:rPr`-child passthrough covers
+**RPR-STYLES-1 · medium · OPEN, re-verified 2026-09-27** — confirmed still open by grep:
+`rPrUnknown` appears in `model/styles.ts` and `serializer/documentWriter.ts`, but in NEITHER
+`parser/styles.ts` nor `serializer/stylesWriter.ts`. So the styles part neither captures nor
+re-emits unknown run properties; they are dropped on save exactly as this entry says.
+Unchanged assessment of size: `parser/styles.ts` uses a non-order-preserving XML shape, so
+this is a real piece of work, not a one-liner.
+
+~~the general unknown-`w:rPr`-child passthrough covers
 `document.xml` (and, through `partWriterSupport.ts`, headers/footers/notes/comments) but
 **not `styles.xml`**. `src/docx/parser/styles.ts` uses a non-order-preserving XML shape, so
 an equivalent passthrough there is a separate, larger change. Unknown run properties in
