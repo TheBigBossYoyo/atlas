@@ -953,7 +953,13 @@ function createWindow() {
 
 // ---- IPC Handlers ---- //
 
-ipcMain.handle('get-initial-file', () => {
+ipcMain.handle('get-initial-file', (event) => {
+  // Main frame only, same as every other handler in this file: this invoke
+  // has side effects on the startup handshake below (it flips `rendererReady`
+  // and CONSUMES `pendingFilePath`), so a subframe reaching it would both
+  // mislead `decideFileOpenAction` about the real renderer's readiness and
+  // swallow the path the user double-clicked.
+  if (!isFromMainFrame(event)) return null;
   // P5.2/ELEC-07 — by construction the renderer registers its
   // `file-opened-path` listener synchronously before ever invoking this (see
   // useFileHandler.ts's boot-subscriptions effect), so this invoke's arrival
@@ -1067,6 +1073,42 @@ ipcMain.handle('path:register-dropped', (event, filePath) => registerDroppedPath
 
 ipcMain.handle('recent:request-open', (event, filePath) => registerRecentPath(event, filePath));
 
+/**
+ * A save dialog's renderer-supplied `suggestedName`/`filters`, validated the
+ * same way every other untrusted IPC input in this file is.
+ *
+ * Both save handlers below already type-check `req.content`, but used to pass
+ * `req.suggestedName`/`req.filters` straight into `dialog.showSaveDialog` —
+ * and that call sits before their `try`, so a malformed filter list (a
+ * non-array, or entries missing `name`/`extensions`) would reject the whole
+ * `invoke` instead of returning the `{ saved: false }` shape the renderer
+ * handles. Anything that isn't the documented shape is dropped in favour of
+ * `fallback` rather than rejecting the save.
+ *
+ * @param {unknown} suggestedName
+ * @param {unknown} filters
+ * @param {string} defaultName
+ * @param {Electron.FileFilter[]} fallback
+ * @returns {{ defaultPath: string, filters: Electron.FileFilter[] }}
+ */
+function saveDialogOptions(suggestedName, filters, defaultName, fallback) {
+  const validFilters = Array.isArray(filters)
+    ? filters.filter(
+        /** @returns {filter is Electron.FileFilter} */
+        (filter) =>
+          !!filter &&
+          typeof filter === 'object' &&
+          typeof (/** @type {{name?: unknown}} */ (filter).name) === 'string' &&
+          Array.isArray(/** @type {{extensions?: unknown}} */ (filter).extensions) &&
+          /** @type {{extensions: unknown[]}} */ (filter).extensions.every((ext) => typeof ext === 'string'),
+      )
+    : [];
+  return {
+    defaultPath: typeof suggestedName === 'string' && suggestedName.length > 0 ? suggestedName : defaultName,
+    filters: validFilters.length > 0 ? validFilters : fallback,
+  };
+}
+
 ipcMain.handle('save-file', async (event, req) => {
   if (!isFromMainFrame(event)) return { saved: false, error: SENDER_FRAME_ERROR_MESSAGE };
   if (!mainWindow) return { saved: false };
@@ -1082,13 +1124,13 @@ ipcMain.handle('save-file', async (event, req) => {
       : undefined;
 
   if (!targetPath) {
-    const result = await dialog.showSaveDialog(mainWindow, {
-      defaultPath: req.suggestedName || 'document.md',
-      filters: req.filters && req.filters.length > 0 ? req.filters : [
+    const result = await dialog.showSaveDialog(
+      mainWindow,
+      saveDialogOptions(req.suggestedName, req.filters, 'document.md', [
         { name: 'Markdown', extensions: ['md'] },
         { name: 'All Files', extensions: ['*'] },
-      ],
-    });
+      ]),
+    );
     if (result.canceled || !result.filePath) return { saved: false };
     targetPath = result.filePath;
   }
@@ -1140,13 +1182,13 @@ ipcMain.handle('save-binary-file', async (event, req) => {
       : undefined;
 
   if (!targetPath) {
-    const result = await dialog.showSaveDialog(mainWindow, {
-      defaultPath: req.suggestedName || 'document.docx',
-      filters: req.filters && req.filters.length > 0 ? req.filters : [
+    const result = await dialog.showSaveDialog(
+      mainWindow,
+      saveDialogOptions(req.suggestedName, req.filters, 'document.docx', [
         { name: 'Word Documents', extensions: ['docx'] },
         { name: 'All Files', extensions: ['*'] },
-      ],
-    });
+      ]),
+    );
     if (result.canceled || !result.filePath) return { saved: false };
     targetPath = result.filePath;
   }
@@ -1244,7 +1286,8 @@ ipcMain.handle('export:printToPdf', async (event, req) => {
   }
 });
 
-ipcMain.handle('spellcheck:add-word', (_event, word) => {
+ipcMain.handle('spellcheck:add-word', (event, word) => {
+  if (!isFromMainFrame(event)) return { added: false };
   if (typeof word !== 'string' || word.length === 0) return { added: false };
   if (!mainWindow || mainWindow.isDestroyed()) return { added: false };
   try {
@@ -1256,7 +1299,8 @@ ipcMain.handle('spellcheck:add-word', (_event, word) => {
   }
 });
 
-ipcMain.handle('spellcheck:replace-misspelling', (_event, word) => {
+ipcMain.handle('spellcheck:replace-misspelling', (event, word) => {
+  if (!isFromMainFrame(event)) return { replaced: false };
   if (typeof word !== 'string' || word.length === 0) return { replaced: false };
   if (!mainWindow || mainWindow.isDestroyed()) return { replaced: false };
   try {
@@ -1268,7 +1312,8 @@ ipcMain.handle('spellcheck:replace-misspelling', (_event, word) => {
   }
 });
 
-ipcMain.handle('spellcheck:get-languages', () => {
+ipcMain.handle('spellcheck:get-languages', (event) => {
+  if (!isFromMainFrame(event)) return { available: [], enabled: [] };
   if (!mainWindow || mainWindow.isDestroyed()) {
     return { available: [], enabled: [] };
   }
@@ -1284,7 +1329,8 @@ ipcMain.handle('spellcheck:get-languages', () => {
   }
 });
 
-ipcMain.handle('spellcheck:set-languages', (_event, languages) => {
+ipcMain.handle('spellcheck:set-languages', (event, languages) => {
+  if (!isFromMainFrame(event)) return { ok: false };
   if (!Array.isArray(languages)) return { ok: false };
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
   try {
@@ -1464,7 +1510,8 @@ app.on('will-quit', () => {
   if (codeRunner) codeRunner.dispose();
 });
 
-ipcMain.on('set-theme', (_event, theme) => {
+ipcMain.on('set-theme', (event, theme) => {
+  if (!isFromMainFrame(event)) return;
   // `theme` arrives from the renderer over IPC — validate it against the
   // known keys instead of trusting/indexing an arbitrary value.
   currentOverlayColors = isKnownOverlayTheme(theme) ? OVERLAY_COLORS[theme] : OVERLAY_COLORS.light;
@@ -1479,6 +1526,12 @@ ipcMain.on('set-theme', (_event, theme) => {
 
 // i18n — backs the renderer's "System" language option (`src/i18n`), which
 // has no web-platform equivalent of `app.getLocale()`.
+//
+// Deliberately the one handler with no `isFromMainFrame` check: it has no side
+// effects and returns nothing user-specific (the OS UI locale, e.g. "en-GB"),
+// so there is nothing for a subframe to gain, while a guard would have to
+// invent a fallback locale and risk regressing the "System" option for the
+// real renderer. Every other handler in this file checks the frame.
 ipcMain.handle('app:get-locale', () => app.getLocale());
 
 // ---- App lifecycle ---- //

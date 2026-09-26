@@ -289,6 +289,10 @@ export const messages = {
   // region announcing the currently-selected cell; shared by SpreadsheetViewer
   // and CsvViewer via useGridCellAnnouncement.ts.
   'spreadsheet.gridAria': '{sheet} sheet grid, {dimensions}',
+  // I18N-1 — FrozenRowsStrip.tsx's per-cell editable input. The frozen rows are
+  // real DOM `<input>`s (not part of the canvas grid above), so each one needs
+  // its own accessible name; 1-based row/column, matching what the grid shows.
+  'spreadsheet.frozenRowCellAria': 'Frozen row {row}, column {col}',
   // SHEET-4 -- shown when a save succeeded but had to fall back from the
   // save-through-the-original-package writer to the lossy one.
   'spreadsheet.saveFallbackWarning':

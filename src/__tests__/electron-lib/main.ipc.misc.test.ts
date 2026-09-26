@@ -64,6 +64,10 @@ describe('electron/main.cjs — remaining IPC handlers', () => {
       const result = handler('get-initial-file')(ALLOWED_EVENT)
       expect(result).toBeNull()
     })
+
+    it('returns null for a request not from the main frame', () => {
+      expect(handler('get-initial-file')(REJECTED_EVENT)).toBeNull()
+    })
   })
 
   describe('open-file-dialog', () => {
@@ -105,42 +109,63 @@ describe('electron/main.cjs — remaining IPC handlers', () => {
 
   describe('spellcheck:add-word', () => {
     it('rejects an empty word without touching the dictionary', () => {
-      const result = handler('spellcheck:add-word')({}, '') as { added: boolean }
+      const result = handler('spellcheck:add-word')(ALLOWED_EVENT, '') as { added: boolean }
       expect(result.added).toBe(false)
       expect(mocks.fakeWindow.webContents.session.addWordToSpellCheckerDictionary).not.toHaveBeenCalled()
     })
 
     it('rejects a non-string word', () => {
-      const result = handler('spellcheck:add-word')({}, 42) as { added: boolean }
+      const result = handler('spellcheck:add-word')(ALLOWED_EVENT, 42) as { added: boolean }
       expect(result.added).toBe(false)
     })
 
     it('adds a real word to the dictionary', () => {
-      const result = handler('spellcheck:add-word')({}, 'atlas') as { added: boolean }
+      const result = handler('spellcheck:add-word')(ALLOWED_EVENT, 'atlas') as { added: boolean }
       expect(result.added).toBe(true)
       expect(mocks.fakeWindow.webContents.session.addWordToSpellCheckerDictionary).toHaveBeenCalledWith('atlas')
+    })
+
+    it('rejects a request not from the main frame without touching the dictionary', () => {
+      const result = handler('spellcheck:add-word')(REJECTED_EVENT, 'atlas') as { added: boolean }
+      expect(result.added).toBe(false)
+      expect(mocks.fakeWindow.webContents.session.addWordToSpellCheckerDictionary).not.toHaveBeenCalled()
     })
   })
 
   describe('spellcheck:replace-misspelling', () => {
     it('rejects an empty word', () => {
-      const result = handler('spellcheck:replace-misspelling')({}, '') as { replaced: boolean }
+      const result = handler('spellcheck:replace-misspelling')(ALLOWED_EVENT, '') as { replaced: boolean }
       expect(result.replaced).toBe(false)
       expect(mocks.fakeWindow.webContents.replaceMisspelling).not.toHaveBeenCalled()
     })
 
     it('replaces a real correction', () => {
-      const result = handler('spellcheck:replace-misspelling')({}, 'atlas') as { replaced: boolean }
+      const result = handler('spellcheck:replace-misspelling')(ALLOWED_EVENT, 'atlas') as { replaced: boolean }
       expect(result.replaced).toBe(true)
       expect(mocks.fakeWindow.webContents.replaceMisspelling).toHaveBeenCalledWith('atlas')
+    })
+
+    it('rejects a request not from the main frame without editing the document', () => {
+      const result = handler('spellcheck:replace-misspelling')(REJECTED_EVENT, 'atlas') as { replaced: boolean }
+      expect(result.replaced).toBe(false)
+      expect(mocks.fakeWindow.webContents.replaceMisspelling).not.toHaveBeenCalled()
     })
   })
 
   describe('spellcheck:get-languages', () => {
     it('returns the mocked available/enabled language lists', () => {
-      const result = handler('spellcheck:get-languages')({}) as { available: string[]; enabled: string[] }
+      const result = handler('spellcheck:get-languages')(ALLOWED_EVENT) as { available: string[]; enabled: string[] }
       expect(result.available).toEqual(['en-US'])
       expect(result.enabled).toEqual(['en-US'])
+    })
+
+    it('returns empty lists for a request not from the main frame', () => {
+      const result = handler('spellcheck:get-languages')(REJECTED_EVENT) as {
+        available: string[]
+        enabled: string[]
+      }
+      expect(result.available).toEqual([])
+      expect(result.enabled).toEqual([])
     })
   })
 
@@ -151,13 +176,13 @@ describe('electron/main.cjs — remaining IPC handlers', () => {
       // this only asserts what the HANDLER does with a bad payload.
       mocks.fakeWindow.webContents.session.setSpellCheckerLanguages.mockClear()
 
-      const result = handler('spellcheck:set-languages')({}, 'en-US') as { ok: boolean }
+      const result = handler('spellcheck:set-languages')(ALLOWED_EVENT, 'en-US') as { ok: boolean }
       expect(result.ok).toBe(false)
       expect(mocks.fakeWindow.webContents.session.setSpellCheckerLanguages).not.toHaveBeenCalled()
     })
 
     it('filters the requested languages down to ones the session actually supports', () => {
-      const result = handler('spellcheck:set-languages')({}, ['en-US', 'zz-ZZ']) as {
+      const result = handler('spellcheck:set-languages')(ALLOWED_EVENT, ['en-US', 'zz-ZZ']) as {
         ok: boolean
         enabled: string[]
       }
@@ -165,21 +190,34 @@ describe('electron/main.cjs — remaining IPC handlers', () => {
       expect(result.enabled).toEqual(['en-US'])
       expect(mocks.fakeWindow.webContents.session.setSpellCheckerLanguages).toHaveBeenLastCalledWith(['en-US'])
     })
+
+    it('rejects a request not from the main frame without changing the session', () => {
+      mocks.fakeWindow.webContents.session.setSpellCheckerLanguages.mockClear()
+
+      const result = handler('spellcheck:set-languages')(REJECTED_EVENT, ['en-US']) as { ok: boolean }
+      expect(result.ok).toBe(false)
+      expect(mocks.fakeWindow.webContents.session.setSpellCheckerLanguages).not.toHaveBeenCalled()
+    })
   })
 
   describe('set-theme', () => {
     it('applies a known theme\'s overlay colors to the title bar', () => {
-      handler('set-theme')({}, 'dark')
+      handler('set-theme')(ALLOWED_EVENT, 'dark')
       expect(mocks.fakeWindow.setTitleBarOverlay).toHaveBeenCalledWith(
         expect.objectContaining({ color: '#161b22', symbolColor: '#e6edf3' }),
       )
     })
 
     it('falls back to the light overlay colors for an unrecognized theme name', () => {
-      handler('set-theme')({}, 'not-a-real-theme')
+      handler('set-theme')(ALLOWED_EVENT, 'not-a-real-theme')
       expect(mocks.fakeWindow.setTitleBarOverlay).toHaveBeenCalledWith(
         expect.objectContaining({ color: '#f6f8fa', symbolColor: '#1f2328' }),
       )
+    })
+
+    it('ignores a request not from the main frame', () => {
+      handler('set-theme')(REJECTED_EVENT, 'dark')
+      expect(mocks.fakeWindow.setTitleBarOverlay).not.toHaveBeenCalled()
     })
   })
 

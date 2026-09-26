@@ -43,17 +43,11 @@ const EXCLUDED_DIR_NAMES = new Set(['__tests__', '__fixtures__', '__snapshots__'
  * here because it is named individually, with its own comment.
  */
 const OPT_OUTS: ReadonlyArray<{ readonly file: string; readonly reason: string }> = [
-  // --- Genuine gaps, owned by another agent working concurrently in a
-  // sibling worktree this batch (phase4 batch 3). Not edited here per this
-  // batch's file-ownership rules; reported instead. ---
-  {
-    file: 'src/viewers/spreadsheet/FrozenRowsStrip.tsx',
-    reason:
-      "TODO(i18n): hard-coded aria-label template `Frozen row ${r + 1}, column ${c + 1}` (~line 83) " +
-      'on the per-cell input — needs `t(\'spreadsheet.frozenRowCellAria\', { row, col })` or similar. ' +
-      'Owned by the spreadsheet-surface agent this batch (anything under src/viewers/spreadsheet/ is ' +
-      'off-limits per this batch\'s ownership rules); left for them to convert.',
-  },
+  // (`src/viewers/spreadsheet/FrozenRowsStrip.tsx` used to be listed here as a
+  // genuine gap deferred to the agent who owned the spreadsheet surface that
+  // batch. That ownership constraint is long gone, and the aria-label is now
+  // `t('spreadsheet.frozenRowCellAria', { row, col })`, so the file is scanned
+  // like every other one — nothing to opt out.)
 
   // --- Not a real gap: a deliberately non-translatable literal that this
   // guard's broadened pattern would otherwise misfire on. ---
