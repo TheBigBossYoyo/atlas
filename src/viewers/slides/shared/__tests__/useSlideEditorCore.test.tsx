@@ -383,7 +383,15 @@ describe('useSlideEditorCore — dirty tracking and save', () => {
       buffer: await deckBuffer(),
       parseDeck: async (pkg) => countingParseDeck(pkg),
     })
-    await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('false'))
+    // Waits on `status`, NOT on `dirty` being false. `dirty` is false before the
+    // package has loaded as well as after (`savedPkg` is still null, so the
+    // dirty check is false by definition), so waiting on it would let the edit
+    // below run against the empty pre-load deck — and the load's own
+    // `history.reset` would then wipe that edit, leaving the deck unchanged and
+    // clean. That is a real race this test hit intermittently, and only under
+    // parallel load, because the load resolving first is what usually hides it.
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('ready'))
+    expect(screen.getByTestId('dirty')).toHaveTextContent('false')
 
     await act(async () => {
       await core().apply(addSlide('two'))
@@ -393,15 +401,7 @@ describe('useSlideEditorCore — dirty tracking and save', () => {
     await act(async () => {
       expect(await core().save()).toBe(true)
     })
-    // An explicit budget on this one wait, unlike the other 400-odd in the suite
-    // that take the global 5s from `setup.ts`. This is the only test that chains
-    // three waits AND a real DEFLATE round trip through `writeOfficePackage`: it
-    // runs in ~50ms alone, but it is the first thing to starve when the whole
-    // suite runs in parallel on a loaded machine (observed twice here, at just
-    // over 5s, while every other test passed). CI has less headroom than a dev
-    // box, so the slowest genuinely-correct path gets room rather than a
-    // periodic red build.
-    await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('false'), { timeout: 15_000 })
+    await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('false'))
   })
 
   it('saves in place: the opened path is passed as existingPath, with the format filter', async () => {
