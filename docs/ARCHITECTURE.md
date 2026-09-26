@@ -278,6 +278,44 @@ flowchart LR
   (measured on a 35-page document: React commit dropped from ~40-50ms to
   ~4-10ms and browser paint from ~50-60ms to ~10-20ms per keystroke once
   this landed).
+  Several pieces of `DocxViewer.tsx` live here rather than in the viewer,
+  moved out on 2026-09-26 when an audit flagged that file as a ~3,600-line
+  module whose bulk was one component:
+  - `useDocxPagination.ts` — the laid-out pages plus the font registration
+    they must not race. `embeddedFonts`, `fontResolver` and the readiness
+    promise had no other reader in the file, so the ordering invariant
+    between "register a font" and "measure with it" is now stated in one
+    place instead of spanning two effects 1,700 lines apart.
+  - `useDocxSelectionPainting.ts` — the layout effect that puts `range` onto
+    the DOM after each commit, and the "scroll the next painted selection
+    into view" flag. That flag is exposed as `revealSelectionOnNextPaint()`
+    rather than a shared ref, because only this effect knows when the target
+    paragraph actually exists: `PageStack` virtualizes pages, so a Find match
+    on an unmounted page has nothing to scroll to until it renders.
+  - `useDocxFind.ts` — find/replace state and its six actions.
+  - `useDocxZoom.ts`, `useDocxFontChoices.ts` — the zoom level, and what the
+    font picker offers.
+  - `selectionDom.ts` — the stateless model-`Range` ↔ DOM-selection
+    translation the above share. `FontFace` registration and `FontResolver`
+    construction moved alongside, into `src/docx/fonts/register.ts`.
+
+  None of it changed behaviour: same effects, same dependency arrays, same
+  batching. `DocxViewer.tsx` went from 3,611 lines to ~3,010, and from 13
+  `useState`/23 `useEffect`/51 `useCallback` to 9/19/43.
+
+  **Where this stopped, and why.** The clusters that remain — comments and
+  the prompt dialog (they are one cluster: adding or replying to a comment
+  opens a prompt, and the confirm handler resolves all three prompt kinds),
+  header/footer editing, and save — are a different shape from the five
+  above. Each of the five owned its state outright and needed four to six
+  narrow inputs. Each of the three writes into the component's core mutation
+  path (`commitState`, `applyEditorCommand`, `onBundleChange`) and would need
+  seven or more collaborators passed in, which trades one large component for
+  several hooks with wide interfaces — harder to follow, not easier. Pulling
+  them out is worth doing behind a change that first narrows that mutation
+  path (e.g. a single document-mutation object the viewer and its hooks both
+  hold), not as more of the same mechanical extraction. `DocxViewer.tsx` is
+  still the largest component in the tree; this is progress, not a finish.
 - **Editor** (`src/docx/editor/`) implements editing as a command pattern
   with bounded undo/redo history, plus the spellcheck bridge
   (`useSpellCheck.ts` — see Section 6's `atlas-phase2-docx.md` note on why

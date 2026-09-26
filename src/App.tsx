@@ -57,6 +57,7 @@ import { ToastProvider } from './components/ToastProvider';
 import { LocaleProvider, useTranslate } from './i18n';
 import { translateWriteError } from './i18n/translateWriteError';
 import { useToast } from './hooks/useToast';
+import { useUnhandledErrorReporter } from './hooks/useUnhandledErrorReporter';
 import { scrollIntoViewRespectingMotionPreference } from './utils/motionPreference';
 import { getTextFileMeta, carryTextFileMeta } from './utils/textDecoding';
 
@@ -202,6 +203,15 @@ function AppShell() {
   const { recent, addRecent, removeRecent } = useRecentFiles();
   const { increase, decrease, reset } = useFontSize();
   const showToast = useToast();
+
+  // Last-resort reporting for a rejection/throw no specific path caught — see
+  // useUnhandledErrorReporter.ts for why the renderer needed its own, given
+  // main.cjs has had process-level handlers all along. Here rather than in
+  // `App` so it sits inside <ToastProvider> and can reach `showToast`.
+  useUnhandledErrorReporter(
+    showToast,
+    useCallback((detail: string) => t('errors.unexpected', { detail }), [t]),
+  );
 
   // P1.1 — document-session guard state. `confirmDiscardChanges` must exist
   // before `useFileHandler()` is called (it's passed in as an option), but

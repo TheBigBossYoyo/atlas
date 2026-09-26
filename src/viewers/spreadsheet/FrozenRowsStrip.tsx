@@ -32,6 +32,8 @@
  */
 import { Fragment } from 'react'
 
+import { useTranslate } from '../../i18n'
+
 const ROW_HEIGHT_PX = 32
 
 export type FrozenRowsStripProps = {
@@ -60,6 +62,8 @@ export function FrozenRowsStrip({
   translateXPx,
   onCommit,
 }: FrozenRowsStripProps) {
+  const t = useTranslate()
+
   if (rows.length === 0) return null
 
   return (
@@ -80,7 +84,7 @@ export function FrozenRowsStrip({
                     key={`${r}-${c}-${editableValue}`}
                     defaultValue={editableValue}
                     style={{ width: columnWidthsPx[c] ?? 120 }}
-                    aria-label={`Frozen row ${r + 1}, column ${c + 1}`}
+                    aria-label={t('spreadsheet.frozenRowCellAria', { row: r + 1, col: c + 1 })}
                     onBlur={(e) => onCommit(r, c, e.currentTarget.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {

@@ -288,6 +288,7 @@ export const messages = {
   'spreadsheet.addSheetAria': 'Ajouter une feuille',
   'spreadsheet.addSheetTitle': 'Ajouter une feuille',
   'spreadsheet.gridAria': 'Grille de la feuille {sheet}, {dimensions}',
+  'spreadsheet.frozenRowCellAria': 'Ligne figée {row}, colonne {col}',
   'spreadsheet.saveFallbackWarning':
     "Ce fichier a été enregistré, mais Atlas n'a pas pu réutiliser sa mise en page d'origine ; certains styles, graphiques, filtres ou tableaux peuvent ne pas avoir été préservés.",
   'csv.gridAria': 'Grille de données, {dimensions}',
@@ -329,6 +330,7 @@ export const messages = {
   // src/hooks/useFileHandler.ts
   'errors.browserModeUnavailable': 'Cette fonctionnalité nécessite l’application de bureau Atlas — l’accès aux fichiers n’est pas disponible dans un simple onglet de navigateur.',
   'errors.fileNotFound': 'Ce fichier est introuvable — il a peut-être été déplacé, renommé ou supprimé.',
+  'errors.unexpected': 'Une erreur est survenue : {detail}',
 
   // src/utils/friendlyLibraryError.ts
   'errors.library.corruptZip': 'le fichier n’a pas pu être lu comme un document Office valide (il est peut-être corrompu ou n’est pas un véritable fichier Office)',

@@ -24,6 +24,46 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 - **Tabs: a Save As finishing just as you switch tabs can no longer show the
   previous document's text under the new tab's name.** Very hard to hit by
   hand; found by a test that failed only under load.
+- **Spreadsheets: a screen reader announces a frozen row's cells in French**
+  when Atlas is in French. Those cells were the one place still named in
+  English.
+- **An action that fails unexpectedly now says so** instead of appearing to do
+  nothing. Anything the app did not anticipate used to vanish silently; it now
+  raises the same kind of notification every other failure does.
+
+### Security
+
+- Four **spellcheck** channels, the **title-bar theme** channel and the
+  startup **"which file did you double-click"** channel accepted a request from
+  any frame in the window, not just the document itself — unlike every other
+  channel, which already checked. Adding a word to your personal dictionary,
+  replacing a misspelling in your document, changing the spellcheck languages
+  and consuming the file queued at launch now all require the real renderer.
+- A **Save As** dialog is no longer handed unchecked file-type filters, so a
+  malformed request fails as a refused save instead of an unhandled error.
+
+### Housekeeping
+
+- A test that waited on a lazily-loaded viewer failed intermittently in a full
+  run but never on its own. Every wait in the suite shared a 1-second budget
+  that only one machine's timing had to miss; it is now 5 seconds, which costs
+  a passing run nothing.
+- The coverage floor had been left at wave 2's measurement while five more
+  waves of tests landed, leaving ~6 points of slack a regression could hide in.
+  Re-measured and raised to 82/70/84/84.
+- The three least-tested files in the tree now have tests: the slide-editor core
+  both the PowerPoint and OpenDocument editors share (12% of its branches were
+  checked, and it had no test file of its own), the spreadsheet editing toolbar,
+  and the frozen-rows strip. All three are pinned by per-file coverage floors so
+  they cannot quietly slide back.
+- The bundle-size gate had only a *relative* limit, which a deliberate baseline
+  refresh moves; it now also has absolute ceilings that a refresh cannot.
+- `DocxViewer.tsx` was ~3,600 lines, most of it one component. Font
+  registration, pagination, selection painting, find/replace, zoom and the font
+  picker's choices moved into six modules of their own, with no behaviour
+  change: 3,611 lines down to ~3,010, and 13 `useState`/23 `useEffect` down to
+  9/19. Still the largest component in the tree — `docs/ARCHITECTURE.md`
+  records which clusters are left and why they need a different change first.
 
 ### Fixed — found by driving the app overnight (2026-09-25)
 

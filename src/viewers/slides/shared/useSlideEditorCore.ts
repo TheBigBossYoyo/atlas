@@ -192,11 +192,25 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
 
   useViewerShortcuts(
     useCallback(
-      (event: KeyboardEvent): boolean => {
+      (event: KeyboardEvent, ctx): boolean => {
+        // Prefer `ctx.inPlainField` over re-deriving this from `event.target`:
+        // the dispatcher already computes it once per keydown, and its version
+        // (ShortcutManagerProvider's `isPlainFieldTarget`) falls back to an
+        // explicit `contenteditable` attribute lookup up the ancestor chain for
+        // where `isContentEditable` is unavailable. This handler used to test
+        // `target.isContentEditable` itself, which is right in a real browser
+        // but silently false under jsdom — so the "don't steal Ctrl+Z from a
+        // text field" guard could not be tested for the contentEditable case at
+        // all, only for input/textarea/select.
+        //
+        // `<select>` is checked separately because `isPlainFieldTarget` covers
+        // input/textarea/contentEditable but NOT select, while the check this
+        // replaced did. No slide-editor surface has a `<select>` today, so
+        // dropping it would have changed nothing visible — which is exactly why
+        // it would have been a bad thing to drop silently.
         const target = event.target
-        if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
-          return false
-        }
+        const isSelect = target instanceof HTMLElement && target.tagName === 'SELECT'
+        if (ctx.inPlainField || isSelect) return false
         if (!(event.ctrlKey || event.metaKey)) return false
         const key = event.key.toLowerCase()
         if (key === 'z' && !event.shiftKey) {

@@ -69,6 +69,21 @@ export function isRangeCollapsed(range: Range): boolean {
   return positionEquals(range.anchor, range.focus)
 }
 
+/**
+ * Nullable range equality, for "did the selection actually move?" checks.
+ * Two nulls are equal; a null and a range are not. Lives here beside
+ * `positionEquals` rather than in the viewer that used to hold it, since both
+ * `DocxViewer` and the Find hook need the same comparison and neither should
+ * import it from the other.
+ */
+export function rangeEquals(left: Range | null, right: Range | null): boolean {
+  if (left === null || right === null) {
+    return left === right
+  }
+
+  return positionEquals(left.anchor, right.anchor) && positionEquals(left.focus, right.focus)
+}
+
 export function normalizeRange(
   range: Range,
 ): Readonly<{

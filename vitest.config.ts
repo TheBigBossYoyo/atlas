@@ -60,6 +60,15 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/__tests__/setup.ts'],
+    // Must stay comfortably ABOVE `setup.ts`'s `asyncUtilTimeout` (5s), which is
+    // the budget every `waitFor` in the suite shares. With both at 5s they raced:
+    // a genuinely-failing `waitFor` was killed by the test timeout first, so the
+    // report was a bare "Test timed out in 5000ms" pointing at the `it(...)` line
+    // instead of Testing Library's actual "expected X to have text content Y" with
+    // the element's real contents. That cost real debugging time on a failure that
+    // had nothing to do with timing — raise this alongside `asyncUtilTimeout` if
+    // that ever changes, and keep the gap.
+    testTimeout: 15_000,
     // `scripts/**` is included so `scripts/lib/officeValidator.mjs`'s own
     // datatype tests actually run in CI. They were first added under a
     // separate scoped config, which nothing invoked -- a test suite that
@@ -98,24 +107,42 @@ export default defineConfig({
         'src/**/*.d.ts',
         'src/main.tsx',
       ],
-      // Ratchet floor — P4.2/QA-04. Measured via `npm run coverage` on
-      // 2026-09-15 against wave1+wave2 (main @ 03b2e2a) plus this wave's own
-      // changes: statements 76.71%, branches 63.69%, functions 80.97%,
-      // lines 78.54% (1844+ tests). Each threshold below is that measured
-      // number rounded DOWN to the next whole percent, so today's suite
-      // clears the gate with a small margin for incidental variance rather
-      // than sitting exactly on the edge. This is a floor, not a target:
-      // CI fails a PR that drops below it, but nothing stops coverage from
-      // climbing well past these numbers as more tests land — whenever a
-      // change pushes the measured number up, lower-bound-round the new
-      // number and raise the threshold in the same PR (see
-      // docs/KNOWN_LIMITATIONS.md's "Coverage ratchet" note) rather than
-      // waiting for a dedicated "raise the thresholds" task.
+      // Ratchet floor — P4.2/QA-04, re-measured 2026-09-26.
+      //
+      // Each threshold is the measured number rounded DOWN to the next whole
+      // percent. This is a floor, not a target: CI fails a PR that drops below
+      // it, but nothing stops coverage from climbing past it as more tests land
+      // — whenever a change pushes the measured number up, lower-bound-round
+      // the new number and raise the threshold in the same PR (see
+      // docs/ARCHITECTURE.md's "Coverage ratchet" row, which points back here
+      // for the numbers) rather than waiting for a dedicated "raise the
+      // thresholds" task.
+      //
+      // History, which is the point of the ratchet:
+      //   2026-09-15, wave1+wave2 (main @ 03b2e2a), 1844+ tests:
+      //     76.71 stmts / 63.69 branches / 80.97 funcs / 78.54 lines -> 76/63/80/78
+      //   2026-09-26, waves 3-8 + the night runs (main @ fd462e7), 3674 tests:
+      //     82.21 stmts / 70.04 branches / 84.53 funcs / 84.09 lines -> 82/70/84/84
+      // The 2026-09-15 numbers had been left in place through waves 3-8, so the
+      // gate was carrying ~6 points of slack: a regression that undid a whole
+      // wave's tests would have passed CI silently. Closing it is the ratchet
+      // working as documented, not a new policy.
+      //
+      // Honest note on margin, since the previous version of this comment
+      // claimed one that the 2026-09-26 numbers do not have: branches (70.04 vs
+      // 70) and lines (84.09 vs 84) now sit ~0.05 of a point above their floor,
+      // because both measurements landed just over an integer. That is safe
+      // rather than flaky — the v8 provider is deterministic for a given tree
+      // (two runs of the same code gave byte-identical branch/function counts
+      // here), so nothing but a real coverage drop can trip it — but it does
+      // mean a PR that adds even a few uncovered branches fails this gate and
+      // has to bring its own tests. That is the intended trade; if it ever
+      // becomes friction, add the tests rather than lowering the floor.
       thresholds: {
-        statements: 76,
-        branches: 63,
-        functions: 80,
-        lines: 78,
+        statements: 82,
+        branches: 70,
+        functions: 84,
+        lines: 84,
         // Per-file floors — P4.7 (viewer coverage sweep). These three PDF
         // sub-components were called out in the plan's status section as
         // badly under-covered (measured via `npx vitest run src/viewers/pdf
@@ -141,6 +168,22 @@ export default defineConfig({
         'src/viewers/pdf/PdfToolbar.tsx': { statements: 99, branches: 90, functions: 99, lines: 99 },
         'src/viewers/pdf/PdfThumbnailRail.tsx': { statements: 91, branches: 69, functions: 99, lines: 96 },
         'src/viewers/pdf/PdfPasswordDialog.tsx': { statements: 99, branches: 99, functions: 99, lines: 99 },
+        // Same treatment, 2026-09-26, for the three files an audit of the tree
+        // found at the bottom of the distribution — the only ones left under
+        // 65% statements. The P4.7 sweep above covered `src/viewers/pdf` and
+        // never came back for the wave 6-8 additions:
+        //   useSlideEditorCore.ts   49.05/12.50/52.17/52.08, no test file at all
+        //   SpreadsheetEditToolbar  35.00/35.00/36.36/38.88, no test file at all
+        //   FrozenRowsStrip.tsx     63.63/37.50/60.00/70.00
+        // `useSlideEditorCore` mattered most of the three: it is the ONE core
+        // both the PPTX and ODP editors delegate to, so anything that breaks in
+        // it breaks two formats at once, and 12.5% branch coverage meant almost
+        // none of its queue/undo/save branching was checked. New behavioural
+        // tests bring them to 96.19/84.44/95.65/97.87 and 100/100/100/100 twice
+        // (per `coverage-summary.json`, same authoritative source as above).
+        'src/viewers/slides/shared/useSlideEditorCore.ts': { statements: 96, branches: 84, functions: 95, lines: 97 },
+        'src/viewers/spreadsheet/SpreadsheetEditToolbar.tsx': { statements: 99, branches: 99, functions: 99, lines: 99 },
+        'src/viewers/spreadsheet/FrozenRowsStrip.tsx': { statements: 99, branches: 99, functions: 99, lines: 99 },
       },
     },
   },

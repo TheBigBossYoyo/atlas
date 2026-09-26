@@ -23,6 +23,29 @@ const projectRoot = process.cwd()
 const baselinePath = path.join(projectRoot, '.sisyphus', 'baselines', 'atlas-phase3-bundle.json')
 const THRESHOLD_PERCENT = 25
 
+// Absolute ceilings, added 2026-09-26 after an audit of the tree.
+//
+// The percentage check above is the sensitive one and stays the primary gate:
+// it compares against the STORED baseline (not the previous build), so slow
+// creep does accumulate against a fixed reference and eventually trips 25%.
+// What it cannot catch is creep across baseline REFRESHES: every intentional
+// size change ends with `capture-bundle-baseline.mjs`, which moves the
+// reference up, so a long series of individually-defensible +20% steps has no
+// stop anywhere. These ceilings are that stop — deliberately loose, since the
+// whole point is that a refresh cannot silently move them.
+//
+// Measured 2026-09-26 (267 chunks): total 12,507.82 KB / gzip 3,989.53 KB, and
+// the largest single chunk is `rtf.js` at 2,236.44 KB — a size the project has
+// explicitly decided to keep (see docs/KNOWN_LIMITATIONS.md's "the `rtf.js`
+// bundle size": it is lazy-loaded, and the size is WMF/EMF rasterization that
+// real legacy RTF documents genuinely need). The ceilings sit roughly 30% above
+// each of those, so they are an absurdity stop rather than a second budget:
+// hitting one means something went wrong in a build, or that a genuine decision
+// to ship materially more code needs to be made explicitly here.
+const MAX_TOTAL_BYTES = 16 * 1024 * 1024 // 16 MiB
+const MAX_TOTAL_GZIP_BYTES = 5 * 1024 * 1024 // 5 MiB
+const MAX_CHUNK_BYTES = 3 * 1024 * 1024 // 3 MiB — rtf.js, the known largest, is ~2.2 MiB
+
 /**
  * @param {number} bytes
  * @returns {string}
@@ -79,6 +102,15 @@ async function main() {
     totalBytes += chunk.bytes
     totalGzipBytes += chunk.gzipBytes
 
+    // Absolute per-chunk ceiling — checked for every chunk, including one with
+    // no baseline entry, so a brand-new oversized chunk cannot slip in as
+    // "(new)" and skip the percentage comparison below entirely.
+    if (chunk.bytes > MAX_CHUNK_BYTES) {
+      violations.push(
+        `Chunk "${chunk.name}" is ${formatKb(chunk.bytes)}, over the ${formatKb(MAX_CHUNK_BYTES)} absolute per-chunk ceiling.`,
+      )
+    }
+
     const base = baselineChunks[chunk.name]
     if (!base) {
       rows.push({ chunk: chunk.name, baseline: '(new)', current: formatKb(chunk.bytes), delta: 'n/a' })
@@ -124,16 +156,43 @@ async function main() {
     )
   }
 
+  if (totalBytes > MAX_TOTAL_BYTES) {
+    violations.push(
+      `Total dist/assets is ${formatKb(totalBytes)}, over the ${formatKb(MAX_TOTAL_BYTES)} absolute ceiling.`,
+    )
+  }
+  if (totalGzipBytes > MAX_TOTAL_GZIP_BYTES) {
+    violations.push(
+      `Total gzipped dist/assets is ${formatKb(totalGzipBytes)}, over the ${formatKb(MAX_TOTAL_GZIP_BYTES)} absolute ceiling.`,
+    )
+  }
+
   if (violations.length > 0) {
     console.error('')
     for (const message of violations) console.error(message)
-    console.error(
-      '\nIf this growth is intentional, refresh the baseline: node scripts/capture-bundle-baseline.mjs',
-    )
+    // Two different fixes, so say which one applies: refreshing the baseline
+    // clears a percentage violation but does nothing for an absolute ceiling
+    // (that is the point of the ceiling), and following the wrong hint just
+    // produces a second failing build.
+    if (violations.some((message) => message.includes('ceiling'))) {
+      console.error(
+        '\nAn absolute ceiling cannot be cleared by refreshing the baseline — either bring the size back' +
+          '\ndown, or raise the ceiling in scripts/check-bundle.mjs as a deliberate, reviewed decision.',
+      )
+    }
+    if (violations.some((message) => message.includes('threshold'))) {
+      console.error(
+        '\nIf this growth is intentional, refresh the baseline: node scripts/capture-bundle-baseline.mjs',
+      )
+    }
     process.exit(1)
   }
 
-  console.log(`\nBundle regression check passed (threshold ${THRESHOLD_PERCENT}%, ${currentChunks.size} chunks checked).`)
+  console.log(
+    `\nBundle regression check passed (threshold ${THRESHOLD_PERCENT}%, ceilings ` +
+      `${formatKb(MAX_TOTAL_BYTES)} total / ${formatKb(MAX_TOTAL_GZIP_BYTES)} gzip / ` +
+      `${formatKb(MAX_CHUNK_BYTES)} per chunk, ${currentChunks.size} chunks checked).`,
+  )
 }
 
 await main()

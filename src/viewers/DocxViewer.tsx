@@ -25,22 +25,8 @@ import {
   type DocxBundle,
   type LossySaveWarningCategory,
 } from '../docx'
-import { paginate, PaginationCancelledError } from '../docx/layout'
-import type { Page, PaginationProgress } from '../docx/layout'
-import type { FontResolver } from '../docx/layout/types'
-import {
-  buildMetrics,
-  collectReferencedFontFamilies,
-  FONT_FAMILIES,
-  loadEmbeddedFonts,
-  loadFontMetrics,
-  parseTtf,
-  resolveFontFamily,
-  wrapWithCanvasAdvance,
-  type EmbeddedFontFamily,
-  type FontMetrics,
-  type FontVariant,
-} from '../docx/fonts'
+import type { Page } from '../docx/layout'
+import { useDocxPagination } from '../docx/render/useDocxPagination'
 import {
   collectBookmarkMaps,
   parseCoreProps,
@@ -66,16 +52,11 @@ import {
   History,
   SpellCheckMenu,
   applyCommand,
-  buildReplaceAllCommands,
-  buildReplaceCommands,
   buildSpellCheckReplacement,
   decodeImageNaturalSizePt,
   ensureListNumbering,
-  findAll,
-  findNext,
   findEnclosingTable,
   findParagraph,
-  findPrev,
   extendOrCollapse,
   handleBeforeInput,
   handleKeyDown,
@@ -95,7 +76,6 @@ import {
   useSpellCheck,
   type Command,
   type EnclosingTable,
-  type FindOptions,
   type ImageMimeType,
   type PasteBlock,
   type Position,
@@ -108,16 +88,19 @@ import {
   buildRemoveHeaderFooterParagraph,
   type HeaderFooterKind,
 } from '../docx/editor'
+import { getSelectionFromDom, syncSelectionToDom } from '../docx/render/selectionDom'
+import { useDocxSelectionPainting } from '../docx/render/useDocxSelectionPainting'
+import { useDocxFind } from '../docx/render/useDocxFind'
+import { useDocxFontChoices } from '../docx/render/useDocxFontChoices'
+import { MAX_ZOOM, MIN_ZOOM, useDocxZoom } from '../docx/render/useDocxZoom'
 import { addCommentToDocument, deleteCommentFromDocument, replyToComment } from '../docx/editor/commentMutations'
-import { comparePositions, isRangeCollapsed, normalizeRange } from '../docx/editor/Selection'
+import { isRangeCollapsed, normalizeRange, rangeEquals } from '../docx/editor/Selection'
 import {
   caretClientRect,
-  domPointToPosition,
   paragraphRangeFromClientPoint,
   positionFromClientPoint,
   positionOnAdjacentLine,
   positionOnePageVertically,
-  positionToDomRange,
   wordRangeFromClientPoint,
   type VerticalDirection,
 } from '../docx/editor/Cursor'
@@ -149,252 +132,16 @@ type HeadingNavSeed = {
  * fresh `Set` object every time (see `PageStack`'s own `memo` doc comment). */
 const EMPTY_PINNED_PAGE_INDICES: ReadonlySet<number> = new Set()
 
-const DEFAULT_FIND_OPTIONS: FindOptions = {
-  caseSensitive: false,
-  wholeWord: false,
-  useRegex: false,
-}
-
 // D24/DXL-19
-const MIN_ZOOM = 0.25
-const MAX_ZOOM = 3
-const ZOOM_STEP = 0.1
-
-function clampZoom(zoom: number): number {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom))
-}
-
 /** D12/DXE-03 — keys whose native contentEditable behavior always mutates
  * content; see handleKeyDownEvent's preventDefault-safety comment. */
 const MUTATING_KEYS: ReadonlySet<string> = new Set(['Backspace', 'Delete', 'Enter', 'Tab'])
-
-/** USR-11 — always offered in the font picker, even before (or without)
- * system font enumeration. */
-const COMMON_OFFICE_FONTS: ReadonlyArray<string> = [
-  'Aptos', 'Arial', 'Calibri', 'Cambria', 'Candara', 'Century Gothic', 'Comic Sans MS', 'Consolas', 'Constantia',
-  'Corbel', 'Courier New', 'Franklin Gothic Medium', 'Garamond', 'Georgia', 'Impact', 'Lucida Console',
-  'Palatino Linotype', 'Segoe UI', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana',
-]
 
 /** DOCX-1 — vertical-caret keys, resolved entirely by `handleKeyDownEvent`
  * itself (via `Cursor.ts`'s line-geometry helpers) before `Input.ts` ever
  * sees them; always `preventDefault()`ed so the browser's own broken native
  * vertical-caret handling on this `inline-block`-run layout never runs. */
 const VERTICAL_MOVE_KEYS: ReadonlySet<string> = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown'])
-
-const DEFAULT_FONT_METRICS: FontMetrics = Object.freeze({
-  unitsPerEm: 1000,
-  ascender: 800,
-  descender: -200,
-  lineGap: 0,
-  xHeight: 500,
-  capHeight: 700,
-  advanceWidth: () => 500,
-  hasGlyph: () => true,
-})
-
-/**
- * Register every bundled substitute font via the FontFace API using URLs
- * emitted by Vite (`?url` imports in families.ts). This replaces the previous
- * CSS @font-face approach which used absolute `/fonts/...` URLs that resolve
- * to `file:///C:/fonts/...` in the packaged Electron app and 404, leaving
- * canvas measurements returning 0/NaN and producing blank pages (3.0.7 bug
- * on LaBoetie_Dossier_v2_Bac2026.docx). Registering both wordName and
- * substituteName guarantees the paginator's measured typeface is the one
- * the browser paints.
- */
-const FONT_VARIANT_DESCRIPTORS: ReadonlyArray<{
-  readonly variant: FontVariant
-  readonly weight: string
-  readonly style: string
-}> = [
-  { variant: 'regular', weight: '400', style: 'normal' },
-  { variant: 'bold', weight: '700', style: 'normal' },
-  { variant: 'italic', weight: '400', style: 'italic' },
-  { variant: 'boldItalic', weight: '700', style: 'italic' },
-]
-
-let fontsRegistered = false
-let fontsRegisteringPromise: Promise<void> | null = null
-
-async function preloadDocxFonts(): Promise<void> {
-  if (typeof document === 'undefined' || document.fonts === undefined) {
-    return
-  }
-  if (fontsRegistered) {
-    return
-  }
-  if (fontsRegisteringPromise !== null) {
-    return fontsRegisteringPromise
-  }
-
-  fontsRegisteringPromise = (async () => {
-    const loads: Promise<FontFace>[] = []
-    for (const family of FONT_FAMILIES) {
-      for (const descriptor of FONT_VARIANT_DESCRIPTORS) {
-        const url = family.files[descriptor.variant]
-        for (const name of [family.wordName, family.substituteName]) {
-          const face = new FontFace(name, `url(${url})`, {
-            weight: descriptor.weight,
-            style: descriptor.style,
-            display: 'block',
-          })
-          loads.push(
-            face.load().then((loaded) => {
-              document.fonts.add(loaded)
-              return loaded
-            }),
-          )
-        }
-      }
-    }
-    await Promise.all(loads)
-    await document.fonts.ready
-    fontsRegistered = true
-  })()
-
-  try {
-    await fontsRegisteringPromise
-  } finally {
-    fontsRegisteringPromise = null
-  }
-}
-
-/**
- * DEFER-4 / DXP-13 — registers a document's own embedded fonts (already
- * de-obfuscated by `loadEmbeddedFonts`) via the same `FontFace` API used for
- * the bundled substitutes, under the font's real Word name so runs that
- * reference it paint with the actual embedded typeface instead of falling
- * back to a metric-substitute or the OS default. Unlike `preloadDocxFonts`
- * (a one-time, app-lifetime registration of the 5 bundled families), this
- * runs per document — callers are responsible for un-registering the
- * returned faces (via `unregisterEmbeddedFonts`) when the document changes,
- * since two different documents can embed two different fonts under the
- * same family name.
- *
- * A face that fails to parse/load (corrupt data, unsupported table format)
- * is skipped individually rather than failing the whole document — the
- * family's other faces, or the bundled-substitute fallback, still work.
- */
-async function registerEmbeddedFonts(
-  families: ReadonlyArray<EmbeddedFontFamily>,
-): Promise<ReadonlyArray<FontFace>> {
-  if (typeof document === 'undefined' || document.fonts === undefined || families.length === 0) {
-    return []
-  }
-
-  const registered: FontFace[] = []
-  for (const family of families) {
-    for (const descriptor of FONT_VARIANT_DESCRIPTORS) {
-      const data = family.faces[descriptor.variant]
-      if (data === undefined) {
-        continue
-      }
-
-      try {
-        const face = new FontFace(family.name, toArrayBuffer(data), {
-          weight: descriptor.weight,
-          style: descriptor.style,
-          display: 'block',
-        })
-        const loaded = await face.load()
-        document.fonts.add(loaded)
-        registered.push(loaded)
-      } catch {
-        // Corrupt/unsupported embedded font data: leave this face
-        // unregistered so it falls back to the bundled substitute (or OS
-        // default), same as an unresolvable font family today.
-      }
-    }
-  }
-
-  return registered
-}
-
-function unregisterEmbeddedFonts(faces: ReadonlyArray<FontFace>): void {
-  if (typeof document === 'undefined' || document.fonts === undefined) {
-    return
-  }
-  for (const face of faces) {
-    document.fonts.delete(face)
-  }
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  // `.slice()` always allocates a fresh, non-shared ArrayBuffer (unlike
-  // `.buffer.slice()`, whose return type widens to ArrayBufferLike because the
-  // source buffer could in principle be a SharedArrayBuffer).
-  return bytes.slice().buffer
-}
-
-function createFontResolver(embeddedFonts: ReadonlyArray<EmbeddedFontFamily> = []): FontResolver {
-  const embeddedByName = new Map<string, EmbeddedFontFamily>()
-  for (const family of embeddedFonts) {
-    embeddedByName.set(family.name.trim().toLowerCase(), family)
-  }
-
-  const cache = new Map<string, Promise<FontMetrics>>()
-
-  return async (family: string, variant: FontVariant): Promise<FontMetrics> => {
-    const embeddedFace = embeddedByName.get(family.trim().toLowerCase())?.faces[variant]
-    if (embeddedFace !== undefined) {
-      const cacheKey = `embedded:${family.trim().toLowerCase()}@${variant}`
-      const existing = cache.get(cacheKey)
-      if (existing !== undefined) {
-        return existing
-      }
-
-      const promise = (async () => {
-        try {
-          const tables = parseTtf(toArrayBuffer(embeddedFace))
-          return wrapWithCanvasAdvance(buildMetrics(tables), family, variant)
-        } catch {
-          // Corrupt embedded font data: fall back to a neutral synthetic
-          // base measured under the requested name, same treatment an
-          // unresolvable bundled family gets below.
-          return wrapWithCanvasAdvance(DEFAULT_FONT_METRICS, family, variant)
-        }
-      })()
-      cache.set(cacheKey, promise)
-      return promise
-    }
-
-    const resolved = resolveFontFamily(family)
-    if (resolved === null) {
-      // Unknown family: still measure via canvas under the requested name so the
-      // browser's OS-fallback width is what the paginator sees. We use a
-      // synthetic 1000-em base with neutral vertical metrics; vertical metrics
-      // for unknown fonts aren't critical (lines won't clip vertically).
-      const syntheticBase: FontMetrics = {
-        unitsPerEm: 1000,
-        ascender: 800,
-        descender: -200,
-        lineGap: 0,
-        xHeight: 500,
-        capHeight: 700,
-        advanceWidth: () => 500,
-        hasGlyph: () => true,
-      }
-      return wrapWithCanvasAdvance(syntheticBase, family, variant)
-    }
-
-    const cacheKey = `${resolved.substituteName}@${variant}`
-    const existing = cache.get(cacheKey)
-    if (existing !== undefined) {
-      return existing
-    }
-
-    // Load TTF for accurate vertical metrics, then override per-glyph advances
-    // with canvas measurements taken under the requested Word font name. The
-    // @font-face stack registered by fontFaces.css maps the Word name to the
-    // bundled substitute, so canvas measures what the DOM will actually paint.
-    const promise = loadFontMetrics(resolved.wordName, variant)
-      .then((base) => wrapWithCanvasAdvance(base, resolved.wordName, variant))
-      .catch(() => DEFAULT_FONT_METRICS)
-    cache.set(cacheKey, promise)
-    return promise
-  }
-}
 
 function normalizeDocxBuffer(content: ArrayBuffer | Uint8Array): ArrayBuffer {
   if (content instanceof ArrayBuffer) {
@@ -552,26 +299,6 @@ function createToolbarState(
   }
 }
 
-function rangeEquals(left: Range | null, right: Range | null): boolean {
-  if (left === null || right === null) {
-    return left === right
-  }
-
-  return (
-    comparePositions(left.anchor, right.anchor) === 0 &&
-    comparePositions(left.focus, right.focus) === 0
-  )
-}
-
-function getCurrentMatchIndex(matches: ReadonlyArray<{ range: Range }>, range: Range | null): number | null {
-  if (range === null) {
-    return null
-  }
-
-  const index = matches.findIndex(match => rangeEquals(match.range, range))
-  return index >= 0 ? index : null
-}
-
 function visitBlock(
   block: DocxDocument['sections'][number]['blocks'][number],
   visitor: (paragraph: Paragraph, paragraphIndex: number) => void,
@@ -646,33 +373,6 @@ function collectDocxMetrics(document: DocxDocument): {
   return { words, navSeeds }
 }
 
-function getSelectionFromDom(root: HTMLElement, docModel?: DocxDocument): Range | null {
-  const domSelection = root.ownerDocument.getSelection()
-  if (domSelection === null || domSelection.rangeCount === 0) {
-    return null
-  }
-
-  const anchorNode = domSelection.anchorNode
-  const focusNode = domSelection.focusNode
-  if (anchorNode === null || focusNode === null) {
-    return null
-  }
-
-  if (!root.contains(anchorNode) || !root.contains(focusNode)) {
-    return null
-  }
-
-  const anchor = domPointToPosition(anchorNode, domSelection.anchorOffset, root.ownerDocument, docModel)
-  const focus = domPointToPosition(focusNode, domSelection.focusOffset, root.ownerDocument, docModel)
-
-  return anchor && focus ? { anchor, focus } : null
-}
-
-const SELECTION_HIGHLIGHT_NAME = 'docx-selection'
-
-type HighlightRegistry = { set: (name: string, highlight: unknown) => void; delete: (name: string) => void }
-type HighlightConstructor = new (...ranges: globalThis.Range[]) => unknown
-
 // F1 — a pending DocxPromptDialog open request. `id` is a monotonically
 // increasing token (see `promptIdRef`) used as the dialog's React `key` so
 // it remounts fresh for every open instead of reusing a previous prompt's
@@ -685,69 +385,6 @@ type DocxPromptRequest =
   | { readonly kind: 'hyperlink'; readonly id: number; readonly selection: Range }
   | { readonly kind: 'comment'; readonly id: number; readonly selection: Range }
   | { readonly kind: 'reply'; readonly id: number; readonly commentId: string; readonly range: Range | null }
-
-/**
- * USR-06 — paints a model range without touching the DOM selection (and so
- * without stealing focus), using the CSS Custom Highlight API. `null` clears
- * it. A no-op where the API is unavailable (e.g. jsdom).
- */
-function paintSelectionHighlight(root: HTMLElement | null, range: Range | null, docModel?: DocxDocument): void {
-  const registry = (globalThis.CSS as unknown as { highlights?: HighlightRegistry } | undefined)?.highlights
-  const HighlightCtor = (globalThis as unknown as { Highlight?: HighlightConstructor }).Highlight
-  if (registry === undefined || HighlightCtor === undefined) {
-    return
-  }
-  if (root === null || range === null) {
-    registry.delete(SELECTION_HIGHLIGHT_NAME)
-    return
-  }
-  const anchor = positionToDomRange(range.anchor, root, docModel)
-  const focus = positionToDomRange(range.focus, root, docModel)
-  if (anchor === null || focus === null) {
-    registry.delete(SELECTION_HIGHLIGHT_NAME)
-    return
-  }
-  const domRange = root.ownerDocument.createRange()
-  domRange.setStart(anchor.node, anchor.offset)
-  domRange.setEnd(focus.node, focus.offset)
-  if (domRange.collapsed) {
-    domRange.setStart(focus.node, focus.offset)
-    domRange.setEnd(anchor.node, anchor.offset)
-  }
-  registry.set(SELECTION_HIGHLIGHT_NAME, new HighlightCtor(domRange))
-}
-
-function syncSelectionToDom(root: HTMLElement, range: Range | null, docModel?: DocxDocument): void {
-  if (range === null) {
-    return
-  }
-
-  const anchor = positionToDomRange(range.anchor, root, docModel)
-  const focus = positionToDomRange(range.focus, root, docModel)
-  if (anchor === null || focus === null) {
-    return
-  }
-
-  const selection = root.ownerDocument.getSelection()
-  if (selection === null) {
-    return
-  }
-
-  const domRange = root.ownerDocument.createRange()
-  domRange.setStart(anchor.node, anchor.offset)
-  domRange.setEnd(focus.node, focus.offset)
-  selection.removeAllRanges()
-  selection.addRange(domRange)
-}
-
-function getReplaceValue(root: HTMLElement | null): string {
-  if (root === null) {
-    return ''
-  }
-
-  const input = root.querySelector<HTMLInputElement>('.docx-find__input--replace')
-  return input?.value ?? ''
-}
 
 /**
  * DEFER-5 / DXS-20 — builds a `(sectionIndex, blockIndex) -> 1-based page`
@@ -861,9 +498,6 @@ function DocxEditor({
   // USR-05 — pointer selection is driven from the model (see
   // handleSurfaceMouseDown): the anchor of an in-progress drag selection.
   const dragAnchorRef = useRef<Range['anchor'] | null>(null)
-  // USR-06 — set by Find next/prev so the post-render selection sync scrolls
-  // the match into view.
-  const revealSelectionRef = useRef(false)
   // DOCX-1 — the client-x "goal column" ArrowUp/ArrowDown/PageUp/PageDown
   // keep across consecutive presses, so moving down through a run of short
   // lines stays under the same visual column instead of snapping to each
@@ -899,16 +533,6 @@ function DocxEditor({
     readonly mountPageIndex: number
   } | null>(null)
   const historyRef = useRef(new History())
-  // DEFER-4 / DXP-13 — this document's own embedded fonts (already
-  // de-obfuscated), keyed off the raw archive so switching to a different
-  // document (a new `bundle.rawArchive`) re-derives them.
-  const embeddedFonts = useMemo(() => loadEmbeddedFonts(bundle.rawArchive), [bundle.rawArchive])
-  const fontResolver = useMemo(() => createFontResolver(embeddedFonts), [embeddedFonts])
-  // Resolves once the current document's embedded fonts have finished
-  // registering via FontFace — the pagination effect awaits this so canvas
-  // measurement (which reads what the browser has actually registered)
-  // never races the registration it depends on.
-  const embeddedFontsReadyRef = useRef<Promise<void>>(Promise.resolve())
   // DEFER-5 / DXS-20 — feedback for "Update Fields"/"Update TOC" below.
   // Not the shared app-wide toast system (`useToast`): that requires a
   // `<ToastProvider>` ancestor the isolated viewer-level tests that mount
@@ -967,36 +591,29 @@ function DocxEditor({
   // menu item fires, `range` (synced onto the click below) is already the
   // source of truth `handleToolbarCommand`/`toolbarToCommand` resolve against.
   const [tableContextMenuAt, setTableContextMenuAt] = useState<{ x: number; y: number } | null>(null)
-  const [pages, setPages] = useState<ReadonlyArray<Page> | null>(null)
-  // D23-PERF — the exact `documentModel` a completed `pages` array was laid
-  // out against, updated in the SAME setState batch as `pages` (see the
-  // pagination effect below). `PageStack` reads this instead of the live
-  // `documentModel` directly: `documentModel` changes on every keystroke, and
-  // since it flows into every `PageView`'s per-page `document`-derived memos
-  // (run/hyperlink metadata, bookmark names — each walking the WHOLE
-  // document), passing it straight through made every keystroke force a full
-  // re-render of every page TWICE — once the instant `documentModel` changed
-  // (still showing the OLD, not-yet-repaginated `pages`), and again once
-  // pagination actually finished and `pages` itself updated. Keeping
-  // `document`/`pages` pinned to the same pagination pass also fixes a latent
-  // correctness gap: `pages`' `paragraphPath`s are block indices into
-  // whichever document produced them, which can be stale (pointing at the
-  // wrong paragraph) against a newer `documentModel` for the brief window
-  // between an edit and its repagination — e.g. an insert/delete shifting
-  // later block indices.
-  const [pagesDocument, setPagesDocument] = useState(bundle.document)
+  // Pagination + the font registration it depends on (see
+  // `docx/render/useDocxPagination.ts`). `pagesDocument` is the exact model
+  // `pages` was laid out against, which is what PageStack must render with —
+  // see that hook for why passing the live `documentModel` instead re-rendered
+  // every page twice per keystroke.
+  const { pages, pagesDocument, paginationProgress, paginationError } = useDocxPagination(documentModel, bundle)
+
+  // Paints `range` onto the DOM after every commit that could have moved the
+  // selection or replaced the pages under it, and owns the "scroll the next
+  // painted selection into view" flag that Find/outline navigation set.
+  const { revealSelectionOnNextPaint } = useDocxSelectionPainting(
+    editorRootRef,
+    range,
+    documentModelRef,
+    pages,
+  )
   // D23-PERF-2 — bypasses PageStack's page virtualization while true, so
   // print (`handlePrint`) and PDF export (the `atlas:docx-*-full-render`
   // window events below, dispatched by `exportDocxPdf`) always see every
   // page in the live DOM instead of whatever happened to be scrolled into
   // view. See `PageStack.tsx`'s `forceRenderAll` prop doc comment.
   const [forceRenderAll, setForceRenderAll] = useState(false)
-  const [paginationProgress, setPaginationProgress] = useState<PaginationProgress | null>(null)
-  const [paginationError, setPaginationError] = useState<string | null>(null)
   const [savePath, setSavePath] = useState(file.path)
-  const [findOpen, setFindOpen] = useState(false)
-  const [findQuery, setFindQuery] = useState('')
-  const [findOptions, setFindOptions] = useState<FindOptions>(DEFAULT_FIND_OPTIONS)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [commentsPaneOpen, setCommentsPaneOpen] = useState(bundle.document.comments.size > 0)
   const [resolvedCommentIds, setResolvedCommentIds] = useState<ReadonlySet<string>>(new Set())
@@ -1013,10 +630,6 @@ function DocxEditor({
   // `saveDocx` persists it via `writeSettingsXml` instead of losing it to
   // the passthrough copy of the original part.
   const [trackChangesEnabled, setTrackChangesEnabled] = useState(bundle.settings?.trackChanges ?? false)
-  // D24/DXL-19 — PageView already fully supports a CSS-transform zoom (its
-  // `zoom` prop); this was simply never wired to anything, hardcoded to 1
-  // below. Percent steps match the common Word/most-viewers convention.
-  const [zoom, setZoom] = useState(1)
   // DXE-11 — the context threaded into Input.ts so a genuine typed
   // insertion/deletion (never History's own undo/redo replay — see
   // `InputContext`'s own doc comment) is recorded as `w:ins`/`w:del`.
@@ -1069,15 +682,6 @@ function DocxEditor({
   const registerSaveAs = useRegisterViewerSaveAs()
   const reportSavedPath = useReportSavedPath()
 
-  const matches = useMemo(() => {
-    if (findQuery.length === 0) {
-      return []
-    }
-
-    return findAll(documentModel, findQuery, findOptions)
-  }, [documentModel, findOptions, findQuery])
-
-  const currentMatchIndex = useMemo(() => getCurrentMatchIndex(matches, range), [matches, range])
 
   // D23-PERF-2 — pages that must stay mounted no matter where the viewport
   // currently is: whichever page(s) hold the caret/selection. Computed
@@ -1155,27 +759,8 @@ function DocxEditor({
   // USR-11 — fonts the document uses first, then every installed system font
   // (via the main process), the bundled metric-compatible substitutes and
   // common Office fonts.
-  const documentFonts = useMemo(() => collectReferencedFontFamilies(documentModel), [documentModel])
-  const [systemFonts, setSystemFonts] = useState<ReadonlyArray<string>>([])
-  useEffect(() => {
-    let cancelled = false
-    const listFonts = window.electronAPI?.fonts?.list
-    if (listFonts === undefined) {
-      return undefined
-    }
-    listFonts()
-      .then((families) => {
-        if (!cancelled) setSystemFonts(families)
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [])
-  const availableFonts = useMemo(() => {
-    const merged = new Set<string>([...COMMON_OFFICE_FONTS, ...FONT_FAMILIES.map((family) => family.wordName), ...systemFonts])
-    return Array.from(merged).sort((a, b) => a.localeCompare(b))
-  }, [systemFonts])
+  const { documentFonts, availableFonts } = useDocxFontChoices(documentModel)
+  const { zoom, handleZoomIn, handleZoomOut, handleZoomReset } = useDocxZoom()
 
   // DXE-25 — save-failure feedback used to be cleared by commitState, which
   // runs on every single edit, so the banner vanished the instant the user
@@ -1281,6 +866,22 @@ function DocxEditor({
     },
     [commitState, documentModel],
   )
+
+  // Find & replace (see `docx/render/useDocxFind.ts`). It needs the selection
+  // to start from and to move, the command applier for the two replace actions,
+  // and the reveal request so a match on a not-yet-mounted virtualized page is
+  // scrolled to once it renders.
+  const {
+    findOpen,
+    setFindOpen,
+    matches,
+    currentMatchIndex,
+    handleFind,
+    handleFindNext,
+    handleFindPrev,
+    handleReplace,
+    handleReplaceAll,
+  } = useDocxFind(documentModel, range, setRange, containerRef, applyEditorCommands, revealSelectionOnNextPaint)
 
   // D29 follow-up — a header/footer field commits its edit as ONE undo step
   // on blur, not per keystroke, so its `onChange` (further below) only
@@ -2047,7 +1648,7 @@ function DocxEditor({
         event.preventDefault()
       }
     },
-    [applyResult, containerRef, documentModel, getTrackChanges, pages, pinnedPageIndices, range],
+    [applyResult, containerRef, documentModel, getTrackChanges, pages, pinnedPageIndices, range, setFindOpen],
   )
 
   const handleCompositionStart = useCallback((event: FormEvent<HTMLDivElement>) => {
@@ -2077,71 +1678,6 @@ function DocxEditor({
     [applyResult, composition.handlers, documentModel, getTrackChanges, range],
   )
 
-  const handleFind = useCallback((query: string, options: FindOptions) => {
-    setFindQuery(query)
-    setFindOptions(options)
-
-    if (query.length === 0) {
-      return
-    }
-
-    const nextMatch = findNext(documentModel, query, options, null)
-    if (nextMatch !== null) {
-      revealSelectionRef.current = true
-      setRange(nextMatch.range)
-    }
-  }, [documentModel])
-
-  const handleFindNext = useCallback(() => {
-    if (findQuery.length === 0) {
-      return
-    }
-
-    const nextMatch = findNext(documentModel, findQuery, findOptions, range?.focus ?? null)
-    if (nextMatch !== null) {
-      revealSelectionRef.current = true
-      setRange(nextMatch.range)
-    }
-  }, [documentModel, findOptions, findQuery, range])
-
-  const handleFindPrev = useCallback(() => {
-    if (findQuery.length === 0) {
-      return
-    }
-
-    const prevMatch = findPrev(documentModel, findQuery, findOptions, range?.anchor ?? null)
-    if (prevMatch !== null) {
-      revealSelectionRef.current = true
-      setRange(prevMatch.range)
-    }
-  }, [documentModel, findOptions, findQuery, range])
-
-  const handleReplace = useCallback(() => {
-    if (findQuery.length === 0 || currentMatchIndex === null) {
-      return
-    }
-
-    const replacement = getReplaceValue(containerRef.current)
-    const match = matches[currentMatchIndex]
-    const commands = buildReplaceCommands(match, replacement)
-    const nextPos = {
-      paragraphPath: match.range.anchor.paragraphPath,
-      runIndex: match.range.anchor.runIndex,
-      charOffset: match.range.anchor.charOffset + replacement.length,
-    }
-
-    applyEditorCommands(commands, { anchor: nextPos, focus: nextPos })
-  }, [applyEditorCommands, containerRef, currentMatchIndex, findQuery, matches])
-
-  const handleReplaceAll = useCallback(() => {
-    if (findQuery.length === 0) {
-      return
-    }
-
-    const replacement = getReplaceValue(containerRef.current)
-    const commands = buildReplaceAllCommands(documentModel, findQuery, findOptions, replacement)
-    applyEditorCommands(commands, range)
-  }, [applyEditorCommands, containerRef, documentModel, findOptions, findQuery, range])
 
   // D23-PERF-2 — outline/heading navigation addresses a paragraph by its
   // running position among every `.docx-page__line[data-paragraph-path]` in
@@ -2448,6 +1984,7 @@ function DocxEditor({
       handleToggleList,
       onBundleChange,
       range,
+      setFindOpen,
     ],
   )
 
@@ -2888,148 +2425,10 @@ function DocxEditor({
     [applyEditorCommand, documentModel],
   )
 
-  // D24/DXL-19
-  const handleZoomIn = useCallback(() => {
-    setZoom((current) => clampZoom(current + ZOOM_STEP))
-  }, [])
-  const handleZoomOut = useCallback(() => {
-    setZoom((current) => clampZoom(current - ZOOM_STEP))
-  }, [])
-  const handleZoomReset = useCallback(() => {
-    setZoom(1)
-  }, [])
-
   useEffect(() => {
     handleToolbarCommandRef.current = handleToolbarCommand
   }, [handleToolbarCommand])
 
-  // DEFER-4 / DXP-13 — register this document's embedded fonts (if any) via
-  // FontFace whenever it changes, and un-register the previous document's
-  // faces on cleanup so a family name embedded differently by two different
-  // documents never bleeds from one into the other.
-  useEffect(() => {
-    let cancelled = false
-    let registeredFaces: ReadonlyArray<FontFace> = []
-
-    const readyPromise = registerEmbeddedFonts(embeddedFonts).then((loaded) => {
-      if (cancelled) {
-        unregisterEmbeddedFonts(loaded)
-        return
-      }
-      registeredFaces = loaded
-    })
-    embeddedFontsReadyRef.current = readyPromise
-
-    return () => {
-      cancelled = true
-      unregisterEmbeddedFonts(registeredFaces)
-    }
-  }, [embeddedFonts])
-
-  useEffect(() => {
-    let cancelled = false
-
-    setPaginationError(null)
-    setPaginationProgress(null)
-
-    void (async () => {
-      // Ensure the browser has actually downloaded and registered the bundled
-      // substitute fonts BEFORE we measure-and-paint. Otherwise pagination
-      // computes widths from real TTF metrics while the DOM still renders with
-      // a fallback font, producing accumulated drift -> mid-line gaps and
-      // right-edge clipping. This document's own embedded fonts (DEFER-4) must
-      // finish registering for the same reason.
-      await preloadDocxFonts()
-      await embeddedFontsReadyRef.current
-
-      if (cancelled) {
-        return
-      }
-
-      try {
-        const nextPages = await paginate({
-          document: documentModel,
-          fontResolver,
-          theme: bundle.theme,
-          // D11 milestone 1/5 — these were parsed from word/settings.xml
-          // (see docx/parser/settings.ts) but never threaded through to the
-          // paginator in production; only paginate.test.ts's direct calls
-          // exercised them. Without this, a real document that turns on
-          // w:evenAndOddHeaders, or sets a non-default footnote/endnote
-          // numbering restart/format, silently fell back to "off"/
-          // "continuous" in the actual app.
-          evenAndOddHeaders: bundle.settings?.evenAndOddHeaders,
-          footnoteNumbering: bundle.settings?.footnotePr,
-          endnoteNumbering: bundle.settings?.endnotePr,
-          onProgress: progress => {
-            if (!cancelled) {
-              setPaginationProgress(progress)
-            }
-          },
-          shouldCancel: () => cancelled,
-        })
-
-        if (!cancelled) {
-          // D23-PERF — batched together so PageStack only ever sees a
-          // `document`/`pages` pair produced by the SAME pagination pass;
-          // see `pagesDocument`'s own doc comment.
-          setPages(nextPages)
-          setPagesDocument(documentModel)
-          setPaginationProgress(null)
-        }
-      } catch (error) {
-        if (error instanceof PaginationCancelledError) {
-          return
-        }
-        if (!cancelled) {
-          // DXE-27 — the failure is already surfaced to the user via
-          // paginationError (rendered below); no need to also log it.
-          setPaginationError(error instanceof Error ? error.message : String(error))
-          setPaginationProgress(null)
-        }
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [documentModel, fontResolver, bundle.theme, bundle.settings])
-
-  useLayoutEffect(() => {
-    const root = editorRootRef.current
-    if (root === null) {
-      return
-    }
-
-    // USR-06 — placing the DOM selection inside a contentEditable moves
-    // keyboard focus into it in Chromium, which stole focus from the Find
-    // box after the first match (Enter then edited the document). While a
-    // form field outside the editor has focus, paint the model selection with
-    // the CSS Custom Highlight API instead of moving the DOM selection.
-    const activeElement = root.ownerDocument.activeElement
-    const fieldHasFocus =
-      activeElement !== null &&
-      !root.contains(activeElement) &&
-      activeElement.matches('input, textarea, select, [contenteditable="true"]')
-    if (fieldHasFocus) {
-      paintSelectionHighlight(root, range, documentModelRef.current)
-    } else {
-      paintSelectionHighlight(root, null)
-      syncSelectionToDom(root, range, documentModelRef.current)
-    }
-
-    if (revealSelectionRef.current && range !== null) {
-      revealSelectionRef.current = false
-      const point = positionToDomRange(range.focus, root, documentModelRef.current)
-      const node = point?.node ?? null
-      const element = node === null ? null : node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
-      if (element !== null && typeof element.scrollIntoView === 'function') {
-        element.scrollIntoView({ block: 'center', inline: 'nearest' })
-      }
-    }
-  }, [pages, range])
-
-  useEffect(() => () => paintSelectionHighlight(null, null), [])
 
   useEffect(() => {
     onPageCountChange?.(pages?.length ?? 1)

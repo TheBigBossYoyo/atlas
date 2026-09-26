@@ -385,6 +385,50 @@ describe('electron/main.cjs IPC handlers', () => {
       expect(raw.toString('utf-8')).toBe('a\nb')
     })
 
+    // The dialog call sits BEFORE the handler's try/catch, so a malformed
+    // `filters`/`suggestedName` reaching Electron would reject the whole
+    // `invoke` instead of returning the `{ saved: false }` shape the renderer
+    // knows how to handle. `saveDialogOptions` validates both first.
+    it('drops a malformed filters payload and saves with the default filters', async () => {
+      const filePath = path.join(tempDir, 'bad-filters.md')
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath })
+
+      const result = (await handler('save-file')(ALLOWED_EVENT, {
+        content: 'hello',
+        suggestedName: 42,
+        filters: ['not-a-filter', { name: 'No extensions' }, { extensions: ['md'] }],
+      })) as { saved: boolean }
+
+      expect(result.saved).toBe(true)
+      const options = mocks.dialog.showSaveDialog.mock.calls[0]?.[1] as {
+        defaultPath: string
+        filters: Array<{ name: string; extensions: string[] }>
+      }
+      expect(options.defaultPath).toBe('document.md')
+      expect(options.filters).toEqual([
+        { name: 'Markdown', extensions: ['md'] },
+        { name: 'All Files', extensions: ['*'] },
+      ])
+    })
+
+    it('keeps a well-formed filters payload', async () => {
+      const filePath = path.join(tempDir, 'good-filters.csv')
+      mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath })
+
+      await handler('save-file')(ALLOWED_EVENT, {
+        content: 'a,b',
+        suggestedName: 'good-filters.csv',
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      })
+
+      const options = mocks.dialog.showSaveDialog.mock.calls[0]?.[1] as {
+        defaultPath: string
+        filters: Array<{ name: string; extensions: string[] }>
+      }
+      expect(options.defaultPath).toBe('good-filters.csv')
+      expect(options.filters).toEqual([{ name: 'CSV', extensions: ['csv'] }])
+    })
+
     it('falls back to the save dialog for a non-allowlisted existingPath', async () => {
       const filePath = path.join(tempDir, 'via-dialog.md')
       mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath })
