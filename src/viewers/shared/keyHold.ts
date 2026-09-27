@@ -15,6 +15,24 @@ const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'AltGraph', 'C
 /** If glide-data-grid's own deferred focus never lands (a stalled animation frame), focus the grid ourselves after this long. */
 export const KEY_HOLD_FALLBACK_MS = 250
 
+/**
+ * The element that actually receives grid keystrokes.
+ *
+ * F6c — exported because "does the grid have focus?" must be asked about THIS
+ * element and not about the grid container. glide-data-grid renders an
+ * accessibility table inside the container, and after an edit commits it leaves
+ * focus on one of that table's `<td>`s. A `<td>` is inside the grid but receives
+ * no useful keystrokes, so treating "container contains focus" as "grid has
+ * focus" silently drops everything typed next. Both this module and
+ * `SpreadsheetDataEditor`'s mouse-down hook must agree on the answer.
+ */
+export const GRID_CANVAS_SELECTOR = 'canvas[data-testid="data-grid-canvas"]'
+
+/** The canvas within `grid`, or null before glide has rendered it. */
+export function gridCanvas(grid: Element): HTMLCanvasElement | null {
+  return grid.querySelector<HTMLCanvasElement>(GRID_CANVAS_SELECTOR)
+}
+
 /** How often a held shortcut re-checks whether the in-flight edit has committed. */
 const IN_FLIGHT_RECHECK_MS = 16
 
@@ -96,9 +114,20 @@ export class KeyHold {
     const grid = this.awaitingFocus
     if (grid === null) return
     clearTimeout(this.fallback)
-    // Only take focus if nothing else has (the user may have clicked elsewhere since).
-    if (document.activeElement === this.focusAtStart && !grid.contains(document.activeElement)) {
-      grid.querySelector<HTMLCanvasElement>('canvas[data-testid="data-grid-canvas"]')?.focus({ preventScroll: true })
+    const canvas = gridCanvas(grid)
+    // Take focus unless something outside the grid has it — the user may have
+    // clicked away, or an edit overlay (which lives in `#portal`, outside the
+    // grid) may have opened and must keep its own focus.
+    //
+    // F6c — this used to require `!grid.contains(document.activeElement)`, i.e. it
+    // did nothing whenever focus was anywhere inside the grid. After an edit
+    // commits, focus sits on a `<td>` of glide's accessibility table, which IS
+    // inside the grid and is NOT the canvas — so the canvas was never focused and
+    // every replayed key went to that `<td>` and did nothing.
+    const active = document.activeElement
+    const heldOutsideGrid = active !== this.focusAtStart && !grid.contains(active)
+    if (!heldOutsideGrid && active !== canvas) {
+      canvas?.focus({ preventScroll: true })
     }
     this.awaitingFocus = null
     this.focusAtStart = null

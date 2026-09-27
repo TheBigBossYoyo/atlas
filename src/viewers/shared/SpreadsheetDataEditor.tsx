@@ -113,7 +113,7 @@ import {
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
 
-import { KeyHold } from './keyHold'
+import { gridCanvas, KeyHold } from './keyHold'
 
 /** A movement tuple, matching `TextCellEditor`'s own Enter/Tab handler below. */
 type Movement = readonly [-1 | 0 | 1, -1 | 0 | 1]
@@ -314,7 +314,21 @@ export function SpreadsheetDataEditor(props: DataEditorProps) {
     // The click lands on glide's `.dvn-scroller`, layered over the canvas.
     if (event.button !== 0 || !(event.target instanceof Element) || event.target.closest('.dvn-scroller') === null) return
     const active = document.activeElement
-    if (active !== null && (event.currentTarget.contains(active) || active.closest('#portal') !== null)) return
+    // Skip the hold only when there is genuinely no focus handoff to wait for:
+    // the CANVAS already has focus, or an edit overlay (in `#portal`) owns it.
+    //
+    // F6c — this used to skip whenever `event.currentTarget.contains(active)`,
+    // i.e. whenever focus was anywhere inside the grid container. After an edit
+    // commits, glide leaves focus on a `<td>` of its own accessibility table,
+    // which is inside the container but is not the canvas and receives no useful
+    // keystrokes. So on the SECOND cell edit of a session `KeyHold.start` was
+    // never called at all, nothing was held, and the keys went straight to that
+    // `<td>`: the text never reached the cell, Enter never committed it, and the
+    // Ctrl+S after it — held behind an edit that could now never commit — never
+    // saved the file. Measured 5/6 at 8x CPU throttling and 1/6 unthrottled
+    // before this fix. Every earlier attempt at this bug was made inside
+    // `KeyHold` and could not work, because `start` was never reached.
+    if (active !== null && (active === gridCanvas(event.currentTarget) || active.closest('#portal') !== null)) return
     keyHoldRef.current?.start(event.currentTarget)
   }, [])
 

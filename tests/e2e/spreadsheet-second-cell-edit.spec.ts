@@ -1,61 +1,36 @@
 /**
- * F6c · HIGH · SILENT DATA LOSS · OPEN — the second cell edit of a session can be
- * lost, and the save that follows it silently does nothing.
+ * F6c · regression test for a HIGH-severity silent data-loss bug, fixed 2026-09-27.
  *
- * Found 2026-09-26/27 while investigating why `spreadsheet-grid-fixes.spec.ts`'s
- * SHEET-4/5 test failed once in a full e2e run and passed in isolation. It is not
- * a flake. The reproduction is below and it is a user-reachable sequence:
+ * The bug: edit a cell and commit it, then click a DIFFERENT cell and type at
+ * once — the second edit was silently lost AND the Ctrl+S after it silently did
+ * not save. The file's `mtime` was unchanged 20s later and nothing was shown to
+ * the user. Reachable by hand, and measured at 5/6 with the renderer throttled 8x
+ * and 1/6 unthrottled, so a slow machine was not a precondition.
  *
- *   1. Click a cell and start typing at once (no pause) — this part works.
- *   2. Press Enter to commit.
- *   3. Click a DIFFERENT cell and start typing at once.
- *   4. Press Enter, then Ctrl+S.
+ * MECHANISM. Committing an edit leaves DOM focus on a `<td>` of glide-data-grid's
+ * own accessibility table rather than on `canvas[data-testid="data-grid-canvas"]`.
+ * `SpreadsheetDataEditor`'s `holdKeysOnMouseDown` then skipped arming `KeyHold`
+ * whenever `grid.contains(document.activeElement)` — which that `<td>` satisfies —
+ * so nothing was held, and the keys went straight to an element that does nothing
+ * with them. The overlay opened (glide's `<td>` handler sees the key) but never
+ * received the text, so Enter could not commit it; and because `KeyHold` holds
+ * chords while an edit is in flight, the Ctrl+S queued behind an edit that could
+ * now never commit and was never replayed.
  *
- * Step 3's text never reaches the cell, step 4's Enter does not commit, and the
- * Ctrl+S never writes the file at all — `mtime` is unchanged 20s later. Nothing
- * tells the user; the app looks like it accepted the edit.
+ * THE FIX, in two halves that only work together — ask whether the CANVAS has
+ * focus, not whether the grid *contains* focus:
+ *   1. `SpreadsheetDataEditor.holdKeysOnMouseDown` arms `KeyHold` unless the canvas
+ *      itself (or an overlay in `#portal`) already has focus.
+ *   2. `KeyHold.release` focuses the canvas unless focus is held outside the grid.
  *
- * Measured frequency (this laptop, `Emulation.setCPUThrottlingRate`, n=6 per rate):
- * 5/6 at 8x, 1/6 unthrottled. It reproduces unthrottled, so a slow or loaded
- * machine is not a precondition — throttling only makes it reliable.
+ * Proven by a control experiment rather than assumed: both halves gives 6/6 at 8x;
+ * reverting only half 1 and keeping half 2 gives 6/6 FAILING. Three earlier attempts
+ * that changed `KeyHold` alone could not have worked, because half 1 meant
+ * `KeyHold.start` was never called in the first place.
  *
- * MECHANISM, from `document.activeElement` sampled at each step:
- *
- *   after cell1 first char : TEXTAREA  (portal textareas: 1)   <- correct
- *   after cell1 Enter      : TD        (portal textareas: 0)   <- focus on glide's
- *                                                                a11y table cell,
- *                                                                not the canvas
- *   after cell2 first char : TD        (portal textareas: 1)   <- overlay OPEN but
- *                                                                unfocused
- *   after cell2 Enter      : TD        (portal textareas: 1)   <- never committed
- *
- * So: committing an edit leaves DOM focus on a `<td>` of glide-data-grid's own
- * accessibility table rather than on `canvas[data-testid="data-grid-canvas"]`.
- * `KeyHold` (src/viewers/shared/keyHold.ts) then replays the held keystrokes to
- * `document.activeElement`, which is that `<td>`, so they do nothing. The overlay
- * opens (glide's own `<td>` handler sees the key) but never receives the text, so
- * Enter cannot commit it — and `KeyHold` holds chords while an edit is in flight,
- * so the Ctrl+S queues behind an edit that can now never commit and is never
- * replayed. That is why the file is not written rather than written with stale
- * text.
- *
- * APPROACHES TRIED AND REJECTED (all in `KeyHold.release`/`drain`; each was
- * measured, none fixed it — recorded so the next attempt does not repeat them):
- *   1. Guard on "is the canvas focused" instead of "does the grid contain focus".
- *      Logically right and necessary, but not sufficient: 8x went 3/3 fail -> 1/3.
- *   2. Also treat "focus moved to another element inside the grid" as not-moved-away.
- *      No measurable improvement (8x 2/3 fail at n=3).
- *   3. Re-assert canvas focus immediately before every replay, not once at release.
- *      Still 5/6 fail at 8x with n=6. glide appears to re-take focus after the
- *      replay too, not only between release and the first replay.
- * All three were reverted. The fix likely belongs in how the edit overlay hands
- * focus back on commit (`SpreadsheetDataEditor.tsx`), not in `KeyHold` — KeyHold is
- * downstream of a focus target that is already wrong.
- *
- * `test.fixme` rather than deleted or left failing: the repro is worth keeping
- * executable and ready to un-fixme, without turning CI red on every run. The
- * bug itself is tracked in the phase-4 backlog as F6c and in
- * docs/KNOWN_LIMITATIONS.md.
+ * Throttled at 8x deliberately: the bug reproduced only 1 in 6 at full speed, so an
+ * unthrottled test would not reliably catch a regression. This is the same
+ * technique `spreadsheet-keystroke-seed.spec.ts` uses for F6/F6b.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -120,7 +95,7 @@ function sheetCells(file: string): Record<string, string> {
   return cells
 }
 
-test.fixme('F6c: a second cell edit is kept, and Ctrl+S after it actually saves', async () => {
+test('F6c: a second cell edit is kept, and Ctrl+S after it actually saves', async () => {
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['H1', 'H2']]), 'Data')
   const file = tmpFile('two-cells.xlsx')

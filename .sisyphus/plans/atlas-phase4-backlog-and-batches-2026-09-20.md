@@ -713,7 +713,7 @@ three refusals plus that deliberate exemption.
 
 ~~the new synchronous zip budget… deliberately skips Zip64 archives… It fails open there.~~
 
-**F6c · HIGH · SILENT DATA LOSS · OPEN** (found 2026-09-27) — **the second cell edit of a
+**F6c · HIGH · SILENT DATA LOSS · FIXED** (found and fixed 2026-09-27) — **the second cell edit of a
 session is lost, and the Ctrl+S after it silently does not save.** Reachable by hand: click a
 cell and type at once, Enter, click another cell and type at once, Enter, Ctrl+S. The second
 cell keeps its old value and the file is never written — `mtime` unchanged 20s later. Nothing
@@ -731,19 +731,30 @@ handler sees the key) but never receives the text, so Enter cannot commit it; an
 never commit and is never replayed. That is why the file is not written rather than written
 with stale text.
 
-Three fixes were attempted in `KeyHold.release`/`drain`, measured, and all reverted —
-recorded so they are not retried: (1) guard on "is the canvas focused" rather than "does the
-grid contain focus" (necessary and logically right, but only 3/3 -> 1/3 at 8x); (2) also
-treat focus moving between elements inside the grid as not-moved-away (no measurable change);
-(3) re-assert canvas focus immediately before every replay (still 5/6 at 8x, n=6 — glide
-appears to re-take focus after the replay as well). **The fix probably belongs in how the
-edit overlay returns focus on commit (`SpreadsheetDataEditor.tsx`), not in `KeyHold`, which
-is downstream of a focus target that is already wrong.**
+**THE FIX** — two halves in two files, and they only work together. Everywhere the question
+"does the grid have focus?" is asked, it must be asked about the CANVAS
+(`canvas[data-testid="data-grid-canvas"]`, now `GRID_CANVAS_SELECTOR`/`gridCanvas()` in
+`keyHold.ts`) and not about the grid container:
+  1. `SpreadsheetDataEditor.holdKeysOnMouseDown` skipped arming `KeyHold` whenever
+     `event.currentTarget.contains(document.activeElement)` — which glide's `<td>` satisfies.
+     It now skips only when the canvas itself, or an overlay in `#portal`, already has focus.
+  2. `KeyHold.release` required `!grid.contains(document.activeElement)` before focusing the
+     canvas, so it did nothing while focus was on that `<td>`. It now focuses the canvas
+     unless focus is held outside the grid.
 
-Repro kept executable as `tests/e2e/spreadsheet-second-cell-edit.spec.ts`, marked
-`test.fixme` — un-fixme it to verify a fix. This is also why
-`spreadsheet-grid-fixes.spec.ts`'s SHEET-4/5 test occasionally goes red: that is TRUE SIGNAL,
-not flake. **Do not cut a release until this is fixed.**
+**Half 1 is why the first three attempts failed.** They all changed `KeyHold`, which could not
+help: `KeyHold.start` was never called at all. Recorded so nobody re-treads them — (a) canvas
+check in `release` only: 3/3 -> 1/3 at 8x; (b) treating intra-grid focus moves as
+not-moved-away: no change; (c) re-asserting canvas focus before every replay: still 5/6 at 8x.
+
+Verified by control experiment, not assumption: both halves -> **6/6 pass at 8x**; reverting
+only half 1 and keeping half 2 -> **6/6 fail**. Before the fix: 5/6 fail at 8x, 1/6
+unthrottled.
+
+Regression test: `tests/e2e/spreadsheet-second-cell-edit.spec.ts`, throttled 8x on purpose
+(1-in-6 at full speed would not reliably catch a regression). This was also the cause of
+`spreadsheet-grid-fixes.spec.ts`'s SHEET-4/5 test going red intermittently — that was true
+signal, correctly not dismissed as flake.
 
 **SHEET45-FLAKE-1 · low · FIXED** (2026-09-26) — `spreadsheet-grid-fixes.spec.ts`'s
 `typeAt` helper failed once in a full e2e run (`#portal textarea` still present 5s after
