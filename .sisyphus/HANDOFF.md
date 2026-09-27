@@ -11,7 +11,30 @@ in **French** — answer him in French. Code, commits, docs and UI stay in Engli
 - `CHANGELOG.md`, `STRICT_MODE_TODO.md`, `docs/KNOWN_LIMITATIONS.md`, `docs/RELEASE.md`
 - `git log --oneline -30`
 
-## Current state (3.7.0)
+## Current state (3.8.0)
+- `main` is pushed and released as **3.8.0** (2026-09-27); installer
+  `release\Atlas-Setup-3.8.0.exe` (SHA256
+  `3b83b808bbd9001fb6d7ff604e9d9d324de944a9af86327630255dc4fe108a17`, 136 MB, unsigned).
+- **Embedded exe metadata verified on the real build** (the check `docs/RELEASE.md` said still
+  needed a lead build + Properties -> Details): ProductName/FileDescription/CompanyName
+  `Atlas`, FileVersion `3.8.0`, ProductVersion `3.8.0.0`, LegalCopyright
+  `Copyright (c) 2026 Atlas`. ELEC-10 is therefore confirmed fixed against a real artifact,
+  not just against the yml.
+- **Step 8 (packaged installer smoke test) has NOT been done for 3.8.0** — it needs a human:
+  UAC prompt, SmartScreen "Run anyway", Start Menu launch, and the uninstall check. The
+  packaged `release\win-unpacked\Atlas.exe` was launched headless with a `.docx` argument as a
+  partial substitute (catches a missing packaged asset, which is step 8's main risk) — see the
+  3.8.0 notes in the phase-4 plan.
+- 3.8.0 fixes **F6c** (HIGH, silent data loss: a second cell edit discarded and the following
+  Ctrl+S writing nothing). 3.7.0 and earlier all have it. Anyone still on 3.7.0 should upgrade.
+- At 3.8.0: **3839 unit tests, 142 Playwright e2e, coverage 82.58/70.41/85.10/84.44,
+  `npm audit` 0, bundle gate green, CI green.**
+- Still open: **P5.1 code signing** (no certificate — see `docs/RELEASE.md`), P5.3 (depends on
+  it), RPR-STYLES-1 (unknown `w:rPr` children dropped from `styles.xml` on save, re-verified
+  2026-09-27), REDO-REPLAY-1, and the comments pane having no un-resolve affordance (new in
+  3.8.0 — resolving now persists, so it is no longer undone by reopening the file).
+
+## Previous state (3.7.0)
 - `main` is pushed and released as **3.7.0**; installer `release\Atlas-Setup-3.7.0.exe`
   (SHA256 `ddb181307d210e42155bcb2abcb8fe861a22675d6186f6e58cb06f4a28f3ec40`, 136 MB, unsigned).
   Earlier installers (3.4.0-3.6.0) are in `release\` too.

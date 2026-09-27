@@ -608,6 +608,42 @@ tests now pin the correct mapping.
 - PageUp/PageDown move by about one screen (no paginator is wired to the editor), not an exact page.
 - Not swept: legacy `.doc`/`.ppt` (no fixtures), markdown preview rendering details, recent files across relaunch.
 
+### 2026-09-27 — 3.8.0 release verification
+
+Installer: `release\Atlas-Setup-3.8.0.exe`, 136 MB, unsigned, SHA256
+`3b83b808bbd9001fb6d7ff604e9d9d324de944a9af86327630255dc4fe108a17`.
+
+**Embedded exe metadata verified against the real artifact** — the check
+`docs/RELEASE.md` said "still requires the lead's next real `electron-builder --win`
+run and inspecting the resulting exe's Properties -> Details tab". Read off
+`release\win-unpacked\Atlas.exe`'s `VersionInfo`: ProductName / FileDescription /
+CompanyName all `Atlas`, FileVersion `3.8.0`, ProductVersion `3.8.0.0`,
+LegalCopyright `Copyright (c) 2026 Atlas`. ELEC-10 is now confirmed against a built
+binary rather than only against `electron-builder.yml` and
+`releaseMetadata.test.ts`.
+
+**Packaged-app launch check (partial stand-in for step 8).** Step 8 proper needs a
+human — UAC prompt, SmartScreen "Run anyway", Start Menu shortcut, uninstall — so it
+is NOT done for 3.8.0. What was done instead targets step 8's main technical risk,
+"an asset that is missing from the package and only fails outside the dev server":
+`release\win-unpacked\Atlas.exe` was launched directly (not `electron:preview`,
+which skips NSIS and runs from source) with a real file of five formats, asserting
+the format's own rendered DOM appeared and that the renderer logged no console
+errors:
+
+| Fixture | Asserted | Result |
+|---|---|---|
+| `sample.docx` | `.docx-page` renders, text correct | 1 page, no console errors |
+| `sample.pdf` | `.pdf-viewer canvas` | 1 canvas, no console errors |
+| `sample-multisheet.xlsx` | `.spreadsheet-viewer__grid canvas` | 2 canvases, no console errors |
+| `sample.pptx` | `.pptx-viewer` | rendered, no console errors |
+| `sample.odt` | `.odt-viewer__body` | rendered, no console errors |
+
+This covers pdfjs's worker, the spreadsheet worker, glide's canvas, the bundled
+fonts and the lazy per-format chunks actually resolving from the packaged asar —
+the things that break in a package and not in dev. It does not cover installation,
+file associations, the Start Menu entry, or uninstall.
+
 ### 2026-09-24 — packaged installer smoke test (`docs/RELEASE.md` step 8), 3.7.0
 
 Owner installed `Atlas-Setup-3.7.0.exe` (UAC); the rest was driven against
