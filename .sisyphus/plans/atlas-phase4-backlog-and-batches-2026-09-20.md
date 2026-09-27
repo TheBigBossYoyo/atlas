@@ -622,10 +622,59 @@ LegalCopyright `Copyright (c) 2026 Atlas`. ELEC-10 is now confirmed against a bu
 binary rather than only against `electron-builder.yml` and
 `releaseMetadata.test.ts`.
 
-**Packaged-app launch check (partial stand-in for step 8).** Step 8 proper needs a
-human — UAC prompt, SmartScreen "Run anyway", Start Menu shortcut, uninstall — so it
-is NOT done for 3.8.0. What was done instead targets step 8's main technical risk,
-"an asset that is missing from the package and only fails outside the dev server":
+**Step 8 (packaged installer smoke test) — DONE for 3.8.0, including the
+upgrade path.** The owner accepted the UAC prompt; everything else was driven
+programmatically. The installer was run silently (`/S`) so UAC was the only
+interaction needed.
+
+**This also closes P5.3's installer-upgrade-path item**, which had never been
+verified against a real prior install. 3.7.0 was installed beforehand, so this was a
+genuine upgrade in place, not a fresh install:
+
+| Check | Before | After | Result |
+|---|---|---|---|
+| Installed exe version | 3.7.0 | 3.8.0 (ProductVersion `3.8.0.0`) | upgraded |
+| Control Panel entries | one, `Atlas 3.7.0` | one, `Atlas 3.8.0` | **no duplicate entry** |
+| Start Menu shortcut | `Atlas.lnk`, 24/09 | same path, re-stamped 27/09, target `C:\Program Files\Atlas\Atlas.exe` | survived |
+| `recent-files.json` | 4210 bytes, 50 entries, sha256 `CDDB0768…` | **byte-identical, same sha256** | preserved |
+| `window-state.json` | 1542x913 @168,56 maximized | identical | preserved |
+| `Local Storage` (theme, locale, drafts) | 10 files, 111 712 bytes | identical | preserved |
+| Installer exit code | — | 0 | clean |
+
+Post-install functional checks on the **installed** build:
+- Launched from the Start Menu shortcut: 4 processes, window title `Atlas`.
+- Opened a `.docx` by argv (what a double-click does): window title
+  `sample.docx — Atlas`.
+- File associations: all 5 `Atlas.*` ProgIDs present, and the legacy
+  `.doc`/`.xls`/`.ppt` ProgIDs resolve to `C:\Program Files\Atlas\Atlas.exe`.
+  Default-Apps integration intact — `HKLM\SOFTWARE\RegisteredApplications` -> `Atlas`
+  -> `SOFTWARE\Atlas\Capabilities`, 43 extensions.
+- **F6c verified fixed in the shipped artifact, not just on `main`**: the repro run
+  against `C:\Program Files\Atlas\Atlas.exe` over CDP at 8x CPU throttle passed
+  **5/5** (A2 `0.5`, B2 `45365` both saved). Before the fix the same scenario failed
+  5/6 at that rate. Playwright's `_electron.launch()` cannot drive a packaged app
+  here, so the app was started with `--remote-debugging-port` and driven via
+  `chromium.connectOverCDP` — worth knowing for future packaged-build testing.
+
+**Not done, and deliberately:** uninstall verification. It would remove the owner's
+working 3.8.0 install, and the upgrade over 3.7.0 already exercised the
+uninstall-and-replace path NSIS runs internally.
+
+**Finding, minor, not fixed — generic ProgIDs in the global class store.**
+`electron-builder` uses each `fileAssociations` entry's `name:` as the ProgID, and
+Atlas's names are human labels, so the install writes ~30 unqualified keys under
+`HKLM\SOFTWARE\Classes` — `Word Document`, `Excel 97-2003 Workbook`,
+`PowerPoint 97-2003 Presentation` and so on — each with an open command pointing at
+Atlas.exe. No collision with Microsoft Office (which uses `Word.Document.12`-style
+ProgIDs), and `build/installer.nsh` separately registers the properly-qualified
+`Atlas.*` set that the Capabilities block uses. But squatting generic names in a
+global hive means another app using the same electron-builder pattern would collide,
+and Atlas's uninstaller would delete them. Fixing it means changing ProgIDs on an
+installed base, which has the same association-identity risk as ELEC-22's legacy
+`appId` — a deliberate decision, not a drive-by.
+
+Also verified, as a narrower packaged-asset check before the install: the unpacked
+build renders five formats with no console errors —
 `release\win-unpacked\Atlas.exe` was launched directly (not `electron:preview`,
 which skips NSIS and runs from source) with a real file of five formats, asserting
 the format's own rendered DOM appeared and that the renderer logged no console

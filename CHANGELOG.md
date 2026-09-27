@@ -76,6 +76,20 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   what Atlas will open at all — so such a file is now refused outright instead of
   waved through.
 
+### Release engineering
+
+- **Atlas will not be code signed** — an explicit decision, not an outstanding task.
+  So the installer will always show Windows' "unknown publisher" warning (use
+  **More info → Run anyway**), the SHA256 published with each release is the only
+  way to verify you got an unmodified installer, and there will be no auto-updater
+  while the build is unsigned. `docs/RELEASE.md` and `docs/KNOWN_LIMITATIONS.md`
+  spell out what that means.
+- **Upgrading in place was verified for the first time**, 3.7.0 → 3.8.0 on a real
+  machine: your recent files, window size and settings all come through untouched,
+  the Start Menu shortcut survives, and you get one entry in Add/Remove Programs
+  rather than two. The cell-edit fix above was then re-checked against the actually
+  installed application, not just the source tree.
+
 ### Housekeeping
 
 - A test that waited on a lazily-loaded viewer failed intermittently in a full

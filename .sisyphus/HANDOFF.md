@@ -20,17 +20,25 @@ in **French** — answer him in French. Code, commits, docs and UI stay in Engli
   `Atlas`, FileVersion `3.8.0`, ProductVersion `3.8.0.0`, LegalCopyright
   `Copyright (c) 2026 Atlas`. ELEC-10 is therefore confirmed fixed against a real artifact,
   not just against the yml.
-- **Step 8 (packaged installer smoke test) has NOT been done for 3.8.0** — it needs a human:
-  UAC prompt, SmartScreen "Run anyway", Start Menu launch, and the uninstall check. The
-  packaged `release\win-unpacked\Atlas.exe` was launched headless with a `.docx` argument as a
-  partial substitute (catches a missing packaged asset, which is step 8's main risk) — see the
-  3.8.0 notes in the phase-4 plan.
+- **Step 8 (packaged installer smoke test) is DONE for 3.8.0, upgrade path included.** The
+  3.8.0 installer was run over the existing 3.7.0 install (owner accepted the UAC prompt;
+  `/S` silent, so that was the only interaction). Result: one Control Panel entry at 3.8.0
+  (no duplicate), Start Menu shortcut intact, and `recent-files.json` / `window-state.json` /
+  `Local Storage` all **byte-identical** afterwards. **This closes P5.3's installer
+  upgrade-path item.** F6c was then re-verified against `C:\Program Files\Atlas\Atlas.exe`
+  itself — 5/5 at 8x CPU throttle. Full table in the phase-4 plan's "3.8.0 release
+  verification". Uninstall verification deliberately skipped: it would remove the working
+  install, and the upgrade already exercised NSIS's internal uninstall-and-replace.
 - 3.8.0 fixes **F6c** (HIGH, silent data loss: a second cell edit discarded and the following
   Ctrl+S writing nothing). 3.7.0 and earlier all have it. Anyone still on 3.7.0 should upgrade.
 - At 3.8.0: **3839 unit tests, 142 Playwright e2e, coverage 82.58/70.41/85.10/84.44,
   `npm audit` 0, bundle gate green, CI green.**
-- Still open: **P5.1 code signing** (no certificate — see `docs/RELEASE.md`), P5.3 (depends on
-  it), RPR-STYLES-1 (unknown `w:rPr` children dropped from `styles.xml` on save, re-verified
+- **P5.1 code signing is CLOSED as WON'T DO** (owner decision, 2026-09-27). Atlas ships
+  unsigned, permanently: expect the SmartScreen "unknown publisher" warning on every release,
+  treat the published SHA256 as the only integrity check, and keep auto-update out of scope
+  (DEFER-7) — an updater running unsigned downloads is a malware path. Do not re-open this as
+  a backlog item; see `docs/RELEASE.md`'s "Code signing — DECIDED AGAINST".
+- Still open: RPR-STYLES-1 (unknown `w:rPr` children dropped from `styles.xml` on save, re-verified
   2026-09-27), REDO-REPLAY-1, and the comments pane having no un-resolve affordance (new in
   3.8.0 — resolving now persists, so it is no longer undone by reopening the file).
 

@@ -377,6 +377,24 @@ Export targets and fidelity vary by format — see the README's Export table
 for the current, per-format matrix (kept as the single source of truth
 there so this document doesn't drift out of sync with it).
 
+## The installer is unsigned, by decision
+
+Atlas is not code signed and will not be (decided 2026-09-27; see
+`docs/RELEASE.md`). Consequences a user or packager should expect, none of which are
+bugs:
+
+- Windows SmartScreen shows "Windows protected your PC" with an unknown-publisher
+  message on first run of a freshly downloaded installer, and will keep doing so
+  release after release — SmartScreen reputation is per file hash, and a
+  low-download-volume tool does not accumulate enough of it. Use **More info ->
+  Run anyway**.
+- The SHA256 published with each release is the only way to verify you received an
+  unmodified installer.
+- There is no auto-updater, and there will not be one while the build is unsigned —
+  an updater that runs unsigned downloaded executables is a malware delivery path.
+- On a machine with AppLocker/WDAC or enterprise AV policy requiring signed
+  binaries, Atlas will be blocked outright rather than warned about.
+
 ## Dev tooling: dev/prod detection depends on `dist/` existing
 
 `electron/main.cjs` decides dev vs. prod (RUN-12, `electron/lib/devDetect.cjs`)

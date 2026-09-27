@@ -983,8 +983,15 @@ AST-based guard so that class of gap cannot return, and `DocxViewer.tsx` taken f
 3,611 lines to 2,380 across fourteen extracted modules with no behaviour change.
 **P4.7 (viewer coverage sweep) is now DONE** — the three files still under 65%
 statements (`useSlideEditorCore`, `SpreadsheetEditToolbar`, `FrozenRowsStrip`) have
-tests and per-file coverage floors. **P5.1 (code signing) and P5.3 remain
-pending**, unchanged and still blocked on a certificate the owner does not hold.
+tests and per-file coverage floors. **P5.1 (code signing) is CLOSED as WON'T DO** — the
+owner decided against signing on 2026-09-27; see `docs/RELEASE.md`'s "Code signing —
+DECIDED AGAINST" section for the consequences that follow (permanent SmartScreen
+warning, the SHA256 being the only integrity check, auto-update staying out of
+scope per DEFER-7, and enterprise-policy machines blocking the app outright).
+**P5.3's signed-build checklist is closed with it**; its other half, installer
+upgrade-path verification, was DONE for 3.8.0 — see the phase-4 plan's "3.8.0
+release verification" section (3.7.0 -> 3.8.0 upgrade in place, user data
+byte-identical, one Control Panel entry, Start Menu shortcut intact).
 
 ### Phase 5 (Release) — PARTIAL (2026-09-20 update)
 `3.2.0` (`4244bdd`) and `3.3.0` (`09cbc9c`) have both shipped — see "Wave

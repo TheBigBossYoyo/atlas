@@ -230,11 +230,32 @@ electron-builder's `AppInfo.companyName` getter does `author.name`, which on
 a string is `undefined` — so `CompanyName` would never have been set even
 with resource editing enabled. Changed to `"author": { "name": "Atlas" }`.
 
-## Code signing — what it would take (not done)
+## Code signing — DECIDED AGAINST (2026-09-27)
 
-The owner has no code-signing certificate today, and P5.1 is explicitly
-scoped to skip anything that needs one. This section is the reference for
-if/when that changes.
+**The owner has decided Atlas will not be code signed.** This is a decision, not a
+pending task: P5.1 is closed as "won't do" rather than "blocked on a certificate",
+and P5.3's signed-build checklist goes with it. Do not re-raise it as an open item.
+
+What that means in practice, so nobody has to rediscover it:
+- Every release installer shows the Windows SmartScreen "unknown publisher" warning
+  on first run, and will keep doing so — reputation is tracked per file hash, and a
+  low-download-volume tool never accumulates enough of it. Users need
+  **More info -> Run anyway**. Say so wherever the installer is handed out.
+- The SHA256 recorded at step 7 is the only integrity check a recipient has. Keep
+  recording it, and publish it alongside the installer rather than only in here.
+- **Auto-update stays out of scope** (`DEFER-7`). An updater that downloads and runs
+  an unsigned executable is a malware delivery path; shipping one without signing
+  would be worse than having no updater.
+- Atlas will be blocked outright, not merely warned about, anywhere AppLocker/WDAC
+  or enterprise AV policy requires signed binaries. It is a personal-machine tool.
+- `electron-builder.yml` keeps `win.signExecutable: false`. Note the ELEC-10 trap
+  recorded below: it must stay `signExecutable`, never `signAndEditExecutable`,
+  because the latter also disables icon and version-metadata embedding.
+
+The subsection below is retained as reference only — what it would have taken, if the
+decision is ever revisited.
+
+### Reference: what signing would have required
 
 **What's needed:**
 - An **OV (Organization Validation) or EV (Extended Validation) code-signing
