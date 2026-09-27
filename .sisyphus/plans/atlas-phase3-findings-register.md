@@ -518,6 +518,24 @@ Still open after wave 4:
 
 ---
 
+### 14d. 3.8.0 resolution status (2026-09-27) — audit follow-through
+
+From an `/sc:analyze` pass over the tree on 2026-09-26, plus what verifying that
+work turned up. Merge commits on `main`: `d98bd30`, `bad5a64`, `89a162c`,
+`3f66935`, `bae3109`, `1766eeb`.
+
+| ID | Status | Where | Evidence |
+|---|---|---|---|
+| F6c | **Fixed** | `9cc2420` | HIGH, silent data loss: a second cell edit was discarded and the Ctrl+S after it wrote nothing (mtime unchanged, no error). Cause: both `SpreadsheetDataEditor.holdKeysOnMouseDown` and `KeyHold.release` asked whether the grid CONTAINER had focus, but after a commit glide leaves focus on a `<td>` of its a11y table — inside the grid, not the canvas. Both now ask about the canvas via a shared `gridCanvas()`. Control experiment: both halves 6/6 pass at 8x throttle, half 2 alone 6/6 fail. Regression test `tests/e2e/spreadsheet-second-cell-edit.spec.ts`, throttled 8x (1-in-6 at full speed would not catch a regression) |
+| ZIP64-1 | **Fixed** | `9888243` | The spreadsheet zip-bomb budget failed OPEN on Zip64 — one sentinel value bypassed it entirely. Now fails closed on positive evidence of Zip64, while still returning quietly for "no plain EOCD at all" (a corrupt/non-zip file, where failing closed would misreport it as too large). 4 new tests |
+| I18N-TEXT-1 | **Fixed** | `9888243` | The guard only checked `title`/`aria-label`/`placeholder` attributes. Now walks the TypeScript AST for `JsxText` across all 83 surface files. It found **12 strings shipping in English in every locale** (all five "failed to render" messages, both "loading" notices, "preparing for print", ODT's tracked-changes banner, the drawing placeholder) — all translated. An earlier "zero literal text children" measurement had only looked inside `<button>`/`<label>`/`<option>`/`<th>`/`<summary>`; all twelve live in a `<div>`/`<span>` |
+| — (comment resolve) | **Fixed** | `9888243` | `w15:done` was parsed AND written, but nothing read it to filter the pane and resolving only touched session state — so Word-resolved threads showed as open and Atlas-resolved ones were forgotten on reopen. New `setCommentResolved`; the pane filters the model. Consequence recorded in KNOWN_LIMITATIONS: resolving is now a document edit, so reopening no longer undoes it and Ctrl+Z does not reach it |
+| P4.7 | **Done** | `95ed23c` | The three files under 65% statements (`useSlideEditorCore` 49/12.5, `SpreadsheetEditToolbar` 35/35, `FrozenRowsStrip` 63/37) now have behavioural tests and per-file floors. `useSlideEditorCore` mattered most — one core shared by both slide editors |
+| F4 (DocxViewer) | **Done** | `d073a71`, `ff62cf7`, `0382448` | 3,611 lines -> 2,380; 29 state declarations/23 effects/51 callbacks -> 10/13/31. Fourteen modules under `docx/render/` and `docx/fonts/`, no behaviour change. What remains is the document, selection, undo history and DOM input handlers |
+| QUIT-DRAFT-1, TEST-9, FIXTURE-1, ARROW-VERT-1, FROZENROWS-I18N-1 | **Already fixed; register reconciled** | `9888243` | All five were listed as open and were fixed in the code. FIXTURE-1's fix was even recorded in the batch log of the same file without the item being updated. Two had been re-investigated from scratch by separate sessions — the reconciliation exists to stop that recurring |
+| Six IPC handlers, save-dialog input | **Fixed** | `6d80e3f` | Four spellcheck channels, `set-theme` and `get-initial-file` were missing the `isFromMainFrame` check the file's own invariant claims for every untrusted channel. `get-initial-file` also CONSUMES `pendingFilePath`, so a subframe could have swallowed the file the user double-clicked. `app:get-locale` is now the one documented exemption |
+| RPR-STYLES-1 | **Open, re-verified** | `6a490ed` | Confirmed still open by grep: `rPrUnknown` is absent from both `parser/styles.ts` and `serializer/stylesWriter.ts`, so unknown run properties in `styles.xml` are dropped on save. Real work, not a one-liner — that part of the assessment is unchanged |
+
 ## Refuted During Verification
 
 **None.** The original audit's verification pass produced zero refuted findings across all 294 items (`"refuted": []` in the source audit data), and this finalization's critic-review pass (below) likewise refuted none of the critic's factual/sequencing/coverage claims — every one was independently confirmed against the live codebase or the plan's own text. 25 findings had their severity adjusted during the original verification pass (21 downgraded, 4 upgraded) — each is marked inline above with `⇩was X` / `⇧was X`; the verifier's rationale for each adjustment is embedded in that row's Impact/Recommendation summary and in the full audit record.

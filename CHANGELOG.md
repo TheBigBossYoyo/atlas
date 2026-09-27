@@ -8,7 +8,7 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
-## [Unreleased]
+## [3.8.0] — 2026-09-27 (audit follow-through: data-loss fix, security hardening, DocxViewer decomposition)
 
 ### Fixed
 
