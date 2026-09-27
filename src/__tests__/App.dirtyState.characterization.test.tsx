@@ -202,7 +202,16 @@ describe('App dirty-state characterization', () => {
     // has; every later `captureState` call in this test reuses the same
     // now-resolved `lazy()` module promise, so it stays synchronous same as
     // before.
-    await waitFor(() => expect(document.querySelector('.markdown-body')).not.toBeNull());
+    // An explicit budget on this one wait, unlike the rest of the suite which takes
+    // the 5s global from `setup.ts`. This is the only assertion that blocks on a
+    // `React.lazy()` dynamic import completing — `MarkdownRenderer`'s chunk is
+    // ~500 KB — and it is the first thing to blow its budget when the machine is
+    // busy: it exceeded 1s (the Testing Library default), then 5s, on a laptop that
+    // had been running builds and Electron e2e all night, while passing in
+    // isolation every time. A longer budget is the right fix here and not a
+    // band-aid, because the CONDITION is correct (wait for the component to mount);
+    // only the time a lazy import takes under load is in question.
+    await waitFor(() => expect(document.querySelector('.markdown-body')).not.toBeNull(), { timeout: 30_000 });
     transitions.push(captureState('1. load sample'));
 
     // 2. Edit -----------------------------------------------------------------

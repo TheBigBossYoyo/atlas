@@ -24,6 +24,12 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 - **Tabs: a Save As finishing just as you switch tabs can no longer show the
   previous document's text under the new tab's name.** Very hard to hit by
   hand; found by a test that failed only under load.
+- **Spreadsheets: editing a second cell no longer loses what you typed, and the
+  save after it no longer does nothing.** After committing one cell's edit, clicking
+  another cell and typing straight away could silently leave the cell unchanged —
+  and the Ctrl+S that followed wrote nothing at all, with no error and no hint that
+  anything was wrong. Worse on a slow or busy machine, but it happened at normal
+  speed too.
 - **Spreadsheets: a screen reader announces a frozen row's cells in French**
   when Atlas is in French. Those cells were the one place still named in
   English.
@@ -80,14 +86,9 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   waves of tests landed, leaving ~6 points of slack a regression could hide in.
   Re-measured and raised to 82/70/84/84.
 - An e2e test failed once in a full run and passed on its own. Investigating it
-  instead of retrying turned up a **real, unreleased bug** (F6c): after committing
-  one cell edit, a second cell edit can be silently lost and the Ctrl+S after it
-  can silently not save. It reproduces 5 times in 6 with the renderer slowed 8x,
-  and 1 in 6 at normal speed. It is **not fixed** — three attempts were measured
-  and reverted — but the cause is now known and written up, the reproduction is
-  kept as a ready-to-enable test, and it is recorded in
-  `docs/KNOWN_LIMITATIONS.md` with a workaround. No release should go out before
-  it is fixed.
+  instead of retrying turned up the data-loss bug above (F6c), which is now fixed.
+  Three earlier attempts at it were measured and reverted before the real cause was
+  found; a control experiment confirms the fix rather than assuming it.
 - Five items the backlog listed as open were already fixed in the code; they are
   now marked resolved with the evidence, and the list carries a note about why the
   drift happens. Two of them had been re-investigated from scratch by separate

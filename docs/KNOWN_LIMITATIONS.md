@@ -230,18 +230,6 @@ PDF editing or save-back** — Atlas does not write PDF files.
 
 ## Spreadsheets (XLSX/ODS/legacy) and CSV/TSV
 
-> **OPEN, HIGH — F6c: the second cell edit of a session can be silently lost, and
-> the save after it silently does nothing.** Click a cell and type straight away,
-> press Enter, then click a different cell and type straight away: the second
-> cell's text may never reach it, Enter may not commit, and a following Ctrl+S may
-> not write the file at all — with no error shown. Measured 5 times in 6 at 8x CPU
-> throttling and 1 in 6 unthrottled, so it is not limited to slow machines. Cause
-> and the three rejected fix attempts are written up in
-> `tests/e2e/spreadsheet-second-cell-edit.spec.ts` and in the phase-4 backlog under
-> F6c. **Work around it by pausing briefly after clicking a cell before typing**,
-> and by checking the file was actually saved (the title bar's unsaved marker) after
-> editing more than one cell.
-
 View and edit — see "Editing scope, overall" above for what editing covers.
 Formatted cell values (numbers/dates/currency per the workbook's own number
 formats), merged cells, column widths, hidden sheets, and frozen-pane
