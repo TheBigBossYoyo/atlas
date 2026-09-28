@@ -104,7 +104,10 @@ test('closing documents releases their bytes instead of piling up in the closed-
     }
 
     async function closeActiveTab(fileName: string): Promise<void> {
-      await page.getByRole('button', { name: `Close ${fileName}` }).click({ timeout: 15_000 })
+      // A11Y pass 4 — the X on a tab is an `aria-hidden` span with no accessible
+      // name (a focusable control inside a `role="tab"` violates WCAG 4.1.2), so
+      // it is addressed by `data-close-tab`, which holds the session's full path.
+      await page.locator(`[data-close-tab$="${fileName}"]`).click({ timeout: 15_000 })
     }
 
     // Open the first file (already loaded via the CLI arg) and close it —

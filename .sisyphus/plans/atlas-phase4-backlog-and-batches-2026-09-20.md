@@ -839,6 +839,18 @@ composite in `Input.ts`), so there is no single state to snapshot there.
 
 5 tests in `editor/__tests__/History.test.ts`.
 
+**BUNDLE-BASELINE-1 · low · observation, 2026-09-28** — the stored bundle baseline
+(`.sisyphus/baselines/atlas-phase3-bundle.json`) was captured on 2026-09-20 and the
+build is now +7.96% total / +7.51% gzip against it. The gate passes (threshold 25%),
+and none of that growth is from this session: axe-core is a devDependency and
+`@lezer/highlight` was already bundled transitively. It is eight days of legitimate
+feature work, but it means a real regression now has less of the 25% window to show
+up in. Refreshing the baseline (`node scripts/capture-bundle-baseline.mjs`) is the
+intended move for accumulated intentional growth — deliberately NOT done here,
+because it also erases the drift record, which is the owner's call rather than a
+drive-by. Worth knowing alongside it: the absolute gzip ceiling is 5 MiB and the
+build is at 3.99 MiB, so about 1.25 MiB of headroom remains.
+
 **CHARTSHEET-1 · low · CLOSED AS A FEATURE REQUEST (2026-09-28)** — one reason the xlsx
 passthrough writer bails to the lossy path is a chartsheet or dialogsheet (no
 `<sheetData>`). Reviewed again and deliberately not scheduled: nothing is silently
