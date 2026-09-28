@@ -48,6 +48,7 @@ import {
   useReportSavedPath,
   useSetViewerDirty,
 } from '../../viewers/shared/useViewerContext'
+import { stashSaveAsHandoff } from './saveAsHandoff'
 import { syncSelectionToDom } from './selectionDom'
 
 /** The file name a save dialog should suggest, from a full path. */
@@ -212,22 +213,32 @@ export function useDocxSave({
         // never shows a dialog (confirmed against the real app: no observed
         // focus loss), so this is scoped to the Save As path specifically.
         //
-        // This is necessary but NOT sufficient end-to-end: confirmed against
-        // the real app that once `reportSavedPath` (above) updates the
-        // active tab's path, `src/components/ViewerRouter.tsx` — which keys
-        // its `ViewerErrorBoundary` (and so this whole component) by
-        // `file.path` — remounts a BRAND NEW `DocxEditor` a render or two
-        // later, discarding the focus this restores along with it. Fixing
-        // that fully needs a change in ViewerRouter.tsx (outside this
-        // component's ownership), described in this task's final report;
-        // this restoration still stands on its own for any Save As that
-        // doesn't trigger that remount, and is the half of the fix that
-        // belongs here.
+        // This alone is not sufficient end-to-end: once `reportSavedPath`
+        // (above) updates the active tab's path, `src/components/
+        // ViewerRouter.tsx` — which keys its `ViewerErrorBoundary`, and so
+        // this whole component, by `file.path` — remounts a brand-new
+        // `DocxEditor` a render or two later, discarding the focus restored
+        // here along with the instance that held it. The remaining half is
+        // `saveAsHandoff.ts`: the caret and scroll position are stashed for
+        // the replacement instance to claim on mount. See that module for why
+        // the alternative (not remounting at all) is a much larger change
+        // than the symptom warrants.
         if (options?.forceDialog) {
           const root = editorRootRef.current
           if (root !== null) {
             root.focus({ preventScroll: true })
             syncSelectionToDom(root, range, documentModelRef.current)
+            // Only when the path actually changed, which is the only case that
+            // remounts — a Save As onto the same file keeps this instance, and
+            // the focus restored just above is all it needs.
+            if (result.path !== undefined && result.path !== filePath) {
+              stashSaveAsHandoff({
+                targetPath: result.path,
+                range,
+                scrollTop: root.scrollTop,
+                scrollLeft: root.scrollLeft,
+              })
+            }
           }
         }
 

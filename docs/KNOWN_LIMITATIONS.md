@@ -76,6 +76,14 @@ rotation and flip (parsed, serialized, and rendered at the right spot with
 correct z-order).
 
 **Not supported:**
+- **A Save As clears the undo history of the document you saved.** Saving under
+  a new name renames the tab, and the document view is keyed by its path, so it
+  is rebuilt from scratch. The cursor, keyboard focus and scroll position are
+  carried across (DOCX-3); the undo stack is not. Undo/redo start fresh from the
+  saved state. Keeping the view alive across a rename is a larger change —
+  `src/components/ViewerRouter.tsx`'s own comment describes what it needs — and
+  is tracked separately.
+
 - **Header/footer editing is per text SEGMENT, not per character, and a
   table block is still fully read-only.** A paragraph made entirely of
   plain runs (text/tabs/breaks) gets one editable field, as before. A

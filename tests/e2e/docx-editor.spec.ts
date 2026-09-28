@@ -411,25 +411,24 @@ test('DOCX-3: typing continues to work immediately after Save As, without clicki
   // that call showed `document.activeElement` correctly back on the editor
   // surface).
   //
-  // FIX-2/2 — NOT done here, outside this task's file ownership: a moment
-  // later, once `reportSavedPath` (called just before the fix above, to tell
-  // the shell the tab's file renamed) updates the active tab's path,
-  // `src/components/ViewerRouter.tsx` remounts a BRAND NEW DocxEditor
-  // instance — `<ViewerErrorBoundary key={file.path} ...>` there keys the
-  // whole viewer subtree by `file.path`, and Save As always changes it — so
-  // the freshly restored focus is immediately discarded along with the old
-  // instance. Confirmed via a temporary render-count console.log: the
-  // component remounts (a fresh `file.path` value in a fresh render) within
-  // ~300ms of the focus fix running. See this task's final report for the
-  // exact fix ViewerRouter.tsx needs (it needs to distinguish "the current
-  // document was renamed by its own Save As" from "the user opened a
-  // different file" before deciding whether to remount).
+  // FIX-2/2 (2026-09-28): once `reportSavedPath` (called just before the fix
+  // above, to tell the shell the tab's file renamed) updates the active tab's
+  // path, `src/components/ViewerRouter.tsx` remounts a BRAND NEW DocxEditor
+  // instance — `<ViewerErrorBoundary key={file.path} ...>` keys the whole
+  // viewer subtree by `file.path`, and Save As always changes it — so the
+  // freshly restored focus was discarded along with the instance that held it,
+  // within ~300ms.
   //
-  // Pinned via `test.fail()` rather than deleted or weakened: this documents
-  // the exact remaining gap and will flip to an unexpected PASS (Playwright
-  // then reports it as a failure needing promotion back to a plain `test`)
-  // the moment ViewerRouter.tsx's half of the fix lands.
-  test.fail()
+  // Not fixed by making ViewerRouter keep the viewer mounted. That is the
+  // change its own comment describes, and it costs the crash-clearing
+  // behaviour of `ViewerErrorBoundary` (LOAD-08/RUN-09) plus a state-
+  // rederivation audit of every viewer that seeds from `file.path`/`bundle`.
+  // Instead `src/docx/render/saveAsHandoff.ts` carries the caret, focus and
+  // scroll position across the remount, for the replacement instance to claim
+  // once it has laid the document out. The remount itself is unchanged and
+  // still costs a re-parse and the undo history.
+  //
+  // This was `test.fail()` until that landed.
 
   const source = await createFixture()
   const target = path.join(path.dirname(source), 'saveas-continue-typing.docx')

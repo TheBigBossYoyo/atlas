@@ -17,6 +17,11 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   not, and after using them Tab and the arrow keys went nowhere until you clicked
   something.
 
+- **Word: typing works straight after Save As, without clicking back in.** The
+  OS save dialog takes focus away from Atlas, and renaming the tab rebuilt the
+  document view from scratch, so the cursor was gone and anything typed next
+  simply did not appear. The cursor, the focus and the scroll position now come
+  back where they were. Undo history is still cleared by a Save As.
 - **Word: redo now restores exactly the state you undid.** Redo used to be
   recomputed by re-running the edit against the document as it stood at that
   moment, which could place it differently if anything had shifted in between.

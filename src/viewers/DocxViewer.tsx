@@ -71,6 +71,7 @@ import { getSelectionFromDom } from '../docx/render/selectionDom'
 import { useDocxSelectionPainting } from '../docx/render/useDocxSelectionPainting'
 import { useDocxComments } from '../docx/render/useDocxComments'
 import { useDocxHeaderFooter } from '../docx/render/useDocxHeaderFooter'
+import { useSaveAsFocusRestore } from '../docx/render/saveAsHandoff'
 import { useDocxSave } from '../docx/render/useDocxSave'
 import { useDocxPrompt } from '../docx/render/useDocxPrompt'
 import { useDocxHyperlink } from '../docx/render/useDocxHyperlink'
@@ -488,6 +489,12 @@ function DocxEditor({
     documentModelRef,
     pages,
   )
+  // DOCX-3 — a Save As renames the tab, ViewerRouter keys the viewer by
+  // `file.path`, and this whole component is therefore a brand-new instance a
+  // render or two after the save. `useDocxSave` restored focus in the instance
+  // that is already gone by then; this claims what it left behind. See
+  // `docx/render/saveAsHandoff.ts`.
+  useSaveAsFocusRestore(file.path, pages !== null, editorRootRef, setRange)
   const { forceRenderAll, handlePrint, forceAllPagesNow, releaseAllPages } = useDocxFullRender()
   const [saveError, setSaveError] = useState<string | null>(null)
   // F1 — the single-line text prompt backing Insert Hyperlink/Add Comment/
