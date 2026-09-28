@@ -9,6 +9,15 @@
  * open/close cycle. The entry has been rewritten around this measurement, and
  * this test is what stops it drifting back to prose.
  *
+ * RELATION TO `memory-retention.spec.ts` (MEM-01). That test covers a different
+ * retainer and measures a different thing: it opens and closes EIGHT multi-MB
+ * documents to prove `documentSessions.ts`'s `recentlyClosed` stack no longer
+ * keeps their bytes, and it watches the renderer's OS process memory. MEM-01's
+ * `shedBytes` fix is the most likely reason the ~24 MB entry above went stale
+ * without anyone noticing. This test watches the JS heap across repeated
+ * open/close of ONE workbook, which is where a viewer-side retainer — the thing
+ * the old entry actually blamed — would show up.
+ *
  * TWO MEASUREMENT TRAPS, both hit while writing this:
  *   - `performance.memory.usedJSHeapSize` is quantized and cached for about 20
  *     minutes in Chromium. It reported a flat 9.5 MB across a 19.5 MB workbook

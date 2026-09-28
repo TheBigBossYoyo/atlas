@@ -421,6 +421,12 @@ library are already warm at the baseline:
 | second | +20.8 MB | +1.5 MB | 93% |
 | third | +21.0 MB | +1.7 MB | 92% |
 
+The most likely reason the old figure went stale without anyone noticing is
+MEM-01's own fix: `documentSessions.ts`'s `recentlyClosed` stack used to keep the
+full bytes of up to five closed documents alive, which is exactly the right order
+of magnitude, and `shedBytes` stopped it. `tests/e2e/memory-retention.spec.ts`
+pins that separately, from process memory across eight documents.
+
 So roughly 0.3–0.4 MB does not come back per open/close cycle. That is small
 enough to be ordinary warm-up (V8 code caches, a grown-then-retained heap, font
 and style caches) rather than the document being held, and it accumulates slowly
