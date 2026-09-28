@@ -44,7 +44,7 @@ function yamlScalar(value) {
 }
 
 /**
- * @param {ReadonlyArray<{ ext: string; associationName: string; associationDescription: string; associationRole: string }>} manifest
+ * @param {ReadonlyArray<{ ext: string; associationProgId: string; associationDescription: string; associationRole: string }>} manifest
  * @returns {string}
  */
 export function buildYamlAssociationsBlock(manifest) {
@@ -52,7 +52,7 @@ export function buildYamlAssociationsBlock(manifest) {
     .map((entry) =>
       [
         `${YAML_ITEM_INDENT}- ext: ${entry.ext}`,
-        `${YAML_FIELD_INDENT}name: ${yamlScalar(entry.associationName)}`,
+        `${YAML_FIELD_INDENT}name: ${yamlScalar(entry.associationProgId)}`,
         `${YAML_FIELD_INDENT}description: ${yamlScalar(entry.associationDescription)}`,
         `${YAML_FIELD_INDENT}role: ${entry.associationRole}`,
       ].join('\n'),

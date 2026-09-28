@@ -675,18 +675,56 @@ Post-install functional checks on the **installed** build:
 working 3.8.0 install, and the upgrade over 3.7.0 already exercised the
 uninstall-and-replace path NSIS runs internally.
 
-**Finding, minor, not fixed — generic ProgIDs in the global class store.**
-`electron-builder` uses each `fileAssociations` entry's `name:` as the ProgID, and
-Atlas's names are human labels, so the install writes ~30 unqualified keys under
-`HKLM\SOFTWARE\Classes` — `Word Document`, `Excel 97-2003 Workbook`,
-`PowerPoint 97-2003 Presentation` and so on — each with an open command pointing at
-Atlas.exe. No collision with Microsoft Office (which uses `Word.Document.12`-style
-ProgIDs), and `build/installer.nsh` separately registers the properly-qualified
-`Atlas.*` set that the Capabilities block uses. But squatting generic names in a
-global hive means another app using the same electron-builder pattern would collide,
-and Atlas's uninstaller would delete them. Fixing it means changing ProgIDs on an
-installed base, which has the same association-identity risk as ELEC-22's legacy
-`appId` — a deliberate decision, not a drive-by.
+**PROGID-1 · minor · FIXED in source 2026-09-28; NEEDS AN INSTALL TEST BEFORE THE
+NEXT RELEASE.** `electron-builder` uses each `fileAssociations` entry's `name:` as
+the ProgID, and Atlas's names were human labels, so an install wrote ~30
+unqualified keys under `HKLM\SOFTWARE\Classes` — `Word Document`,
+`Excel 97-2003 Workbook`, `Source Code` — each with an open command pointing at
+Atlas.exe. No collision with Microsoft Office (`Word.Document.12`-style ids), and
+`build/installer.nsh` separately registers the qualified `Atlas.*` set the
+Capabilities block uses. But squatting generic names in a global hive means any
+other app following the same electron-builder pattern collides, and Atlas's
+uninstaller would then delete keys it does not own.
+
+The manifest field is now `associationProgId` (it was `associationName`, which is
+what invited the mistake — electron-builder never treated it as a label) and holds
+`Atlas.WordDocument`, `Atlas.Excel972003Workbook`, `Atlas.SourceCode` and so on.
+`associationDescription` is untouched and is still what Explorer shows, so no
+visible label changes. `Macro-Enabled` becomes `Macro` in the ProgIDs only, because
+`Atlas.PowerPointMacroEnabledPresentation` is 40 characters and Microsoft's limit
+is 39 — silently, not with an error.
+
+**Corrected risk assessment.** The earlier note here called this "the same
+association-identity risk as ELEC-22's legacy `appId`". That was wrong, and worth
+saying plainly: `appId` keys upgrade-in-place detection and the Windows uninstall
+entry, so changing it breaks the upgrade path itself. A ProgID only names a file
+type. An in-place upgrade runs the previous uninstaller first (NSIS's
+uninstall-and-replace path), which removes the old generic keys before the new
+installer writes the qualified ones — the ordinary flow, not a migration. The
+residual risk is orphaned keys if that uninstall step is skipped, which is
+untidiness rather than a broken association.
+
+**A latent bug found by the test written for this**, not by inspection: `.txt` and
+`.log` shared the ProgID `Plain Text` while carrying different descriptions
+("Plain Text" and "Plain Text Log"), so Explorer labelled both with whichever
+extension the installer happened to write last. `.log` now has
+`Atlas.PlainTextLog`. The test asserts a one-to-one ProgID/description mapping for
+exactly this reason, plus the `Atlas.` prefix, the 39-character limit and the
+character set.
+
+**How far verification actually got.** In source: 95 manifest entries, the
+regenerated `electron-builder.yml` read by hand, and 4 new tests. In the build:
+`npm run electron:build` succeeds with the new names, which rules out
+electron-builder rejecting any of them — that is the whole of what the build
+proves. A string-level check of the produced installer was attempted and is NOT
+possible: NSIS keeps its script strings in an LZMA-compressed header, so neither
+`grep` (ASCII or UTF-16LE) nor `7z x` finds them, and 7-Zip no longer decompiles
+`[NSIS].nsi`. So the registry behaviour is unverified: NOT by installing. Before the next release,
+install over an existing 3.8.0 and confirm: double-clicking a `.docx`/`.xlsx`/
+`.pdf` still opens Atlas, `HKLM\SOFTWARE\Classes` has the `Atlas.*` keys and no
+longer has `Word Document`/`Source Code`/etc., and the Capabilities block still
+resolves. That needs an elevated install on a real machine, which is why it is
+written down here rather than assumed.
 
 Also verified, as a narrower packaged-asset check before the install: the unpacked
 build renders five formats with no console errors —
@@ -801,9 +839,14 @@ composite in `Input.ts`), so there is no single state to snapshot there.
 
 5 tests in `editor/__tests__/History.test.ts`.
 
-**CHARTSHEET-1 · low** — one reason the xlsx passthrough writer bails to the lossy path is
-a chartsheet or dialogsheet (no `<sheetData>`). Supporting those is a feature, not a bug
-fix; the user is now warned instead. Recorded so the warning's cause is known.
+**CHARTSHEET-1 · low · CLOSED AS A FEATURE REQUEST (2026-09-28)** — one reason the xlsx
+passthrough writer bails to the lossy path is a chartsheet or dialogsheet (no
+`<sheetData>`). Reviewed again and deliberately not scheduled: nothing is silently
+wrong here. The file still opens, the sheets Atlas understands still render, and the
+user is told before a save takes the lossy path. Supporting chartsheets means
+modelling and round-tripping chart XML — a feature of comparable size to the
+spreadsheet viewer itself, not a fix. It stays recorded so the warning's cause is
+known, and should be reopened only as a scoped feature, not carried as a defect.
 
 ---
 

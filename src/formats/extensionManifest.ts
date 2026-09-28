@@ -37,9 +37,28 @@ export interface ExtensionManifestEntry {
   /** Lowercase extension with no leading dot, e.g. `"docx"`. */
   readonly ext: string
   readonly format: FormatId
-  /** Windows file-association display name (electron-builder `name`). */
-  readonly associationName: string
-  /** Windows file-association description (electron-builder `description`). */
+  /**
+   * The Windows ProgID for this extension (electron-builder's `name`, which it
+   * writes verbatim as a key under `HKLM\SOFTWARE\Classes`).
+   *
+   * PROGID-1 — this field used to hold the human label ("Word Document"), which
+   * is what its old name, `associationName`, invited. electron-builder does not
+   * treat `name` as a label: it uses it as the ProgID, so an install created
+   * about thirty UNQUALIFIED keys in a global hive — `Word Document`,
+   * `Excel 97-2003 Workbook`, `Source Code` — each pointing at Atlas.exe. No
+   * collision with Office, which uses `Word.Document.12`-style ids, but any
+   * other app following the same electron-builder pattern would collide, and
+   * Atlas's uninstaller would then delete keys it does not own. The visible
+   * label was never this field's job; `associationDescription` is what Explorer
+   * shows.
+   *
+   * Constraints enforced by `__tests__/extensionManifest.test.ts`: `Atlas.`
+   * prefix, letters/digits/periods only, at most 39 characters, and one ProgID
+   * per distinct description (so Explorer can still label a `.dotx` differently
+   * from a `.docx`).
+   */
+  readonly associationProgId: string
+  /** Windows file-association description — the label Explorer shows (electron-builder `description`). */
   readonly associationDescription: string
   readonly associationRole: WindowsAssociationRole
   /** Language id for `format: 'code'` entries — the code editor's language label and symbol-pattern key (USR-18). */
@@ -49,7 +68,7 @@ export interface ExtensionManifestEntry {
 type RawEntry = readonly [
   ext: string,
   format: FormatId,
-  associationName: string,
+  associationProgId: string,
   associationDescription: string,
   associationRole: WindowsAssociationRole,
   shikiLang?: string,
@@ -61,26 +80,26 @@ type RawEntry = readonly [
 // ---------------------------------------------------------------------------
 
 const MARKDOWN_ROWS: ReadonlyArray<RawEntry> = [
-  ['md', 'markdown', 'Markdown Document', 'Markdown Document', 'Editor'],
-  ['markdown', 'markdown', 'Markdown Document', 'Markdown Document', 'Editor'],
-  ['mdown', 'markdown', 'Markdown Document', 'Markdown Document', 'Editor'],
-  ['mkd', 'markdown', 'Markdown Document', 'Markdown Document', 'Editor'],
-  ['mdx', 'markdown', 'MDX Document', 'Markdown Document with JSX', 'Editor'],
+  ['md', 'markdown', 'Atlas.MarkdownDocument', 'Markdown Document', 'Editor'],
+  ['markdown', 'markdown', 'Atlas.MarkdownDocument', 'Markdown Document', 'Editor'],
+  ['mdown', 'markdown', 'Atlas.MarkdownDocument', 'Markdown Document', 'Editor'],
+  ['mkd', 'markdown', 'Atlas.MarkdownDocument', 'Markdown Document', 'Editor'],
+  ['mdx', 'markdown', 'Atlas.MDXDocument', 'Markdown Document with JSX', 'Editor'],
 ]
 
 const DOCX_ROWS: ReadonlyArray<RawEntry> = [
-  ['docx', 'docx', 'Word Document', 'Word Document', 'Editor'],
-  ['docm', 'docx', 'Word Macro-Enabled Document', 'Word Macro-Enabled Document', 'Editor'],
-  ['dotx', 'docx', 'Word Template', 'Word Template', 'Editor'],
-  ['dotm', 'docx', 'Word Macro-Enabled Template', 'Word Macro-Enabled Template', 'Editor'],
+  ['docx', 'docx', 'Atlas.WordDocument', 'Word Document', 'Editor'],
+  ['docm', 'docx', 'Atlas.WordMacroDocument', 'Word Macro-Enabled Document', 'Editor'],
+  ['dotx', 'docx', 'Atlas.WordTemplate', 'Word Template', 'Editor'],
+  ['dotm', 'docx', 'Atlas.WordMacroTemplate', 'Word Macro-Enabled Template', 'Editor'],
 ]
 
 const XLSX_ROWS: ReadonlyArray<RawEntry> = [
-  ['xlsx', 'xlsx', 'Excel Spreadsheet', 'Excel Spreadsheet', 'Viewer'],
-  ['xlsm', 'xlsx', 'Excel Macro-Enabled Spreadsheet', 'Excel Macro-Enabled Spreadsheet', 'Viewer'],
-  ['xlsb', 'xlsx', 'Excel Binary Spreadsheet', 'Excel Binary Spreadsheet', 'Viewer'],
-  ['xltx', 'xlsx', 'Excel Template', 'Excel Template', 'Viewer'],
-  ['xltm', 'xlsx', 'Excel Macro-Enabled Template', 'Excel Macro-Enabled Template', 'Viewer'],
+  ['xlsx', 'xlsx', 'Atlas.ExcelSpreadsheet', 'Excel Spreadsheet', 'Viewer'],
+  ['xlsm', 'xlsx', 'Atlas.ExcelMacroSpreadsheet', 'Excel Macro-Enabled Spreadsheet', 'Viewer'],
+  ['xlsb', 'xlsx', 'Atlas.ExcelBinarySpreadsheet', 'Excel Binary Spreadsheet', 'Viewer'],
+  ['xltx', 'xlsx', 'Atlas.ExcelTemplate', 'Excel Template', 'Viewer'],
+  ['xltm', 'xlsx', 'Atlas.ExcelMacroTemplate', 'Excel Macro-Enabled Template', 'Viewer'],
   // Wave 3 — legacy binary BIFF8 workbook. Unlike `.doc`/`.ppt`, SheetJS's
   // `XLSX.read`/`XLSX.write` genuinely parse and re-serialize this OLE2/CFB
   // -container format (`bookType: 'xls'`), so it is routed to the same
@@ -89,16 +108,16 @@ const XLSX_ROWS: ReadonlyArray<RawEntry> = [
   // `spreadsheetWrite.ts`. One real, documented limitation: this build's
   // BIFF8 writer never serializes a cell's formula text, only its cached
   // value, so a formula saved back to `.xls` round-trips as a plain value.
-  ['xls', 'xlsx', 'Excel 97-2003 Workbook', 'Excel 97-2003 Workbook', 'Viewer'],
+  ['xls', 'xlsx', 'Atlas.Excel972003Workbook', 'Excel 97-2003 Workbook', 'Viewer'],
 ]
 
 const PPTX_ROWS: ReadonlyArray<RawEntry> = [
-  ['pptx', 'pptx', 'PowerPoint Presentation', 'PowerPoint Presentation', 'Viewer'],
-  ['pptm', 'pptx', 'PowerPoint Macro-Enabled Presentation', 'PowerPoint Macro-Enabled Presentation', 'Viewer'],
-  ['potx', 'pptx', 'PowerPoint Template', 'PowerPoint Template', 'Viewer'],
-  ['potm', 'pptx', 'PowerPoint Macro-Enabled Template', 'PowerPoint Macro-Enabled Template', 'Viewer'],
-  ['ppsx', 'pptx', 'PowerPoint Slide Show', 'PowerPoint Slide Show', 'Viewer'],
-  ['ppsm', 'pptx', 'PowerPoint Macro-Enabled Slide Show', 'PowerPoint Macro-Enabled Slide Show', 'Viewer'],
+  ['pptx', 'pptx', 'Atlas.PowerPointPresentation', 'PowerPoint Presentation', 'Viewer'],
+  ['pptm', 'pptx', 'Atlas.PowerPointMacroPresentation', 'PowerPoint Macro-Enabled Presentation', 'Viewer'],
+  ['potx', 'pptx', 'Atlas.PowerPointTemplate', 'PowerPoint Template', 'Viewer'],
+  ['potm', 'pptx', 'Atlas.PowerPointMacroTemplate', 'PowerPoint Macro-Enabled Template', 'Viewer'],
+  ['ppsx', 'pptx', 'Atlas.PowerPointSlideShow', 'PowerPoint Slide Show', 'Viewer'],
+  ['ppsm', 'pptx', 'Atlas.PowerPointMacroSlideShow', 'PowerPoint Macro-Enabled Slide Show', 'Viewer'],
 ]
 
 // wave-4 legacy-office — unlike `.xls` (genuine SheetJS BIFF8 read/write
@@ -112,96 +131,96 @@ const PPTX_ROWS: ReadonlyArray<RawEntry> = [
 // to `formats/legacyOffice.ts`'s honest "not supported" message via
 // `UnknownViewer`, same as `.xlt` since wave 3.
 const LEGACY_DOC_ROWS: ReadonlyArray<RawEntry> = [
-  ['doc', 'doc', 'Word 97-2003 Document', 'Word 97-2003 Document', 'Viewer'],
+  ['doc', 'doc', 'Atlas.Word972003Document', 'Word 97-2003 Document', 'Viewer'],
 ]
 
 const LEGACY_PPT_ROWS: ReadonlyArray<RawEntry> = [
-  ['ppt', 'ppt', 'PowerPoint 97-2003 Presentation', 'PowerPoint 97-2003 Presentation', 'Viewer'],
+  ['ppt', 'ppt', 'Atlas.PowerPoint972003Presentation', 'PowerPoint 97-2003 Presentation', 'Viewer'],
 ]
 
 const MISC_DOCUMENT_ROWS: ReadonlyArray<RawEntry> = [
-  ['pdf', 'pdf', 'PDF Document', 'PDF Document', 'Viewer'],
-  ['csv', 'csv', 'Comma-Separated Values', 'Comma-Separated Values File', 'Viewer'],
-  ['tsv', 'tsv', 'Tab-Separated Values', 'Tab-Separated Values File', 'Viewer'],
-  ['tab', 'tsv', 'Tab-Separated Values', 'Tab-Separated Values File', 'Viewer'],
-  ['txt', 'text', 'Plain Text', 'Plain Text', 'Viewer'],
-  ['log', 'text', 'Plain Text', 'Plain Text Log', 'Viewer'],
-  ['odt', 'odt', 'OpenDocument Text', 'OpenDocument Text Document', 'Viewer'],
-  ['ods', 'ods', 'OpenDocument Spreadsheet', 'OpenDocument Spreadsheet', 'Viewer'],
-  ['odp', 'odp', 'OpenDocument Presentation', 'OpenDocument Presentation', 'Viewer'],
-  ['rtf', 'rtf', 'Rich Text Document', 'Rich Text Document', 'Viewer'],
+  ['pdf', 'pdf', 'Atlas.PDFDocument', 'PDF Document', 'Viewer'],
+  ['csv', 'csv', 'Atlas.CommaSeparatedValues', 'Comma-Separated Values File', 'Viewer'],
+  ['tsv', 'tsv', 'Atlas.TabSeparatedValues', 'Tab-Separated Values File', 'Viewer'],
+  ['tab', 'tsv', 'Atlas.TabSeparatedValues', 'Tab-Separated Values File', 'Viewer'],
+  ['txt', 'text', 'Atlas.PlainText', 'Plain Text', 'Viewer'],
+  ['log', 'text', 'Atlas.PlainTextLog', 'Plain Text Log', 'Viewer'],
+  ['odt', 'odt', 'Atlas.OpenDocumentText', 'OpenDocument Text Document', 'Viewer'],
+  ['ods', 'ods', 'Atlas.OpenDocumentSpreadsheet', 'OpenDocument Spreadsheet', 'Viewer'],
+  ['odp', 'odp', 'Atlas.OpenDocumentPresentation', 'OpenDocument Presentation', 'Viewer'],
+  ['rtf', 'rtf', 'Atlas.RichTextDocument', 'Rich Text Document', 'Viewer'],
   // Wave 3 — "Flat ODS": a single flat-XML file (no ZIP container) holding
   // the same OpenDocument spreadsheet schema as `.ods`. SheetJS reads and
   // writes it directly (`bookType: 'fods'`), so it routes to the same
   // spreadsheet viewer with full in-place Save supported.
-  ['fods', 'ods', 'Flat OpenDocument Spreadsheet', 'Flat OpenDocument Spreadsheet', 'Viewer'],
+  ['fods', 'ods', 'Atlas.FlatOpenDocumentSpreadsheet', 'Flat OpenDocument Spreadsheet', 'Viewer'],
 ]
 
 // Source-code extensions -> language id (historically shiki ids; kept as the
 // code editor's language label — see viewers/CodeViewer.tsx). Some are aliases
 // rather than canonical names (e.g. `bash` for `.zsh`, `bat` for `.cmd`).
 const CODE_ROWS: ReadonlyArray<RawEntry> = [
-  ['ts', 'code', 'Source Code', 'Source Code', 'Viewer', 'typescript'],
-  ['tsx', 'code', 'Source Code', 'Source Code', 'Viewer', 'tsx'],
-  ['js', 'code', 'Source Code', 'Source Code', 'Viewer', 'javascript'],
-  ['jsx', 'code', 'Source Code', 'Source Code', 'Viewer', 'jsx'],
-  ['mjs', 'code', 'Source Code', 'Source Code', 'Viewer', 'javascript'],
-  ['cjs', 'code', 'Source Code', 'Source Code', 'Viewer', 'javascript'],
-  ['py', 'code', 'Source Code', 'Source Code', 'Viewer', 'python'],
-  ['pyw', 'code', 'Source Code', 'Source Code', 'Viewer', 'python'],
-  ['rb', 'code', 'Source Code', 'Source Code', 'Viewer', 'ruby'],
-  ['go', 'code', 'Source Code', 'Source Code', 'Viewer', 'go'],
-  ['rs', 'code', 'Source Code', 'Source Code', 'Viewer', 'rust'],
-  ['java', 'code', 'Source Code', 'Source Code', 'Viewer', 'java'],
-  ['kt', 'code', 'Source Code', 'Source Code', 'Viewer', 'kotlin'],
-  ['kts', 'code', 'Source Code', 'Source Code', 'Viewer', 'kotlin'],
-  ['swift', 'code', 'Source Code', 'Source Code', 'Viewer', 'swift'],
-  ['c', 'code', 'Source Code', 'Source Code', 'Viewer', 'c'],
-  ['h', 'code', 'Source Code', 'Source Code', 'Viewer', 'c'],
-  ['cpp', 'code', 'Source Code', 'Source Code', 'Viewer', 'cpp'],
-  ['hpp', 'code', 'Source Code', 'Source Code', 'Viewer', 'cpp'],
-  ['cc', 'code', 'Source Code', 'Source Code', 'Viewer', 'cpp'],
-  ['cs', 'code', 'Source Code', 'Source Code', 'Viewer', 'csharp'],
-  ['php', 'code', 'Source Code', 'Source Code', 'Viewer', 'php'],
-  ['pl', 'code', 'Source Code', 'Source Code', 'Viewer', 'perl'],
-  ['lua', 'code', 'Source Code', 'Source Code', 'Viewer', 'lua'],
-  ['r', 'code', 'Source Code', 'Source Code', 'Viewer', 'r'],
-  ['scala', 'code', 'Source Code', 'Source Code', 'Viewer', 'scala'],
-  ['clj', 'code', 'Source Code', 'Source Code', 'Viewer', 'clojure'],
-  ['ex', 'code', 'Source Code', 'Source Code', 'Viewer', 'elixir'],
-  ['exs', 'code', 'Source Code', 'Source Code', 'Viewer', 'elixir'],
-  ['erl', 'code', 'Source Code', 'Source Code', 'Viewer', 'erlang'],
-  ['hs', 'code', 'Source Code', 'Source Code', 'Viewer', 'haskell'],
-  ['ml', 'code', 'Source Code', 'Source Code', 'Viewer', 'ocaml'],
-  ['dart', 'code', 'Source Code', 'Source Code', 'Viewer', 'dart'],
-  ['vue', 'code', 'Source Code', 'Source Code', 'Viewer', 'vue'],
-  ['svelte', 'code', 'Source Code', 'Source Code', 'Viewer', 'svelte'],
-  ['sh', 'code', 'Source Code', 'Source Code', 'Viewer', 'bash'],
-  ['bash', 'code', 'Source Code', 'Source Code', 'Viewer', 'bash'],
-  ['zsh', 'code', 'Source Code', 'Source Code', 'Viewer', 'bash'],
-  ['fish', 'code', 'Source Code', 'Source Code', 'Viewer', 'fish'],
-  ['ps1', 'code', 'Source Code', 'Source Code', 'Viewer', 'powershell'],
-  ['bat', 'code', 'Source Code', 'Source Code', 'Viewer', 'bat'],
-  ['cmd', 'code', 'Source Code', 'Source Code', 'Viewer', 'bat'],
-  ['json', 'code', 'Source Code', 'Source Code', 'Viewer', 'json'],
-  ['jsonc', 'code', 'Source Code', 'Source Code', 'Viewer', 'jsonc'],
-  ['yaml', 'code', 'Source Code', 'Source Code', 'Viewer', 'yaml'],
-  ['yml', 'code', 'Source Code', 'Source Code', 'Viewer', 'yaml'],
-  ['toml', 'code', 'Source Code', 'Source Code', 'Viewer', 'toml'],
-  ['xml', 'code', 'Source Code', 'Source Code', 'Viewer', 'xml'],
-  ['html', 'code', 'Source Code', 'Source Code', 'Viewer', 'html'],
-  ['htm', 'code', 'Source Code', 'Source Code', 'Viewer', 'html'],
-  ['css', 'code', 'Source Code', 'Source Code', 'Viewer', 'css'],
-  ['scss', 'code', 'Source Code', 'Source Code', 'Viewer', 'scss'],
-  ['sass', 'code', 'Source Code', 'Source Code', 'Viewer', 'sass'],
-  ['less', 'code', 'Source Code', 'Source Code', 'Viewer', 'less'],
-  ['sql', 'code', 'Source Code', 'Source Code', 'Viewer', 'sql'],
-  ['graphql', 'code', 'Source Code', 'Source Code', 'Viewer', 'graphql'],
-  ['proto', 'code', 'Source Code', 'Source Code', 'Viewer', 'proto'],
-  ['dockerfile', 'code', 'Source Code', 'Source Code', 'Viewer', 'docker'],
-  ['ini', 'code', 'Source Code', 'Source Code', 'Viewer', 'ini'],
-  ['cfg', 'code', 'Source Code', 'Source Code', 'Viewer', 'ini'],
-  ['conf', 'code', 'Source Code', 'Source Code', 'Viewer', 'ini'],
+  ['ts', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'typescript'],
+  ['tsx', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'tsx'],
+  ['js', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'javascript'],
+  ['jsx', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'jsx'],
+  ['mjs', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'javascript'],
+  ['cjs', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'javascript'],
+  ['py', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'python'],
+  ['pyw', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'python'],
+  ['rb', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'ruby'],
+  ['go', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'go'],
+  ['rs', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'rust'],
+  ['java', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'java'],
+  ['kt', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'kotlin'],
+  ['kts', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'kotlin'],
+  ['swift', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'swift'],
+  ['c', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'c'],
+  ['h', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'c'],
+  ['cpp', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'cpp'],
+  ['hpp', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'cpp'],
+  ['cc', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'cpp'],
+  ['cs', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'csharp'],
+  ['php', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'php'],
+  ['pl', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'perl'],
+  ['lua', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'lua'],
+  ['r', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'r'],
+  ['scala', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'scala'],
+  ['clj', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'clojure'],
+  ['ex', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'elixir'],
+  ['exs', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'elixir'],
+  ['erl', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'erlang'],
+  ['hs', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'haskell'],
+  ['ml', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'ocaml'],
+  ['dart', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'dart'],
+  ['vue', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'vue'],
+  ['svelte', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'svelte'],
+  ['sh', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'bash'],
+  ['bash', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'bash'],
+  ['zsh', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'bash'],
+  ['fish', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'fish'],
+  ['ps1', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'powershell'],
+  ['bat', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'bat'],
+  ['cmd', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'bat'],
+  ['json', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'json'],
+  ['jsonc', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'jsonc'],
+  ['yaml', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'yaml'],
+  ['yml', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'yaml'],
+  ['toml', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'toml'],
+  ['xml', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'xml'],
+  ['html', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'html'],
+  ['htm', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'html'],
+  ['css', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'css'],
+  ['scss', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'scss'],
+  ['sass', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'sass'],
+  ['less', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'less'],
+  ['sql', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'sql'],
+  ['graphql', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'graphql'],
+  ['proto', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'proto'],
+  ['dockerfile', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'docker'],
+  ['ini', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'ini'],
+  ['cfg', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'ini'],
+  ['conf', 'code', 'Atlas.SourceCode', 'Source Code', 'Viewer', 'ini'],
 ]
 
 const RAW_ENTRIES: ReadonlyArray<RawEntry> = [
@@ -217,10 +236,10 @@ const RAW_ENTRIES: ReadonlyArray<RawEntry> = [
 
 /** The full, ordered manifest — one entry per known extension. */
 export const EXTENSION_MANIFEST: ReadonlyArray<ExtensionManifestEntry> = RAW_ENTRIES.map(
-  ([ext, format, associationName, associationDescription, associationRole, shikiLang]) => ({
+  ([ext, format, associationProgId, associationDescription, associationRole, shikiLang]) => ({
     ext,
     format,
-    associationName,
+    associationProgId,
     associationDescription,
     associationRole,
     ...(shikiLang !== undefined ? { shikiLang } : {}),

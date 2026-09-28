@@ -1,6 +1,6 @@
 export interface AssociationLike {
   readonly ext: string
-  readonly associationName: string
+  readonly associationProgId: string
   readonly associationDescription: string
   readonly associationRole: string
 }

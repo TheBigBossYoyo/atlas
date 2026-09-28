@@ -34,6 +34,60 @@ describe('EXTENSION_MANIFEST', () => {
     }
   })
 
+  // PROGID-1 — `associationProgId` is written verbatim into
+  // `HKLM\SOFTWARE\Classes` by electron-builder. It used to hold the human label,
+  // so an install squatted about thirty unqualified generic names there ("Word
+  // Document", "Source Code") and the uninstaller then deleted them. These pin the
+  // shape so it cannot drift back.
+  describe('associationProgId (PROGID-1)', () => {
+    it('is namespaced under Atlas., so nothing generic is written to the global class store', () => {
+      for (const entry of EXTENSION_MANIFEST) {
+        expect(entry.associationProgId, entry.ext).toMatch(/^Atlas\./)
+      }
+    })
+
+    it('is a valid ProgID: letters, digits and periods only, at most 39 characters', () => {
+      // Both limits are Microsoft's, and both are silent when broken — an
+      // over-long or punctuated ProgID is simply not honoured by some shell APIs
+      // rather than reported. `Atlas.PowerPointMacroEnabledPresentation` would be
+      // 40, which is why the ProgIDs say "Macro" where the label says
+      // "Macro-Enabled".
+      for (const entry of EXTENSION_MANIFEST) {
+        expect(entry.associationProgId, entry.ext).toMatch(/^[A-Za-z][A-Za-z0-9.]*$/)
+        expect(entry.associationProgId.length, `${entry.ext} -> ${entry.associationProgId}`).toBeLessThanOrEqual(39)
+      }
+    })
+
+    it('is not the human label — that is associationDescription, which Explorer shows', () => {
+      for (const entry of EXTENSION_MANIFEST) {
+        expect(entry.associationProgId).not.toBe(entry.associationDescription)
+      }
+    })
+
+    it('maps one-to-one with the description, so Explorer can still label .dotx unlike .docx', () => {
+      // A shared ProgID would mean a shared label: whichever extension the
+      // installer wrote last would name all of them.
+      const descriptionByProgId = new Map<string, string>()
+      for (const entry of EXTENSION_MANIFEST) {
+        const seen = descriptionByProgId.get(entry.associationProgId)
+        if (seen === undefined) {
+          descriptionByProgId.set(entry.associationProgId, entry.associationDescription)
+        } else {
+          expect(seen, entry.associationProgId).toBe(entry.associationDescription)
+        }
+      }
+      const progIdByDescription = new Map<string, string>()
+      for (const entry of EXTENSION_MANIFEST) {
+        const seen = progIdByDescription.get(entry.associationDescription)
+        if (seen === undefined) {
+          progIdByDescription.set(entry.associationDescription, entry.associationProgId)
+        } else {
+          expect(seen, entry.associationDescription).toBe(entry.associationProgId)
+        }
+      }
+    })
+  })
+
   it('only "code" entries carry a shikiLang', () => {
     for (const entry of EXTENSION_MANIFEST) {
       if (entry.format === 'code') {

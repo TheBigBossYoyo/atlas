@@ -148,8 +148,9 @@ These were found during execution and are recorded in the plan, unscheduled:
 - **TEST-9 / TEST-10** — `App.dirtyState.characterization.test.tsx` passes in the suite and
   fails alone; a cluster of App-shell tests behave differently under load. One of that
   cluster already turned out to be a **real product bug**, so do not assume noise.
-- **CHARTSHEET-1** — a chartsheet/dialogsheet makes the xlsx passthrough writer bail to the
-  lossy path; the user is now warned, but support is unimplemented.
+- **CHARTSHEET-1** — closed as a feature request 2026-09-28, not a defect: the file opens,
+  the understood sheets render, and the user is warned before a lossy save. Reopen only as
+  scoped chart-XML work.
 - **FIXTURE-1** — `tests/e2e/fixtures/generate.mjs:407` emits a non-conforming `.ods`
   (`mimetype` not first in the zip), so "Atlas opens .ods" is proven against a file no real
   tool would produce.

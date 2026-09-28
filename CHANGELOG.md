@@ -16,7 +16,6 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   would expect.** Ctrl+W already did; the X button and the middle-click close did
   not, and after using them Tab and the arrow keys went nowhere until you clicked
   something.
-
 - **Word: typing works straight after Save As, without clicking back in.** The
   OS save dialog takes focus away from Atlas, and renaming the tab rebuilt the
   document view from scratch, so the cursor was gone and anything typed next
@@ -33,7 +32,6 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   Those properties are now carried through untouched, in the right place, along
   with the file's namespace declarations. The same applies to list levels in
   `numbering.xml`.
-
 - **Accessibility: the tab bar, the slide rail, the slide editing surface and the
   code editor are now described correctly to a screen reader.** An automated
   accessibility audit found five real faults — among them a tab bar that
@@ -48,6 +46,13 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   or Backspace** (Ctrl+W still works too). A button inside a tab is something
   assistive software cannot describe correctly, and Delete is one keystroke
   instead of tabbing to a button. It is listed in the shortcuts dialog.
+- **Windows file types are registered under Atlas-specific names.** Installing
+  used to claim about thirty generic names — "Word Document", "Source Code" —
+  in a registry area shared by every program on the machine, and uninstalling
+  removed them again even if another program had put them there. The names
+  Explorer shows you are unchanged. A side effect: `.log` files are now labelled
+  "Plain Text Log" reliably, where before they and `.txt` could end up sharing
+  whichever label was written last.
 
 ### Added
 

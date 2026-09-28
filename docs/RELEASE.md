@@ -144,7 +144,28 @@ that didn't embed):
    actually reflects it — see that file's own history for why the two can
    disagree: `signAndEditExecutable: false` used to silently skip this
    embedding entirely.)
-6. Uninstall via **Settings → Apps** and confirm it removes cleanly (no
+6. **For the first release after 2026-09-28 only — PROGID-1.** The ProgIDs
+   Atlas registers changed from generic human labels (`Word Document`,
+   `Source Code`) to namespaced ones (`Atlas.WordDocument`,
+   `Atlas.SourceCode`), so that an install stops squatting generic names in a
+   hive shared with every other program. Verified in source, and the installer
+   builds with the new names — but never yet by installing, and a string check of
+   the built installer is not possible (NSIS compresses its script strings). On an upgrade over an
+   existing install, confirm with `reg query`:
+
+   ```
+   reg query "HKLM\SOFTWARE\Classes\Atlas.WordDocument" /s
+   reg query "HKLM\SOFTWARE\Classes\.docx"
+   reg query "HKLM\SOFTWARE\Classes\Word Document"
+   ```
+
+   Expect the first two to exist and point at `Atlas.exe`, and the third to be
+   gone (NSIS runs the previous uninstaller before the new install, which is
+   what removes it). If the old generic keys are still there afterwards they
+   are orphans — harmless, but delete them by hand and note it here. Step 3's
+   Explorer double-click is the behavioural half of this check; do not skip it
+   for this release.
+7. Uninstall via **Settings → Apps** and confirm it removes cleanly (no
    leftover Start Menu entry, no orphaned registry `appId` entry beyond
    what Windows itself retains for "recently uninstalled").
 
