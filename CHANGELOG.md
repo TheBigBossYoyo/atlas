@@ -17,6 +17,14 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   not, and after using them Tab and the arrow keys went nowhere until you clicked
   something.
 
+- **Word: a style no longer loses formatting Atlas does not itself understand.**
+  `styles.xml` is rebuilt from scratch on every save, so any run property Atlas
+  had no field for — including `w:noProof` and `w:snapToGrid`, which sit on
+  Word's own built-in styles — silently disappeared the first time you saved.
+  Those properties are now carried through untouched, in the right place, along
+  with the file's namespace declarations. The same applies to list levels in
+  `numbering.xml`.
+
 ### Added
 
 - **Word comments: a resolved comment can be un-resolved again.** Resolving used

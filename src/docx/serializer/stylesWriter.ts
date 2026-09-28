@@ -22,6 +22,12 @@ import type {
   Width,
 } from '../model'
 import type { StylesPart } from '../parser/styles'
+import {
+  createRawPassthroughState,
+  restoreRawPassthrough,
+  spliceRawPassthrough,
+  type RawPassthroughState,
+} from './rawPassthrough'
 
 type XmlPrimitive = string | number | boolean
 type XmlValue = XmlPrimitive | XmlNode | XmlValue[]
@@ -43,12 +49,12 @@ const xmlBuilder = new XMLBuilder({
 })
 
 export function writeStylesXml(stylesPart: StylesPart): string {
-  const styles = Array.from(stylesPart.styles.values()).map(buildStyleXml)
+  const state = createRawPassthroughState()
+  const styles = Array.from(stylesPart.styles.values()).map((style) => buildStyleXml(style, state))
 
   const root: XmlNode = {
-    '@_xmlns:w': WORD_NAMESPACE,
-    '@_xmlns:r': RELATIONSHIP_NAMESPACE,
-    'w:docDefaults': buildDocDefaultsXml(stylesPart.docDefaults),
+    ...buildRootAttributes(stylesPart.rootAttributes),
+    'w:docDefaults': buildDocDefaultsXml(stylesPart.docDefaults, state),
     // D19 / DXS-14: re-emit `<w:latentStyles>` verbatim (as parsed) rather
     // than silently dropping it — see `StylesPart.latentStyles`'s doc
     // comment in `parser/styles.ts`.
@@ -56,7 +62,27 @@ export function writeStylesXml(stylesPart: StylesPart): string {
     ...(styles.length > 0 ? { 'w:style': styles } : {}),
   }
 
-  return `${XML_DECLARATION}${xmlBuilder.build({ 'w:styles': root })}`
+  return restoreRawPassthrough(`${XML_DECLARATION}${xmlBuilder.build({ 'w:styles': root })}`, state)
+}
+
+/**
+ * RPR-STYLES-1 — the source `<w:styles>` element's own attributes, or the two
+ * declarations Atlas used to hardcode when a caller has none (a `StylesPart`
+ * built by a test or by code rather than parsed from a file). See
+ * `StylesPart.rootAttributes` for why re-emitting these stopped being optional:
+ * passthrough content can carry a prefix only the source declared.
+ */
+function buildRootAttributes(attributes: StylesPart['rootAttributes']): XmlNode {
+  if (attributes === undefined || attributes.size === 0) {
+    return { '@_xmlns:w': WORD_NAMESPACE, '@_xmlns:r': RELATIONSHIP_NAMESPACE }
+  }
+
+  const node: Record<string, string> = {}
+  for (const [name, value] of attributes) {
+    node[`@_${name}`] = value
+  }
+  if (node['@_xmlns:w'] === undefined) node['@_xmlns:w'] = WORD_NAMESPACE
+  return node
 }
 
 // Child order follows ECMA-376 `CT_PPrBase`/`CT_PPr` (§17.3.1.26), restricted
@@ -104,6 +130,7 @@ export function buildParagraphPropertiesXml(
 // duplicate builder shared.
 export function buildRunPropertiesXml(
   props: RunProps | undefined,
+  state: RawPassthroughState,
 ): Record<string, unknown> | undefined {
   if (props === undefined) return undefined
 
@@ -142,14 +169,20 @@ export function buildRunPropertiesXml(
     ...withElement('w:lang', buildLanguageSetXml(props.lang)),
   }
 
-  return hasEntries(node) ? node : undefined
+  // RPR-STYLES-1 — spliced AFTER the modeled children are laid out in schema
+  // order, since each fragment is positioned relative to one of them. The
+  // emptiness check has to run on the result: a `w:rPr` whose only children
+  // are passthrough ones is still a `w:rPr` that has to be written.
+  const withPassthrough = spliceRawPassthrough<XmlValue | undefined>(node, props.rPrUnknown, state)
+
+  return hasEntries(withPassthrough) ? withPassthrough : undefined
 }
 
-function buildDocDefaultsXml(defaults: StylesPart['docDefaults']): XmlNode {
+function buildDocDefaultsXml(defaults: StylesPart['docDefaults'], state: RawPassthroughState): XmlNode {
   return {
     ...withElement(
       'w:rPrDefault',
-      defaults.rPr === undefined ? undefined : { 'w:rPr': buildRunPropertiesXml(defaults.rPr) ?? {} },
+      defaults.rPr === undefined ? undefined : { 'w:rPr': buildRunPropertiesXml(defaults.rPr, state) ?? {} },
     ),
     ...withElement(
       'w:pPrDefault',
@@ -160,10 +193,10 @@ function buildDocDefaultsXml(defaults: StylesPart['docDefaults']): XmlNode {
   }
 }
 
-function buildStyleXml(style: Style): XmlNode {
+function buildStyleXml(style: Style, state: RawPassthroughState): XmlNode {
   const paragraph = buildStyleParagraphProps(style)
   const aliases = serializeAliases(style.aliases)
-  const tblStylePr = buildTableConditionalFormatsXml(style.conditionalFormats)
+  const tblStylePr = buildTableConditionalFormatsXml(style.conditionalFormats, state)
 
   return {
     '@_w:type': style.type,
@@ -183,7 +216,7 @@ function buildStyleXml(style: Style): XmlNode {
     ...withElement('w:qFormat', buildOnOffElement(style.qFormat)),
     ...withElement('w:locked', buildOnOffElement(style.locked)),
     ...withElement('w:pPr', buildParagraphPropertiesXml(paragraph)),
-    ...withElement('w:rPr', buildRunPropertiesXml(style.run)),
+    ...withElement('w:rPr', buildRunPropertiesXml(style.run, state)),
     ...withElement('w:tblPr', buildTableStylePropertiesXml(style.table)),
     ...(tblStylePr.length > 0 ? { 'w:tblStylePr': tblStylePr } : {}),
   }
@@ -198,13 +231,14 @@ function buildStyleXml(style: Style): XmlNode {
  */
 function buildTableConditionalFormatsXml(
   conditionalFormats: ReadonlyMap<TableConditionalFormatType, TableConditionalFormat> | undefined,
+  state: RawPassthroughState,
 ): XmlNode[] {
   if (conditionalFormats === undefined) return []
 
   return Array.from(conditionalFormats.entries()).map(([type, format]) => ({
     '@_w:type': type,
     ...withElement('w:pPr', buildParagraphPropertiesXml(format.paragraph)),
-    ...withElement('w:rPr', buildRunPropertiesXml(format.run)),
+    ...withElement('w:rPr', buildRunPropertiesXml(format.run, state)),
     ...withElement('w:tblPr', buildTableStylePropertiesXml(format.table)),
     ...withElement('w:trPr', buildTableConditionalRowPropertiesXml(format.row)),
     ...withElement('w:tcPr', buildTableConditionalCellPropertiesXml(format.cell)),

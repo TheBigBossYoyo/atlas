@@ -7,7 +7,7 @@
 import { XMLParser } from 'fast-xml-parser'
 
 import type { JustifyContent, LvlDef, LvlOverride, NumberingSuffix } from '../model'
-import { parseParaPropsNode, parseRunPropsNode } from './styles'
+import { collectAttributes, parseParaPropsNode, parseRunPropsNode } from './styles'
 import { DocxParseError } from './unzip'
 import { assertXmlPartSizeWithinLimit } from './xmlSizeGuard'
 
@@ -47,6 +47,12 @@ export interface NumInstance {
 export interface NumberingPart {
   readonly abstractNums: ReadonlyMap<string, AbstractNum>
   readonly nums: ReadonlyMap<string, NumInstance>
+  /**
+   * RPR-STYLES-1 — the source `<w:numbering>` element's own attributes; see
+   * `StylesPart.rootAttributes` in `./styles` for why they are carried through
+   * rather than rebuilt from a hardcoded pair.
+   */
+  readonly rootAttributes?: ReadonlyMap<string, string>
 }
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
@@ -77,7 +83,13 @@ export function parseNumbering(xml: string): NumberingPart {
     nums.set(num.numId, num)
   }
 
-  return { abstractNums, nums }
+  const rootAttributes = collectAttributes(numberingRoot)
+
+  return {
+    abstractNums,
+    nums,
+    ...(rootAttributes !== undefined ? { rootAttributes } : {}),
+  }
 }
 
 function parseAbstractNumNode(node: XmlNode): AbstractNum | undefined {

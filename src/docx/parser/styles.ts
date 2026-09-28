@@ -5,7 +5,7 @@
  * the Wave A.2 model.
  */
 
-import { XMLParser } from 'fast-xml-parser'
+import { XMLBuilder, XMLParser } from 'fast-xml-parser'
 
 import { DocxParseError } from './unzip'
 import {
@@ -36,6 +36,7 @@ import type {
   NumberingStyleProps,
   OnOff,
   ParaProps,
+  RPrUnknownChild,
   RunProps,
   SectionColumns,
   SectionProps,
@@ -97,6 +98,17 @@ export interface StylesPart {
    * silently dropped on every save.
    */
   readonly latentStyles?: unknown
+  /**
+   * RPR-STYLES-1 — every attribute on the source `<w:styles>` element:
+   * namespace declarations (`xmlns:w14`, `xmlns:w15`, `xmlns:mc`, ...) and
+   * `mc:Ignorable`. `stylesWriter.ts` used to hardcode `xmlns:w` plus
+   * `xmlns:r` and emit nothing else, which was harmless only for as long as
+   * nothing it emitted USED another prefix. `rPrUnknown` passthrough does —
+   * a `<w14:ligatures>` re-emitted under a root that never declares `w14`
+   * is not well-formed XML, and Word reports the whole file as unreadable
+   * content. So the source's own declarations are carried through verbatim.
+   */
+  readonly rootAttributes?: ReadonlyMap<string, string>
 }
 
 const xmlParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' })
@@ -128,6 +140,7 @@ export function parseStyles(xml: string): StylesPart {
   }
 
   const latentStyles = getNode(stylesRoot, 'w:latentStyles')
+  const rootAttributes = collectAttributes(stylesRoot)
 
   return {
     docDefaults: {
@@ -136,7 +149,25 @@ export function parseStyles(xml: string): StylesPart {
     },
     styles,
     ...(latentStyles !== undefined ? { latentStyles } : {}),
+    ...(rootAttributes !== undefined ? { rootAttributes } : {}),
   }
+}
+
+/**
+ * The `@_`-prefixed keys of `node` as a plain name -> value map, with the
+ * prefix stripped. `undefined` when there are none.
+ */
+export function collectAttributes(node: XmlNode | undefined): ReadonlyMap<string, string> | undefined {
+  if (node === undefined) return undefined
+  let attributes: Map<string, string> | undefined
+  for (const key of Object.keys(node)) {
+    if (!key.startsWith('@_')) continue
+    const value = node[key]
+    if (value === undefined || typeof value === 'object') continue
+    attributes ??= new Map()
+    attributes.set(key.slice(2), String(value))
+  }
+  return attributes
 }
 
 export function parseRunPropsNode(node: unknown): RunProps | undefined {
@@ -359,6 +390,89 @@ function parseTableStylePrCellVerticalAlign(value: string | undefined): TableCel
   }
 }
 
+/**
+ * RPR-STYLES-1 — every `w:rPr` child name `parseRunPropsElement` below reads,
+ * modeled or not. Mirrors `parser/document.ts`'s `KNOWN_RPR_CHILD_NAMES` for
+ * the direct-formatting path, and must stay in sync with BOTH: this set is
+ * what decides whether a child is carried through opaquely, and the two
+ * parsers feed the same `RunProps.rPrUnknown` field.
+ */
+const KNOWN_RPR_CHILD_NAMES: ReadonlySet<string> = new Set([
+  'w:rStyle', 'w:rFonts', 'w:b', 'w:bCs', 'w:i', 'w:iCs', 'w:caps', 'w:smallCaps',
+  'w:strike', 'w:dstrike', 'w:outline', 'w:emboss', 'w:imprint', 'w:vanish', 'w:webHidden',
+  'w:color', 'w:spacing', 'w:w', 'w:kern', 'w:position', 'w:sz', 'w:szCs', 'w:highlight',
+  'w:u', 'w:bdr', 'w:shd', 'w:vertAlign', 'w:rtl', 'w:em', 'w:lang',
+])
+
+/**
+ * Rebuilds a captured `w:rPr` child back into XML text.
+ *
+ * `parser/document.ts` can slice the exact source substring for its
+ * passthrough because it tracks byte ranges; this module does not, so it takes
+ * that file's documented fallback — a tree rebuild. The consequence, stated
+ * plainly: attributes, nesting and the order of differently-named children all
+ * survive, but a child element repeated with other names interleaved between
+ * its occurrences comes back grouped. Nothing in `CT_RPr` does that, and the
+ * alternative on offer was dropping the element entirely.
+ */
+const unknownXmlBuilder = new XMLBuilder({
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  format: false,
+  processEntities: true,
+  suppressEmptyNode: true,
+})
+
+/**
+ * RPR-STYLES-1 — captures each `w:rPr` child this module has no field for, so
+ * a save rebuilds it instead of dropping it.
+ *
+ * This was silent data loss on every save of any document whose styles use a
+ * run property Atlas doesn't model — `w:noProof` and `w:snapToGrid` are on
+ * Word's own built-in styles, so it was not an exotic case. `styles.xml` is
+ * rebuilt from the model in full (`saveDocx` step 3), unlike `settings.xml`,
+ * so there was no passthrough copy underneath to fall back on.
+ *
+ * Child ORDER comes from `Object.keys`: `fast-xml-parser` inserts keys as it
+ * reads them and none of these names are integer-like, so insertion order is
+ * document order. `before` names the next MODELED sibling, which is how
+ * `spliceRawPassthrough` puts the child back in the right place in what is a
+ * strict `xsd:sequence` — Word treats a mis-ordered `CT_RPr` as unreadable
+ * content, so appending everything at the end would trade one bug for a worse
+ * one.
+ */
+function parseRPrUnknownChildren(node: XmlNode): ReadonlyArray<RPrUnknownChild> | undefined {
+  const childNames = Object.keys(node).filter((key) => !key.startsWith('@_') && key !== '#text')
+  let unknown: RPrUnknownChild[] | undefined
+
+  for (let index = 0; index < childNames.length; index += 1) {
+    const name = childNames[index]
+    if (name === undefined || KNOWN_RPR_CHILD_NAMES.has(name)) continue
+
+    let before: string | undefined
+    for (let lookahead = index + 1; lookahead < childNames.length; lookahead += 1) {
+      const later = childNames[lookahead]
+      if (later !== undefined && KNOWN_RPR_CHILD_NAMES.has(later)) {
+        before = later
+        break
+      }
+    }
+
+    const value = node[name]
+    // A child name repeated in the source parses as an array; each occurrence
+    // is its own passthrough element.
+    for (const occurrence of Array.isArray(value) ? value : [value]) {
+      unknown ??= []
+      unknown.push({
+        xml: unknownXmlBuilder.build({ [name]: occurrence ?? '' }) as string,
+        ...(before !== undefined ? { before } : {}),
+      })
+    }
+  }
+
+  return unknown
+}
+
 function parseRunPropsElement(node: XmlNode | undefined): RunProps | undefined {
   if (node === undefined) return undefined
 
@@ -459,6 +573,9 @@ function parseRunPropsElement(node: XmlNode | undefined): RunProps | undefined {
 
   const charScale = parseCharScale(getValAttr(getNode(node, 'w:w')))
   if (charScale !== undefined) props.charScale = charScale
+
+  const rPrUnknown = parseRPrUnknownChildren(node)
+  if (rPrUnknown !== undefined) props.rPrUnknown = rPrUnknown
 
   return hasKeys(props) ? props : undefined
 }
