@@ -157,6 +157,59 @@ describe('TabBar', () => {
       expect(screen.getByRole('button', { name: 'Close c.md' })).toHaveFocus()
     })
 
+    // CTRLW-FOCUS-1 — the two tests above close through TabBar's own button, which
+    // records the neighbour to focus before the removal. The global Ctrl+W in App.tsx
+    // removes a session WITHOUT going through this component at all, and that route
+    // used to leave focus on <body>. This harness exposes an external close to
+    // reproduce exactly that.
+    describe('a close that does not go through TabBar (Ctrl+W)', () => {
+      function ExternalCloseHarness({ initial }: { initial: ReadonlyArray<DocumentSession> }) {
+        const [items, setItems] = useState(initial)
+        return (
+          <>
+            <button type="button" onClick={() => setItems((prev) => prev.filter((s) => s.id !== '/b.md'))}>
+              close-b-externally
+            </button>
+            <TabBar
+              sessions={items}
+              activeId={items[0]?.id ?? null}
+              isActiveDirty={false}
+              onSelect={() => {}}
+              onClose={(id) => setItems((prev) => prev.filter((s) => s.id !== id))}
+              onReorder={() => {}}
+            />
+          </>
+        )
+      }
+
+      it("re-homes focus to a neighbouring tab when focus was in the tab bar", () => {
+        render(<ExternalCloseHarness initial={three} />)
+
+        // Focus sits on b's close button, as it would after arrowing through the bar;
+        // then b is removed from outside TabBar entirely.
+        screen.getByRole('button', { name: 'Close b.md' }).focus()
+        fireEvent.click(screen.getByText('close-b-externally'))
+
+        expect(screen.queryByRole('tab', { name: /b\.md/ })).not.toBeInTheDocument()
+        expect(document.activeElement).not.toBe(document.body)
+        expect(screen.getByRole('button', { name: 'Close c.md' })).toHaveFocus()
+      })
+
+      it('leaves focus alone when it was OUTSIDE the tab bar', () => {
+        // Ctrl+W pressed while the caret is in the document must not yank focus up to
+        // a tab's close button — that would be worse than the original bug.
+        render(<ExternalCloseHarness initial={three} />)
+
+        const outside = screen.getByText('close-b-externally')
+        outside.focus()
+        expect(outside).toHaveFocus()
+        fireEvent.click(outside)
+
+        expect(screen.queryByRole('tab', { name: /b\.md/ })).not.toBeInTheDocument()
+        expect(outside).toHaveFocus()
+      })
+    })
+
     it("moves focus to the previous tab's close button when the last tab is closed", () => {
       render(<Harness initial={three} />)
 

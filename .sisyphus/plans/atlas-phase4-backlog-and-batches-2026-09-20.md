@@ -446,7 +446,17 @@ noticing they share one outer clock, so neither could ever be honoured. Now
 `test.setTimeout(120_000)`, matching the pattern `memory-retention.spec.ts` and
 `perf.spec.ts` already use.
 
-**TEST-10 · medium · OPEN** — four tests in the App-shell area now behave differently under
+**TEST-10 · medium · RESOLVED** (verified 2026-09-28) — the cluster is healthy. Each member
+passes alone under `--maxWorkers=1` (`App.shellSession` 37, `App.dirtyState` 1, `App.export`
+5) and the three pass together 3 runs out of 3; the full 3839-test suite and four CI runs
+have been green since. Resolved by accumulated work rather than one fix: `App.shellSession`'s
+case was a real product bug (already recorded), and `App.dirtyState` got the suite-wide
+`asyncUtilTimeout` raised to 5s plus a 30s budget on the one assertion that blocks on a
+`React.lazy()` chunk. Honest caveat: the resolution is "the budgets are now adequate", not
+"the coupling was found and eliminated" — if this area starts flaking again, look for
+coupling rather than raising budgets a third time.
+
+Original entry: four tests in the App-shell area now behave differently under
 CPU contention: they pass in isolation and fail in a loaded full-suite or CI run.
 `App.shellSession.test.tsx`'s close-confirmation case (now fixed — and it turned out to be
 a **product** bug), `App.dirtyState.characterization.test.tsx` (passes in the suite, fails
@@ -731,8 +741,16 @@ Save path, which does round-trip. So DRAFT-1's fix (clearing the draft in
 Open, but **not** Alt+F4 / the window X / File > Quit. Needs a symmetric discard
 notification in `electron/main.cjs` + `electron/preload.cjs`.
 
-**CTRLW-FOCUS-1 · low · OPEN, re-verified 2026-09-28** — still true: `closeActiveSession`
-in `src/App.tsx` calls `closeSessionById(sessions.activeId)` directly, with no focus move.
+**CTRLW-FOCUS-1 · low · FIXED** (2026-09-28) — rather than make every caller announce
+intent, `TabBar`'s focus effect now also INFERS the re-home: when the session list shrank and
+the tab that had focus is gone, it focuses the tab that took its place. That covers Ctrl+W,
+the toolbar Close and anything added later, with no cooperation from the caller.
+
+Guarded on focus having been inside the tab bar at the time — Ctrl+W pressed while the caret
+is in the document must not yank focus up to a close button, which would be worse than the
+bug. Two tests, and the first was checked against a neutralised fix to be sure it bites.
+**Left deliberately unfixed:** where focus should go when Ctrl+W is pressed from inside the
+document (presumably the newly-active document) is a ViewerRouter question, not a TabBar one.
 — `src/App.tsx`'s global Ctrl+W calls `closeSessionById` directly,
 bypassing `TabBar`'s new `handleClose`, so that one route still does not move focus to the
 neighbouring tab. Fixable only from `App.tsx`.
@@ -895,7 +913,27 @@ threading gap. Found and fixed by the DOCX-2 agent.
 did. So every test asserting "Atlas opens `.ods`" proves it against a file no real tool
 would produce.
 
-**INSERT-TABLE-CURSOR-1 · low** — batch 1's Insert Table fix parks the cursor on the
+**INSERT-TABLE-CURSOR-1 · low · OPEN, and blocked on something else than this entry
+assumed — attempted and reverted 2026-09-28.** The premise ("cells are now addressable, so
+it is a small follow-up") is only half right. Cell PATHS do resolve —
+`PageView.renderPageTableRow` attaches one per cell — but paths are attached to rendered
+LINES, and a freshly inserted table's cells are empty, so there is no line and therefore no
+DOM node for a caret to anchor to. Measured: with the cursor changed to
+`[section, ...prefix, index + 1, 0, 0, 0]`, `syncSelectionToDom` still cannot resolve it, the
+DOM selection never moves, and typed text lands on path `2` (the paragraph after the table)
+exactly as before — diagnostic from the real app read
+`hits: ["path=2 inTable=false"], tableText: ""`, the empty `tableText` being the tell.
+
+So the real blocker is **empty-cell caret anchoring**, not path resolution: a cell with no
+content renders no line box. Fixing this needs either a zero-width/placeholder line box per
+empty cell paragraph in `layoutTable.ts`, or a `positionToDomRange` fallback that anchors to
+the cell element itself when the cell has no lines. Both are larger than "small", and the
+DOCX-16 failure mode if it is got wrong is that every keystroke after Insert Table vanishes
+silently — which is why `docx-insert-table.spec.ts` asserts the landing paragraph explicitly.
+Reverted to the DOCX-16 behaviour (park on the paragraph after the table), which that test
+still passes.
+
+Original entry: batch 1's Insert Table fix parks the cursor on the
 addressable paragraph *after* the table, because cells were unreachable at the time. Cells
 are now addressable, so moving it into the first cell (Word's actual behaviour) is a small
 follow-up plus a test update.

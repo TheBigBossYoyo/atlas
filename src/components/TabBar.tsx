@@ -50,17 +50,58 @@ function TabBarBase({ sessions, activeId, isActiveDirty, onSelect, onClose, onRe
   // mirroring how browser tab strips let you keep closing tabs by repeatedly
   // pressing the same key/mouse button in place, which is more useful here
   // than restoring focus to whatever was focused before the tab bar existed.
+  //
+  // CTRLW-FOCUS-1 — the `pendingFocusIdRef` handshake below only fires for closes
+  // that go through this component's own `handleClose`. The global Ctrl+W in
+  // `App.tsx` calls `closeSessionById` directly, so that route left focus on
+  // `document.body` exactly as described above. Rather than have every caller
+  // remember to announce intent, the effect now ALSO re-homes focus whenever the
+  // session list shrank and the tab that had focus is gone — which covers Ctrl+W,
+  // the toolbar Close and anything added later, with no cooperation needed.
+  //
+  // Guarded on focus having been inside the tab bar at the time. Ctrl+W pressed
+  // while the caret is in the document must NOT yank focus up to a tab's close
+  // button; that would be worse than the bug. Where focus *should* go for that case
+  // (the newly-active document, presumably) is a larger question about ViewerRouter
+  // and is deliberately left alone here rather than guessed at.
   const closeButtonRefs = useRef<Array<HTMLButtonElement | null>>([])
   const pendingFocusIdRef = useRef<string | null>(null)
+  const previousSessionsRef = useRef<ReadonlyArray<{ id: string }>>(sessions)
 
   useEffect(() => {
-    const targetId = pendingFocusIdRef.current
-    if (targetId === null) return
+    const previous = previousSessionsRef.current
+    previousSessionsRef.current = sessions
+
+    const explicitTargetId = pendingFocusIdRef.current
     pendingFocusIdRef.current = null
-    const targetIndex = sessions.findIndex((s) => s.id === targetId)
-    if (targetIndex === -1) return
-    setFocusedId(targetId)
-    closeButtonRefs.current[targetIndex]?.focus()
+
+    const focusTabByIndex = (index: number): void => {
+      const target = sessions[index]
+      if (target === undefined) return
+      setFocusedId(target.id)
+      closeButtonRefs.current[index]?.focus()
+    }
+
+    if (explicitTargetId !== null) {
+      const targetIndex = sessions.findIndex((s) => s.id === explicitTargetId)
+      if (targetIndex !== -1) focusTabByIndex(targetIndex)
+      return
+    }
+
+    // No explicit handshake: infer it. Only act on a shrink, and only when focus was
+    // in this tab bar — see the note above.
+    if (sessions.length >= previous.length) return
+    const activeElement = document.activeElement
+    const focusWasInTabBar =
+      activeElement === null ||
+      activeElement === document.body ||
+      closeButtonRefs.current.includes(activeElement as HTMLButtonElement)
+    if (!focusWasInTabBar) return
+
+    const closedIndex = previous.findIndex((p) => !sessions.some((s) => s.id === p.id))
+    if (closedIndex === -1) return
+    // The tab that slid into the closed one's place, or the last one if it was last.
+    focusTabByIndex(Math.min(closedIndex, sessions.length - 1))
   }, [sessions])
 
   if (sessions.length === 0) return null
