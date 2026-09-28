@@ -491,11 +491,16 @@ directory and nothing deleted one: 2,876 directories / 26 GB on the development
 machine, growing ~110 per full suite run. Now pruned on launch, bounded and
 best-effort. Found while investigating the export failure.
 
-**INSERT-TEXT-THROWS-1 · medium · OPEN** — `applyInsertText` throws for any
-paragraph containing a comment range/reference, a footnote/endnote reference, or
-a bare `w:oMath`. Typing in a paragraph that merely *contains* a comment or a
-formula is an everyday action. Proven by three `toThrow()` assertions in the
-corpus suite. What the user actually sees was not determined.
+**INSERT-TEXT-THROWS-1 · medium · FIXED** (verified against the code 2026-09-28) —
+`commands.ts` now has `chunkParagraphForInsert`, which partitions a paragraph into inert
+markers (bookmarks, comment ranges/references, note references, opaque nodes like a bare
+`w:oMath` — kept byte-identical and never a caret target) and the editable runs between
+them, so typing elsewhere in the same paragraph works and the marker is untouched. The
+fix comment in `commands.ts` names this finding. The 2026-09-25 night-run CHANGELOG entry
+("typing in a paragraph that contains a comment, a footnote reference or an equation
+works") is the user-facing record.
+
+~~`applyInsertText` throws for any paragraph containing a comment range/reference…~~
 
 ### 2026-09-24 — the CI red on `95a28a8` was F6 regressing on a slow CPU
 
@@ -726,7 +731,9 @@ Save path, which does round-trip. So DRAFT-1's fix (clearing the draft in
 Open, but **not** Alt+F4 / the window X / File > Quit. Needs a symmetric discard
 notification in `electron/main.cjs` + `electron/preload.cjs`.
 
-**CTRLW-FOCUS-1 · low** — `src/App.tsx`'s global Ctrl+W calls `closeSessionById` directly,
+**CTRLW-FOCUS-1 · low · OPEN, re-verified 2026-09-28** — still true: `closeActiveSession`
+in `src/App.tsx` calls `closeSessionById(sessions.activeId)` directly, with no focus move.
+— `src/App.tsx`'s global Ctrl+W calls `closeSessionById` directly,
 bypassing `TabBar`'s new `handleClose`, so that one route still does not move focus to the
 neighbouring tab. Fixable only from `App.tsx`.
 
