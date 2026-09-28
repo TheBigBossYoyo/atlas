@@ -66,6 +66,10 @@ export function ShortcutsModal({ isOpen, onClose }: ShortcutsModalProps) {
             <dt>{renderKeys('Ctrl+S')}</dt><dd>{t('shortcuts.save')}</dd>
             <dt>{renderKeys('Ctrl+Shift+S')}</dt><dd>{t('shortcuts.saveAs')}</dd>
             <dt>{renderKeys('Ctrl+W')}</dt><dd>{t('shortcuts.closeFile')}</dd>
+            {/* A11Y pass 4 — the X on a tab is a mouse affordance only (a
+                focusable control inside a `role="tab"` is a WCAG 4.1.2
+                violation), so the keyboard path has to be discoverable here. */}
+            <dt>{renderKeys('Delete')}</dt><dd>{t('shortcuts.closeFocusedTab')}</dd>
             <dt>{renderKeys('Ctrl+Tab')} / {renderKeys('Ctrl+Shift+Tab')}</dt><dd>{t('shortcuts.nextPrevTab')}</dd>
             <dt>{renderKeys('Ctrl+Shift+T')}</dt><dd>{t('shortcuts.reopenClosed')}</dd>
             <dt>{renderKeys('Ctrl+P')}</dt><dd>{t('shortcuts.printExport')}</dd>

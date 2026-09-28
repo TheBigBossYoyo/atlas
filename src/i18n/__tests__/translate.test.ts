@@ -74,8 +74,11 @@ describe('translate', () => {
   });
 
   it('interpolates params through a full translate() call', () => {
-    expect(translate('en', 'tabBar.closeAria', { name: 'report.md' })).toBe('Close report.md');
-    expect(translate('fr', 'tabBar.closeAria', { name: 'report.md' })).toBe('Fermer report.md');
+    // `tabBar.closeAria` was removed by A11Y pass 4 (the tab close affordance is
+    // `aria-hidden` and has no name); `closeTitle` is the same interpolation in
+    // the same catalogue entry family.
+    expect(translate('en', 'tabBar.closeTitle', { name: 'report.md' })).toBe('Close report.md');
+    expect(translate('fr', 'tabBar.closeTitle', { name: 'report.md' })).toBe('Fermer report.md');
   });
 
   it('applies plural selection through a full translate() call', () => {

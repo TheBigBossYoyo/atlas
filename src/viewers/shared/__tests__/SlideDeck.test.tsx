@@ -114,6 +114,8 @@ describe('SlideDeck', () => {
     const slides = await loadFixtureSlides()
     const { getByRole } = render(<SlideDeck slides={slides} activeIndex={0} onSelect={vi.fn()} />)
 
+    // A11Y pass 4 — the label now sits on the REAL list (`react-window`'s own
+    // element), not on a wrapper that duplicated the role around it.
     const rail = getByRole('list', { name: 'Slide thumbnails' })
     const railButtons = within(rail).getAllByRole('button')
     expect(within(rail).getAllByRole('listitem').length).toBe(slides.length)

@@ -111,6 +111,11 @@ speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked t
 ## What is left
 1. **Code signing (P5.1)** — the only item needing the owner's money. `docs/RELEASE.md` lists the
    certificate options and what changes in `electron-builder.yml`.
+2b. **Accessibility**: an automated WCAG 2.1 A/AA audit now exists
+   (`tests/e2e/accessibility.spec.ts`, axe-core injected into the real Electron window,
+   nine surfaces) and passes with zero violations after five fixes — see the Accessibility
+   section of `docs/KNOWN_LIMITATIONS.md`. Testing with a REAL screen reader still has not
+   happened, and axe cannot substitute for it.
 2. **No Office verification** — nothing Atlas writes has ever been opened in real Microsoft Office or
    LibreOffice (neither is installed here). Structural validation is the substitute (see above).
 3. **Memory**: re-measured 2026-09-28 and the ~24 MB claim is WRONG — a closed 100k-row

@@ -118,7 +118,7 @@ export const messages = {
 
   // TabBar.tsx
   'tabBar.label': 'Open documents',
-  'tabBar.closeAria': 'Close {name}',
+  'tabBar.tabDirtyAria': '{name} (unsaved changes)',
   'tabBar.closeTitle': 'Close {name}',
 
   // ShortcutsModal.tsx
@@ -129,6 +129,7 @@ export const messages = {
   'shortcuts.openFile': 'Open file',
   'shortcuts.save': 'Save',
   'shortcuts.saveAs': 'Save As',
+  'shortcuts.closeFocusedTab': 'Close the tab that has keyboard focus',
   'shortcuts.closeFile': 'Close file',
   'shortcuts.nextPrevTab': 'Next / previous tab',
   'shortcuts.reopenClosed': 'Reopen last closed document',
@@ -220,6 +221,7 @@ export const messages = {
   'legacyFormat.notice': '{formatLabel} — legacy format, shown as read-only text. Re-save it as {modernExtension} in Word, PowerPoint, or a compatible app for full fidelity editing.',
 
   // CodeViewer.tsx
+  'codeViewer.editorAria': 'Source code editor, {name}',
   'codeViewer.toolbarAria': 'Code editor',
   'codeViewer.stop': 'Stop',
   'codeViewer.run': 'Run',

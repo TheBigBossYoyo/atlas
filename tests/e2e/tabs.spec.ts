@@ -54,8 +54,10 @@ test('opens documents in tabs, switches between them and closes them', async () 
     await page.keyboard.press('Control+Tab')
     await expect(page.getByRole('tab', { name: 'second.md' })).toHaveAttribute('aria-selected', 'true')
 
-    // Closing a tab leaves the other one showing.
-    await page.getByRole('button', { name: 'Close second.md' }).click()
+    // Closing a tab leaves the other one showing. A11Y pass 4 — the X is an
+    // `aria-hidden` span with no accessible name (a focusable control inside a
+    // `role="tab"` violates WCAG 4.1.2), so it is addressed by `data-close-tab`.
+    await page.locator('[data-close-tab$="second.md"]').click()
     await expect(page.getByRole('tab', { name: 'second.md' })).toHaveCount(0)
     await expect(page.getByRole('tab', { name: 'first.md' })).toHaveAttribute('aria-selected', 'true')
     await expect(page.locator('.markdown-body')).toContainText('first file')

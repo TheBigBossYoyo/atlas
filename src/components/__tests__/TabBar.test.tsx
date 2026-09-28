@@ -21,8 +21,19 @@ function renderBar(overrides: Partial<React.ComponentProps<typeof TabBar>> = {})
     onReorder: vi.fn(),
     ...overrides,
   }
-  render(<TabBar {...props} />)
-  return props
+  const { container } = render(<TabBar {...props} />)
+  return { ...props, container }
+}
+
+/**
+ * A11Y pass 4 — the X on a tab is a mouse-only `<span>` with `aria-hidden` (a
+ * focusable control inside a `role="tab"` is a WCAG 4.1.2 violation), so it has
+ * no role and no accessible name to query by. `data-close-tab` exists for this.
+ */
+function closeAffordance(id: string): HTMLElement {
+  const node = document.querySelector(`[data-close-tab="${id}"]`)
+  if (node === null) throw new Error(`no close affordance for ${id}`)
+  return node as HTMLElement
 }
 
 describe('TabBar', () => {
@@ -43,27 +54,86 @@ describe('TabBar', () => {
   })
 
   it('shows the unsaved dot only on the document being edited', () => {
-    renderBar({ isActiveDirty: true })
-    const dots = screen.getAllByLabelText('Unsaved changes')
+    const { container } = renderBar({ isActiveDirty: true })
+    const dots = container.querySelectorAll('.tab-bar__dirty')
     expect(dots).toHaveLength(1)
-    expect(screen.getByRole('tab', { name: /a\.md/ })).toContainElement(dots[0])
+    expect(screen.getByRole('tab', { name: /a\.md/ })).toContainElement(dots[0] as HTMLElement)
+  })
+
+  it('says unsaved changes in the tab own accessible name, not only as a coloured dot', () => {
+    // A11Y pass 4 — the dot is `aria-hidden` and the state lives in the tab's
+    // `aria-label` instead. A screen reader gets nothing from a background
+    // colour, and labelling both the dot and the tab said it twice.
+    renderBar({ isActiveDirty: true })
+    expect(screen.getByRole('tab', { name: 'a.md (unsaved changes)' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'b.docx' })).toBeInTheDocument()
+  })
+
+  it('does not fold the close button label into the tab name', () => {
+    // Name-from-content would make this tab "a.md Close a.md", which is what a
+    // screen reader would then read out for every tab.
+    renderBar()
+    expect(screen.getByRole('tab', { name: 'a.md' })).toBeInTheDocument()
   })
 
   it('closes from the close button and from a middle click', () => {
     const props = renderBar()
-    fireEvent.click(screen.getByRole('button', { name: 'Close b.docx' }))
+    fireEvent.click(closeAffordance('/b.docx'))
     expect(props.onClose).toHaveBeenCalledWith('/b.docx')
 
     // Testing Library has no auxClick helper; dispatch the real event.
-    const tab = screen.getByRole('tab', { name: /a[.]md/ }).parentElement!
+    // A11Y pass 4 — the tab element IS the wrapper that carries these handlers
+    // now, so this no longer reaches for `.parentElement`.
+    const tab = screen.getByRole('tab', { name: /a[.]md/ })
     fireEvent(tab, new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true }))
     expect(props.onClose).toHaveBeenCalledWith('/a.md')
   })
 
+  it('closing a background tab does not also select it', () => {
+    // The close affordance sits inside the tab, which owns the select handler,
+    // so the click has to be stopped from bubbling.
+    const props = renderBar()
+    fireEvent.click(closeAffordance('/b.docx'))
+    expect(props.onClose).toHaveBeenCalledWith('/b.docx')
+    expect(props.onSelect).not.toHaveBeenCalled()
+  })
+
+  it('Delete and Backspace on a focused tab close it', () => {
+    // A11Y pass 4 — the X is not focusable at all, so this IS the keyboard path
+    // to closing a tab (alongside the shell's Ctrl+W). Listed in the shortcuts
+    // dialog for that reason.
+    const props = renderBar()
+    fireEvent.keyDown(screen.getByRole('tab', { name: /b\.docx/ }), { key: 'Delete' })
+    expect(props.onClose).toHaveBeenCalledWith('/b.docx')
+
+    fireEvent.keyDown(screen.getByRole('tab', { name: /a\.md/ }), { key: 'Backspace' })
+    expect(props.onClose).toHaveBeenCalledWith('/a.md')
+  })
+
+  it('Enter and Space select the focused tab', () => {
+    // Free with a `<button>`; a `div[role="tab"]` has to do it itself.
+    const props = renderBar()
+    fireEvent.keyDown(screen.getByRole('tab', { name: /b\.docx/ }), { key: 'Enter' })
+    expect(props.onSelect).toHaveBeenCalledWith('/b.docx')
+
+    fireEvent.keyDown(screen.getByRole('tab', { name: /b\.docx/ }), { key: ' ' })
+    expect(props.onSelect).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the close affordance out of the accessibility tree entirely', () => {
+    // Not merely out of the Tab sequence: axe is explicit that a negative
+    // tabindex inside an interactive control does not stop AT reaching it, so the
+    // X carries no role and no name and is aria-hidden.
+    renderBar()
+    expect(screen.queryByRole('button', { name: /Close/ })).not.toBeInTheDocument()
+    expect(closeAffordance('/a.md')).toHaveAttribute('aria-hidden', 'true')
+    expect(closeAffordance('/a.md')).not.toHaveAttribute('tabindex')
+  })
+
   it('reorders on drag and drop', () => {
     const props = renderBar()
-    const first = screen.getByRole('tab', { name: /a\.md/ }).parentElement!
-    const second = screen.getByRole('tab', { name: /b\.docx/ }).parentElement!
+    const first = screen.getByRole('tab', { name: /a\.md/ })
+    const second = screen.getByRole('tab', { name: /b\.docx/ })
 
     fireEvent.dragStart(first)
     fireEvent.dragOver(second)
@@ -145,19 +215,21 @@ describe('TabBar', () => {
       )
     }
 
-    it("moves focus to the next tab's close button when a middle tab is closed", () => {
+    it('moves focus to the next TAB when a middle tab is closed', () => {
       render(<Harness initial={three} />)
 
-      const closeB = screen.getByRole('button', { name: 'Close b.md' })
-      closeB.focus()
-      fireEvent.click(closeB)
+      screen.getByRole('tab', { name: /b\.md/ }).focus()
+      fireEvent.click(closeAffordance('/b.md'))
 
       expect(screen.queryByRole('tab', { name: /b\.md/ })).not.toBeInTheDocument()
       expect(document.activeElement).not.toBe(document.body)
-      expect(screen.getByRole('button', { name: 'Close c.md' })).toHaveFocus()
+      // A11Y pass 4 — the neighbouring tab, not its close button, which is no
+      // longer focusable. Pressing Delete again closes that one, so closing
+      // several in a row still works without moving the hands.
+      expect(screen.getByRole('tab', { name: /c\.md/ })).toHaveFocus()
     })
 
-    // CTRLW-FOCUS-1 — the two tests above close through TabBar's own button, which
+    // CTRLW-FOCUS-1 — the two tests above close through TabBar's own X, which
     // records the neighbour to focus before the removal. The global Ctrl+W in App.tsx
     // removes a session WITHOUT going through this component at all, and that route
     // used to leave focus on <body>. This harness exposes an external close to
@@ -185,19 +257,19 @@ describe('TabBar', () => {
       it("re-homes focus to a neighbouring tab when focus was in the tab bar", () => {
         render(<ExternalCloseHarness initial={three} />)
 
-        // Focus sits on b's close button, as it would after arrowing through the bar;
-        // then b is removed from outside TabBar entirely.
-        screen.getByRole('button', { name: 'Close b.md' }).focus()
+        // Focus sits on b's tab, as it would after arrowing through the bar; then
+        // b is removed from outside TabBar entirely.
+        screen.getByRole('tab', { name: /b\.md/ }).focus()
         fireEvent.click(screen.getByText('close-b-externally'))
 
         expect(screen.queryByRole('tab', { name: /b\.md/ })).not.toBeInTheDocument()
         expect(document.activeElement).not.toBe(document.body)
-        expect(screen.getByRole('button', { name: 'Close c.md' })).toHaveFocus()
+        expect(screen.getByRole('tab', { name: /c\.md/ })).toHaveFocus()
       })
 
       it('leaves focus alone when it was OUTSIDE the tab bar', () => {
         // Ctrl+W pressed while the caret is in the document must not yank focus up to
-        // a tab's close button — that would be worse than the original bug.
+        // a tab — that would be worse than the original bug.
         render(<ExternalCloseHarness initial={three} />)
 
         const outside = screen.getByText('close-b-externally')
@@ -210,16 +282,15 @@ describe('TabBar', () => {
       })
     })
 
-    it("moves focus to the previous tab's close button when the last tab is closed", () => {
+    it('moves focus to the previous TAB when the last tab is closed', () => {
       render(<Harness initial={three} />)
 
-      const closeC = screen.getByRole('button', { name: 'Close c.md' })
-      closeC.focus()
-      fireEvent.click(closeC)
+      screen.getByRole('tab', { name: /c\.md/ }).focus()
+      fireEvent.click(closeAffordance('/c.md'))
 
       expect(screen.queryByRole('tab', { name: /c\.md/ })).not.toBeInTheDocument()
       expect(document.activeElement).not.toBe(document.body)
-      expect(screen.getByRole('button', { name: 'Close b.md' })).toHaveFocus()
+      expect(screen.getByRole('tab', { name: /b\.md/ })).toHaveFocus()
     })
 
     it('never leaves focus on <body> when the sole remaining tab is closed', () => {
@@ -228,9 +299,8 @@ describe('TabBar', () => {
       ]
       const { container } = render(<Harness initial={one} />)
 
-      const closeA = screen.getByRole('button', { name: 'Close a.md' })
-      closeA.focus()
-      fireEvent.click(closeA)
+      screen.getByRole('tab', { name: /a\.md/ }).focus()
+      fireEvent.click(closeAffordance('/a.md'))
 
       // The bar itself unmounts (no tabs left) — nothing inside it can be
       // focused, and where focus goes next is the shell's (App.tsx's)

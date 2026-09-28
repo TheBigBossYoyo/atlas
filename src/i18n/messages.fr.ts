@@ -121,7 +121,7 @@ export const messages = {
 
   // TabBar.tsx
   'tabBar.label': 'Documents ouverts',
-  'tabBar.closeAria': 'Fermer {name}',
+  'tabBar.tabDirtyAria': '{name} (modifications non enregistrées)',
   'tabBar.closeTitle': 'Fermer {name}',
 
   // ShortcutsModal.tsx
@@ -132,6 +132,7 @@ export const messages = {
   'shortcuts.openFile': 'Ouvrir un fichier',
   'shortcuts.save': 'Enregistrer',
   'shortcuts.saveAs': 'Enregistrer sous',
+  'shortcuts.closeFocusedTab': 'Fermer l’onglet qui a le focus clavier',
   'shortcuts.closeFile': 'Fermer le fichier',
   'shortcuts.nextPrevTab': 'Onglet suivant / précédent',
   'shortcuts.reopenClosed': 'Rouvrir le dernier document fermé',
@@ -223,6 +224,7 @@ export const messages = {
   'legacyFormat.notice': '{formatLabel} — format hérité, affiché en lecture seule sous forme de texte. Réenregistrez-le au format {modernExtension} dans Word, PowerPoint ou une application compatible pour une édition fidèle.',
 
   // CodeViewer.tsx
+  'codeViewer.editorAria': 'Éditeur de code source, {name}',
   'codeViewer.toolbarAria': 'Éditeur de code',
   'codeViewer.stop': 'Arrêter',
   'codeViewer.run': 'Exécuter',

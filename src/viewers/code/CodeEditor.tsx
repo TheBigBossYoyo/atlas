@@ -26,11 +26,14 @@
 import { memo, useEffect, useRef } from 'react'
 import { basicSetup } from 'codemirror'
 import { indentWithTab } from '@codemirror/commands'
-import { LanguageDescription } from '@codemirror/language'
+import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language'
+import { tags } from '@lezer/highlight'
 import { languages } from '@codemirror/language-data'
 import { gotoLine, openSearchPanel, selectNextOccurrence } from '@codemirror/search'
 import { Compartment, EditorState, Prec, type Extension } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
+
+import { useTranslate } from '../../i18n'
 import { oneDark } from '@codemirror/theme-one-dark'
 
 export type CodeEditorApi = {
@@ -56,6 +59,39 @@ const baseTheme = EditorView.theme({
   '.cm-scroller': { fontFamily: "'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', Consolas, monospace", lineHeight: '1.6' },
 })
 
+/**
+ * A11Y pass 4 (axe audit, 2026-09-28) — WCAG 1.4.3 contrast fix for ONE colour
+ * in CodeMirror's own `defaultHighlightStyle`.
+ *
+ * `#085` (rgb 0 136 85), which that style uses for type names, class names,
+ * numbers and a few related tags, measures 4.26:1 against the light theme's
+ * `#f1faff` active-line background — under the 4.5:1 AA threshold for body text
+ * at this size. `#074` (rgb 0 119 68) is the same hue at 5.3:1.
+ *
+ * Done as a higher-precedence `HighlightStyle` rather than as CSS, because the
+ * class names `defaultHighlightStyle` generates (`.ͼi` and friends) are
+ * generated, obfuscated and not stable across releases — a stylesheet pinned to
+ * one of them would stop applying silently on the next upgrade. Only the dark
+ * theme is exempt: `oneDark` brings its own palette and does not use this colour.
+ */
+const CONTRAST_FIXED_GREEN = '#007744'
+
+const contrastFixes = HighlightStyle.define([
+  {
+    tag: [
+      tags.typeName,
+      tags.className,
+      tags.number,
+      tags.changed,
+      tags.annotation,
+      tags.modifier,
+      tags.self,
+      tags.namespace,
+    ],
+    color: CONTRAST_FIXED_GREEN,
+  },
+])
+
 // FIELD-02 — wrapped in `Prec.high` so these bindings win over `basicSetup`'s
 // own default `searchKeymap`, which is listed first in the `extensions`
 // array below and otherwise claims Mod-g for "find next" at the same
@@ -71,6 +107,7 @@ const editorKeys = Prec.high(keymap.of([
 ]))
 
 function CodeEditorBase({ initialText, fileName, dark, wrap, onDocChange, onReady }: CodeEditorProps) {
+  const t = useTranslate()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const themeCompartment = useRef(new Compartment())
@@ -87,9 +124,18 @@ function CodeEditorBase({ initialText, fileName, dark, wrap, onDocChange, onRead
     const host = hostRef.current
     if (!host) return undefined
     const extensions: Extension[] = [
+      // A11Y pass 4 — before `basicSetup`, because in CodeMirror an extension
+      // earlier in the array has HIGHER precedence, and this has to win over the
+      // `defaultHighlightStyle` that `basicSetup` installs.
+      syntaxHighlighting(contrastFixes),
       basicSetup,
       editorKeys,
       baseTheme,
+      // A11Y pass 4 — CodeMirror gives `.cm-content` `role="textbox"` and no
+      // accessible name, so a screen reader announced an unlabelled edit field.
+      // The file name is included because a viewer with several editors open
+      // otherwise announces them identically.
+      EditorView.contentAttributes.of({ 'aria-label': t('codeViewer.editorAria', { name: fileName }) }),
       themeCompartment.current.of(dark ? oneDark : []),
       wrapCompartment.current.of(wrap ? EditorView.lineWrapping : []),
       languageCompartment.current.of([]),

@@ -34,6 +34,21 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   with the file's namespace declarations. The same applies to list levels in
   `numbering.xml`.
 
+- **Accessibility: the tab bar, the slide rail, the slide editing surface and the
+  code editor are now described correctly to a screen reader.** An automated
+  accessibility audit found five real faults — among them a tab bar that
+  described itself in a way assistive software rejects, on every screen in the
+  app, and a code-editor colour too faint to meet the contrast standard.
+- **Accessibility: an unsaved-changes tab now says so, not just shows a dot.**
+  A coloured dot tells a screen reader nothing.
+
+### Changed
+
+- **The X on a tab is now for the mouse; the keyboard closes a tab with Delete
+  or Backspace** (Ctrl+W still works too). A button inside a tab is something
+  assistive software cannot describe correctly, and Delete is one keystroke
+  instead of tabbing to a button. It is listed in the shortcuts dialog.
+
 ### Added
 
 - **Word comments: a resolved comment can be un-resolved again.** Resolving used

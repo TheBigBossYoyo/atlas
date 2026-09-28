@@ -274,6 +274,14 @@ function SlideEditCanvasBase({
         ref={layerRef}
         className="slide-edit__layer"
         tabIndex={0}
+        // A11Y pass 4 (axe audit, 2026-09-28) — a role was required, not
+        // optional: `aria-label` on a `div` with no role is prohibited, so the
+        // label this surface already had was being discarded and the focusable
+        // element announced as nothing at all. `application` is the honest role
+        // here rather than a convenient one — this layer owns the arrow keys for
+        // nudging a selected shape, and a screen reader's virtual cursor
+        // intercepting them is exactly what must not happen.
+        role="application"
         aria-label={t('slides.editCanvas.surfaceAria')}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

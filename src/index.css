@@ -2203,12 +2203,27 @@ mark.search-highlight--active {
   background: var(--bg-tertiary);
 }
 
+/* A11Y pass 4 — the tab is a `div[role="tab"]` now rather than a `<button>`, so
+   the focus ring has to be asked for explicitly; arrowing along the bar is
+   invisible without it. */
+.tab-bar__tab {
+  cursor: pointer;
+}
+
+.tab-bar__tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .tab-bar__tab--active {
   background: var(--bg-primary);
   border-color: var(--border-primary);
   color: var(--text-primary);
 }
 
+/* A `<span>` since A11Y pass 4 (it was a `<button>` carrying `role="tab"`);
+   the declarations that used to reset button chrome are harmless and kept so a
+   revert is a one-line change. */
 .tab-bar__label {
   display: inline-flex;
   align-items: center;

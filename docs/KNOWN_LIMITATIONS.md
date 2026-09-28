@@ -355,13 +355,49 @@ restores focus to whatever triggered it once closed, via a shared
 `useFocusTrap` hook — `PresenterView` traps it even when the browser refuses
 its `requestFullscreen()` call. A toolbar dropdown restores focus to its own
 trigger button on close the same way; closing a tab in the tab bar instead
-moves focus to a neighbouring tab's own close button (there's no single
-fixed "trigger" to return to for a dynamic list), via TabBar's own
-`useEffect`, so keyboard users can keep closing tabs in place instead of
-losing focus to `<body>`. Beyond these two passes (contrast and focus), no
-dedicated screen-reader testing has been done — ARIA roles/labels exist
-where a component already needed them (e.g. dialog roles, icon-only button
-labels) but haven't been audited end-to-end with an actual screen reader.
+moves focus to a neighbouring tab (there's no single fixed "trigger" to return
+to for a dynamic list), via TabBar's own `useEffect`, so keyboard users can keep
+closing tabs in place instead of losing focus to `<body>`.
+
+**Pass 4, 2026-09-28: an automated WCAG 2.1 A/AA audit, the first one ever run
+here.** `tests/e2e/accessibility.spec.ts` injects axe-core into the real Electron
+window and audits nine surfaces — the empty shell, each viewer (Word, Word with
+the comments pane open, spreadsheet, markdown, slides, PDF, code) and the
+keyboard-shortcuts dialog. It found five distinct violations, all now fixed:
+
+- **The tab bar, critical, on every screen in the app** (the bar is always
+  mounted). `role="tablist"` may only own `tab` children and each tab's close
+  button sat beside the tab as a second child of the list. Fixing that exposed
+  the other half: a *focusable* control inside a `role="tab"` is a WCAG 4.1.2
+  `nested-interactive` violation, and axe is explicit that `tabindex="-1"` plus
+  `aria-hidden` does not excuse it. So the X is now a mouse-only affordance, as
+  it is in every browser tab strip, and closing by keyboard is **Delete** or
+  **Backspace** on the focused tab (or Ctrl+W) — fewer keystrokes than tabbing to
+  a button, and listed in the shortcuts dialog. The unsaved-changes dot is now
+  stated in the tab's own accessible name instead of being only a coloured dot.
+- **The slide thumbnail rail, critical.** A wrapper carried `role="list"` around
+  `react-window`'s own `role="list"`, so one list owned another. The label moved
+  onto the real list and the wrapper became a plain layout box.
+- **The slide editing surface, serious.** `aria-label` on a `div` with no role is
+  prohibited, so the label it had was being discarded and the focusable element
+  announced as nothing. It is `role="application"` now — the honest role, since
+  that layer owns the arrow keys for nudging a shape.
+- **The code editor, serious.** CodeMirror gives `.cm-content` `role="textbox"`
+  and no accessible name; it now carries one, including the file name.
+- **The code editor, serious, contrast.** One colour in CodeMirror's own
+  `defaultHighlightStyle` (`#085`, used for type names, class names and numbers)
+  measures 4.26:1 against the light theme's active-line background, under the
+  4.5:1 AA threshold. Overridden with `#074` (5.3:1) through a
+  higher-precedence `HighlightStyle` rather than CSS, because the class names
+  that style generates are obfuscated and not stable across releases.
+
+**What that audit does not prove.** axe finds machine-checkable failures: a
+control with no name, a contrast ratio below threshold, a role with missing
+required children. It cannot tell you whether a screen reader makes a *document*
+readable — whether page boundaries are announced, whether the caret position is
+spoken as it moves, whether the comments pane reads in a sensible order. That
+still needs a real screen reader and a person, and still has not happened. Zero
+axe violations is the floor, not the ceiling.
 
 ## Export
 

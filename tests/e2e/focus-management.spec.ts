@@ -138,32 +138,32 @@ test('closing a tab by keyboard moves focus to a neighbouring tab, never to <bod
     await page.getByRole('button', { name: 'Open', exact: true }).click()
     await expect(page.getByRole('tab', { name: 'third.md' })).toBeVisible({ timeout: 20_000 })
 
-    // ---- Close the MIDDLE tab (second.md) purely by keyboard: Tab lands on
-    // its close button (simulated by focusing it directly, the same way a
-    // real Tab walk would — see keyboard-only.spec.ts for the equivalent
-    // pattern), then Enter activates it. No mouse click anywhere.
-    const closeSecond = page.getByRole('button', { name: 'Close second.md' })
-    await closeSecond.focus()
-    await page.keyboard.press('Enter')
+    // ---- Close the MIDDLE tab (second.md) purely by keyboard. A11Y pass 4
+    // changed how: the X on a tab is a mouse-only affordance now (a focusable
+    // control inside a `role="tab"` is a WCAG 4.1.2 `nested-interactive`
+    // violation), so the keyboard path is Delete on the focused TAB. The
+    // property under test is unchanged — closing by keyboard must never drop
+    // focus to <body> — and there is one fewer keystroke to get there.
+    await page.getByRole('tab', { name: 'second.md' }).focus()
+    await page.keyboard.press('Delete')
 
     await expect(page.getByRole('tab', { name: 'second.md' })).toHaveCount(0)
-    // Never <body> — the previous close button unmounted right under focus.
+    // Never <body> — the element that had focus unmounted right under it.
     expect(await activeElementDescription(page)).not.toBe('body')
-    // Lands on the next tab's own close button (third.md), so a keyboard
-    // user can keep closing tabs in place.
-    await expect(page.getByRole('button', { name: 'Close third.md' })).toBeFocused()
+    // Lands on the next tab (third.md), so Delete again keeps closing in place.
+    await expect(page.getByRole('tab', { name: 'third.md' })).toBeFocused()
 
     // ---- Close third.md too (now the LAST tab) — focus should fall back to
-    // the remaining neighbour, first.md's close button.
-    await page.keyboard.press('Enter')
+    // the remaining neighbour, first.md.
+    await page.keyboard.press('Delete')
     await expect(page.getByRole('tab', { name: 'third.md' })).toHaveCount(0)
     expect(await activeElementDescription(page)).not.toBe('body')
-    await expect(page.getByRole('button', { name: 'Close first.md' })).toBeFocused()
+    await expect(page.getByRole('tab', { name: 'first.md' })).toBeFocused()
 
     // ---- Close the sole remaining tab — TabBar itself unmounts; the app
     // must not crash or hang (where focus lands next is the shell's concern,
     // not TabBar's — this only proves the keyboard close path is safe here).
-    await page.keyboard.press('Enter')
+    await page.keyboard.press('Delete')
     await expect(page.getByRole('tab', { name: 'first.md' })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Load Sample Document' })).toBeVisible({ timeout: 10_000 })
   } finally {

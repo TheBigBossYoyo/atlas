@@ -276,9 +276,17 @@ function SlideDeckBase({ slides, activeIndex, onSelect, editor }: SlideDeckProps
   return (
     <div ref={containerRef} className={isFullscreen ? 'slide-deck slide-deck--fullscreen' : 'slide-deck'}>
       {!isFullscreen && (
-        <div className="slide-deck__rail" role="list" aria-label={t('slides.deck.thumbnailRailAria')}>
+        // A11Y pass 4 (axe audit, 2026-09-28) — this wrapper used to carry
+        // `role="list"` and the label, but `react-window`'s `List` renders its own
+        // `role="list"` inside it, and a `list` may only own `listitem`s: axe
+        // reported a CRITICAL `aria-required-children` violation. The wrapper is
+        // now purely a layout box and the label moved onto the real list below,
+        // which is where it belonged — one list, labelled, with `listitem`
+        // children, instead of two nested ones.
+        <div className="slide-deck__rail">
           {slides.length > 0 && (
             <List
+              aria-label={t('slides.deck.thumbnailRailAria')}
               rowComponent={ThumbnailRow}
               rowCount={slides.length}
               rowHeight={rowHeight}
