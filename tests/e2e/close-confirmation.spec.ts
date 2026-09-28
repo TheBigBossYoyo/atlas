@@ -32,7 +32,16 @@ import type { ElectronApplication, Page } from '@playwright/test'
 const projectRoot = process.cwd()
 const fixtureDir = path.join(projectRoot, 'tests', 'e2e', 'fixtures')
 
+// Only when something is actually missing. This used to run unconditionally, and
+// `generate.mjs` rewrites the git-tracked fixture binaries with zips that are
+// equivalent but not byte-identical (archive timestamps), so every suite run left
+// eight modified binaries in the working tree. Harmless in itself, and exactly how
+// churn gets swept into an unrelated commit by a `git add -A` — which is what
+// happened in `a2683a4`, `bc447d4` and `7ad2042` before this was noticed.
 test.beforeAll(() => {
+  const required = ['sample.md', 'sample.docx', 'sample.xlsx', 'sample.pptx', 'sample.pdf']
+  const missing = required.filter((name) => !fs.existsSync(path.join(fixtureDir, name)))
+  if (missing.length === 0) return
   execFileSync(process.execPath, ['tests/e2e/fixtures/generate.mjs'], {
     cwd: projectRoot,
     stdio: 'inherit',
