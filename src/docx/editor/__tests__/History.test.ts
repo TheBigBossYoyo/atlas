@@ -331,6 +331,111 @@ describe('History', () => {
     const undone = history.undo(second.document)
     expect(runText(undone!.document)).toBe('AxB')
   })
+
+  // ---------------------------------------------------------------------------
+  // REDO-REPLAY-1 — redo restores a recorded document instead of replaying a
+  // stored command against whatever document it is handed. The replay was
+  // position-sensitive: a command names paragraph paths, run indices and
+  // character offsets, so a document that has shifted since the command was
+  // recorded takes the edit somewhere else. These assert the two properties
+  // that make the class of bug unreachable rather than just its one known
+  // trigger.
+  // ---------------------------------------------------------------------------
+
+  it('REDO-REPLAY-1: redo hands back the exact pre-undo document, not a recomputed one', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const applied = applyCommand(original, { kind: 'insert-text', at: position([0], 0, 5), text: '!' })
+
+    history.push(applied.inverse)
+    const undone = history.undo(applied.document)
+    const redone = history.redo(undone!.document)
+
+    // `toBe`, not `toEqual`: recomputing an equal document is what the old
+    // implementation did, and is exactly what this stops relying on.
+    expect(redone?.document).toBe(applied.document)
+  })
+
+  it('REDO-REPLAY-1: the undo pushed back by a redo is the original inverse', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const applied = applyCommand(original, { kind: 'insert-text', at: position([0], 0, 5), text: '!' })
+
+    history.push(applied.inverse)
+    const undone = history.undo(applied.document)
+    const redone = history.redo(undone!.document)
+
+    // Previously this was the inverse OF the inverse — equivalent, but derived.
+    expect(redone?.undoCommand).toBe(applied.inverse)
+
+    // And it still undoes the redo, which is the property that actually matters.
+    const undoneAgain = history.undo(redone!.document)
+    expect(undoneAgain?.document).toEqual(original)
+  })
+
+  it('REDO-REPLAY-1: redo declines rather than replay against a document History never produced', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const applied = applyCommand(original, { kind: 'insert-text', at: position([0], 0, 5), text: '!' })
+
+    history.push(applied.inverse)
+    const undone = history.undo(applied.document)
+
+    // Stands in for a change made behind History's back. Every path that can
+    // actually do this drops the redo stack first (`push`, `bumpRevision`, a
+    // coalesced keystroke), so reaching redo with a foreign document should be
+    // impossible — but if it happens, replaying the recorded snapshot over it
+    // would silently discard that change.
+    const drifted = applyCommand(undone!.document, {
+      kind: 'insert-text',
+      at: position([0], 0, 0),
+      text: 'PREFIX ',
+    }).document
+
+    expect(history.redo(drifted)).toBeNull()
+    // Dropped, not merely skipped: a second attempt with the right document
+    // must not resurrect a stale entry either.
+    expect(history.redo(undone!.document)).toBeNull()
+  })
+
+  it('REDO-REPLAY-1: a multi-step undo/redo chain walks back to every intermediate state', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+
+    const first = applyCommand(original, { kind: 'insert-text', at: position([0], 0, 5), text: 'A' })
+    history.push(first.inverse)
+    const second = applyCommand(first.document, { kind: 'insert-text', at: position([0], 0, 0), text: 'B' })
+    history.push(second.inverse)
+
+    const undoneSecond = history.undo(second.document)
+    expect(undoneSecond?.document).toEqual(first.document)
+    const undoneFirst = history.undo(undoneSecond!.document)
+    expect(undoneFirst?.document).toEqual(original)
+
+    const redoneFirst = history.redo(undoneFirst!.document)
+    expect(redoneFirst?.document).toBe(undoneSecond!.document)
+    const redoneSecond = history.redo(redoneFirst!.document)
+    expect(redoneSecond?.document).toBe(second.document)
+  })
+
+  it('REDO-REPLAY-1: redo still reports the caret position of the edit it restores', () => {
+    const history = new History()
+    const original = createDocument('Atlas')
+    const applied = applyCommand(original, { kind: 'insert-text', at: position([0], 0, 5), text: '!' })
+
+    history.push(applied.inverse)
+    const undone = history.undo(applied.document)
+    const redone = history.redo(undone!.document)
+
+    // Same expectation as the pre-existing selection test, restated here
+    // because the position is now derived from the recorded pair rather than
+    // from the caller's document.
+    expect(redone?.range).toEqual({
+      anchor: position([0], 0, 5),
+      focus: position([0], 0, 6),
+    })
+  })
+
 })
 
 function position(paragraphPath: ReadonlyArray<number>, runIndex: number, charOffset: number): Position {

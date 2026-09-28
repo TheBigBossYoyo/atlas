@@ -141,8 +141,6 @@ These were found during execution and are recorded in the plan, unscheduled:
   quit path end to end.
 - **ZIP64-1** — the spreadsheet zip-bomb guard skips Zip64 archives and fails open, so a
   crafted bomb bypasses it by choosing that format.
-- **RPR-STYLES-1** — the unknown-`w:rPr`-child passthrough covers `document.xml` but not
-  `styles.xml` (non-order-preserving parser shape there).
 - **I18N-TEXT-1** — the inverted i18n guard covers literal *attributes* across 83 files but
   raw JSX **text** is still only caught by a short exact-phrase list.
 - **FROZENROWS-I18N-1** — `FrozenRowsStrip.tsx` has a hardcoded aria-label; opted out of
@@ -150,8 +148,6 @@ These were found during execution and are recorded in the plan, unscheduled:
 - **TEST-9 / TEST-10** — `App.dirtyState.characterization.test.tsx` passes in the suite and
   fails alone; a cluster of App-shell tests behave differently under load. One of that
   cluster already turned out to be a **real product bug**, so do not assume noise.
-- **REDO-REPLAY-1** — `History.redo` replays a stored command against the *current*
-  document, not the one it was computed against.
 - **CHARTSHEET-1** — a chartsheet/dialogsheet makes the xlsx passthrough writer bail to the
   lossy path; the user is now warned, but support is unimplemented.
 - **FIXTURE-1** — `tests/e2e/fixtures/generate.mjs:407` emits a non-conforming `.ods`

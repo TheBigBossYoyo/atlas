@@ -17,6 +17,10 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   not, and after using them Tab and the arrow keys went nowhere until you clicked
   something.
 
+- **Word: redo now restores exactly the state you undid.** Redo used to be
+  recomputed by re-running the edit against the document as it stood at that
+  moment, which could place it differently if anything had shifted in between.
+  It now restores the state directly, so redo cannot land in the wrong place.
 - **Word: a style no longer loses formatting Atlas does not itself understand.**
   `styles.xml` is rebuilt from scratch on every save, so any run property Atlas
   had no field for — including `w:noProof` and `w:snapToGrid`, which sit on

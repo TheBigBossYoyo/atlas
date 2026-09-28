@@ -780,11 +780,26 @@ by reintroducing one literal (it failed with the file, line and text) and restor
 because a sibling agent owned the file. The **only** genuine i18n gap the inverted guard
 found across all 83 files.
 
-**REDO-REPLAY-1 · medium** — `History.redo` replays a stored command against whatever the
-*current* document is, not the document the command was computed against. A non-undoable
-external edit between an undo and a later redo can therefore apply the redo at a shifted
-position. Batch 3 closed the stale-redo-after-external-edit case as a side effect (via
-`bumpRevision` clearing the redo stack), but the general replay behaviour is untouched.
+**REDO-REPLAY-1 · medium · FIXED** (2026-09-28) — `redo` no longer replays anything. An
+undo already holds the document a redo has to produce — it is the document being undone —
+so the redo entry records it, along with the state the undo left behind (`fromDocument`) and
+the original inverse the undo popped. Redo returns the recorded document (reference-equal to
+the pre-undo object, asserted with `toBe`), re-pushes the original inverse rather than an
+inverse-of-the-inverse, and derives only the caret position by replaying the command against
+`fromDocument` — the pair it was recorded against — inside a try/catch, so a throw costs
+the caret position instead of the whole redo.
+
+Handed a document History never produced, redo now drops the stack and returns null rather
+than replaying the snapshot over an untracked change. That branch should be unreachable
+(`push`, `bumpRevision` and a coalesced keystroke all drop the stack), which is exactly why
+it is asserted rather than assumed.
+
+Cost: two document graphs per redo entry, both structurally shared with what the app already
+holds, alive only while the user is inside an undo chain. `undo` is unchanged and still
+replays — a push can happen against an intermediate document (the delete-then-insert
+composite in `Input.ts`), so there is no single state to snapshot there.
+
+5 tests in `editor/__tests__/History.test.ts`.
 
 **CHARTSHEET-1 · low** — one reason the xlsx passthrough writer bails to the lossy path is
 a chartsheet or dialogsheet (no `<sheetData>`). Supporting those is a feature, not a bug
@@ -879,12 +894,27 @@ before asking whether it is focused, and gives all three waits a 20s budget (ove
 was measured at 2.45s at 24x, so the 5s default was marginal). The end-of-test byte
 assertions were always the real verification and are unchanged.
 
-**RPR-STYLES-1 · medium · OPEN, re-verified 2026-09-27** — confirmed still open by grep:
-`rPrUnknown` appears in `model/styles.ts` and `serializer/documentWriter.ts`, but in NEITHER
-`parser/styles.ts` nor `serializer/stylesWriter.ts`. So the styles part neither captures nor
-re-emits unknown run properties; they are dropped on save exactly as this entry says.
-Unchanged assessment of size: `parser/styles.ts` uses a non-order-preserving XML shape, so
-this is a real piece of work, not a one-liner.
+**RPR-STYLES-1 · medium · FIXED** (2026-09-28) — `parser/styles.ts` now captures every
+unmodeled `w:rPr` child into the same `RunProps.rPrUnknown` the document path uses, and
+`serializer/stylesWriter.ts` splices each one back ahead of the modeled sibling it sat
+before, so the `CT_RPr` sequence stays schema-ordered. The non-order-preserving XML shape
+turned out not to be the obstacle it looked like: `fast-xml-parser` inserts keys in document
+order and none of these names are integer-like, so `Object.keys` IS document order. The
+passthrough mechanism (placeholder element per fragment, substituted into the finished
+string) lives in the new `serializer/rawPassthrough.ts`.
+
+Two things the entry did not anticipate, both found while implementing:
+- `writeStylesXml` hardcoded `xmlns:w` plus `xmlns:r` and emitted no other root attribute.
+  Harmless while nothing it emitted used another prefix — but re-emitting a `w14:`/`w15:`
+  run property under a root that never declares the prefix is not well-formed XML and Word
+  rejects the whole file. Both writers now carry the source root's own attributes through.
+  Fixing the data loss without this would have shipped a worse bug.
+- `numbering.xml` shares `parseRunPropsNode` and `buildRunPropertiesXml`, so it inherited
+  the capture and with it the obligation to restore the placeholders; without that it would
+  have written a literal `<atlas-raw-0/>` into the file.
+
+13 tests in `serializer/__tests__/stylesRPrPassthrough.test.ts`, all asserting the
+serialized XML — the model holding a fragment says nothing about the file getting it back.
 
 ~~the general unknown-`w:rPr`-child passthrough covers
 `document.xml` (and, through `partWriterSupport.ts`, headers/footers/notes/comments) but

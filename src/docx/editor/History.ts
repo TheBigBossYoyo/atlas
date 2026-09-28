@@ -19,11 +19,37 @@ type UndoEntry = {
   readonly priorRevision: number
 }
 
-/** A redo-stack entry: the command that redoes it, plus the revision that
- *  was current right before the undo that produced this entry — what
- *  `currentRevision` is restored to when this entry is redone. */
+/**
+ * A redo-stack entry.
+ *
+ * REDO-REPLAY-1 — `redo` used to recompute its document by replaying `command`
+ * against whatever document the caller handed in. Everything about that is
+ * position-sensitive: the command names paragraph paths, run indices and
+ * character offsets, so replaying it against a document that has shifted since
+ * the command was recorded lands the edit somewhere else entirely. The
+ * reachable case (an external, non-undoable edit between the undo and the redo)
+ * was closed by having `bumpRevision` drop the stack, but that fixed one
+ * source of drift rather than the replay itself.
+ *
+ * An undo already HAS the document the redo has to produce — it is the document
+ * being undone — so redo does not need to recompute anything. This entry keeps
+ * it, alongside `fromDocument`, the state the undo left behind. `command` is
+ * still kept, but only to derive the caret position, and it is replayed against
+ * `fromDocument` rather than against the caller's document, so that is exact
+ * too. `undoCommand` is the inverse the undo popped: re-pushing that original
+ * is exact where inverting the inverse was merely equivalent.
+ *
+ * Memory: two document graphs per entry, both structurally shared with the
+ * document the app is already holding (an edit rebuilds only the blocks it
+ * touches), and the whole stack is dropped by `push`/`bumpRevision`/a coalesced
+ * keystroke — so these live only for as long as the user is actually sitting
+ * inside an undo chain.
+ */
 type RedoEntry = {
+  readonly document: Document
+  readonly fromDocument: Document
   readonly command: Command
+  readonly undoCommand: Command
   readonly laterRevision: number
 }
 
@@ -35,10 +61,15 @@ export class History {
   // DIRTY-1 — a cheap, O(1) stand-in for reference-equality against the
   // last-saved document (see DocxViewer.tsx's dirty-tracking comment above
   // `lastSavedDocument`). `documentModel` is rebuilt as a brand-new object
-  // graph on every edit, undo and redo included — undo/redo apply the
-  // *stored inverse command*, they never hand back a previously-held
-  // object — so two document states that are byte-for-byte identical (e.g.
-  // "typed a character, then undid it") are never `===` to one another.
+  // graph on every edit, and on every undo — `undo` applies the *stored
+  // inverse command* — so two document states that are byte-for-byte
+  // identical (e.g. "typed a character, then undid it") are never `===` to
+  // one another.
+  //
+  // (REDO-REPLAY-1 has since made `redo` hand back the exact pre-undo object
+  // from its snapshot, so that one hop IS reference-equal now. It changes
+  // nothing here: a counter is still needed for every other hop, and redo
+  // restores its recorded revision rather than deriving one from identity.)
   //
   // A monotonic revision counter sidesteps that without ever walking the
   // document: every *forward* change — a fresh push, a keystroke coalesced
@@ -133,7 +164,15 @@ export class History {
     }
 
     const result = applyCommand(doc, entry.command)
-    this.redoStack.push({ command: result.inverse, laterRevision: this.currentRevision })
+    this.redoStack.push({
+      // `doc` is the state being undone, which is precisely the state a redo
+      // has to restore — see `RedoEntry`.
+      document: doc,
+      fromDocument: result.document,
+      command: result.inverse,
+      undoCommand: entry.command,
+      laterRevision: this.currentRevision,
+    })
     this.currentRevision = entry.priorRevision
     this.lastInsert = null
 
@@ -144,6 +183,19 @@ export class History {
     }
   }
 
+  /**
+   * REDO-REPLAY-1 — restores the recorded document rather than replaying a
+   * command against the caller's. See `RedoEntry` for why.
+   *
+   * `doc` is no longer what the result is computed from; it is checked against
+   * the state this entry was recorded from. A mismatch means the document moved
+   * without History being told, which every path that can do so already
+   * prevents by dropping this stack (`push`, `bumpRevision`, a coalesced
+   * keystroke) — so this should be unreachable. If it happens anyway, the
+   * recorded snapshot would silently overwrite whatever that untracked change
+   * did, which is worse than not redoing: the stack is dropped and redo becomes
+   * a no-op instead.
+   */
   redo(
     doc: Document,
   ): {
@@ -156,15 +208,20 @@ export class History {
       return null
     }
 
-    const result = applyCommand(doc, entry.command)
-    this.undoStack.push({ command: result.inverse, priorRevision: this.currentRevision })
+    if (doc !== entry.fromDocument) {
+      this.redoStack.length = 0
+      this.lastInsert = null
+      return null
+    }
+
+    this.undoStack.push({ command: entry.undoCommand, priorRevision: this.currentRevision })
     this.currentRevision = entry.laterRevision
     this.lastInsert = null
 
     return {
-      document: result.document,
-      undoCommand: result.inverse,
-      range: result.range ?? null,
+      document: entry.document,
+      undoCommand: entry.undoCommand,
+      range: redoRange(entry),
     }
   }
 
@@ -221,6 +278,26 @@ export class History {
     }
 
     return true
+  }
+}
+
+/**
+ * The caret position to restore alongside a redone document: whatever
+ * `applyCommand` computes for the redo command, replayed against the state the
+ * undo left behind (`fromDocument`) — not against the caller's document, so the
+ * position is derived from the same pair the command was recorded against.
+ *
+ * The document that replay produces is discarded: `redo` returns the recorded
+ * snapshot, which is exact, and this is only here for the range. A throw means
+ * no position could be derived, in which case the caller keeps the selection it
+ * has — strictly better than the old behaviour, where the same throw took the
+ * whole redo with it.
+ */
+function redoRange(entry: RedoEntry): Range | null {
+  try {
+    return applyCommand(entry.fromDocument, entry.command).range ?? null
+  } catch {
+    return null
   }
 }
 
