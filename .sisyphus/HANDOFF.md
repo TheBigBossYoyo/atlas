@@ -113,8 +113,10 @@ speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked t
    certificate options and what changes in `electron-builder.yml`.
 2. **No Office verification** — nothing Atlas writes has ever been opened in real Microsoft Office or
    LibreOffice (neither is installed here). Structural validation is the substitute (see above).
-3. **Memory**: a closed spreadsheet tab leaves ~24 MB reachable, root-caused to how the grid
-   library's image loader captures the viewer's scope (`docs/KNOWN_LIMITATIONS.md`).
+3. **Memory**: re-measured 2026-09-28 and the ~24 MB claim is WRONG — a closed 100k-row
+   spreadsheet tab gives back 92-94%, leaving ~0.3-0.4 MB per open/close cycle. Pinned by
+   `tests/e2e/spreadsheet-memory-release.spec.ts`; method and the two measurement traps are in
+   `docs/KNOWN_LIMITATIONS.md`.
 4. `.doc`/`.ppt` are read-only, text only. No split view. A 3-D spreadsheet reference only shifts
    from its first sheet (matching Excel itself).
 5. A content control or shape whose content was edited, or one inside a table, header or footer,

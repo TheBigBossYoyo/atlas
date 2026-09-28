@@ -165,7 +165,7 @@ These were found during execution and are recorded in the plan, unscheduled:
   checks attribute datatypes — but it passed two genuinely invalid files clean before that
   was added, so treat a clean validator run as necessary, not sufficient.
 - Code signing needs a paid certificate (`docs/RELEASE.md`) — the one item needing money.
-- A closed spreadsheet tab retains ~24 MB (grid library's image loader capturing scope).
+- A closed spreadsheet tab releases 92-94% (re-measured 2026-09-28; the old ~24 MB figure was wrong, and `performance.memory` is quantized/cached and cannot measure this).
 - `.doc`/`.ppt` are read-only text. No split view.
 
 ## How to work here

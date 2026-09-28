@@ -403,23 +403,37 @@ regardless of what's on disk (or delete `dist/` first). CI's `e2e-windows`
 job never hits this, since it always runs a fresh `npx vite build`
 immediately before the e2e step.
 
-## Memory: a closed spreadsheet tab is not fully released
+## Memory: a closed spreadsheet tab releases nearly all of what it used
 
-Closing a tab frees most of what the document used, but a large spreadsheet
-leaves part of itself reachable. Measured after closing a 100 000-row `.xlsx`
-and forcing garbage collection: ~24 MB of JavaScript heap stays live
-(reproducible across runs, and unchanged by further re-renders, so it is
-genuine retention rather than collection lag).
+Re-measured 2026-09-28, replacing an earlier entry here that claimed ~24 MB
+stayed reachable after closing a large spreadsheet and root-caused it, in prose,
+to the grid library's image loader capturing the viewer's scope. **That does not
+reproduce.**
 
-Root cause, traced through heap-snapshot retainer chains: the grid library
-(`@glideapps/glide-data-grid`) creates an image loader per mount whose
-callback shares a lexical scope with the viewer's own document state, so that
-state outlives the unmount. The fix belongs inside how the viewer hands
-callbacks to that library, and has not been attempted yet — guessing at a
-third-party release mechanism risked breaking editing for a memory-only gain.
+What a 100 000-row, 19.5 MB `.xlsx` actually costs, measured with CDP
+`HeapProfiler.collectGarbage` (five passes) followed by `Runtime.getHeapUsage`,
+with a small spreadsheet left open throughout so the viewer chunk and the grid
+library are already warm at the baseline:
 
-Practical effect: opening and closing several very large spreadsheets in one
-session grows memory. Closing and reopening the app releases it.
+| | peak over baseline | retained after closing | released |
+|---|---|---|---|
+| first open/close | +20.1 MB | +1.1 MB | 94% |
+| second | +20.8 MB | +1.5 MB | 93% |
+| third | +21.0 MB | +1.7 MB | 92% |
+
+So roughly 0.3–0.4 MB does not come back per open/close cycle. That is small
+enough to be ordinary warm-up (V8 code caches, a grown-then-retained heap, font
+and style caches) rather than the document being held, and it accumulates slowly
+enough not to matter in a session; it is recorded here rather than claimed to be
+zero. `tests/e2e/spreadsheet-memory-release.spec.ts` pins the release ratio, so a
+genuine retainer reappearing fails a test instead of being rediscovered by hand.
+
+Two traps worth knowing if you re-measure this, both of which the earlier figure
+may have fallen into: `performance.memory.usedJSHeapSize` is quantized and cached
+for about 20 minutes in Chromium — it reported a flat 9.5 MB across the whole
+19.5 MB workbook being opened and closed, which reads exactly like "no leak" and
+is really "no measurement". And a single `collectGarbage` leaves a detached React
+tree behind; it takes a few passes before the figure settles.
 
 ## Build & performance: the `rtf.js` bundle size
 

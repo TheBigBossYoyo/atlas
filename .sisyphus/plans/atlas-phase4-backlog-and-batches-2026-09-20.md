@@ -248,7 +248,7 @@ already-open path (see SESS-1).
 | Item | Status |
 |---|---|
 | Nothing Atlas writes has been opened in real Microsoft Office or LibreOffice | **Still true.** Neither is installed. `scripts/validate-office-file.mjs` is a structural substitute, and DOCX-4's duplicate `docPr` ids show it does not catch semantic violations. |
-| Closed spreadsheet tab retains ~24 MB | Documented in `docs/KNOWN_LIMITATIONS.md` with its measurement; not re-measured this session. |
+| Closed spreadsheet tab retains ~24 MB | **Refuted 2026-09-28.** Re-measured with CDP `Runtime.getHeapUsage` after repeated `collectGarbage`: 92-94% released, ~0.3-0.4 MB retained per open/close cycle. The original figure was most likely `performance.memory.usedJSHeapSize`, which Chromium quantizes and caches for ~20 minutes — it reads a flat number through a 19.5 MB workbook opening AND closing. Entry rewritten around the measurement; pinned by `tests/e2e/spreadsheet-memory-release.spec.ts`. |
 | `.doc`/`.ppt` read-only, text only | Still true. SEC-3 adds that encrypted files are not detected. |
 | No split view | Still true. |
 | Edited content control / shape unwrapped on save, user is told | True for `document.xml`, styles, numbering, headers and footers. **DOCX-2 above narrows this**: in footnotes, endnotes and comments it is unwrapped and the user is *not* told. |
