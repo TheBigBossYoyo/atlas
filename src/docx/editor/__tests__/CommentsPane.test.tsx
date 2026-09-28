@@ -80,7 +80,10 @@ describe('CommentsPane', () => {
         onAddComment={onAddComment}
         onReply={onReply}
         onResolve={onResolve}
+        onUnresolve={vi.fn()}
         onDelete={onDelete}
+        showResolved={false}
+        onToggleShowResolved={vi.fn()}
       />,
     )
 
@@ -101,5 +104,64 @@ describe('CommentsPane', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: /delete/i })[0])
     expect(onDelete).toHaveBeenCalledWith('1')
+  })
+})
+
+describe('CommentsPane — resolved threads (the way back from a mis-click)', () => {
+  /** `createDocument()` with the root thread marked resolved, as the file would carry it. */
+  function documentWithResolvedRoot(): ReturnType<typeof createDocument> {
+    const base = createDocument()
+    const comments = new Map(base.comments)
+    for (const [id, comment] of comments) {
+      if (comment.parentId === undefined) comments.set(id, { ...comment, resolved: true })
+    }
+    return { ...base, comments }
+  }
+
+  it('offers Unresolve, not Resolve, on a resolved thread, and marks it in text', () => {
+    const onUnresolve = vi.fn()
+    const onResolve = vi.fn()
+    render(
+      <CommentsPane
+        document={documentWithResolvedRoot()}
+        onScrollToParagraph={vi.fn()}
+        onAddComment={vi.fn()}
+        onReply={vi.fn()}
+        onResolve={onResolve}
+        onUnresolve={onUnresolve}
+        onDelete={vi.fn()}
+        showResolved
+        onToggleShowResolved={vi.fn()}
+      />,
+    )
+
+    // Marked as text, not only by a CSS class — a screen reader has nothing else.
+    expect(screen.getByText('Resolved')).toBeInTheDocument()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /unresolve/i })[0])
+    expect(onUnresolve).toHaveBeenCalledTimes(1)
+    expect(onResolve).not.toHaveBeenCalled()
+  })
+
+  it('the Show resolved checkbox reports toggling', () => {
+    const onToggleShowResolved = vi.fn()
+    render(
+      <CommentsPane
+        document={createDocument()}
+        onScrollToParagraph={vi.fn()}
+        onAddComment={vi.fn()}
+        onReply={vi.fn()}
+        onResolve={vi.fn()}
+        onUnresolve={vi.fn()}
+        onDelete={vi.fn()}
+        showResolved={false}
+        onToggleShowResolved={onToggleShowResolved}
+      />,
+    )
+
+    const toggle = screen.getByRole('checkbox', { name: /show resolved/i })
+    expect(toggle).not.toBeChecked()
+    fireEvent.click(toggle)
+    expect(onToggleShowResolved).toHaveBeenCalledTimes(1)
   })
 })

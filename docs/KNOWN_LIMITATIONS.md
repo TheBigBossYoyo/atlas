@@ -76,22 +76,6 @@ rotation and flip (parsed, serialized, and rendered at the right spot with
 correct z-order).
 
 **Not supported:**
-- **A resolved comment cannot be un-resolved from inside Atlas.** Resolving a
-  thread now persists (it writes `w15:done` to `word/commentsExtended.xml`, and
-  reads the flag a file already carries — fixed 2026-09-26), which is the right
-  data model and matches Word. But the comments pane hides resolved threads and
-  offers no "show resolved" toggle, and the resolve is not routed through the
-  editor's Command/History system, so **Ctrl+Z will not undo it either**. Nothing
-  is lost — the comment stays in the file, and replying to the thread re-opens it
-  — but recovering from a mis-click currently means reopening the thread in Word,
-  or replying to it. Before the persistence fix this was self-correcting (the
-  state was session-only, so reopening the file brought every thread back), which
-  is exactly what makes the affordance worth adding now.
-
-  The follow-up is one of: a "show resolved" toggle in the pane with an unresolve
-  action, or a `set-comment-resolved` command kind so undo reaches it. The second
-  is tidier — it would also make resolve part of the normal undo stack like every
-  other edit — and needs a new entry in `docx/editor/commandTypes.ts`.
 - **Header/footer editing is per text SEGMENT, not per character, and a
   table block is still fully read-only.** A paragraph made entirely of
   plain runs (text/tabs/breaks) gets one editable field, as before. A

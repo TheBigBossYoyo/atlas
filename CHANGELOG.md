@@ -8,6 +8,22 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Tabs: closing a tab any way you like now puts the keyboard back where you
+  would expect.** Ctrl+W already did; the X button and the middle-click close did
+  not, and after using them Tab and the arrow keys went nowhere until you clicked
+  something.
+
+### Added
+
+- **Word comments: a resolved comment can be un-resolved again.** Resolving used
+  to be one-way inside Atlas — the thread disappeared from the pane and only Word
+  could bring it back. The pane now has a "Show resolved" tick box; resolved
+  threads appear greyed out and marked "Resolved", with an Unresolve button.
+
 ## [3.8.0] — 2026-09-27 (audit follow-through: data-loss fix, security hardening, DocxViewer decomposition)
 
 ### Fixed

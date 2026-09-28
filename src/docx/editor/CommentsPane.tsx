@@ -1,6 +1,6 @@
 import { memo, useMemo } from 'react'
 
-import { Check, MessageSquare, Reply, Trash2 } from 'lucide-react'
+import { Check, MessageSquare, Reply, Trash2, Undo2 } from 'lucide-react'
 
 import type { Comment, Document as DocxDocument } from '../model/document'
 import { extractCommentText, findCommentAnchors } from './comments'
@@ -13,7 +13,11 @@ export interface CommentsPaneProps {
   readonly onAddComment: () => void
   readonly onReply: (commentId: string) => void
   readonly onResolve: (commentId: string) => void
+  readonly onUnresolve: (commentId: string) => void
   readonly onDelete: (commentId: string) => void
+  /** When true, resolved threads are listed (marked, with Unresolve in place of Resolve). */
+  readonly showResolved: boolean
+  readonly onToggleShowResolved: () => void
 }
 
 interface CommentThread {
@@ -36,7 +40,10 @@ function CommentsPaneBase({
   onAddComment,
   onReply,
   onResolve,
+  onUnresolve,
   onDelete,
+  showResolved,
+  onToggleShowResolved,
 }: CommentsPaneProps) {
   const t = useTranslate()
   const groups = useMemo(() => buildCommentGroups(document), [document])
@@ -53,6 +60,14 @@ function CommentsPaneBase({
           {t('docx.comments.addComment')}
         </button>
       </header>
+
+      {/* Resolving is a document edit that survives reopening the file, so this is the
+          only way back from a mis-click. Off by default: getting a thread out of the
+          way is the point of resolving it. */}
+      <label className="comments-pane__show-resolved">
+        <input type="checkbox" checked={showResolved} onChange={onToggleShowResolved} />
+        <span>{t('docx.comments.showResolved')}</span>
+      </label>
 
       <div className="comments-pane__count">{t('docx.comments.count', { count })}</div>
 
@@ -85,6 +100,7 @@ function CommentsPaneBase({
                     onScrollToParagraph={onScrollToParagraph}
                     onReply={onReply}
                     onResolve={onResolve}
+                    onUnresolve={onUnresolve}
                     onDelete={onDelete}
                   />
                 ))}
@@ -102,6 +118,7 @@ interface CommentThreadViewProps {
   readonly onScrollToParagraph: (paragraphIndex: number) => void
   readonly onReply: (commentId: string) => void
   readonly onResolve: (commentId: string) => void
+  readonly onUnresolve: (commentId: string) => void
   readonly onDelete: (commentId: string) => void
 }
 
@@ -110,15 +127,17 @@ function CommentThreadView({
   onScrollToParagraph,
   onReply,
   onResolve,
+  onUnresolve,
   onDelete,
 }: CommentThreadViewProps) {
   const t = useTranslate()
   const author = thread.comment.author ?? t('docx.comments.unknownAuthor')
   const text = extractCommentText(thread.comment)
   const dateLabel = formatCommentDate(thread.comment.date)
+  const isResolved = thread.comment.resolved === true
 
   return (
-    <article className="comments-pane__item">
+    <article className={`comments-pane__item${isResolved ? ' comments-pane__item--resolved' : ''}`}>
       <button
         type="button"
         className="comments-pane__card"
@@ -133,6 +152,8 @@ function CommentThreadView({
           {dateLabel !== null ? <span className="comments-pane__date">{dateLabel}</span> : null}
         </div>
         <div className="comments-pane__body">{text.length > 0 ? text : t('docx.comments.emptyCommentBody')}</div>
+        {/* Text, not only a CSS style: a screen reader has nothing to go on otherwise. */}
+        {isResolved ? <div className="comments-pane__resolved-badge">{t('docx.comments.resolvedBadge')}</div> : null}
       </button>
 
       <div className="comments-pane__actions">
@@ -140,10 +161,17 @@ function CommentThreadView({
           <Reply size={14} aria-hidden="true" />
           <span>{t('docx.comments.reply')}</span>
         </button>
-        <button type="button" className="comments-pane__action" onClick={() => onResolve(thread.id)}>
-          <Check size={14} aria-hidden="true" />
-          <span>{t('docx.comments.resolve')}</span>
-        </button>
+        {isResolved ? (
+          <button type="button" className="comments-pane__action" onClick={() => onUnresolve(thread.id)}>
+            <Undo2 size={14} aria-hidden="true" />
+            <span>{t('docx.comments.unresolve')}</span>
+          </button>
+        ) : (
+          <button type="button" className="comments-pane__action" onClick={() => onResolve(thread.id)}>
+            <Check size={14} aria-hidden="true" />
+            <span>{t('docx.comments.resolve')}</span>
+          </button>
+        )}
         <button type="button" className="comments-pane__action comments-pane__action--danger" onClick={() => onDelete(thread.id)}>
           <Trash2 size={14} aria-hidden="true" />
           <span>{t('docx.comments.delete')}</span>
@@ -159,6 +187,7 @@ function CommentThreadView({
               onScrollToParagraph={onScrollToParagraph}
               onReply={onReply}
               onResolve={onResolve}
+              onUnresolve={onUnresolve}
               onDelete={onDelete}
             />
           ))}

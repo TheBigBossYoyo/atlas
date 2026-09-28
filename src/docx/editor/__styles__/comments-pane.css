@@ -137,3 +137,31 @@
   padding-left: 12px;
   border-left: 2px solid var(--border-primary, #d0d7de);
 }
+
+/* The "Show resolved" toggle, and how a resolved thread reads once listed.
+   The dimming is presentation only — `CommentsPane` also renders the word
+   "Resolved" as text, because a screen reader gets nothing from opacity. */
+.comments-pane__show-resolved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 8px;
+  font-size: 12px;
+  color: var(--text-secondary, #57606a);
+  cursor: pointer;
+}
+
+.comments-pane__item--resolved {
+  opacity: 0.62;
+}
+
+.comments-pane__resolved-badge {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-primary, #d0d7de);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary, #57606a);
+}

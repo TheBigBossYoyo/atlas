@@ -472,6 +472,9 @@ export const messages = {
   'docx.comments.emptyCommentBody': '(commentaire vide)',
   'docx.comments.reply': 'Répondre',
   'docx.comments.resolve': 'Résoudre',
+  'docx.comments.showResolved': 'Afficher les commentaires résolus',
+  'docx.comments.unresolve': 'Rétablir',
+  'docx.comments.resolvedBadge': 'Résolu',
   'docx.comments.delete': 'Supprimer',
   'docx.comments.unknownAuthor': 'Auteur inconnu',
 

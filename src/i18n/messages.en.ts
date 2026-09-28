@@ -486,6 +486,11 @@ export const messages = {
   'docx.comments.emptyCommentBody': '(empty comment)',
   'docx.comments.reply': 'Reply',
   'docx.comments.resolve': 'Resolve',
+  // Resolving persists to the file (w15:done), so it is not undone by reopening and
+  // Ctrl+Z does not reach it — this toggle plus Unresolve is the way back.
+  'docx.comments.showResolved': 'Show resolved',
+  'docx.comments.unresolve': 'Unresolve',
+  'docx.comments.resolvedBadge': 'Resolved',
   'docx.comments.delete': 'Delete',
   'docx.comments.unknownAuthor': 'Unknown author',
 

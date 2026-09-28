@@ -630,7 +630,10 @@ function DocxEditor({
     setCommentsPaneOpen,
     commentsDocument,
     handleResolveComment,
+    handleUnresolveComment,
     handleDeleteComment,
+    showResolved,
+    toggleShowResolved,
     confirmComment,
     confirmReply,
   } = useDocxComments(
@@ -2201,7 +2204,10 @@ function DocxEditor({
             onAddComment={handleAddComment}
             onReply={handleReplyToComment}
             onResolve={handleResolveComment}
+            onUnresolve={handleUnresolveComment}
             onDelete={handleDeleteComment}
+            showResolved={showResolved}
+            onToggleShowResolved={toggleShowResolved}
           />
         ) : null}
         <DocxPromptDialog

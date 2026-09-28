@@ -24,6 +24,11 @@
  * It follows that resolving marks the document dirty, which is correct — it is a
  * change that needs saving, and Word behaves the same way.
  *
+ * And because it now persists, reopening the file no longer undoes a mis-click. That
+ * is what `showResolved` is for: the pane can list resolved threads and offer
+ * Unresolve on them. Off by default, since getting a thread out of the way is the
+ * point of resolving it.
+ *
  * The three writes below all share one non-obvious requirement, marked DIRTY-1
  * at each site in the original: a comment edit is NOT undoable through the
  * command history, so nothing bumps the revision that the dirty check compares
@@ -47,7 +52,16 @@ export type DocxComments = {
   /** The model with resolved threads filtered out — what the pane renders. */
   readonly commentsDocument: DocxDocument
   readonly handleResolveComment: (commentId: string) => void
+  /** Brings a resolved thread back. Only reachable while `showResolved` is on. */
+  readonly handleUnresolveComment: (commentId: string) => void
   readonly handleDeleteComment: (commentId: string) => void
+  /**
+   * Whether resolved threads are listed. Off by default — resolving is meant to get
+   * a thread out of the way — but without this there is no way back from a
+   * mis-click, since resolving is a document edit and survives reopening the file.
+   */
+  readonly showResolved: boolean
+  readonly toggleShowResolved: () => void
   /**
    * Adds a comment on `selection` with the text the prompt dialog collected.
    * Lives here rather than in the viewer's prompt handler because it needs
@@ -84,6 +98,7 @@ export function useDocxComments(
   setSaveError: (message: string | null) => void,
 ): DocxComments {
   const [commentsPaneOpen, setCommentsPaneOpen] = useState(documentCommentCount > 0)
+  const [showResolved, setShowResolved] = useState(false)
   const [lastCommentCount, setLastCommentCount] = useState(documentCommentCount)
 
   // setState-during-render reset, the same idiom `viewers/shared/ViewerContext.tsx`
@@ -96,17 +111,25 @@ export function useDocxComments(
   if (lastCommentCount !== documentCommentCount) {
     setLastCommentCount(documentCommentCount)
     setCommentsPaneOpen(documentCommentCount > 0)
+    setShowResolved(false)
   }
 
-  const handleResolveComment = useCallback(
-    (commentId: string) => {
-      const next = setCommentResolved(documentModel, commentId, true)
+  const toggleShowResolved = useCallback(() => {
+    setShowResolved((current) => !current)
+  }, [])
+
+  const setResolved = useCallback(
+    (commentId: string, resolved: boolean) => {
+      const next = setCommentResolved(documentModel, commentId, resolved)
       if (next === documentModel) return
       bumpRevision()
       commitState(next, range)
     },
     [bumpRevision, commitState, documentModel, range],
   )
+
+  const handleResolveComment = useCallback((commentId: string) => setResolved(commentId, true), [setResolved])
+  const handleUnresolveComment = useCallback((commentId: string) => setResolved(commentId, false), [setResolved])
 
   const handleDeleteComment = useCallback(
     (commentId: string) => {
@@ -150,6 +173,12 @@ export function useDocxComments(
   )
 
   const commentsDocument = useMemo<DocxDocument>(() => {
+    // While the reader is looking at resolved threads, hand the pane the whole model
+    // — it marks the resolved ones itself and offers Unresolve on them.
+    if (showResolved) {
+      return documentModel
+    }
+
     const comments = documentModel.comments
     const hasResolved = [...comments.values()].some((comment) => comment.resolved === true)
     if (!hasResolved) {
@@ -173,14 +202,17 @@ export function useDocxComments(
       ...documentModel,
       comments: filtered,
     }
-  }, [documentModel])
+  }, [documentModel, showResolved])
 
   return {
     commentsPaneOpen,
     setCommentsPaneOpen,
     commentsDocument,
     handleResolveComment,
+    handleUnresolveComment,
     handleDeleteComment,
+    showResolved,
+    toggleShowResolved,
     confirmComment,
     confirmReply,
   }
