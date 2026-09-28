@@ -839,6 +839,33 @@ composite in `Input.ts`), so there is no single state to snapshot there.
 
 5 tests in `editor/__tests__/History.test.ts`.
 
+**MATRIX-FLAKE-1 · OPEN, unresolved, 2026-09-28** — `spreadsheet-edit-matrix.spec.ts`'s
+UNTHROTTLED "a percent, an ISO date and a formula all survive consecutive edits" case
+timed out once waiting for the edit overlay to close after committing with Enter
+(20s). Measured since:
+
+- 1 failure in 2 full 166-test suite runs (the first full run passed it)
+- 8/8 passing in isolation with `--repeat-each=4`, both 1x and 8x
+- 14/14 passing at file scope
+- the 8x-throttled twin of the same case passed in the run that failed
+
+So it is not reproducible on demand, which is exactly the shape F6, F6b and F6c each
+had before they were pinned down — and this path has been a real bug 3 times out of 3,
+so it is NOT being written off as noise. What is different here is that it fails only
+under whole-suite load, where ~160 Electron launches have already come and gone.
+
+Deliberately NOT papered over with a longer timeout: this session already shipped a
+15s band-aid on a different load-dependent failure, and the real cause turned out to
+be a bad wait condition. Instead both waits in `editCell` now throw with the focus
+state, the overlay count and the overlay's current value, mirroring
+`spreadsheet-second-cell-edit.spec.ts`'s `diag` — the next occurrence will say
+whether focus sat on a `<td>` of glide's accessibility table (the F6c signature),
+whether the overlay held the typed text, or whether nothing had focus at all.
+
+Next step when it recurs: read the message. If focus is on the canvas and the overlay
+holds the full text, it is a commit-path bug; if focus is elsewhere, it is the F6c
+family again; if the overlay is empty, the keystrokes never arrived.
+
 **BUNDLE-BASELINE-1 · low · observation, 2026-09-28** — the stored bundle baseline
 (`.sisyphus/baselines/atlas-phase3-bundle.json`) was captured on 2026-09-20 and the
 build is now +7.96% total / +7.51% gzip against it. The gate passes (threshold 25%),

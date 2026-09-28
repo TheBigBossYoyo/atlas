@@ -125,15 +125,43 @@ async function clickCell(page: Page, col: number, row: number): Promise<void> {
 type Commit = 'Enter' | 'Tab' | 'click-away'
 
 /**
+ * What has focus, and how many edit overlays exist — the two facts that told F6c
+ * apart from a slow machine. Mirrors `spreadsheet-second-cell-edit.spec.ts`'s
+ * `focusState`, for the same reason: a bare timeout on the overlay wait says
+ * nothing about WHY, and this path has produced three real data-loss bugs whose
+ * only outward sign was a timeout.
+ */
+async function focusState(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const active = document.activeElement
+    const name = active === null ? 'null' : active.tagName + (active instanceof HTMLElement && active.dataset.testid !== undefined ? `[${active.dataset.testid}]` : '')
+    const text = document.querySelector('#portal textarea')
+    return `focus=${name} overlays=${document.querySelectorAll('#portal textarea').length}${
+      text instanceof HTMLTextAreaElement ? ` overlayValue=${JSON.stringify(text.value)}` : ''
+    }`
+  })
+}
+
+/**
  * Types `text` into (col, row) exactly as a user does — click, then type with no
  * pause — and commits it the requested way. No screen assertions beyond waiting for
  * the overlay to appear and then go, which is synchronisation, not verification.
+ *
+ * Both waits carry the focus/overlay state in their failure message. Added after
+ * the second full-suite run saw the unthrottled percent/date/formula case time out
+ * on the closing wait once (8/8 in isolation, 14/14 at file scope, so not
+ * reproducible on demand) — without this, the next occurrence would be as
+ * undiagnosable as that one was.
  */
 async function editCell(page: Page, col: number, row: number, text: string, commit: Commit): Promise<void> {
   await resetViewport(page)
   await clickCell(page, col, row)
   await page.keyboard.type(text.slice(0, 1))
-  await page.waitForSelector('#portal textarea', { timeout: 20_000 })
+  try {
+    await page.waitForSelector('#portal textarea', { timeout: 20_000 })
+  } catch (cause) {
+    throw new Error(`the edit overlay never opened for ${text} at (${col},${row}): ${await focusState(page)}`, { cause })
+  }
   if (text.length > 1) await page.keyboard.type(text.slice(1), { delay: 20 })
 
   if (commit === 'click-away') {
@@ -143,7 +171,14 @@ async function editCell(page: Page, col: number, row: number, text: string, comm
   } else {
     await page.keyboard.press(commit)
   }
-  await page.waitForFunction(() => document.querySelectorAll('#portal textarea').length === 0, null, { timeout: 20_000 })
+  try {
+    await page.waitForFunction(() => document.querySelectorAll('#portal textarea').length === 0, null, { timeout: 20_000 })
+  } catch (cause) {
+    throw new Error(
+      `the edit overlay never closed after committing ${text} at (${col},${row}) with ${commit}: ${await focusState(page)}`,
+      { cause },
+    )
+  }
 }
 
 /** Saves and waits for the write itself, so "never saved" and "saved wrong" fail differently. */
