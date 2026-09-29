@@ -25,6 +25,15 @@ interface RawNumberingDocument {
 export interface AbstractNum {
   readonly abstractNumId: string
   /**
+   * FID-NUM-1 — every attribute on the source `w:abstractNum` this model has no
+   * field for, by qualified name. In practice that is
+   * `w15:restartNumberingAfterBreak` (whether numbering restarts after a section
+   * break), present on every `w:abstractNum` in this repo's whole corpus and
+   * dropped on every save before this. See `LvlDef.unknownAttributes` for why
+   * this is a map rather than a field per attribute.
+   */
+  readonly unknownAttributes?: ReadonlyMap<string, string>
+  /**
    * `w:multiLevelType` (round-trip fidelity audit, DXS round 2) — whether
    * this is a single-level list, an independently-numbered multilevel
    * list, or a "hybrid" multilevel list (Word's modern default for any
@@ -92,6 +101,34 @@ export function parseNumbering(xml: string): NumberingPart {
   }
 }
 
+/**
+ * FID-NUM-1 — the attributes each node type models, so everything else can be
+ * carried through opaquely. Keep in sync with the `getAttr` calls in the
+ * corresponding parser below; an attribute listed here and then NOT read is
+ * silently dropped, which is the bug this set exists to prevent.
+ */
+const KNOWN_ABSTRACT_NUM_ATTRS: ReadonlySet<string> = new Set(['w:abstractNumId'])
+const KNOWN_LVL_ATTRS: ReadonlySet<string> = new Set(['w:ilvl', 'w:tentative'])
+
+/**
+ * The `@_`-prefixed keys of `node` that `known` does not cover, as a plain
+ * qualified-name -> value map. `undefined` when there are none, so a node with
+ * nothing unusual carries no extra field.
+ */
+function parseUnknownAttributes(node: XmlNode, known: ReadonlySet<string>): ReadonlyMap<string, string> | undefined {
+  let unknown: Map<string, string> | undefined
+  for (const key of Object.keys(node)) {
+    if (!key.startsWith('@_')) continue
+    const name = key.slice(2)
+    if (known.has(name)) continue
+    const value = node[key]
+    if (value === undefined || typeof value === 'object') continue
+    unknown ??= new Map()
+    unknown.set(name, String(value))
+  }
+  return unknown
+}
+
 function parseAbstractNumNode(node: XmlNode): AbstractNum | undefined {
   const abstractNumId = getAttr(node, 'w:abstractNumId')?.trim()
   if (abstractNumId === undefined || abstractNumId === '') return undefined
@@ -104,8 +141,11 @@ function parseAbstractNumNode(node: XmlNode): AbstractNum | undefined {
     levels.set(level.level, level)
   }
 
+  const unknownAttributes = parseUnknownAttributes(node, KNOWN_ABSTRACT_NUM_ATTRS)
+
   return {
     abstractNumId,
+    ...(unknownAttributes !== undefined ? { unknownAttributes } : {}),
     ...(withValue('multiLevelType', getValAttr(getNode(node, 'w:multiLevelType')))),
     ...(withValue('styleLink', getValAttr(getNode(node, 'w:styleLink')))),
     ...(withValue('numberStyleLink', getValAttr(getNode(node, 'w:numStyleLink')))),
@@ -138,8 +178,11 @@ function parseLevelNode(node: XmlNode): LvlDef | undefined {
   const level = parseInteger(getAttr(node, 'w:ilvl'))
   if (level === undefined) return undefined
 
+  const unknownAttributes = parseUnknownAttributes(node, KNOWN_LVL_ATTRS)
+
   return {
     level,
+    ...(unknownAttributes !== undefined ? { unknownAttributes } : {}),
     ...(withValue('start', parseInteger(getValAttr(getNode(node, 'w:start'))))),
     ...(withValue('restart', parseInteger(getValAttr(getNode(node, 'w:lvlRestart'))))),
     ...(withValue('format', getValAttr(getNode(node, 'w:numFmt')))),

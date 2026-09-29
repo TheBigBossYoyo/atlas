@@ -461,7 +461,32 @@ export interface LvlDef {
   readonly format?: string
   readonly text?: LvlText
   readonly suffix?: NumberingSuffix
+  /**
+   * `w:lvl/@w:tentative`.
+   *
+   * FID-NUM-1 — note this is the `w` namespace only. Word writes the attribute as
+   * `w15:tentative` (every fixture in this repo's corpus does, nine times per
+   * file, and not one uses `w:tentative`), which is a DIFFERENT attribute as far
+   * as any XML parser is concerned. That one is carried by
+   * `unknownAttributes` rather than being folded in here, because collapsing two
+   * namespaces into one field would mean guessing which to write back.
+   */
   readonly tentative?: OnOff
+  /**
+   * FID-NUM-1 — every attribute on the source `w:lvl` this model has no field
+   * for, by qualified name, so a save rebuilds it instead of dropping it.
+   *
+   * `w:lvl` and `w:abstractNum` are rebuilt from the model in full, so an
+   * attribute nobody modelled simply ceased to exist. Both of the ones that
+   * actually appear in real files are `w15:` extension attributes —
+   * `w15:tentative` here and `w15:restartNumberingAfterBreak` on
+   * `w:abstractNum` — so a per-attribute field for each would have been the
+   * wrong shape: the next `w16:` attribute would be lost in exactly the same
+   * silent way. Written back verbatim by `numberingWriter.ts`, whose root now
+   * carries the source's own namespace declarations (RPR-STYLES-1) so a
+   * prefixed attribute stays well-formed.
+   */
+  readonly unknownAttributes?: ReadonlyMap<string, string>
   readonly legal?: OnOff
   readonly justification?: JustifyContent
   readonly pStyle?: string

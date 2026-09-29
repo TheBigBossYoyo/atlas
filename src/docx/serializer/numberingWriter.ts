@@ -66,6 +66,9 @@ function buildAbstractNumXml(abstractNum: AbstractNum, state: RawPassthroughStat
 
   return {
     '@_w:abstractNumId': abstractNum.abstractNumId,
+    // FID-NUM-1 — before the modelled child elements, since attributes are not
+    // part of the child sequence and `fast-xml-parser` emits them first anyway.
+    ...buildUnknownAttributes(abstractNum.unknownAttributes),
     ...buildValElement('w:multiLevelType', abstractNum.multiLevelType),
     ...buildValElement('w:styleLink', abstractNum.styleLink),
     ...buildValElement('w:numStyleLink', abstractNum.numberStyleLink),
@@ -91,6 +94,7 @@ function buildNumXml(num: NumInstance, state: RawPassthroughState): XmlNode {
 function buildLevelXml(level: LvlDef, state: RawPassthroughState): XmlNode {
   return {
     '@_w:ilvl': String(level.level),
+    ...buildUnknownAttributes(level.unknownAttributes),
     ...withAttribute('@_w:tentative', buildOnOffAttribute(level.tentative)),
     ...buildValElement('w:start', level.start),
     ...buildValElement('w:numFmt', level.format),
@@ -114,6 +118,21 @@ function buildLevelOverrideXml(levelOverride: LvlOverride, state: RawPassthrough
       levelOverride.levelDefinition === undefined ? undefined : buildLevelXml(levelOverride.levelDefinition, state),
     ),
   }
+}
+
+/**
+ * FID-NUM-1 — re-emits captured attributes verbatim under their original
+ * qualified names. The prefix is safe because `writeNumberingXml` carries the
+ * source root's own namespace declarations through (RPR-STYLES-1); without that,
+ * writing back a `w15:` attribute would produce XML that is not well-formed.
+ */
+function buildUnknownAttributes(attributes: ReadonlyMap<string, string> | undefined): XmlNode {
+  if (attributes === undefined || attributes.size === 0) return {}
+  const node: Record<string, string> = {}
+  for (const [name, value] of attributes) {
+    node[`@_${name}`] = value
+  }
+  return node
 }
 
 function buildOnOffElement(value: boolean | undefined): XmlNode | undefined {

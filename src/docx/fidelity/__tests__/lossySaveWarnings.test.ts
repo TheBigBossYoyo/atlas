@@ -42,16 +42,26 @@ import { validateOfficeFile } from '../../../../scripts/lib/officeValidator.mjs'
 // here — exactly like `content-control-alternate-content`'s own pre-fix
 // shape once was — rather than silently swallowed:
 //
-//   1. `word/numbering.xml`'s `w:abstractNum/@w15:restartNumberingAfterBreak`
-//      is not modeled anywhere in `parser/numbering.ts` — every
-//      `w:abstractNum` in every fixture that has one loses it on every
-//      save. Low real-world severity (governs whether numbering restarts
-//      after a section break), but a genuine, silent, permanent loss.
-//   2. `word/numbering.xml`'s `w:lvl/@w15:tentative` — `parser/numbering.ts`
-//      reads `getAttr(node, 'w:tentative')`, the WRONG namespace prefix;
-//      real `.docx` files (this whole corpus included) write it as
-//      `w15:tentative`, so the parser's own lookup never matches and the
-//      value is silently dropped every time, under either prefix.
+//   1. FIXED (FID-NUM-1, 2026-09-29) — `word/numbering.xml`'s
+//      `w:abstractNum/@w15:restartNumberingAfterBreak` was modeled nowhere, so
+//      every `w:abstractNum` in every fixture that has one lost it on every
+//      save. Now carried by `AbstractNum.unknownAttributes`.
+//   2. FIXED (FID-NUM-1, 2026-09-29) — `word/numbering.xml`'s
+//      `w:lvl/@w15:tentative`. `parser/numbering.ts` read
+//      `getAttr(node, 'w:tentative')`, the WRONG namespace; every fixture in
+//      this corpus writes `w15:tentative` (nine times per file) and not one
+//      writes `w:tentative`, so the lookup never matched. Now carried by
+//      `LvlDef.unknownAttributes`.
+//
+//      Both were fixed the same way, and deliberately NOT by adding a field per
+//      attribute: they are `w15:` extension attributes, so the next `w16:` one
+//      would have been lost in exactly the same silent way. `w:abstractNum` and
+//      `w:lvl` now carry every attribute the model has no field for, by
+//      qualified name, and `numberingWriter.ts` writes them back verbatim —
+//      safe because its root carries the source's own namespace declarations
+//      (RPR-STYLES-1). `LvlDef.tentative` stays as the `w`-namespace field it
+//      always was; collapsing two namespaces into one field would mean guessing
+//      which to write back.
 //   3. `word/document.xml`'s `wp:inline`'s own `distT`/`distB`/`distL`/
 //      `distR` (space-around-image) attributes aren't modeled at all —
 //      `buildDrawingNode` (documentWriter.ts) only builds attributes for
@@ -93,10 +103,6 @@ import { validateOfficeFile } from '../../../../scripts/lib/officeValidator.mjs'
 //      acceptable trade. A per-fixture accepted entry, verified by reading
 //      `parseWidth`, is the honest way to record "this specific instance is
 //      fine" without weakening the general rule.
-const NUMBERING_TENTATIVE_AND_RESTART_TAGS: ReadonlyArray<{ readonly tag: string }> = [
-  { tag: 'w:abstractNum' },
-  { tag: 'w:lvl' },
-]
 const KNOWN_ACCEPTED_WARNINGS: Partial<Record<string, ReadonlyArray<{ readonly tag: string }>>> = {
   'image-anchored-floating': [
     { tag: 'wp:anchor' },
@@ -147,7 +153,7 @@ describe('detectLossySaveWarnings', () => {
       // Every fixture in this corpus has a `word/numbering.xml` part
       // exhibiting the same two real, unmodeled-attribute gaps (see the
       // long comment above), plus whatever fixture-specific ones apply.
-      const expectedWarnings = [...NUMBERING_TENTATIVE_AND_RESTART_TAGS, ...(KNOWN_ACCEPTED_WARNINGS[fixtureId] ?? [])]
+      const expectedWarnings = KNOWN_ACCEPTED_WARNINGS[fixtureId] ?? []
       const expectedTags = expectedWarnings.map((w) => w.tag)
       expect(
         warnings.map((w) => w.tag).sort(),
