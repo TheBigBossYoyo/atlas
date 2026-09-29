@@ -211,3 +211,146 @@ describe('KeyHold (F6b) — while an edit is in flight', () => {
     detach = () => undefined
   })
 })
+
+/**
+ * MATRIX-FLAKE-1 — the second-cell-edit data loss, one layer deeper than F6c.
+ *
+ * F6c was "the overlay never opened, because `KeyHold.start` was never called".
+ * This is "the overlay opened and was left without focus". glide mounts the edit
+ * overlay one task before it takes focus, and replaying the first character to the
+ * canvas is what opens it — so every key immediately after that one arrives in the
+ * gap, when the overlay exists but `document.activeElement` is still the canvas or
+ * a `<td>` of glide's accessibility table. Dispatching into either loses the key.
+ *
+ * Observed in the real app as an overlay holding `"t"` after `"two"` was typed,
+ * with the Enter gone too, so the edit could never commit and the Ctrl+S queued
+ * behind it never saved the file: `focus=TD[glide-cell-2-1] overlays=1
+ * overlayValue="t"`. It only reproduces under whole-suite load (2 of 4 full e2e
+ * runs, never in isolation), which is why the invariant is pinned HERE, where it is
+ * deterministic, rather than left to a probabilistic end-to-end run.
+ */
+describe('KeyHold (MATRIX-FLAKE-1) — an overlay that is mounted but not focused', () => {
+  let portal: HTMLDivElement
+  let overlay: HTMLTextAreaElement
+
+  function mountOverlay(): void {
+    portal = document.createElement('div')
+    portal.id = 'portal'
+    overlay = document.createElement('textarea')
+    portal.appendChild(overlay)
+    document.body.appendChild(portal)
+  }
+
+  beforeEach(() => {
+    // jsdom implements no `execCommand`, and `replayKey` uses `insertText` for a
+    // printable key going to a focused textarea — a synthetic keydown never
+    // inserts anything. Stubbed to do what the real one does, so these can assert
+    // the TEXT that landed rather than merely that focus moved. Worth noting that
+    // branch had no coverage at all before this.
+    ;(document as unknown as { execCommand: (c: string, ui: boolean, v: string) => boolean }).execCommand = (
+      command,
+      _ui,
+      value,
+    ) => {
+      if (command !== 'insertText') return false
+      const target = document.activeElement
+      if (!(target instanceof HTMLTextAreaElement)) return false
+      target.value += value
+      return true
+    }
+  })
+
+  afterEach(() => {
+    portal?.remove()
+    delete (document as unknown as { execCommand?: unknown }).execCommand
+  })
+
+  it('gives the overlay focus and replays into it, instead of the element glide left focused', () => {
+    // The state after a previous edit commits: focus parked on a `<td>` of glide's
+    // accessibility table, which is inside the grid and receives nothing useful.
+    const td = document.createElement('td')
+    td.tabIndex = -1
+    grid.appendChild(td)
+    const lost: string[] = []
+    td.addEventListener('keydown', (e) => lost.push(e.key))
+    td.focus()
+
+    hold.start(grid)
+    press('w')
+    press('o')
+
+    mountOverlay()
+    expect(document.activeElement).toBe(td)
+
+    hold.release()
+    vi.advanceTimersByTime(50)
+
+    expect(document.activeElement).toBe(overlay)
+    expect(lost, 'no key may reach the accessibility-table cell').toEqual([])
+    // The point of the whole exercise: the characters are IN the cell editor.
+    expect(overlay.value).toBe('wo')
+  })
+
+  it('does not focus the canvas out from under a mounted overlay', () => {
+    // `release` used to ask only whether focus sat inside the grid. After a commit
+    // it does — on that `<td>` — so the canvas was focused while an overlay was
+    // already open, which is how the overlay ended up owning no keystrokes.
+    const td = document.createElement('td')
+    td.tabIndex = -1
+    grid.appendChild(td)
+    td.focus()
+    mountOverlay()
+
+    hold.start(grid)
+    hold.release()
+
+    expect(document.activeElement).not.toBe(canvas)
+    expect(document.activeElement).toBe(overlay)
+  })
+
+  it('still focuses the canvas when no overlay is open', () => {
+    // The F6c behaviour this must not regress.
+    const td = document.createElement('td')
+    td.tabIndex = -1
+    grid.appendChild(td)
+    td.focus()
+
+    hold.start(grid)
+    hold.release()
+
+    expect(document.activeElement).toBe(canvas)
+  })
+
+  it('replays a single printable key into the focused overlay as typed text', () => {
+    mountOverlay()
+    overlay.focus()
+
+    hold.start(grid)
+    press('x')
+    hold.release()
+    vi.advanceTimersByTime(50)
+
+    // `replayKey` routes a printable key to a focused textarea through
+    // `insertText` rather than a synthetic keydown, because a synthetic keydown
+    // never inserts anything.
+    expect(document.activeElement).toBe(overlay)
+    expect(overlay.value).toBe('x')
+  })
+
+  it('gives up waiting rather than holding a key forever when focus can never land', () => {
+    // A textarea that refuses focus stands in for "focus can never land there".
+    // Holding the key indefinitely would lose it just as surely as misdelivering
+    // it, and with no trace at all.
+    mountOverlay()
+    overlay.setAttribute('disabled', 'true')
+    const seen = recordOnWindow()
+
+    hold.start(grid)
+    press('q')
+    hold.release()
+    vi.advanceTimersByTime(2000)
+    seen.stop()
+
+    expect(seen.keys, 'the key is eventually delivered, not dropped').toContain('q')
+  })
+})

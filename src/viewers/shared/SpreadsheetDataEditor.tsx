@@ -113,7 +113,19 @@ import {
 } from '@glideapps/glide-data-grid'
 import '@glideapps/glide-data-grid/dist/index.css'
 
-import { gridCanvas, KeyHold } from './keyHold'
+import { gridCanvas, KeyHold, overlayTextarea } from './keyHold'
+
+/**
+ * MATRIX-FLAKE-1 — how long `TextCellEditor` keeps trying to claim DOM focus for a
+ * freshly mounted overlay.
+ *
+ * The module header measures 200-300ms from the seeding keystroke to the textarea
+ * gaining focus unthrottled; this has to cover the same handoff on a machine under
+ * load, where the e2e matrix reproduces the loss at 8x CPU throttling. The guard
+ * costs one `requestAnimationFrame` per frame and stops the moment focus lands, so
+ * a generous bound is cheap.
+ */
+const OVERLAY_FOCUS_GUARD_MS = 2000
 
 /** A movement tuple, matching `TextCellEditor`'s own Enter/Tab handler below. */
 type Movement = readonly [-1 | 0 | 1, -1 | 0 | 1]
@@ -197,6 +209,50 @@ const TextCellEditor: ProvideEditorComponent<TextCell> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // MATRIX-FLAKE-1 — make sure this overlay actually ENDS UP with DOM focus.
+  //
+  // `TextCellEntry` below asks for `autoFocus`, which React applies once, on
+  // mount. Opening the overlay also makes glide re-render the whole grid (see the
+  // module header's 200-300ms measurement), and that re-render can leave focus on
+  // a `<td>` of glide's own accessibility table instead — after which NOTHING
+  // re-asserts it. Every key typed from then on goes to that `<td>` and is lost:
+  // observed as an overlay still holding `"t"` after `"two"` was typed, with the
+  // Enter gone too, so the edit could never commit and the Ctrl+S queued behind it
+  // never saved the file. 2 of 4 full e2e runs, never reproducible in isolation.
+  //
+  // Note this is NOT the same gap as F6c (the overlay never opened) or the replay
+  // path in `KeyHold.drain` (a key replayed before the overlay had focus). These
+  // keystrokes are real ones arriving after the overlay is already open, so
+  // `KeyHold` is not holding them and never sees them — which is why fixing the
+  // replay path alone did not help.
+  //
+  // Deliberately stops at the FIRST success. A guard that kept re-focusing would
+  // fight the click-away commit path, where focus legitimately leaves a
+  // still-mounted overlay. And it only steps in when focus is somewhere that is
+  // never legitimate during an edit — nothing, `<body>`, or a table cell — so a
+  // user who clicks into another control keeps it.
+  const readonlyCell = value.readonly === true
+  useEffect(() => {
+    if (readonlyCell) return undefined
+
+    const deadline = performance.now() + OVERLAY_FOCUS_GUARD_MS
+    let frame = 0
+    const claimFocus = (): void => {
+      const overlay = overlayTextarea()
+      // Gone, or already ours: either way there is nothing left to guard.
+      if (overlay === null || document.activeElement === overlay) return
+
+      const active = document.activeElement
+      if (active === null || active === document.body || active instanceof HTMLTableCellElement) {
+        overlay.focus({ preventScroll: true })
+        if (document.activeElement === overlay) return
+      }
+      if (performance.now() < deadline) frame = requestAnimationFrame(claimFocus)
+    }
+    frame = requestAnimationFrame(claimFocus)
+    return () => cancelAnimationFrame(frame)
+  }, [readonlyCell])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     const isCommitKey = (event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab'

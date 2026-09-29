@@ -33,8 +33,30 @@ export function gridCanvas(grid: Element): HTMLCanvasElement | null {
   return grid.querySelector<HTMLCanvasElement>(GRID_CANVAS_SELECTOR)
 }
 
+/**
+ * glide's cell-edit overlay lives in `#portal`, OUTSIDE the grid container.
+ *
+ * MATRIX-FLAKE-1 — "an overlay exists" and "the overlay has focus" are different
+ * questions, and conflating them cost a silent data-loss bug. See `drain`.
+ */
+export const OVERLAY_TEXTAREA_SELECTOR = '#portal textarea'
+
+export function overlayTextarea(): HTMLTextAreaElement | null {
+  return document.querySelector<HTMLTextAreaElement>(OVERLAY_TEXTAREA_SELECTOR)
+}
+
 /** How often a held shortcut re-checks whether the in-flight edit has committed. */
 const IN_FLIGHT_RECHECK_MS = 16
+
+/**
+ * How long `drain` waits for a mounted overlay to accept focus before replaying
+ * into it anyway.
+ *
+ * Bounded on purpose: if focus can never land there, dispatching the key is still
+ * better than holding it forever, which would lose it just as surely and with no
+ * trace. A second is far longer than the mount-then-focus gap this exists for.
+ */
+const OVERLAY_FOCUS_MAX_WAIT_MS = 1000
 
 /** Our own replays, which must pass straight through rather than be held again. */
 const replayed = new WeakSet<Event>()
@@ -80,6 +102,8 @@ export class KeyHold {
   private focusAtStart: Element | null = null
   private fallback: ReturnType<typeof setTimeout> | undefined
   private drainTimer: ReturnType<typeof setTimeout> | undefined
+  /** When the current wait for an unfocused overlay began; null when not waiting. */
+  private overlayWaitStartedAt: number | null = null
 
   private readonly editInFlight: () => boolean
 
@@ -98,6 +122,7 @@ export class KeyHold {
       this.keys = []
       this.awaitingFocus = null
       this.focusAtStart = null
+      this.overlayWaitStartedAt = null
     }
   }
 
@@ -126,7 +151,16 @@ export class KeyHold {
     // every replayed key went to that `<td>` and did nothing.
     const active = document.activeElement
     const heldOutsideGrid = active !== this.focusAtStart && !grid.contains(active)
-    if (!heldOutsideGrid && active !== canvas) {
+    const overlay = overlayTextarea()
+    if (overlay !== null) {
+      // MATRIX-FLAKE-1 — an edit overlay is already open, so IT owns focus and the
+      // canvas must not take it. The old code asked only whether focus sat inside
+      // the grid: after a commit it sits on a `<td>` of glide's accessibility
+      // table, which is inside the grid, so the canvas was focused out from under
+      // a freshly mounted overlay and every key after the first went to that
+      // `<td>` and was lost.
+      if (active !== overlay) overlay.focus({ preventScroll: true })
+    } else if (!heldOutsideGrid && active !== canvas) {
       canvas?.focus({ preventScroll: true })
     }
     this.awaitingFocus = null
@@ -159,8 +193,53 @@ export class KeyHold {
       this.scheduleDrain(IN_FLIGHT_RECHECK_MS)
       return
     }
+    // MATRIX-FLAKE-1 — see `awaitOverlayFocus`. Replaying before a mounted overlay
+    // has focus delivers the key to whatever glide left focused instead, and it is
+    // gone.
+    if (!this.awaitOverlayFocus()) {
+      this.scheduleDrain(IN_FLIGHT_RECHECK_MS)
+      return
+    }
     this.keys.shift()
     replayKey(next)
     if (this.keys.length > 0) this.scheduleDrain(0)
+  }
+
+  /**
+   * MATRIX-FLAKE-1 — whether it is safe to replay the next key now.
+   *
+   * The overlay mounts one task before it takes focus. Replaying the first
+   * character to the canvas is what OPENS it, so the keys immediately after that
+   * one arrive in the gap: the overlay exists, and `document.activeElement` is
+   * still the canvas or a `<td>` of glide's accessibility table. Dispatching into
+   * either loses the key silently — measured as an overlay left holding `"t"`
+   * after `"two"` was typed, with the Enter gone too, so the edit could never
+   * commit and the Ctrl+S behind it never saved.
+   *
+   * So: if an overlay is mounted, it must own focus first. Asking for focus and
+   * re-checking (rather than assuming `focus()` worked) matters because it can
+   * fail while the element is still being attached.
+   */
+  private awaitOverlayFocus(): boolean {
+    const overlay = overlayTextarea()
+    if (overlay === null || document.activeElement === overlay) {
+      this.overlayWaitStartedAt = null
+      return true
+    }
+
+    overlay.focus({ preventScroll: true })
+    if (document.activeElement === overlay) {
+      this.overlayWaitStartedAt = null
+      return true
+    }
+
+    const startedAt = this.overlayWaitStartedAt ?? performance.now()
+    this.overlayWaitStartedAt = startedAt
+    if (performance.now() - startedAt >= OVERLAY_FOCUS_MAX_WAIT_MS) {
+      // Out of patience. Replaying is still better than holding the key forever.
+      this.overlayWaitStartedAt = null
+      return true
+    }
+    return false
   }
 }
