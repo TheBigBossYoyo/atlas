@@ -358,7 +358,7 @@ describe('writeDocumentXml', () => {
       <w:p>
         <w:r>
           <w:drawing>
-            <wp:anchor behindDoc="1" allowOverlap="0">
+            <wp:anchor distT="114300" distB="114300" distL="114300" distR="114300" simplePos="0" relativeHeight="5" behindDoc="1" locked="0" layoutInCell="1" allowOverlap="0">
               <wp:simplePos x="0" y="0"/>
               <wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>
               <wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>
@@ -397,6 +397,19 @@ describe('writeDocumentXml', () => {
     // values (not just the element names above).
     expect(written).toContain('behindDoc="1"')
     expect(written).toContain('allowOverlap="0"')
+    // FID-DRAW-1 — these were hardcoded literals in `buildAnchorAttributes`, read
+    // from nothing. `relativeHeight` is the floating image's Z-ORDER, so two
+    // stacked images both came back as `relativeHeight="0"` and their
+    // front-to-back order was silently flattened. `distT` was `"0"` for every
+    // image regardless of the space the source actually set around it.
+    //
+    // The anchor above now carries the full attribute set `CT_Anchor` requires,
+    // which is also what Word always writes — the previous version of this test
+    // omitted all of them, so it round-tripped only because the writer's
+    // hardcoded defaults happened to match what the parser ignored.
+    expect(written).toContain('relativeHeight="5"')
+    expect(written).toContain('distT="114300"')
+    expect(written).toContain('distR="114300"')
     expect(written).toContain('relativeFrom="column"')
     expect(written).toContain('relativeFrom="paragraph"')
     expect(written).toContain('914400')

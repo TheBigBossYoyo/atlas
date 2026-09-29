@@ -21,6 +21,13 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   document view from scratch, so the cursor was gone and anything typed next
   simply did not appear. The cursor, the focus and the scroll position now come
   back where they were. Undo history is still cleared by a Save As.
+- **Word: a floating image keeps its front-to-back order.** Two images stacked
+  on top of one another both came back at the same depth when you saved, so
+  whichever was in front could end up behind. The space set around an image, and
+  a few display hints, were being dropped in the same way.
+- **Word: a numbered or bulleted list keeps two settings Word puts on it.**
+  Whether numbering restarts after a section break, and a marker Word writes on
+  each list level, were dropped the first time you saved.
 - **Word: redo now restores exactly the state you undid.** Redo used to be
   recomputed by re-running the edit against the document as it stood at that
   moment, which could place it differently if anything had shifted in between.

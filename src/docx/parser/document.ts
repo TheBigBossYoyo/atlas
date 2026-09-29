@@ -1038,6 +1038,42 @@ function parseBreak(element: OrderedXmlNode): BreakNode {
   }
 }
 
+/**
+ * FID-DRAW-1 — the attributes each drawing element models with a field of its
+ * own; everything else is carried through by name. Keep in sync with the
+ * `attr(...)` reads in `parseDrawing`/`parseAnchorPosition`: a name listed here
+ * and then not read is silently dropped, which is the bug this exists to stop.
+ */
+const MODELED_LAYOUT_ATTRS: ReadonlySet<string> = new Set(['behindDoc', 'allowOverlap'])
+const MODELED_BLIP_ATTRS: ReadonlySet<string> = new Set(['r:embed', 'r:link'])
+/** `pic:spPr` has no modelled attributes — its geometry lives in child elements. */
+const EMPTY_MODELED_ATTRS: ReadonlySet<string> = new Set()
+
+/**
+ * `element`'s attributes minus `modeled`, as a plain name -> value map.
+ * `undefined` when there are none, so an element with nothing unusual carries no
+ * extra field.
+ */
+function parseUnmodeledAttributes(
+  element: OrderedXmlNode | undefined,
+  modeled: ReadonlySet<string>,
+): ReadonlyMap<string, string> | undefined {
+  const attributes = element?.[':@']
+  if (attributes === undefined) return undefined
+
+  let unmodeled: Map<string, string> | undefined
+  for (const key of Object.keys(attributes)) {
+    if (!key.startsWith('@_')) continue
+    const name = key.slice(2)
+    if (modeled.has(name)) continue
+    const value = attributes[key]
+    if (value === undefined) continue
+    unmodeled ??= new Map()
+    unmodeled.set(name, String(value))
+  }
+  return unmodeled
+}
+
 function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
   const inline = child(element, 'wp:inline')
   const anchor = child(element, 'wp:anchor')
@@ -1079,6 +1115,14 @@ function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
   const transform = parseDrawingTransform(findDescendant(layoutElement, 'a:xfrm'))
   const anchorPosition = anchor !== undefined ? parseAnchorPosition(anchor) : undefined
   const anchorChildren = anchor !== undefined ? parseAnchorChildren(anchor) : undefined
+  // FID-DRAW-1 — see `Drawing.layoutAttributes`. `wp:inline` previously got no
+  // attributes at all on save, and `wp:anchor`'s were hardcoded constants.
+  const layoutAttributes = parseUnmodeledAttributes(layoutElement, MODELED_LAYOUT_ATTRS)
+  const blipAttributes = parseUnmodeledAttributes(blip, MODELED_BLIP_ATTRS)
+  const shapePropertiesAttributes = parseUnmodeledAttributes(
+    findDescendant(layoutElement, 'pic:spPr'),
+    EMPTY_MODELED_ATTRS,
+  )
 
   return {
     kind: 'drawing',
@@ -1093,6 +1137,9 @@ function parseDrawing(element: OrderedXmlNode): Drawing | UnknownNode {
     ...(transform !== undefined ? { transform } : {}),
     ...(anchorPosition ?? {}),
     ...(anchorChildren !== undefined ? { anchorChildren } : {}),
+    ...(layoutAttributes !== undefined ? { layoutAttributes } : {}),
+    ...(blipAttributes !== undefined ? { blipAttributes } : {}),
+    ...(shapePropertiesAttributes !== undefined ? { shapePropertiesAttributes } : {}),
   }
 }
 

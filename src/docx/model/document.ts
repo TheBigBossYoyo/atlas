@@ -280,6 +280,37 @@ export interface Drawing {
    * rebuilt from `extent`/`title`/`description`/`name`/`relationshipId`.
    */
   readonly anchorChildren?: ReadonlyArray<DrawingAnchorChild>
+  /**
+   * FID-DRAW-1 — every attribute on the source `wp:inline`/`wp:anchor` this model
+   * has no field of its own for, by name.
+   *
+   * Two separate losses, found by running the fidelity detector across the
+   * corpus:
+   *   - `wp:inline` got NO attributes at all. `buildDrawingNode` passed
+   *     `undefined` for them and only `wp:anchor` had a builder, so an inline
+   *     image's `distT`/`distB`/`distL`/`distR` (the space around it) were
+   *     dropped on every save.
+   *   - `wp:anchor`'s `distT`/`distB`/`distL`/`distR`/`simplePos`/
+   *     `relativeHeight`/`locked` were HARDCODED literals in
+   *     `buildAnchorAttributes`, never read from the source. `relativeHeight` is
+   *     the floating image's Z-ORDER: two anchored images stacked in a
+   *     particular order both collapsed to `relativeHeight="0"`, silently
+   *     flattening which one is in front.
+   *
+   * `behindDoc` and `allowOverlap` keep their own typed fields because the
+   * layout engine reads them; they are excluded from this map so they cannot be
+   * written twice.
+   */
+  readonly layoutAttributes?: ReadonlyMap<string, string>
+  /**
+   * FID-DRAW-1 — `a:blip`'s attributes other than the relationship id, and
+   * `pic:spPr`'s own attributes. In practice `a:blip/@cstate` (a compression
+   * hint) and `pic:spPr/@bwMode` (a black-and-white preview hint): neither was
+   * ever emitted, so both were lost unconditionally. Cosmetic, and the lowest
+   * severity of the five gaps — but silent and permanent all the same.
+   */
+  readonly blipAttributes?: ReadonlyMap<string, string>
+  readonly shapePropertiesAttributes?: ReadonlyMap<string, string>
 }
 
 export type RunChild =

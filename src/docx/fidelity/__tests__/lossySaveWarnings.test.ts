@@ -62,30 +62,30 @@ import { validateOfficeFile } from '../../../../scripts/lib/officeValidator.mjs'
 //      (RPR-STYLES-1). `LvlDef.tentative` stays as the `w`-namespace field it
 //      always was; collapsing two namespaces into one field would mean guessing
 //      which to write back.
-//   3. `word/document.xml`'s `wp:inline`'s own `distT`/`distB`/`distL`/
-//      `distR` (space-around-image) attributes aren't modeled at all —
-//      `buildDrawingNode` (documentWriter.ts) only builds attributes for
-//      `wp:anchor` (`buildAnchorAttributes`), passing `undefined` for
-//      `wp:inline`. Harmless in this corpus (every source value happens to
-//      be the OOXML default, `"0"`), but a real inline image with an
-//      explicit nonzero distance would silently lose it — latent, not yet
-//      exercised by a fixture with a nonzero value.
-//   4. `word/document.xml`'s `wp:anchor`'s own `distT`/`distB`/`distL`/
-//      `distR`/`simplePos`/`relativeHeight`/`locked` are HARDCODED constants
-//      in `buildAnchorAttributes` (documentWriter.ts — `attributes['@_...'] =
-//      '0'`/`'1'` literals), never read from the source at all.
-//      `relativeHeight` is the most consequential: it's the floating
-//      image's Z-ORDER. Two anchored images with different stacking order
-//      in the source both collapse to `relativeHeight="0"` on save,
-//      silently flattening their front-to-back order. `distT`/`distR`/
-//      `simplePos`/`locked` aren't listed as separate warnings below only
-//      because this fixture's own source values happen to already be `"0"`
-//      — same latent-vs-exercised distinction as (3).
-//   5. `word/document.xml`'s `a:blip/@cstate` (image compression hint) and
-//      `pic:spPr/@bwMode` (black-and-white print-preview hint) are never
-//      emitted by `buildGraphicNode`/the shape-properties builder at all —
-//      purely cosmetic rendering hints, lowest real-world severity of the
-//      five, but still a genuine, silent, unconditional loss.
+//   3–5. ALL FIXED (FID-DRAW-1, 2026-09-29), together, because they were one
+//      problem wearing three hats: the drawing writer rebuilt every element's
+//      attributes from a handful of modelled fields and literals, so anything
+//      else the source carried was gone.
+//        • `wp:inline` got NO attributes at all — `buildDrawingNode` passed
+//          `undefined` for them — so an inline image's `distT`/`distB`/`distL`/
+//          `distR` (the space around it) were dropped on every save.
+//        • `wp:anchor`'s `distT`/`distB`/`distL`/`distR`/`simplePos`/
+//          `relativeHeight`/`locked`/`layoutInCell` were HARDCODED literals in
+//          `buildAnchorAttributes`, read from nothing. `relativeHeight` is the
+//          floating image's Z-ORDER: two anchored images stacked in a particular
+//          order both came back as `relativeHeight="0"`, silently flattening
+//          which one is in front. The most consequential of the five, and
+//          invisible to any text comparison.
+//        • `a:blip/@cstate` (compression hint) and `pic:spPr/@bwMode`
+//          (black-and-white preview hint) were never emitted at all.
+//      Fixed by capturing each element's unmodelled attributes by name
+//      (`Drawing.layoutAttributes`/`blipAttributes`/`shapePropertiesAttributes`)
+//      and writing them back. `wp:anchor` keeps the literals as a FALLBACK,
+//      since `CT_Anchor` requires them and a `Drawing` can be built by code
+//      rather than parsed; `behindDoc`/`allowOverlap` keep their typed fields
+//      and are applied last, so the layout engine's view wins over a captured
+//      copy. `wp:inline` gets nothing when the source gave nothing, so a save
+//      does not invent `dist*="0"` attributes the file never had.
 //   6. `word/document.xml`'s `w:tblW/@w:w` when `w:tblW/@w:type="auto"` (or
 //      `"nil"`) — this one is DIFFERENT from the five above: it is
 //      confirmed SAFE, not a real gap. `parseWidth` (parser/document.ts)
@@ -104,37 +104,6 @@ import { validateOfficeFile } from '../../../../scripts/lib/officeValidator.mjs'
 //      `parseWidth`, is the honest way to record "this specific instance is
 //      fine" without weakening the general rule.
 const KNOWN_ACCEPTED_WARNINGS: Partial<Record<string, ReadonlyArray<{ readonly tag: string }>>> = {
-  'image-anchored-floating': [
-    { tag: 'wp:anchor' },
-    { tag: 'wp:anchor' },
-    { tag: 'wp:anchor' },
-    { tag: 'a:blip' },
-    { tag: 'pic:spPr' },
-  ],
-  'image-crop-rotation-flip': [
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'a:blip' },
-    { tag: 'pic:spPr' },
-  ],
-  'image-emf-wmf': [
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'a:blip' },
-    { tag: 'pic:spPr' },
-  ],
-  'image-inline': [
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'wp:inline' },
-    { tag: 'a:blip' },
-    { tag: 'pic:spPr' },
-  ],
   'table-fixed-grid-merged-cells': [{ tag: 'w:tblW' }],
   'table-styled-banded': [{ tag: 'w:tblW' }],
 }

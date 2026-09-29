@@ -597,7 +597,12 @@ function buildBreakNode(breakNode: BreakNode): OrderedXmlNode {
 
 function buildDrawingNode(drawing: Drawing, state: SerializeState): OrderedXmlNode {
   const layoutName = drawing.layout === 'anchor' ? 'wp:anchor' : 'wp:inline'
-  const layoutAttributes = drawing.layout === 'anchor' ? buildAnchorAttributes(drawing) : undefined
+  // FID-DRAW-1 — `wp:inline` used to get `undefined` here, so an inline image's
+  // `distT`/`distB`/`distL`/`distR` (the space around it) were dropped on every
+  // save. It has no required attributes of its own, so whatever the source
+  // carried is simply written back.
+  const layoutAttributes =
+    drawing.layout === 'anchor' ? buildAnchorAttributes(drawing) : buildInlineAttributes(drawing)
   const layoutChildren =
     drawing.layout === 'anchor' && drawing.anchorChildren !== undefined
       ? buildAnchorChildrenNodes(drawing, drawing.anchorChildren, state)
@@ -789,9 +794,15 @@ function buildGraphicNode(drawing: Drawing): OrderedXmlNode {
     throw new Error('buildGraphicNode requires a relationshipId')
   }
 
-  const blipFillChildren: OrderedXmlNode[] = [
-    createElement('a:blip', [], { '@_r:embed': drawing.relationshipId }),
-  ]
+  // FID-DRAW-1 — `a:blip/@cstate` (a compression hint) was never emitted, so it
+  // was lost unconditionally. Cosmetic, but silent and permanent.
+  const blipAttributes = createAttributes()
+  blipAttributes['@_r:embed'] = drawing.relationshipId
+  for (const [name, value] of drawing.blipAttributes ?? []) {
+    blipAttributes[`@_${name}`] = value
+  }
+
+  const blipFillChildren: OrderedXmlNode[] = [createElement('a:blip', [], blipAttributes)]
   if (drawing.crop !== undefined) {
     blipFillChildren.push(buildSrcRectNode(drawing.crop))
   }
@@ -851,10 +862,21 @@ function buildPictureShapePropertiesNode(drawing: Drawing): OrderedXmlNode {
     )
   }
 
-  return createElement('pic:spPr', [
-    createElement('a:xfrm', xfrmChildren, xfrmAttributes),
-    createElement('a:prstGeom', [createElement('a:avLst', [])], { '@_prst': 'rect' }),
-  ])
+  // FID-DRAW-1 — `pic:spPr/@bwMode` (a black-and-white preview hint) was likewise
+  // never emitted.
+  const spPrAttributes = createAttributes()
+  for (const [name, value] of drawing.shapePropertiesAttributes ?? []) {
+    spPrAttributes[`@_${name}`] = value
+  }
+
+  return createElement(
+    'pic:spPr',
+    [
+      createElement('a:xfrm', xfrmChildren, xfrmAttributes),
+      createElement('a:prstGeom', [createElement('a:avLst', [])], { '@_prst': 'rect' }),
+    ],
+    hasAttributes(spPrAttributes) ? spPrAttributes : undefined,
+  )
 }
 
 function buildSrcRectNode(crop: DrawingCrop): OrderedXmlNode {
@@ -866,6 +888,22 @@ function buildSrcRectNode(crop: DrawingCrop): OrderedXmlNode {
   return createElement('a:srcRect', [], attributes)
 }
 
+/**
+ * FID-DRAW-1 — `wp:anchor`'s attributes, from the SOURCE where the source had
+ * them.
+ *
+ * `distT`/`distB`/`distL`/`distR`/`simplePos`/`relativeHeight`/`locked`/
+ * `layoutInCell` used to be hardcoded literals here, read from nothing.
+ * `relativeHeight` is the floating image's Z-ORDER, so two anchored images
+ * stacked in a particular order both came back as `relativeHeight="0"` and their
+ * front-to-back order was silently flattened — the most consequential of the
+ * five fidelity gaps, and invisible in any text comparison.
+ *
+ * The defaults stay as a fallback, because `CT_Anchor` REQUIRES all of these and
+ * a `Drawing` can be built by code rather than parsed from a file (every writer
+ * test does exactly that). `behindDoc`/`allowOverlap` are applied last: they have
+ * typed fields the layout engine owns, so those win over a captured copy.
+ */
 function buildAnchorAttributes(drawing: Drawing): XmlAttributes {
   const attributes = createAttributes()
   attributes['@_distT'] = '0'
@@ -874,10 +912,31 @@ function buildAnchorAttributes(drawing: Drawing): XmlAttributes {
   attributes['@_distR'] = '0'
   attributes['@_simplePos'] = '0'
   attributes['@_relativeHeight'] = '0'
-  attributes['@_behindDoc'] = buildOnOffAttribute(drawing.behindDoc) ?? '0'
   attributes['@_locked'] = '0'
   attributes['@_layoutInCell'] = '1'
+
+  for (const [name, value] of drawing.layoutAttributes ?? []) {
+    attributes[`@_${name}`] = value
+  }
+
+  attributes['@_behindDoc'] = buildOnOffAttribute(drawing.behindDoc) ?? '0'
   attributes['@_allowOverlap'] = buildOnOffAttribute(drawing.allowOverlap) ?? '1'
+  return attributes
+}
+
+/**
+ * FID-DRAW-1 — `wp:inline`'s own attributes. Unlike `wp:anchor` it has no
+ * required ones, so an element the source gave nothing gets nothing rather than
+ * gaining `dist*="0"` attributes it never had.
+ */
+function buildInlineAttributes(drawing: Drawing): XmlAttributes | undefined {
+  if (drawing.layoutAttributes === undefined || drawing.layoutAttributes.size === 0) {
+    return undefined
+  }
+  const attributes = createAttributes()
+  for (const [name, value] of drawing.layoutAttributes) {
+    attributes[`@_${name}`] = value
+  }
   return attributes
 }
 
