@@ -150,10 +150,12 @@ What is genuinely open, highest value first:
   Still open: the two TABLE fixtures, which LibreOffice cannot read even untouched, so
   tables are externally unverified; the XLSX and PPTX write paths, which have no
   equivalent harness yet; and Microsoft Office itself.
-- **Five drawing/numbering fidelity gaps** recorded in `KNOWN_ACCEPTED_WARNINGS` in
-  `src/docx/fidelity/__tests__/lossySaveWarnings.test.ts`, found when the extended
-  detector was run corpus-wide. `wp:anchor/@relativeHeight` (floating-image z-order,
-  hardcoded `"0"`) is the highest impact and corroborates DOCX-5 from static analysis.
+- ~~Five drawing/numbering fidelity gaps~~ **ALL FIXED 2026-09-29** (FID-NUM-1 `1884f62`,
+  FID-DRAW-1 `8879e6f`). The corpus fidelity detector now reports zero unexplained loss;
+  the only accepted entries left are the two `w:tblW` ones that note 6 in
+  `lossySaveWarnings.test.ts` established are safe by reading `parseWidth`. Note none of
+  these change a character of text, so the LibreOffice comparison is blind to them — keep
+  both checks.
 - **PROGID-1's install verification.** The ProgIDs an install registers changed from
   generic labels to `Atlas.*`; source and build are verified, the registry behaviour is
   not. `docs/RELEASE.md` step 8 carries the `reg query` checks. Needs an elevated install
