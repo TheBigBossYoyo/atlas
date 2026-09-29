@@ -1,13 +1,13 @@
 {
-  "capturedAt": "2026-09-20",
-  "packageVersion": "3.3.0",
-  "chunkCount": 252,
-  "totalBytes": 11598590,
-  "totalGzipBytes": 3715418,
+  "capturedAt": "2026-09-29",
+  "packageVersion": "3.8.0",
+  "chunkCount": 267,
+  "totalBytes": 12523291,
+  "totalGzipBytes": 3994884,
   "chunks": {
     "abnfDiagram-VCTEODGH.js": {
       "bytes": 1846,
-      "gzipBytes": 896
+      "gzipBytes": 897
     },
     "apl.js": {
       "bytes": 2290,
@@ -19,11 +19,11 @@
     },
     "architecture-7GRP2DOG.js": {
       "bytes": 131,
-      "gzipBytes": 132
+      "gzipBytes": 135
     },
     "architectureDiagram-5GKGNRK7.js": {
       "bytes": 148904,
-      "gzipBytes": 40892
+      "gzipBytes": 40890
     },
     "array.js": {
       "bytes": 107,
@@ -42,12 +42,12 @@
       "gzipBytes": 1734
     },
     "binaryReader.js": {
-      "bytes": 2108,
-      "gzipBytes": 954
+      "bytes": 2143,
+      "gzipBytes": 963
     },
     "blockDiagram-I7D4REHJ.js": {
       "bytes": 41446,
-      "gzipBytes": 13333
+      "gzipBytes": 13328
     },
     "brainfuck.js": {
       "bytes": 599,
@@ -55,15 +55,11 @@
     },
     "c4Diagram-7LVT6UL2.js": {
       "bytes": 64740,
-      "gzipBytes": 18385
+      "gzipBytes": 18381
     },
     "channel.js": {
       "bytes": 114,
       "gzipBytes": 124
-    },
-    "chevron-up.js": {
-      "bytes": 203,
-      "gzipBytes": 174
     },
     "chunk-2Q5K7J3B.js": {
       "bytes": 191,
@@ -71,7 +67,7 @@
     },
     "chunk-4HAMMTFA.js": {
       "bytes": 104855,
-      "gzipBytes": 25562
+      "gzipBytes": 25560
     },
     "chunk-5VM5RSS4.js": {
       "bytes": 362,
@@ -79,11 +75,11 @@
     },
     "chunk-75Z2AOVW.js": {
       "bytes": 30811,
-      "gzipBytes": 8496
+      "gzipBytes": 8494
     },
     "chunk-DU6HZSFF.js": {
-      "bytes": 208877,
-      "gzipBytes": 25036
+      "bytes": 208765,
+      "gzipBytes": 24975
     },
     "chunk-F27PBJKO.js": {
       "bytes": 1972,
@@ -99,11 +95,11 @@
     },
     "chunk-GVQU2GXP.js": {
       "bytes": 1416,
-      "gzipBytes": 794
+      "gzipBytes": 795
     },
     "chunk-IMKFNOWR.js": {
-      "bytes": 37673,
-      "gzipBytes": 12239
+      "bytes": 37677,
+      "gzipBytes": 12240
     },
     "chunk-JWPE2WC7.js": {
       "bytes": 223,
@@ -111,11 +107,11 @@
     },
     "chunk-L3NEJ4N5.js": {
       "bytes": 9686,
-      "gzipBytes": 2919
+      "gzipBytes": 2918
     },
     "chunk-OSK3NFVY.js": {
       "bytes": 36469,
-      "gzipBytes": 7961
+      "gzipBytes": 7959
     },
     "chunk-P2QGCYS3.js": {
       "bytes": 1947,
@@ -123,23 +119,23 @@
     },
     "chunk-POPQ4Y6H.js": {
       "bytes": 574,
-      "gzipBytes": 400
+      "gzipBytes": 399
     },
     "chunk-PWAF6VOD.js": {
       "bytes": 5833,
       "gzipBytes": 2678
     },
     "chunk-SHT3W25Y.js": {
-      "bytes": 61233,
-      "gzipBytes": 19512
+      "bytes": 61237,
+      "gzipBytes": 19514
     },
     "chunk-SVP7TREG.js": {
       "bytes": 15644,
       "gzipBytes": 4339
     },
     "chunk-TICWLB2K.js": {
-      "bytes": 48813,
-      "gzipBytes": 15509
+      "bytes": 48817,
+      "gzipBytes": 15507
     },
     "chunk-XXDRQBXY.js": {
       "bytes": 262,
@@ -151,11 +147,11 @@
     },
     "classDiagram-v2-VYDZK3BY.js": {
       "bytes": 778,
-      "gzipBytes": 453
+      "gzipBytes": 452
     },
     "classDiagram-ZZMXUADV.js": {
       "bytes": 778,
-      "gzipBytes": 453
+      "gzipBytes": 452
     },
     "clike.js": {
       "bytes": 22054,
@@ -174,12 +170,12 @@
       "gzipBytes": 2975
     },
     "CodeEditor.js": {
-      "bytes": 115132,
-      "gzipBytes": 35571
+      "bytes": 115321,
+      "gzipBytes": 35621
     },
     "CodeViewer.js": {
-      "bytes": 8131,
-      "gzipBytes": 2950
+      "bytes": 8014,
+      "gzipBytes": 2904
     },
     "CodeViewer.css": {
       "bytes": 2276,
@@ -209,13 +205,17 @@
       "bytes": 24664,
       "gzipBytes": 8211
     },
+    "csvParse.js": {
+      "bytes": 376,
+      "gzipBytes": 246
+    },
     "CsvViewer.js": {
-      "bytes": 5346,
-      "gzipBytes": 2323
+      "bytes": 6037,
+      "gzipBytes": 2582
     },
     "cynefin-OW5HDTMX.js": {
       "bytes": 126,
-      "gzipBytes": 131
+      "gzipBytes": 132
     },
     "cynefinDiagram-5FMLGOSQ.js": {
       "bytes": 9943,
@@ -239,11 +239,11 @@
     },
     "dagre-GXQ25YYZ.js": {
       "bytes": 10974,
-      "gzipBytes": 4141
+      "gzipBytes": 4137
     },
     "data-grid-overlay-editor.js": {
-      "bytes": 3613,
-      "gzipBytes": 1788
+      "bytes": 3612,
+      "gzipBytes": 1789
     },
     "defaultLocale.js": {
       "bytes": 4634,
@@ -251,23 +251,23 @@
     },
     "diagram-S7CK7UJ4.js": {
       "bytes": 8197,
-      "gzipBytes": 3643
+      "gzipBytes": 3642
     },
     "diagram-UQ7AKVKN.js": {
       "bytes": 6074,
-      "gzipBytes": 2562
+      "gzipBytes": 2563
     },
     "diagram-VSXAHHWV.js": {
       "bytes": 10652,
-      "gzipBytes": 4110
+      "gzipBytes": 4111
     },
     "diagram-VX7I27RA.js": {
       "bytes": 15755,
-      "gzipBytes": 5497
+      "gzipBytes": 5498
     },
     "diagram-Z3DM3KII.js": {
       "bytes": 4280,
-      "gzipBytes": 1844
+      "gzipBytes": 1845
     },
     "diff.js": {
       "bytes": 302,
@@ -275,23 +275,23 @@
     },
     "dist.js": {
       "bytes": 1066942,
-      "gzipBytes": 386991
+      "gzipBytes": 386941
     },
     "doc.js": {
       "bytes": 2685,
-      "gzipBytes": 1348
+      "gzipBytes": 1349
     },
     "dockerfile.js": {
       "bytes": 1906,
       "gzipBytes": 653
     },
-    "DocxViewer.js": {
-      "bytes": 436198,
-      "gzipBytes": 121613
-    },
     "DocxViewer.css": {
-      "bytes": 22050,
-      "gzipBytes": 4060
+      "bytes": 23110,
+      "gzipBytes": 4222
+    },
+    "DocxViewer.js": {
+      "bytes": 471350,
+      "gzipBytes": 131620
     },
     "dtd.js": {
       "bytes": 2092,
@@ -323,7 +323,7 @@
     },
     "erDiagram-RLTQ6QDP.js": {
       "bytes": 30690,
-      "gzipBytes": 10506
+      "gzipBytes": 10501
     },
     "erlang.js": {
       "bytes": 7846,
@@ -331,7 +331,11 @@
     },
     "eventmodeling-NTZA5JFV.js": {
       "bytes": 132,
-      "gzipBytes": 134
+      "gzipBytes": 136
+    },
+    "export.js": {
+      "bytes": 859841,
+      "gzipBytes": 236145
     },
     "factor.js": {
       "bytes": 1669,
@@ -343,7 +347,7 @@
     },
     "flowDiagram-HODETNUW.js": {
       "bytes": 575,
-      "gzipBytes": 317
+      "gzipBytes": 318
     },
     "forth.js": {
       "bytes": 2539,
@@ -352,6 +356,10 @@
     "fortran.js": {
       "bytes": 3862,
       "gzipBytes": 1926
+    },
+    "friendlyLibraryError.js": {
+      "bytes": 622,
+      "gzipBytes": 380
     },
     "ganttDiagram-EL5Y4UJY.js": {
       "bytes": 69352,
@@ -367,11 +375,11 @@
     },
     "gitGraph-4MIJSDKK.js": {
       "bytes": 127,
-      "gzipBytes": 130
+      "gzipBytes": 132
     },
     "gitGraphDiagram-WWUBYQGX.js": {
       "bytes": 29008,
-      "gzipBytes": 8517
+      "gzipBytes": 8518
     },
     "graphlib.js": {
       "bytes": 23904,
@@ -397,17 +405,17 @@
       "bytes": 9826,
       "gzipBytes": 4378
     },
-    "index.css": {
-      "bytes": 61400,
-      "gzipBytes": 14871
-    },
     "index.js": {
-      "bytes": 2634585,
-      "gzipBytes": 785226
+      "bytes": 337588,
+      "gzipBytes": 99672
+    },
+    "index.css": {
+      "bytes": 61713,
+      "gzipBytes": 14927
     },
     "info-A6RAGUB7.js": {
       "bytes": 123,
-      "gzipBytes": 128
+      "gzipBytes": 130
     },
     "infoDiagram-27XIBGKW.js": {
       "bytes": 656,
@@ -427,11 +435,7 @@
     },
     "journeyDiagram-3NMN7TZE.js": {
       "bytes": 23158,
-      "gzipBytes": 8134
-    },
-    "jsx-runtime.js": {
-      "bytes": 435,
-      "gzipBytes": 304
+      "gzipBytes": 8133
     },
     "julia.js": {
       "bytes": 5263,
@@ -439,27 +443,35 @@
     },
     "kanban-definition-UXKFOSKX.js": {
       "bytes": 20262,
-      "gzipBytes": 7123
+      "gzipBytes": 7118
+    },
+    "katex.js": {
+      "bytes": 259044,
+      "gzipBytes": 76734
     },
     "LegacyDocViewer.js": {
-      "bytes": 2472,
-      "gzipBytes": 1141
+      "bytes": 2383,
+      "gzipBytes": 1094
     },
     "LegacyDocViewer.css": {
       "bytes": 533,
       "gzipBytes": 277
     },
-    "LegacyFormatBanner.js": {
-      "bytes": 428,
-      "gzipBytes": 282
-    },
     "LegacyFormatBanner.css": {
       "bytes": 272,
       "gzipBytes": 199
     },
+    "LegacyFormatBanner.js": {
+      "bytes": 388,
+      "gzipBytes": 261
+    },
+    "legacyOffice.js": {
+      "bytes": 737,
+      "gzipBytes": 449
+    },
     "LegacyPptViewer.js": {
-      "bytes": 2415,
-      "gzipBytes": 1143
+      "bytes": 2319,
+      "gzipBytes": 1102
     },
     "LegacyPptViewer.css": {
       "bytes": 283,
@@ -467,7 +479,7 @@
     },
     "line.js": {
       "bytes": 943,
-      "gzipBytes": 471
+      "gzipBytes": 472
     },
     "linear.js": {
       "bytes": 5517,
@@ -485,9 +497,21 @@
       "bytes": 3128,
       "gzipBytes": 1394
     },
+    "markdownParse.worker.js": {
+      "bytes": 755732,
+      "gzipBytes": 228799
+    },
+    "MarkdownRenderer.js": {
+      "bytes": 511277,
+      "gzipBytes": 157477
+    },
     "MarkdownViewer.js": {
-      "bytes": 822,
-      "gzipBytes": 516
+      "bytes": 848,
+      "gzipBytes": 525
+    },
+    "marked.esm.js": {
+      "bytes": 41083,
+      "gzipBytes": 12214
     },
     "mathematica.js": {
       "bytes": 1899,
@@ -498,16 +522,16 @@
       "gzipBytes": 650
     },
     "mermaid-parser.core.js": {
-      "bytes": 16748,
-      "gzipBytes": 3928
+      "bytes": 16747,
+      "gzipBytes": 3926
     },
     "mermaid.core.js": {
-      "bytes": 95217,
-      "gzipBytes": 32389
+      "bytes": 95099,
+      "gzipBytes": 32378
     },
     "mindmap-definition-YA3MSWOX.js": {
       "bytes": 23440,
-      "gzipBytes": 7968
+      "gzipBytes": 7962
     },
     "mirc.js": {
       "bytes": 5917,
@@ -550,20 +574,24 @@
       "gzipBytes": 1077
     },
     "OdpViewer.js": {
-      "bytes": 6619,
-      "gzipBytes": 2620
+      "bytes": 6648,
+      "gzipBytes": 2618
     },
     "OdsViewer.js": {
       "bytes": 75,
       "gzipBytes": 86
     },
     "OdtViewer.js": {
-      "bytes": 2397,
-      "gzipBytes": 1228
+      "bytes": 2199,
+      "gzipBytes": 1125
     },
     "OdtViewer.css": {
       "bytes": 827,
       "gzipBytes": 389
+    },
+    "officePackage.js": {
+      "bytes": 3358,
+      "gzipBytes": 1500
     },
     "ordinal.js": {
       "bytes": 1174,
@@ -575,11 +603,15 @@
     },
     "packet-AYTQ26CC.js": {
       "bytes": 125,
-      "gzipBytes": 128
+      "gzipBytes": 130
     },
     "pageEstimate.js": {
       "bytes": 382,
       "gzipBytes": 261
+    },
+    "parser.js": {
+      "bytes": 27417,
+      "gzipBytes": 9945
     },
     "pascal.js": {
       "bytes": 2256,
@@ -590,12 +622,12 @@
       "gzipBytes": 977
     },
     "pdf.js": {
-      "bytes": 487968,
+      "bytes": 487967,
       "gzipBytes": 146991
     },
     "PdfViewer.js": {
-      "bytes": 29336,
-      "gzipBytes": 9676
+      "bytes": 29638,
+      "gzipBytes": 9719
     },
     "PdfViewer.css": {
       "bytes": 8707,
@@ -603,7 +635,7 @@
     },
     "pegDiagram-XKGWAZYB.js": {
       "bytes": 2011,
-      "gzipBytes": 942
+      "gzipBytes": 943
     },
     "perl.js": {
       "bytes": 9733,
@@ -611,7 +643,7 @@
     },
     "pie-WAS4IAKB.js": {
       "bytes": 122,
-      "gzipBytes": 127
+      "gzipBytes": 128
     },
     "pieDiagram-E7YTZNPT.js": {
       "bytes": 6226,
@@ -627,11 +659,11 @@
     },
     "ppt.js": {
       "bytes": 2287,
-      "gzipBytes": 1215
+      "gzipBytes": 1214
     },
     "PptxViewer.js": {
-      "bytes": 15000,
-      "gzipBytes": 5424
+      "bytes": 18232,
+      "gzipBytes": 6226
     },
     "printer.js": {
       "bytes": 319,
@@ -653,6 +685,10 @@
       "bytes": 2517,
       "gzipBytes": 1197
     },
+    "purify.es.js": {
+      "bytes": 27009,
+      "gzipBytes": 10698
+    },
     "python.js": {
       "bytes": 6272,
       "gzipBytes": 2671
@@ -671,35 +707,35 @@
     },
     "radar-RG4KPBEZ.js": {
       "bytes": 124,
-      "gzipBytes": 128
+      "gzipBytes": 130
     },
     "railroad-74A4TZTK.js": {
       "bytes": 127,
-      "gzipBytes": 130
+      "gzipBytes": 132
     },
     "railroad-abnf-HS5TGJTU.js": {
       "bytes": 131,
-      "gzipBytes": 133
+      "gzipBytes": 135
     },
     "railroad-ebnf-LZEXJU2U.js": {
       "bytes": 131,
-      "gzipBytes": 133
+      "gzipBytes": 135
     },
     "railroad-peg-WCYAUIDC.js": {
       "bytes": 130,
-      "gzipBytes": 132
+      "gzipBytes": 134
     },
     "railroadDiagram-O6MQD6OU.js": {
       "bytes": 1659,
-      "gzipBytes": 769
+      "gzipBytes": 772
     },
     "react.js": {
       "bytes": 7532,
       "gzipBytes": 2885
     },
     "react-window.js": {
-      "bytes": 8594,
-      "gzipBytes": 3251
+      "bytes": 8588,
+      "gzipBytes": 3253
     },
     "reader.js": {
       "bytes": 31827,
@@ -707,7 +743,7 @@
     },
     "requirementDiagram-BXWQKSXE.js": {
       "bytes": 31000,
-      "gzipBytes": 9711
+      "gzipBytes": 9705
     },
     "rolldown-runtime.js": {
       "bytes": 1106,
@@ -730,8 +766,8 @@
       "gzipBytes": 193
     },
     "RtfViewer.js": {
-      "bytes": 1938,
-      "gzipBytes": 1024
+      "bytes": 1786,
+      "gzipBytes": 966
     },
     "ruby.js": {
       "bytes": 5077,
@@ -739,7 +775,7 @@
     },
     "sankeyDiagram-P5KCCOFB.js": {
       "bytes": 22792,
-      "gzipBytes": 8217
+      "gzipBytes": 8218
     },
     "sas.js": {
       "bytes": 9331,
@@ -755,7 +791,7 @@
     },
     "sequenceDiagram-WJ2MYXX4.js": {
       "bytes": 115744,
-      "gzipBytes": 30378
+      "gzipBytes": 30376
     },
     "shell.js": {
       "bytes": 2434,
@@ -772,6 +808,14 @@
     "sizeCapture-INFHLROL.js": {
       "bytes": 875,
       "gzipBytes": 511
+    },
+    "sizeThresholds.js": {
+      "bytes": 21472,
+      "gzipBytes": 7903
+    },
+    "SlideCanvas.js": {
+      "bytes": 6800,
+      "gzipBytes": 2669
     },
     "smalltalk.js": {
       "bytes": 1996,
@@ -790,20 +834,24 @@
       "gzipBytes": 533
     },
     "SpreadsheetDataEditor.js": {
-      "bytes": 237649,
-      "gzipBytes": 77051
+      "bytes": 241523,
+      "gzipBytes": 78317
     },
     "SpreadsheetDataEditor.css": {
       "bytes": 8107,
       "gzipBytes": 2012
     },
+    "spreadsheetGrid.js": {
+      "bytes": 1993,
+      "gzipBytes": 1084
+    },
     "SpreadsheetViewer.js": {
-      "bytes": 11069,
-      "gzipBytes": 4217
+      "bytes": 12071,
+      "gzipBytes": 4582
     },
     "spreadsheetWorker.worker.js": {
-      "bytes": 466623,
-      "gzipBytes": 152191
+      "bytes": 534176,
+      "gzipBytes": 169918
     },
     "sql.js": {
       "bytes": 36836,
@@ -815,7 +863,7 @@
     },
     "stateDiagram-D77RDMKH.js": {
       "bytes": 10644,
-      "gzipBytes": 3733
+      "gzipBytes": 3730
     },
     "stateDiagram-v2-MP3YSRHH.js": {
       "bytes": 781,
@@ -835,7 +883,7 @@
     },
     "swimlanes-42K2YHIH.js": {
       "bytes": 111119,
-      "gzipBytes": 37567
+      "gzipBytes": 37560
     },
     "swimlanesDiagram-VR7AAH4N.js": {
       "bytes": 834,
@@ -858,8 +906,8 @@
       "gzipBytes": 529
     },
     "TextViewer.js": {
-      "bytes": 749,
-      "gzipBytes": 429
+      "bytes": 710,
+      "gzipBytes": 418
     },
     "tiddlywiki.js": {
       "bytes": 2760,
@@ -871,7 +919,7 @@
     },
     "timeline-definition-24CTP7MA.js": {
       "bytes": 30373,
-      "gzipBytes": 9926
+      "gzipBytes": 9925
     },
     "toml.js": {
       "bytes": 1045,
@@ -883,11 +931,11 @@
     },
     "treemap-WGGIJYW6.js": {
       "bytes": 126,
-      "gzipBytes": 129
+      "gzipBytes": 131
     },
     "treeView-Q6P3EWNA.js": {
       "bytes": 127,
-      "gzipBytes": 130
+      "gzipBytes": 132
     },
     "troff.js": {
       "bytes": 957,
@@ -922,20 +970,24 @@
       "gzipBytes": 622
     },
     "UnknownViewer.js": {
-      "bytes": 4608,
-      "gzipBytes": 2006
+      "bytes": 3543,
+      "gzipBytes": 1504
+    },
+    "unzip.js": {
+      "bytes": 97293,
+      "gzipBytes": 28959
     },
     "useSlideEditorCore.js": {
-      "bytes": 2647,
-      "gzipBytes": 1272
-    },
-    "useSlideKeyboardNav.js": {
-      "bytes": 16863,
-      "gzipBytes": 5728
+      "bytes": 2670,
+      "gzipBytes": 1273
     },
     "useSlideKeyboardNav.css": {
       "bytes": 7452,
       "gzipBytes": 1726
+    },
+    "useSlideKeyboardNav.js": {
+      "bytes": 18581,
+      "gzipBytes": 6118
     },
     "useUndoableState.js": {
       "bytes": 1595,
@@ -955,7 +1007,7 @@
     },
     "vennDiagram-4TSXK5OY.js": {
       "bytes": 41157,
-      "gzipBytes": 15003
+      "gzipBytes": 15002
     },
     "verilog.js": {
       "bytes": 8182,
@@ -965,21 +1017,21 @@
       "bytes": 3315,
       "gzipBytes": 1494
     },
-    "viewer-spreadsheet.js": {
-      "bytes": 62955,
-      "gzipBytes": 20456
-    },
     "viewer-spreadsheet.css": {
-      "bytes": 5960,
-      "gzipBytes": 1148
+      "bytes": 6171,
+      "gzipBytes": 1167
+    },
+    "viewer-spreadsheet.js": {
+      "bytes": 71176,
+      "gzipBytes": 23003
     },
     "VirtualizedPlainText.js": {
-      "bytes": 928,
-      "gzipBytes": 522
+      "bytes": 922,
+      "gzipBytes": 523
     },
     "wardley-WFR3VGLG.js": {
       "bytes": 126,
-      "gzipBytes": 130
+      "gzipBytes": 132
     },
     "wardleyDiagram-VM6X3IG4.js": {
       "bytes": 25207,
@@ -988,6 +1040,14 @@
     "webidl.js": {
       "bytes": 2449,
       "gzipBytes": 1247
+    },
+    "WorkerMarkdownBody.js": {
+      "bytes": 2278,
+      "gzipBytes": 1048
+    },
+    "xlsx.js": {
+      "bytes": 484402,
+      "gzipBytes": 156508
     },
     "XlsxViewer.js": {
       "bytes": 76,
@@ -999,7 +1059,7 @@
     },
     "xychartDiagram-S5SC5T6Z.js": {
       "bytes": 44147,
-      "gzipBytes": 12169
+      "gzipBytes": 12167
     },
     "yacas.js": {
       "bytes": 2141,

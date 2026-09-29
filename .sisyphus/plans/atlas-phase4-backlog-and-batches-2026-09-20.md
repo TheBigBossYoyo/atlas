@@ -866,7 +866,7 @@ Next step when it recurs: read the message. If focus is on the canvas and the ov
 holds the full text, it is a commit-path bug; if focus is elsewhere, it is the F6c
 family again; if the overlay is empty, the keystrokes never arrived.
 
-**BUNDLE-BASELINE-1 · low · observation, 2026-09-28** — the stored bundle baseline
+**BUNDLE-BASELINE-1 · low · RESOLVED 2026-09-29 (baseline refreshed at the owner's request)** — the stored bundle baseline
 (`.sisyphus/baselines/atlas-phase3-bundle.json`) was captured on 2026-09-20 and the
 build is now +7.96% total / +7.51% gzip against it. The gate passes (threshold 25%),
 and none of that growth is from this session: axe-core is a devDependency and
@@ -877,6 +877,14 @@ intended move for accumulated intentional growth — deliberately NOT done here,
 because it also erases the drift record, which is the owner's call rather than a
 drive-by. Worth knowing alongside it: the absolute gzip ceiling is 5 MiB and the
 build is at 3.99 MiB, so about 1.25 MiB of headroom remains.
+
+**Refreshed 2026-09-29.** New baseline: 267 chunks, 12523.29 KB total,
+3994.88 KB gzip, captured at package version 3.8.0. The drift record the refresh
+erases is preserved here deliberately — the OLD baseline was 2026-09-20, 11598.59
+KB / 3715.42 KB gzip, so nine days of feature work cost +7.97% total and +7.52%
+gzip. The 25% window now starts from today's size again. The absolute ceilings did
+not move (16 MiB total / 5 MiB gzip / 3 MiB per chunk), so the ~1.25 MiB of gzip
+headroom is unchanged and is the figure that actually bounds growth.
 
 **CHARTSHEET-1 · low · CLOSED AS A FEATURE REQUEST (2026-09-28)** — one reason the xlsx
 passthrough writer bails to the lossy path is a chartsheet or dialogsheet (no
