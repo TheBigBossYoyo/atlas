@@ -145,11 +145,11 @@ watchdog for a cyclic-sector-chain hang in the vendored SheetJS CFB reader).
 
 What is genuinely open, highest value first:
 
-- **Nothing Atlas writes has ever been opened in real Microsoft Office or LibreOffice.**
-  See section 5 — this is the largest standing risk to the entire DOCX/XLSX/PPTX write
-  path, and it is the one item on this list that could invalidate work already believed
-  done. LibreOffice is free; installing it would turn "structurally valid per our own
-  validator" into "actually opens".
+- **Office verification is now PARTLY done, and what is left is specific.** LibreOffice
+  reads what Atlas writes for 20 of 22 corpus fixtures (OFFICE-VERIFY-1, see section 5).
+  Still open: the two TABLE fixtures, which LibreOffice cannot read even untouched, so
+  tables are externally unverified; the XLSX and PPTX write paths, which have no
+  equivalent harness yet; and Microsoft Office itself.
 - **Five drawing/numbering fidelity gaps** recorded in `KNOWN_ACCEPTED_WARNINGS` in
   `src/docx/fidelity/__tests__/lossySaveWarnings.test.ts`, found when the extended
   detector was run corpus-wide. `wp:anchor/@relativeHeight` (floating-image z-order,
@@ -167,10 +167,23 @@ What is genuinely open, highest value first:
 
 ### 5. Still true, still unaddressed
 
-- **Nothing Atlas writes has ever been opened in real Microsoft Office or LibreOffice.**
-  Neither is installed. `scripts/validate-office-file.mjs` is the substitute, and it now
-  checks attribute datatypes — but it passed two genuinely invalid files clean before that
-  was added, so treat a clean validator run as necessary, not sufficient.
+- **LibreOffice now reads what Atlas writes — for documents without tables.**
+  `src/docx/__tests__/libreOfficeRoundTrip.test.ts` (OFFICE-VERIFY-1) has
+  LibreOffice extract the text of each corpus fixture and of the same file after
+  Atlas parses and re-saves it, and asserts they match. 20 of 22 fixtures pass.
+  The other two are the corpus's only TABLE fixtures, and LibreOffice 26.8.0
+  cannot read either of them in their UNTOUCHED original form — it runs away
+  (620 MB of temp output in 120 s, 4.6 GB if left), with a fresh profile, before
+  Atlas touches anything. So **tables remain externally unverified**, and Word
+  itself is still untested: LibreOffice is more forgiving in places, stricter in
+  others, and reads none of the `w15:`/`w16:` extensions this codebase works to
+  preserve. Text equality also says nothing about formatting. A floor, not a
+  certificate. The test SKIPS when `soffice` is missing (CI has none), so a green
+  suite does not mean it ran — `scoop install extras/libreoffice`.
+- **Microsoft Office is still untested, and the XLSX/PPTX write paths have no external
+  check at all.** `scripts/validate-office-file.mjs` remains the only substitute there,
+  and it passed two genuinely invalid files clean before attribute datatype checks were
+  added — treat a clean validator run as necessary, not sufficient.
 - Code signing needs a paid certificate (`docs/RELEASE.md`) — the one item needing money.
 - A closed spreadsheet tab releases 92-94% (re-measured 2026-09-28; the old ~24 MB figure was wrong, and `performance.memory` is quantized/cached and cannot measure this).
 - `.doc`/`.ppt` are read-only text. No split view.

@@ -116,8 +116,12 @@ speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked t
    nine surfaces) and passes with zero violations after five fixes — see the Accessibility
    section of `docs/KNOWN_LIMITATIONS.md`. Testing with a REAL screen reader still has not
    happened, and axe cannot substitute for it.
-2. **No Office verification** — nothing Atlas writes has ever been opened in real Microsoft Office or
-   LibreOffice (neither is installed here). Structural validation is the substitute (see above).
+2. **Office verification — partly done (2026-09-29).** LibreOffice reads what Atlas writes
+   for 20 of 22 corpus fixtures, asserted by comparing the text it extracts before and
+   after an Atlas round trip (`src/docx/__tests__/libreOfficeRoundTrip.test.ts`). The two
+   exceptions are the only TABLE fixtures, which LibreOffice 26.8.0 cannot read in their
+   UNTOUCHED form, so tables stay externally unverified. Microsoft Office is still
+   untested, and `scripts/validate-office-file.mjs` remains necessary-not-sufficient.
 3. **Memory**: re-measured 2026-09-28 and the ~24 MB claim is WRONG — a closed 100k-row
    spreadsheet tab gives back 92-94%, leaving ~0.3-0.4 MB per open/close cycle. Pinned by
    `tests/e2e/spreadsheet-memory-release.spec.ts`; method and the two measurement traps are in
