@@ -839,7 +839,42 @@ composite in `Input.ts`), so there is no single state to snapshot there.
 
 5 tests in `editor/__tests__/History.test.ts`.
 
-**MATRIX-FLAKE-1 · OPEN, unresolved, 2026-09-28** — `spreadsheet-edit-matrix.spec.ts`'s
+**MATRIX-FLAKE-1 · OPEN · MECHANISM IDENTIFIED 2026-09-29 — it is the F6c family, and
+it is real silent data loss.** The diagnostics added on 2026-09-28 fired on the next
+occurrence and settled it in one line:
+
+```
+the edit overlay never closed after committing two at (1,1) with Enter:
+focus=TD[glide-cell-2-1]  overlays=1  overlayValue="t"
+```
+
+Read against the guide written for exactly this: focus is on a `<td>` of glide's
+accessibility table (**the F6c signature**), the overlay is still open, and it holds
+only `"t"` when the test typed `"two"`. So the overlay mounted and received the FIRST
+character, then never got DOM focus, and `w`, `o` and the Enter all went to that
+`<td>` and were lost.
+
+That is the same failure shape as F6c, in the same path, and F6c's fix does not cover
+it. F6c was "the overlay never opened because `KeyHold` was never armed"; this is "the
+overlay opened and was left without focus". `holdKeysOnMouseDown` skips arming when an
+overlay in `#portal` already has focus — but here an overlay EXISTS without having
+focus, which that check reads as "nothing to do".
+
+Frequency: 2 of 4 full 166-test suite runs on 2026-09-29. Never reproducible in
+isolation (8/8 with `--repeat-each=4` at 1x and 8x, 14/14 at file scope), so it needs
+whole-suite load. Do not chase it with a longer timeout — the overlay never closes,
+so no timeout makes it pass, and this session already shipped one 15s band-aid whose
+real cause turned out to be a bad wait condition.
+
+Next step for whoever picks this up: the question is which of `SpreadsheetDataEditor`'s
+focus paths can leave a mounted `#portal` textarea unfocused. Start at
+`holdKeysOnMouseDown`'s early return and `KeyHold.release`'s `heldOutsideGrid` branch —
+an overlay that exists but is not `document.activeElement` satisfies neither "the canvas
+has focus" nor "focus is held outside the grid", so nothing takes ownership of it.
+
+Original 2026-09-28 entry follows.
+
+**MATRIX-FLAKE-1 · originally recorded 2026-09-28** — `spreadsheet-edit-matrix.spec.ts`'s
 UNTHROTTLED "a percent, an ISO date and a formula all survive consecutive edits" case
 timed out once waiting for the edit overlay to close after committing with Enter
 (20s). Measured since:

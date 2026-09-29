@@ -159,9 +159,14 @@ What is genuinely open, highest value first:
   generic labels to `Atlas.*`; source and build are verified, the registry behaviour is
   not. `docs/RELEASE.md` step 8 carries the `reg query` checks. Needs an elevated install
   on a real machine.
-- **MATRIX-FLAKE-1.** One unreproducible load-dependent failure in
-  `spreadsheet-edit-matrix.spec.ts`; instrumented so the next occurrence is diagnosable.
-  Do not write it off — this path has been a real bug 3 times out of 3.
+- **MATRIX-FLAKE-1 — now the highest-priority open item: real silent data loss.** The
+  instrumentation fired on 2026-09-29 and identified it as the F6c family:
+  `focus=TD[glide-cell-2-1] overlays=1 overlayValue="t"` when `"two"` was typed — the
+  overlay mounts, takes the first character, never receives DOM focus, and everything
+  after it goes to a glide accessibility-table `<td>` and is lost. 2 of 4 full suite runs;
+  never reproducible in isolation. F6c's fix does not cover it: that was "the overlay never
+  opened", this is "the overlay opened unfocused". See the backlog entry for where to
+  start.
 - **BUNDLE-BASELINE-1.** The bundle baseline is from 2026-09-20 and the build is +7.96%
   against it, so a real regression has less of the 25% window to show up in. Refreshing
   it also erases the drift record, which is why it is the owner's call.
