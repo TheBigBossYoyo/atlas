@@ -130,34 +130,40 @@ watchdog for a cyclic-sector-chain hang in the vendored SheetJS CFB reader).
 
 ### 4. Open items worth promoting into a batch
 
-These were found during execution and are recorded in the plan, unscheduled:
+> **Reconciled 2026-09-29.** Every item this section listed had already been fixed and
+> marked so in `plans/atlas-phase4-backlog-and-batches-2026-09-20.md` — all seven of
+> them — while this list still presented them as open work. That is the same drift the
+> backlog file warns about in its own reconciliation note, and it has already cost two
+> sessions re-investigating closed items from scratch. Checked against the backlog's
+> status markers, not from memory:
+> INSERT-TEXT-THROWS-1 **FIXED** · QUIT-DRAFT-1 **RESOLVED** · ZIP64-1 **FIXED** ·
+> I18N-TEXT-1 **FIXED** · FROZENROWS-I18N-1 **RESOLVED** · TEST-9/TEST-10 **RESOLVED** ·
+> FIXTURE-1 **RESOLVED** · CHARTSHEET-1 **closed as a feature request**.
+>
+> **If you fix something, mark it in the backlog AND delete it from here.** This section
+> is a pointer, not a second source of truth.
 
-- **INSERT-TEXT-THROWS-1** — `applyInsertText` **throws** for any paragraph containing a
-  comment range/reference, a footnote/endnote reference, or a bare `w:oMath`. Typing in a
-  paragraph that merely *contains* a comment or a formula is an everyday action. Proven by
-  three `toThrow()` assertions in the corpus suite. **Nobody has checked what the user
-  actually sees** — a crash, a lost keystroke, or a clean refusal. Find out first.
-- **QUIT-DRAFT-1 is only partly closed** — fixed for renderer-routed discards; verify the
-  quit path end to end.
-- **ZIP64-1** — the spreadsheet zip-bomb guard skips Zip64 archives and fails open, so a
-  crafted bomb bypasses it by choosing that format.
-- **I18N-TEXT-1** — the inverted i18n guard covers literal *attributes* across 83 files but
-  raw JSX **text** is still only caught by a short exact-phrase list.
-- **FROZENROWS-I18N-1** — `FrozenRowsStrip.tsx` has a hardcoded aria-label; opted out of
-  the guard with a TODO.
-- **TEST-9 / TEST-10** — `App.dirtyState.characterization.test.tsx` passes in the suite and
-  fails alone; a cluster of App-shell tests behave differently under load. One of that
-  cluster already turned out to be a **real product bug**, so do not assume noise.
-- **CHARTSHEET-1** — closed as a feature request 2026-09-28, not a defect: the file opens,
-  the understood sheets render, and the user is warned before a lossy save. Reopen only as
-  scoped chart-XML work.
-- **FIXTURE-1** — `tests/e2e/fixtures/generate.mjs:407` emits a non-conforming `.ods`
-  (`mimetype` not first in the zip), so "Atlas opens .ods" is proven against a file no real
-  tool would produce.
+What is genuinely open, highest value first:
+
+- **Nothing Atlas writes has ever been opened in real Microsoft Office or LibreOffice.**
+  See section 5 — this is the largest standing risk to the entire DOCX/XLSX/PPTX write
+  path, and it is the one item on this list that could invalidate work already believed
+  done. LibreOffice is free; installing it would turn "structurally valid per our own
+  validator" into "actually opens".
 - **Five drawing/numbering fidelity gaps** recorded in `KNOWN_ACCEPTED_WARNINGS` in
-  `src/docx/fidelity/__tests__/lossySaveWarnings.test.ts`, found when the extended detector
-  was run corpus-wide. `wp:anchor/@relativeHeight` (floating-image z-order, hardcoded `"0"`)
-  is the highest impact and corroborates DOCX-5 from static analysis.
+  `src/docx/fidelity/__tests__/lossySaveWarnings.test.ts`, found when the extended
+  detector was run corpus-wide. `wp:anchor/@relativeHeight` (floating-image z-order,
+  hardcoded `"0"`) is the highest impact and corroborates DOCX-5 from static analysis.
+- **PROGID-1's install verification.** The ProgIDs an install registers changed from
+  generic labels to `Atlas.*`; source and build are verified, the registry behaviour is
+  not. `docs/RELEASE.md` step 8 carries the `reg query` checks. Needs an elevated install
+  on a real machine.
+- **MATRIX-FLAKE-1.** One unreproducible load-dependent failure in
+  `spreadsheet-edit-matrix.spec.ts`; instrumented so the next occurrence is diagnosable.
+  Do not write it off — this path has been a real bug 3 times out of 3.
+- **BUNDLE-BASELINE-1.** The bundle baseline is from 2026-09-20 and the build is +7.96%
+  against it, so a real regression has less of the 25% window to show up in. Refreshing
+  it also erases the drift record, which is why it is the owner's call.
 
 ### 5. Still true, still unaddressed
 
