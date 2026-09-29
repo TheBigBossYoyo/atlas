@@ -87,6 +87,23 @@ export interface StylesPart {
   readonly docDefaults: {
     readonly rPr?: RunProps
     readonly pPr?: ParaProps
+    /**
+     * FID-DEFAULTS-1 — whether `<w:rPrDefault>`/`<w:pPrDefault>` were PRESENT in
+     * the source, separately from whether they carried any properties.
+     *
+     * An empty `<w:rPrDefault/>` parses to no `RunProps` at all, so the writer
+     * had nothing to emit and collapsed `<w:docDefaults><w:rPrDefault/>
+     * <w:pPrDefault/></w:docDefaults>` to `<w:docDefaults/>`. That looked inert
+     * and is not: LibreOffice computes different defaults from the two, and
+     * measurably changed its output — it stopped emitting
+     * `p { direction: ltr; text-align: start; orphans: 2; widows: 2 }` and
+     * started emitting an explicit `font-size: 12pt` on runs that had inherited
+     * it before. Found by the round-trip comparison in
+     * `docx/__tests__/libreOfficeRoundTrip.test.ts`, which is exactly the class
+     * of difference no amount of reading our own code would have surfaced.
+     */
+    readonly rPrDefaultPresent?: boolean
+    readonly pPrDefaultPresent?: boolean
   }
   readonly styles: ReadonlyMap<string, Style>
   /**
@@ -146,6 +163,12 @@ export function parseStyles(xml: string): StylesPart {
     docDefaults: {
       ...(rPr !== undefined ? { rPr } : {}),
       ...(pPr !== undefined ? { pPr } : {}),
+      // Key presence, NOT `getNode`: an empty `<w:rPrDefault/>` parses to the
+      // empty STRING, and `getNode`/`asXmlNode` return undefined for that — so
+      // asking for the node is exactly the check that cannot see the case this
+      // flag exists for.
+      ...(docDefaultsNode?.['w:rPrDefault'] !== undefined ? { rPrDefaultPresent: true } : {}),
+      ...(docDefaultsNode?.['w:pPrDefault'] !== undefined ? { pPrDefaultPresent: true } : {}),
     },
     styles,
     ...(latentStyles !== undefined ? { latentStyles } : {}),

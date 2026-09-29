@@ -178,17 +178,25 @@ export function buildRunPropertiesXml(
   return hasEntries(withPassthrough) ? withPassthrough : undefined
 }
 
+/**
+ * FID-DEFAULTS-1 — an EMPTY `<w:rPrDefault/>`/`<w:pPrDefault/>` is re-emitted when
+ * the source had one. See `StylesPart.docDefaults.rPrDefaultPresent` for why that
+ * is not the no-op it looks like: LibreOffice computes different document defaults
+ * from `<w:docDefaults/>` than from `<w:docDefaults><w:rPrDefault/>
+ * <w:pPrDefault/></w:docDefaults>`, and changed its rendered output accordingly.
+ */
 function buildDocDefaultsXml(defaults: StylesPart['docDefaults'], state: RawPassthroughState): XmlNode {
+  const rPr = defaults.rPr === undefined ? undefined : buildRunPropertiesXml(defaults.rPr, state)
+  const pPr = defaults.pPr === undefined ? undefined : buildParagraphPropertiesXml(defaults.pPr)
+
   return {
     ...withElement(
       'w:rPrDefault',
-      defaults.rPr === undefined ? undefined : { 'w:rPr': buildRunPropertiesXml(defaults.rPr, state) ?? {} },
+      rPr !== undefined ? { 'w:rPr': rPr } : defaults.rPrDefaultPresent === true ? {} : undefined,
     ),
     ...withElement(
       'w:pPrDefault',
-      defaults.pPr === undefined
-        ? undefined
-        : { 'w:pPr': buildParagraphPropertiesXml(defaults.pPr) ?? {} },
+      pPr !== undefined ? { 'w:pPr': pPr } : defaults.pPrDefaultPresent === true ? {} : undefined,
     ),
   }
 }

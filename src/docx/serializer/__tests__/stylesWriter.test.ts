@@ -335,4 +335,70 @@ describe('writeStylesXml', () => {
       expect(written).toContain('<w:w w:val="80"/>')
     })
   })
+  // FID-DEFAULTS-1 — an EMPTY `<w:rPrDefault/>`/`<w:pPrDefault/>` is not the no-op
+  // it looks like. `<w:docDefaults/>` and
+  // `<w:docDefaults><w:rPrDefault/><w:pPrDefault/></w:docDefaults>` make
+  // LibreOffice compute DIFFERENT document defaults: with the children present it
+  // emits `p { direction: ltr; text-align: start; orphans: 2; widows: 2 }` and lets
+  // runs inherit their size, and without them it drops that rule and writes an
+  // explicit `font-size: 12pt` instead. Found by the round-trip comparison in
+  // `docx/__tests__/libreOfficeRoundTrip.test.ts` against a real consumer — no
+  // amount of reading Atlas's own code would have surfaced it, because by Atlas's
+  // own model the two are identical.
+  describe('empty docDefaults children (FID-DEFAULTS-1)', () => {
+    const emptyDefaults =
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:docDefaults><w:rPrDefault/><w:pPrDefault/></w:docDefaults>'
+      + '</w:styles>'
+
+    it('re-emits an empty w:rPrDefault and w:pPrDefault that the source had', () => {
+      const written = writeStylesXml(parseStyles(emptyDefaults))
+
+      expect(written).toContain('<w:rPrDefault/>')
+      expect(written).toContain('<w:pPrDefault/>')
+    })
+
+    it('does not invent them for a source that had neither', () => {
+      const written = writeStylesXml(
+        parseStyles(
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+          + '<w:docDefaults/>'
+          + '</w:styles>',
+        ),
+      )
+
+      expect(written).not.toContain('rPrDefault')
+      expect(written).not.toContain('pPrDefault')
+    })
+
+    it('still nests real properties inside them when there are any', () => {
+      const written = writeStylesXml(
+        parseStyles(
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+          + '<w:docDefaults><w:rPrDefault><w:rPr><w:b/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>'
+          + '</w:styles>',
+        ),
+      )
+
+      expect(written).toContain('<w:rPrDefault><w:rPr><w:b/></w:rPr></w:rPrDefault>')
+      expect(written).toContain('<w:pPrDefault/>')
+    })
+
+    it('emits only the one the source had', () => {
+      const written = writeStylesXml(
+        parseStyles(
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          + '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+          + '<w:docDefaults><w:pPrDefault/></w:docDefaults>'
+          + '</w:styles>',
+        ),
+      )
+
+      expect(written).toContain('<w:pPrDefault/>')
+      expect(written).not.toContain('rPrDefault')
+    })
+  })
 })

@@ -399,6 +399,25 @@ spoken as it moves, whether the comments pane reads in a sensible order. That
 still needs a real screen reader and a person, and still has not happened. Zero
 axe violations is the floor, not the ceiling.
 
+## Verification: what an outside program says about what Atlas writes
+
+Every DOCX round-trip guarantee in this project used to be self-asserted. Since
+2026-09-29 it is not: LibreOffice converts each of the 22 corpus fixtures and the
+same file after Atlas has parsed and re-saved it, and the extracted text must
+match, tables included. `src/docx/__tests__/libreOfficeRoundTrip.test.ts`.
+
+That found one real fidelity loss nothing else would have (`FID-DEFAULTS-1`):
+collapsing an empty `<w:rPrDefault/>`/`<w:pPrDefault/>` pair to `<w:docDefaults/>`
+made LibreOffice compute different document defaults, even though Atlas's own
+model saw the two as identical.
+
+**Still unverified by any outside program:** Microsoft Office itself, and the
+spreadsheet and slide write paths, which have no equivalent check. Text equality
+also says nothing about formatting — a lost run property or a flattened image
+z-order is invisible to it, which is why the fidelity detector
+(`src/docx/fidelity/`) exists alongside it. And the test skips silently when
+LibreOffice is not installed, so a green suite does not prove it ran.
+
 ## Export
 
 Export targets and fidelity vary by format — see the README's Export table

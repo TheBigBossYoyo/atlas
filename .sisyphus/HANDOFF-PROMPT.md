@@ -145,11 +145,10 @@ watchdog for a cyclic-sector-chain hang in the vendored SheetJS CFB reader).
 
 What is genuinely open, highest value first:
 
-- **Office verification is now PARTLY done, and what is left is specific.** LibreOffice
-  reads what Atlas writes for 20 of 22 corpus fixtures (OFFICE-VERIFY-1, see section 5).
-  Still open: the two TABLE fixtures, which LibreOffice cannot read even untouched, so
-  tables are externally unverified; the XLSX and PPTX write paths, which have no
-  equivalent harness yet; and Microsoft Office itself.
+- **Office verification: DOCX done, the rest open.** LibreOffice reads what Atlas writes
+  for all 22 corpus fixtures, tables included (OFFICE-VERIFY-1, see section 5). Still
+  open: the XLSX and PPTX write paths, which have no equivalent harness, and Microsoft
+  Office itself.
 - ~~Five drawing/numbering fidelity gaps~~ **ALL FIXED 2026-09-29** (FID-NUM-1 `1884f62`,
   FID-DRAW-1 `8879e6f`). The corpus fidelity detector now reports zero unexplained loss;
   the only accepted entries left are the two `w:tblW` ones that note 6 in
@@ -169,19 +168,34 @@ What is genuinely open, highest value first:
 
 ### 5. Still true, still unaddressed
 
-- **LibreOffice now reads what Atlas writes — for documents without tables.**
+- **LibreOffice reads what Atlas writes — all 22 corpus fixtures, tables included.**
   `src/docx/__tests__/libreOfficeRoundTrip.test.ts` (OFFICE-VERIFY-1) has
-  LibreOffice extract the text of each corpus fixture and of the same file after
-  Atlas parses and re-saves it, and asserts they match. 20 of 22 fixtures pass.
-  The other two are the corpus's only TABLE fixtures, and LibreOffice 26.8.0
-  cannot read either of them in their UNTOUCHED original form — it runs away
-  (620 MB of temp output in 120 s, 4.6 GB if left), with a fresh profile, before
-  Atlas touches anything. So **tables remain externally unverified**, and Word
-  itself is still untested: LibreOffice is more forgiving in places, stricter in
-  others, and reads none of the `w15:`/`w16:` extensions this codebase works to
-  preserve. Text equality also says nothing about formatting. A floor, not a
-  certificate. The test SKIPS when `soffice` is missing (CI has none), so a green
-  suite does not mean it ran — `scoop install extras/libreoffice`.
+  LibreOffice convert each fixture and the same file after Atlas parses and
+  re-saves it, and asserts the extracted text matches. 22 of 22 pass, no
+  exclusions.
+
+  Two things that had to be got right first, both worth knowing before touching
+  this test:
+    - **The `txt:Text` filter hangs on any document containing a table** in
+      LibreOffice 26.8.0 — a real runaway, 620 MB of temp output in 120 s and
+      4.6 GB if left. Bisected to be sure it was not our markup: stripping
+      `tblPr`/`tblGrid`/`tblLook`/`tblBorders`/`tblStyle` changed nothing, removing
+      the `<w:tbl>` fixed it, a hand-built minimal 1x1-table `.docx` hangs too, and
+      that same minimal file converts to `odt` and `html` without trouble. The test
+      uses the HTML filter, which is why tables are covered rather than excluded.
+    - **Newlines in LibreOffice's HTML output are not content.** It wraps its own
+      output, so a span can come back split across lines. An earlier version of the
+      test preserved those newlines and reported `rtl-text` as a content difference
+      because of it. Block boundaries are marked with a sentinel first, then all
+      real whitespace collapses, then the sentinel becomes a newline.
+
+  Still not proven: **Microsoft Office itself**, and the XLSX/PPTX write paths,
+  which have no equivalent harness. LibreOffice is also more forgiving in places
+  and stricter in others, and reads none of the `w15:`/`w16:` extensions this
+  codebase works to preserve; text equality says nothing about formatting, which is
+  what `fidelity/__tests__/lossySaveWarnings.test.ts` is for. The test SKIPS when
+  `soffice` is missing (CI has none), so a green suite does not mean it ran —
+  `scoop install extras/libreoffice`, per-user, no elevation.
 - **Microsoft Office is still untested, and the XLSX/PPTX write paths have no external
   check at all.** `scripts/validate-office-file.mjs` remains the only substitute there,
   and it passed two genuinely invalid files clean before attribute datatype checks were
