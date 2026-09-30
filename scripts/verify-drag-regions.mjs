@@ -34,6 +34,7 @@ import { execFileSync } from 'node:child_process'
 
 import { _electron as electron } from '@playwright/test'
 
+/** @param {number} fx @param {number} fy */
 const CLICK_PS = (fx, fy) => `
 $sig = @'
 using System; using System.Runtime.InteropServices;
@@ -76,6 +77,7 @@ Add-Type -TypeDefinition $sig -ErrorAction SilentlyContinue
 [DLG]::D() | ForEach-Object { $_ }
 `
 
+/** @param {string} script @returns {string} */
 const ps = (script) => execFileSync('powershell', ['-NoProfile', '-Command', script], { encoding: 'utf8' }).trim()
 const dialogs = () => ps(DIALOG_PS)
 
@@ -93,7 +95,9 @@ const geom = await app.evaluate(({ BrowserWindow, screen }) => {
 await page.waitForTimeout(800)
 console.log('content bounds', geom.content, 'display', geom.display)
 
+/** @param {{ x: number, y: number, width: number, height: number } | null} box */
 async function realClick(box) {
+  if (box === null) throw new Error('no bounding box for the click target')
   const cx = geom.content.x + box.x + box.width / 2
   const cy = geom.content.y + box.y + box.height / 2
   const fx = Math.round((cx / geom.display.width) * 65535)
