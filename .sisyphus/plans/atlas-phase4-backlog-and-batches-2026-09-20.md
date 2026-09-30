@@ -839,8 +839,63 @@ composite in `Input.ts`), so there is no single state to snapshot there.
 
 5 tests in `editor/__tests__/History.test.ts`.
 
-**MATRIX-FLAKE-1 · OPEN · MECHANISM IDENTIFIED 2026-09-29 — it is the F6c family, and
-it is real silent data loss.** The diagnostics added on 2026-09-28 fired on the next
+**SEED-24X-1 · OPEN QUESTION, 2026-09-30** — `spreadsheet-keystroke-seed.spec.ts`'s
+24x-throttled "Ctrl+S pressed straight after typing saves the typed text" failed once
+("the file was never saved") in the SECOND full-suite run after MATRIX-FLAKE-1's fix.
+
+It is very likely the flake already recorded in this file's CI-only-flakes note — the
+same test failed once at `35a8ec3` and passed on later runs, and the in-flight bound
+was raised 5s→30s at `0c48ffb` without that being proven to be the cause. It also
+passed in the first full run after the fix and in a 37/37 targeted spreadsheet run.
+
+**But it sits in the code path MATRIX-FLAKE-1's fix touched, so "pre-existing" is an
+assumption, not a measurement.** The one plausible mechanism by which that fix could
+reach this test has since been removed: `KeyHold.drain`'s new overlay-focus gate now
+exempts chords, because a Ctrl+S is a window shortcut rather than text for the cell
+editor, so making it wait for overlay focus (or moving focus on its behalf) only added
+delay and risk to the F6b path that holds it behind an in-flight edit.
+
+**Unmeasured.** The run that would have settled it — that single test, `--repeat-each=5`
+— was stopped by the harness when the machine ran low on memory, twice. Do not treat
+this as resolved until it has run: `npx playwright test tests/e2e/spreadsheet-keystroke-seed.spec.ts -g "24x" --repeat-each=5`.
+Compare against the pre-fix baseline before concluding anything.
+
+**MATRIX-FLAKE-1 · FIXED 2026-09-30** — the cell editor now claims DOM focus for
+itself (`TextCellEditor`'s focus guard in `SpreadsheetDataEditor.tsx`).
+
+The overlay mounts, takes the first typed character, and then never gets DOM focus,
+so everything typed after it goes to a `<td>` of glide's accessibility table and is
+lost. This module's own header had already measured the window — 200-300ms between
+the seeding keystroke and the textarea gaining focus, because opening the overlay
+makes glide re-render the whole grid. `TextCellEntry` asks for React's `autoFocus`,
+which applies once, on mount; if that re-render leaves focus on a `<td>`, nothing
+re-asserts it. The guard claims focus and STOPS AT THE FIRST SUCCESS — one that kept
+re-focusing would fight the click-away commit path, where focus legitimately leaves
+a still-mounted overlay — and only intervenes when focus is somewhere never
+legitimate mid-edit (nothing, `<body>`, or a table cell).
+
+**THE FIRST FIX ATTEMPT WAS IN THE WRONG LAYER**, and that is the part worth
+remembering. It changed `KeyHold`'s replay path — but the lost keys are typed AFTER
+the overlay is open, when `awaitingFocus` is null and the queue is empty, so
+`KeyHold` is not holding them and never sees them. The run after it came back with
+TWO failures instead of one. This is the fourth fix in this family to be attempted
+inside `KeyHold` and the fourth to be wrong about it; `spreadsheet-second-cell-edit.spec.ts`'s
+header records the first three. **If you are looking at a lost-keystroke bug in this
+grid, establish which element actually has focus before changing anything.**
+
+Two `KeyHold` changes were kept anyway, because both are correct on their own terms:
+`release` no longer focuses the canvas out from under a mounted overlay, and `drain`
+no longer replays into an overlay that has not got focus yet.
+
+Evidence: 5 new unit tests in `keyHold.test.ts`, 3 of which fail when the fix is
+reverted (checked by reverting, not assumed); 37/37 spreadsheet e2e; 166/166 full
+e2e twice consecutively, against a baseline of 2 failures in 4 runs. Those tests
+also had to stub `document.execCommand`, which jsdom lacks — so `replayKey`'s
+textarea branch had no coverage at all before this.
+
+Original diagnosis follows, kept because the diagnostic output is what cracked it.
+
+**MATRIX-FLAKE-1 · mechanism identified 2026-09-29** The diagnostics added on 2026-09-28 fired on the next
 occurrence and settled it in one line:
 
 ```

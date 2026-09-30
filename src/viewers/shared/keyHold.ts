@@ -196,7 +196,13 @@ export class KeyHold {
     // MATRIX-FLAKE-1 — see `awaitOverlayFocus`. Replaying before a mounted overlay
     // has focus delivers the key to whatever glide left focused instead, and it is
     // gone.
-    if (!this.awaitOverlayFocus()) {
+    //
+    // Chords are exempt on purpose. A Ctrl+S is not text going into the cell
+    // editor — it is a shortcut the window handles — so it needs no overlay focus,
+    // and making it wait for one (or moving focus on its behalf) would add delay
+    // and risk to the F6b path that holds it behind an in-flight edit, for no
+    // benefit.
+    if (!isChord(next) && !this.awaitOverlayFocus()) {
       this.scheduleDrain(IN_FLIGHT_RECHECK_MS)
       return
     }

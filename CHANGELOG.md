@@ -12,6 +12,11 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 
 ### Fixed
 
+- **Spreadsheets: a cell edit no longer loses everything after the first letter.**
+  Opening the cell editor rebuilds the grid behind it, and the editor could be left
+  without the keyboard — so typing "two" left just "t", Enter never committed it,
+  and the Ctrl+S afterwards saved nothing. Worse on a slow or busy machine. The
+  editor now takes the keyboard for itself as soon as it opens.
 - **Tabs: closing a tab any way you like now puts the keyboard back where you
   would expect.** Ctrl+W already did; the X button and the middle-click close did
   not, and after using them Tab and the arrow keys went nowhere until you clicked
