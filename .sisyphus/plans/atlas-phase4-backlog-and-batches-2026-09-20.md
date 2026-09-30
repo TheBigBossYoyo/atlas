@@ -839,7 +839,7 @@ composite in `Input.ts`), so there is no single state to snapshot there.
 
 5 tests in `editor/__tests__/History.test.ts`.
 
-**SEED-24X-1 · OPEN QUESTION, 2026-09-30** — `spreadsheet-keystroke-seed.spec.ts`'s
+**SEED-24X-1 · not caused by MATRIX-FLAKE-1's fix (measured); still a load-sensitive flake, 2026-09-30** — `spreadsheet-keystroke-seed.spec.ts`'s
 24x-throttled "Ctrl+S pressed straight after typing saves the typed text" failed once
 ("the file was never saved") in the SECOND full-suite run after MATRIX-FLAKE-1's fix.
 
@@ -855,10 +855,16 @@ exempts chords, because a Ctrl+S is a window shortcut rather than text for the c
 editor, so making it wait for overlay focus (or moving focus on its behalf) only added
 delay and risk to the F6b path that holds it behind an in-flight edit.
 
-**Unmeasured.** The run that would have settled it — that single test, `--repeat-each=5`
-— was stopped by the harness when the machine ran low on memory, twice. Do not treat
-this as resolved until it has run: `npx playwright test tests/e2e/spreadsheet-keystroke-seed.spec.ts -g "24x" --repeat-each=5`.
-Compare against the pre-fix baseline before concluding anything.
+**Measured 2026-09-30: 5/5 passing** with the fix in place
+(`npx playwright test tests/e2e/spreadsheet-keystroke-seed.spec.ts -g "24x" --repeat-each=5`).
+So MATRIX-FLAKE-1's fix is not causing it, and the chord exemption above removed the
+only mechanism by which it could have.
+
+What that does NOT establish: this test only ever fails under whole-suite load, so 5/5
+in isolation cannot prove it never will again. It stays on the CI-only-flake list it
+was already on — one occurrence in the second full run of 2026-09-30, one at `35a8ec3`
+— rather than being marked resolved. If it recurs, note that the 30s in-flight bound
+from `0c48ffb` was never proven to be the fix for the first occurrence either.
 
 **MATRIX-FLAKE-1 · FIXED 2026-09-30** — the cell editor now claims DOM focus for
 itself (`TextCellEditor`'s focus guard in `SpreadsheetDataEditor.tsx`).
