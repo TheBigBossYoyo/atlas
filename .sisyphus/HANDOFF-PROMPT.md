@@ -145,10 +145,10 @@ watchdog for a cyclic-sector-chain hang in the vendored SheetJS CFB reader).
 
 What is genuinely open, highest value first:
 
-- **Office verification: DOCX done, the rest open.** LibreOffice reads what Atlas writes
-  for all 22 corpus fixtures, tables included (OFFICE-VERIFY-1, see section 5). Still
-  open: the XLSX and PPTX write paths, which have no equivalent harness, and Microsoft
-  Office itself.
+- **Office verification: all three write paths done.** Word 22/22, spreadsheets through
+  both save branches, slides including `.odp` (OFFICE-VERIFY-1/2/3, see section 5). Only
+  Microsoft Office itself remains untested — and it needs a licence and a machine with it
+  installed, so it is a purchasing decision rather than an engineering one.
 - ~~Five drawing/numbering fidelity gaps~~ **ALL FIXED 2026-09-29** (FID-NUM-1 `1884f62`,
   FID-DRAW-1 `8879e6f`). The corpus fidelity detector now reports zero unexplained loss;
   the only accepted entries left are the two `w:tblW` ones that note 6 in

@@ -411,12 +411,31 @@ collapsing an empty `<w:rPrDefault/>`/`<w:pPrDefault/>` pair to `<w:docDefaults/
 made LibreOffice compute different document defaults, even though Atlas's own
 model saw the two as identical.
 
-**Still unverified by any outside program:** Microsoft Office itself, and the
-spreadsheet and slide write paths, which have no equivalent check. Text equality
-also says nothing about formatting — a lost run property or a flattened image
-z-order is invisible to it, which is why the fidelity detector
-(`src/docx/fidelity/`) exists alongside it. And the test skips silently when
-LibreOffice is not installed, so a green suite does not prove it ran.
+All three write paths are covered now, each with its own harness:
+
+| Path | Harness | Covers |
+|---|---|---|
+| Word | `src/docx/__tests__/libreOfficeRoundTrip.test.ts` | all 22 corpus fixtures |
+| Spreadsheets | `src/viewers/spreadsheet/__tests__/libreOfficeSpreadsheetRoundTrip.test.ts` | `.xlsx`, multi-sheet `.xlsx`, `.ods` — through **both** save branches |
+| Slides | `src/viewers/slides/__tests__/libreOfficeSlideRoundTrip.test.ts` | `.pptx`, multi-slide `.pptx`, `.odp` |
+
+The spreadsheet one deliberately exercises the fallback writer as well as the
+byte-preserving passthrough, including for `.xlsx` files where a real save would use
+the passthrough. The fallback is the lossy branch, and SHEET-4 means the passthrough
+returns `null` on several genuine internal failures — which silently routes a real
+save down it.
+
+Each harness also contains a **self-check that deliberately changes one cell,
+paragraph or slide and requires the comparison to notice.** A round-trip test that
+passes means nothing if it would not catch a change, and there are several ways for
+one to become a silent no-op — an extractor returning a constant, a filter writing
+nothing, a converted file nobody reads — all of which look like a green run.
+
+**Still unverified by any outside program:** Microsoft Office itself. Text equality
+also says nothing about formatting — a lost run property or a flattened image z-order
+is invisible to it, which is why the fidelity detector (`src/docx/fidelity/`) exists
+alongside these. And they skip silently when LibreOffice is not installed, so a green
+suite does not prove they ran.
 
 ## Export
 

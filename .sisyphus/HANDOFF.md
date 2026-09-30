@@ -116,13 +116,15 @@ speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked t
    nine surfaces) and passes with zero violations after five fixes — see the Accessibility
    section of `docs/KNOWN_LIMITATIONS.md`. Testing with a REAL screen reader still has not
    happened, and axe cannot substitute for it.
-2. **Office verification — DOCX done (2026-09-29).** LibreOffice reads what Atlas writes
-   for ALL 22 corpus fixtures, tables included, asserted by comparing the text it extracts
-   before and after an Atlas round trip (`src/docx/__tests__/libreOfficeRoundTrip.test.ts`).
-   Use the HTML filter, never `txt:Text` — that one hangs on any document with a table in
-   LibreOffice 26.8.0. Microsoft Office is still untested, the XLSX/PPTX write paths have no
-   equivalent harness, and `scripts/validate-office-file.mjs` remains
-   necessary-not-sufficient.
+2. **Office verification — all three write paths done (2026-09-30).** LibreOffice reads
+   what Atlas writes for Word (22/22 corpus fixtures), spreadsheets (`.xlsx`,
+   multi-sheet `.xlsx`, `.ods`, through BOTH the passthrough and the rebuild branch) and
+   slides (`.pptx`, multi-slide `.pptx`, `.odp`). Shared plumbing in
+   `src/__tests__/helpers/libreOffice.ts`; each harness has a self-check that changes one
+   cell/paragraph/slide and requires the comparison to catch it. Use the HTML/flat-ODF
+   filters, never `txt:Text` — that hangs on any document with a table in LibreOffice
+   26.8.0. Microsoft Office itself is still untested, and
+   `scripts/validate-office-file.mjs` remains necessary-not-sufficient.
 3. **Memory**: re-measured 2026-09-28 and the ~24 MB claim is WRONG — a closed 100k-row
    spreadsheet tab gives back 92-94%, leaving ~0.3-0.4 MB per open/close cycle. Pinned by
    `tests/e2e/spreadsheet-memory-release.spec.ts`; method and the two measurement traps are in
