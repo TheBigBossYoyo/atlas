@@ -20,6 +20,11 @@
  * honest automated guard is to assert the rule exists — the behaviour itself needs
  * a human with a real mouse, which is worth remembering for anything else added to
  * this toolbar.
+ *
+ * There IS a way to check the behaviour, just not from a test runner:
+ * `scripts/verify-drag-regions.mjs` synthesises a genuine OS mouse event. It was
+ * used to prove this fix both ways — with the rule removed and the app rebuilt it
+ * reports the menu still open and no dialog, which is the bug exactly as reported.
  */
 import fs from 'node:fs'
 import path from 'node:path'
