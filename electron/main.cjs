@@ -342,6 +342,26 @@ function logMainEvent(level, message, error) {
   logToFile(logDir, level, message, error);
 }
 
+/**
+ * NEWDOC-DIALOG-1 — the window to parent a native dialog on, or `null` when there
+ * is no usable one.
+ *
+ * `mainWindow` is only set to `null` on the window's `closed` event (see the
+ * assignment in `createWindow`), so between a window being destroyed and that
+ * event arriving it is non-null AND destroyed. Passing such a window to
+ * `dialog.show*` does not open anything: the call never resolves, so the IPC
+ * promise behind it hangs forever and the UI that awaited it simply does nothing
+ * — which is exactly what "the New buttons don't work" looks like from outside.
+ *
+ * Several sites already guarded this (`mainWindow.isDestroyed()` at the top of
+ * this file) and the file-open path already branches on a usable owner; the
+ * dialog sites below did not. A parentless dialog is a worse experience than a
+ * properly-owned modal one, but it is enormously better than nothing happening.
+ */
+function dialogOwnerWindow() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+}
+
 // ---- File path helpers ---- //
 
 // P2.2/ELEC-05/ELEC-15/LOAD-03/LOAD-12 — derived from the single canonical
@@ -1216,7 +1236,6 @@ ipcMain.handle('save-binary-file', async (event, req) => {
 // model (ELEC-02/03) — the renderer never chooses a filesystem path.
 ipcMain.handle('document:new', async (event, formatId) => {
   if (!isFromMainFrame(event)) return { created: false, error: SENDER_FRAME_ERROR_MESSAGE };
-  if (!mainWindow) return { created: false };
 
   // Own keys only: a name like 'constructor' must not resolve to an inherited property.
   const spec =
@@ -1230,16 +1249,26 @@ ipcMain.handle('document:new', async (event, formatId) => {
     defaultDir = os.homedir();
   }
 
-  const result = await dialog.showSaveDialog(mainWindow, {
-    defaultPath: path.join(defaultDir, spec.defaultName),
-    filters: [
-      { name: spec.filterName, extensions: [spec.extension] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
-  });
-  if (result.canceled || !result.filePath) return { created: false };
-
   try {
+    // NEWDOC-DIALOG-1 — inside the try, and owner-guarded. This used to sit
+    // outside it and pass `mainWindow` unchecked, so a destroyed-but-not-yet-null
+    // window meant the dialog never opened, the promise never settled, and the
+    // renderer's `await` hung with nothing shown to the user. The old
+    // `if (!mainWindow) return { created: false }` was silent for the same reason:
+    // no `error` field means the renderer shows no toast.
+    const owner = dialogOwnerWindow();
+    const saveOptions = {
+      defaultPath: path.join(defaultDir, spec.defaultName),
+      filters: [
+        { name: spec.filterName, extensions: [spec.extension] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    };
+    const result = owner
+      ? await dialog.showSaveDialog(owner, saveOptions)
+      : await dialog.showSaveDialog(saveOptions);
+    if (result.canceled || !result.filePath) return { created: false };
+
     const bytes = spec.templateFile ? readTemplateBytes(spec.templateFile) : '';
     atomicWriteFile(result.filePath, bytes);
     trustPath(result.filePath);

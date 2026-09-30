@@ -1428,6 +1428,29 @@ mark.search-highlight--active {
   -webkit-app-region: no-drag;
 }
 
+/* NEWDOC-DRAG-1 — every dropdown PANEL in the toolbar must opt out of the drag
+   region, not just the button that opens it.
+
+   `-webkit-app-region` is an inherited property, so the `drag` on
+   `.toolbar--electron` above reaches every descendant. The trigger buttons carry
+   `.toolbar__nodrag`, but the `<ul class="dropdown__menu">` each one opens did
+   not — so Windows treated a click anywhere on an open menu as a title-bar drag
+   and the event never reached the DOM. The menu's `onClick` never fired, the menu
+   stayed open, and nothing happened: reported from the real app as "when trying
+   to create a new document the buttons simply don't work".
+
+   It affected all four toolbar menus (New, Open/Export, Theme, Language), not
+   just New.
+
+   No test caught it, and could not have: Playwright dispatches input through CDP
+   straight to the renderer, which bypasses the OS drag-region hit-testing
+   entirely. `tests/e2e/new-document.spec.ts` clicks these items successfully on a
+   build where a real mouse cannot. Anything in this region needs checking by
+   hand, or with real OS input. */
+.app--electron .dropdown__menu {
+  -webkit-app-region: no-drag;
+}
+
 .app--electron .search-overlay {
   right: 156px; /* Account for overlay buttons */
 }

@@ -85,6 +85,65 @@ describe('electron/main.cjs — document:new + empty-file substitution', () => {
       expect(mocks.dialog.showSaveDialog).not.toHaveBeenCalled()
     })
 
+    // NEWDOC-DIALOG-1 — hardening around the dialog call, prompted by a report
+    // that "the New buttons simply don't work": menu closed, no dialog, no error.
+    //
+    // The tempting theory was a destroyed-but-not-yet-null `mainWindow` (it is
+    // only nulled on the `closed` event, so that state is reachable) being passed
+    // to `dialog.showSaveDialog`, which opens nothing and never settles. The
+    // first test below DISPROVES that as an explanation: `isFromMainFrame`
+    // already rejects a destroyed window, so the user is told. Kept as a test
+    // precisely because it is the evidence against that theory — without it,
+    // someone will propose it again.
+    //
+    // What did change is defence in depth: the dialog call now sits inside the
+    // handler's try/catch and degrades to a parentless dialog rather than a dead
+    // owner, so a throw or a missing window surfaces as an error instead of a
+    // promise that never settles.
+    describe('dialog robustness (NEWDOC-DIALOG-1)', () => {
+      it('tells the user rather than going silent when the window is destroyed', async () => {
+        mocks.fakeWindow.__setDestroyed(true)
+
+        const result = (await handler('document:new')(ALLOWED_EVENT, 'markdown')) as {
+          created: boolean
+          error?: string
+        }
+
+        expect(result.created).toBe(false)
+        // An error field is what makes the renderer show a toast. Silence here is
+        // the bug that was reported; this is the assertion that it cannot happen.
+        expect(result.error).toBeTruthy()
+        expect(mocks.dialog.showSaveDialog).not.toHaveBeenCalled()
+      })
+
+      it('passes the window as the dialog owner while it is alive', async () => {
+        const filePath = path.join(tempDir, 'Document.md')
+        mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: false, filePath })
+
+        await handler('document:new')(ALLOWED_EVENT, 'markdown')
+
+        // A properly-owned modal dialog stays the normal case; parentless is only
+        // the fallback.
+        const [firstArg] = mocks.dialog.showSaveDialog.mock.calls[0] as unknown[]
+        expect(firstArg).toBe(mocks.fakeWindow)
+      })
+
+      it('reports an error instead of hanging when the dialog itself throws', async () => {
+        mocks.dialog.showSaveDialog.mockRejectedValueOnce(new Error('Object has been destroyed'))
+
+        const result = (await handler('document:new')(ALLOWED_EVENT, 'markdown')) as {
+          created: boolean
+          error?: string
+        }
+
+        // Before this, the dialog call sat outside the try/catch: the rejection
+        // escaped the handler, the IPC promise rejected, and the renderer's
+        // unguarded `await` showed the user nothing.
+        expect(result.created).toBe(false)
+        expect(result.error).toBeTruthy()
+      })
+    })
+
     it('reports not-created when the save dialog is cancelled', async () => {
       mocks.dialog.showSaveDialog.mockResolvedValueOnce({ canceled: true })
       const result = (await handler('document:new')(ALLOWED_EVENT, 'docx')) as { created: boolean }

@@ -44,8 +44,15 @@ export function createElectronMock(tempDir: string) {
   // tests need every listener for an event, not just the last.
   const windowOnHandlers = new Map<string, IpcHandler[]>()
 
+  // Mutable so a test can model a window that has been destroyed but whose
+  // `closed` event has not yet nulled `mainWindow` (NEWDOC-DIALOG-1).
+  let windowDestroyed = false
   const fakeWindow = {
-    isDestroyed: () => false,
+    isDestroyed: () => windowDestroyed,
+    /** Test-only: flip the window into the destroyed-but-not-yet-null state. */
+    __setDestroyed: (value: boolean) => {
+      windowDestroyed = value
+    },
     isMinimized: () => false,
     isMaximized: vi.fn(() => false),
     isVisible: () => true,

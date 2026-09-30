@@ -965,7 +965,16 @@ function AppShell() {
         showToast(t('errors.browserModeUnavailable'), 'error');
         return;
       }
-      const result = await window.electronAPI.newDocument(format);
+      // NEWDOC-DIALOG-1 — a rejection here used to escape into the `void` at the
+      // call site and show the user nothing at all, which is indistinguishable
+      // from the button doing nothing. Whatever went wrong, say so.
+      let result;
+      try {
+        result = await window.electronAPI.newDocument(format);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : String(error), 'error');
+        return;
+      }
       if (result.created) {
         await openFileFromPath(result.path);
       } else if (result.error) {
