@@ -100,6 +100,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // template written atomically) for the toolbar's "New" action / Ctrl+N.
   /** @param {string} formatId */
   newDocument: (formatId) => ipcRenderer.invoke('document:new', formatId),
+
+  // VERSIONS-1 — document version history. `bytes` goes out as a `Uint8Array`,
+  // which structured clone carries without the copy a plain array would cost on
+  // a large document.
+  /** @param {{ path: string, bytes: Uint8Array, label?: string | null }} req */
+  historySnapshot: (req) => ipcRenderer.invoke('history:snapshot', req),
+  /** @param {string} filePath */
+  historyList: (filePath) => ipcRenderer.invoke('history:list', filePath),
+  /** @param {{ path: string, id: string }} req */
+  historyRead: (req) => ipcRenderer.invoke('history:read', req),
+  /** @param {string} filePath */
+  historyClear: (filePath) => ipcRenderer.invoke('history:clear', filePath),
   /** @param {string} path */
   readBinaryByPath: (path) => ipcRenderer.invoke('file:readBinaryByPath', path),
   /** @param {(path: string) => void} callback */

@@ -63,6 +63,22 @@ type PrintToPdfResult =
   | { readonly ok: true; readonly bytes: Uint8Array }
   | { readonly ok: false; readonly error: string };
 
+/** VERSIONS-1 — one recorded state of a document, as the history panel lists it. */
+interface DocumentVersion {
+  /** Content hash: two versions holding identical bytes share one id. */
+  readonly id: string
+  /** When it was recorded (epoch ms). */
+  readonly at: number
+  /** Uncompressed size of the document at that point. */
+  readonly bytes: number
+  /** Why it exists, when there is something worth saying (e.g. before a restore). */
+  readonly label: string | null
+}
+
+type VersionSnapshotResult =
+  | { stored: true; id: string; at: number }
+  | { stored: false; reason?: 'unchanged' | 'invalidPath'; id?: string; error?: string }
+
 interface ElectronAPI {
   getInitialFile: () => Promise<ElectronFileData | { path: string } | null>;
   openFileDialog: () => Promise<ElectronFileData | null>;
@@ -103,6 +119,22 @@ interface ElectronAPI {
   openFileBinary: () => Promise<{ canceled: boolean; path: string; buffer: ArrayBuffer }>;
   /** NEW-01 — the toolbar's "New" action / Ctrl+N: shows a native Save dialog, writes a blank template there, and reports the resulting path. */
   newDocument: (formatId: NewDocumentFormat) => Promise<NewDocumentResult>;
+
+  /**
+   * VERSIONS-1 — document version history.
+   *
+   * Optional on this interface like the other desktop-only members: in a plain
+   * browser tab there is no main process to hold a history, and the UI hides
+   * itself rather than offering something that cannot work.
+   */
+  historySnapshot?: (req: {
+    path: string
+    bytes: Uint8Array
+    label?: string | null
+  }) => Promise<VersionSnapshotResult>;
+  historyList?: (path: string) => Promise<{ versions: DocumentVersion[]; error?: string }>;
+  historyRead?: (req: { path: string; id: string }) => Promise<{ bytes?: Uint8Array; error?: string }>;
+  historyClear?: (path: string) => Promise<{ cleared: boolean; error?: string }>;
   readBinaryByPath: (path: string) => Promise<{ path: string; buffer: ArrayBuffer }>;
   onFileOpenedPath: (callback: (path: string) => void) => () => void;
   /** Resolves a dropped `File` to its absolute path (Electron 32+ removed `File.path`). */

@@ -5,6 +5,7 @@ const fs = require('fs');
 
 const { createPathAllowlist } = require('./lib/pathAllowlist.cjs');
 const { createRecentFilesStore } = require('./lib/recentFilesStore.cjs');
+const { createVersionHistory } = require('./lib/versionHistory.cjs');
 const { listSystemFontFamilies } = require('./lib/systemFonts.cjs');
 const { createCodeRunner, runtimeFor: runCodeRuntimeFor } = require('./lib/codeRunner.cjs');
 const { atomicWriteFile, FileLockedError, classifyWriteError, classifyWriteErrorCode } = require('./lib/atomicWrite.cjs');
@@ -278,6 +279,39 @@ function getRecentFilesStore() {
     recentFilesStoreInstance = createRecentFilesStore(getUserDataDir());
   }
   return recentFilesStoreInstance;
+}
+
+/** @type {import('./lib/versionHistory.cjs').VersionHistory | null} */
+let versionHistoryInstance = null;
+function getVersionHistory() {
+  if (!versionHistoryInstance) {
+    versionHistoryInstance = createVersionHistory(path.join(getUserDataDir(), 'history'));
+  }
+  return versionHistoryInstance;
+}
+
+/**
+ * VERSIONS-1 — records a version of what was just written to `filePath`.
+ *
+ * Called from the two write handlers because that is the one place in the app
+ * where the finished bytes of EVERY format already exist: the renderer serialises
+ * a .docx/.xlsx/.pptx in its own way and hands main the result, so hooking the
+ * write means every format gets history for free rather than each viewer having
+ * to remember to ask for it.
+ *
+ * Never throws. A history is a convenience layered on top of saving, and a
+ * failure to record one must not turn a successful save into a failed one — the
+ * user's file is already safely on disk by the time this runs.
+ *
+ * @param {string} filePath
+ * @param {Uint8Array | Buffer} bytes
+ */
+function recordVersionAfterWrite(filePath, bytes) {
+  try {
+    getVersionHistory().snapshot(filePath, Buffer.from(bytes.buffer ?? bytes, bytes.byteOffset ?? 0, bytes.byteLength));
+  } catch (err) {
+    logMainEvent('ERROR', 'version history snapshot after write failed', err);
+  }
 }
 
 /**
@@ -1172,6 +1206,10 @@ ipcMain.handle('save-file', async (event, req) => {
   try {
     atomicWriteFile(targetPath, bytesToWrite);
     trustPath(targetPath);
+    // After `trustPath`, so the path is allowlisted before a version is filed
+    // under it, and after the write, so a version only ever exists for content
+    // that genuinely reached the disk.
+    recordVersionAfterWrite(targetPath, bytesToWrite);
     return {
       saved: true,
       path: targetPath,
@@ -1214,8 +1252,10 @@ ipcMain.handle('save-binary-file', async (event, req) => {
   }
 
   try {
-    atomicWriteFile(targetPath, Buffer.from(req.content));
+    const written = Buffer.from(req.content);
+    atomicWriteFile(targetPath, written);
     trustPath(targetPath);
+    recordVersionAfterWrite(targetPath, written);
     return { saved: true, path: targetPath, name: path.basename(targetPath) };
   } catch (err) {
     logMainEvent('ERROR', 'save-binary-file failed', err);
@@ -1280,6 +1320,85 @@ ipcMain.handle('document:new', async (event, formatId) => {
       error: err instanceof FileLockedError ? err.message : (classifyWriteError(err) ?? 'Could not create the new document.'),
       errorCode: err instanceof FileLockedError ? 'fileLocked' : (classifyWriteErrorCode(err) ?? 'unknownNewDocument'),
     };
+  }
+});
+
+// ---- VERSIONS-1: document version history ---- //
+//
+// A document is named by its PATH, and every one of these re-checks that path
+// against `pathAllowlist` rather than trusting the renderer's word for it. The
+// allowlist is the same gate the read/write channels use, so a page script cannot
+// name a file the user never opened and start reading or writing history for it.
+//
+// `history:snapshot` takes the bytes the renderer is about to write (or has just
+// written). It does NOT read the file from disk itself: the point is to capture
+// what the user has in front of them, which for an unsaved document is not what
+// is on disk. Bytes are validated as a real byte array before being trusted.
+ipcMain.handle('history:snapshot', async (event, req) => {
+  if (!isFromMainFrame(event)) return { stored: false, error: SENDER_FRAME_ERROR_MESSAGE };
+  if (!req || typeof req.path !== 'string' || !pathAllowlist.has(req.path)) {
+    return { stored: false, error: 'Unknown document.' };
+  }
+  // A byte-width typed array, checked WITHOUT `instanceof`.
+  //
+  // `instanceof Uint8Array` is false for a Uint8Array built in another JS realm,
+  // and this value has crossed a process boundary to get here. Structured clone
+  // happens to rebuild it with the main process's own constructor, so the naive
+  // check does pass in the running app — but it fails the moment anything else
+  // hands the handler a buffer (a test harness requiring `main.cjs` into a
+  // different realm is exactly that case, and it caught this). `ArrayBuffer.isView`
+  // is realm-independent; `BYTES_PER_ELEMENT === 1` keeps it to byte-width views
+  // and excludes `DataView`, which has no such property.
+  const bytes = req.bytes;
+  if (!ArrayBuffer.isView(bytes) || /** @type {{ BYTES_PER_ELEMENT?: number }} */ (bytes).BYTES_PER_ELEMENT !== 1) {
+    return { stored: false, error: 'Nothing to record.' };
+  }
+
+  try {
+    const label = typeof req.label === 'string' && req.label.length <= 200 ? req.label : null;
+    const result = getVersionHistory().snapshot(req.path, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength), label);
+    return result;
+  } catch (err) {
+    logMainEvent('ERROR', 'history:snapshot failed', err);
+    return { stored: false, error: 'Could not record a version.' };
+  }
+});
+
+ipcMain.handle('history:list', async (event, filePath) => {
+  if (!isFromMainFrame(event)) return { versions: [], error: SENDER_FRAME_ERROR_MESSAGE };
+  if (typeof filePath !== 'string' || !pathAllowlist.has(filePath)) return { versions: [] };
+  try {
+    return { versions: getVersionHistory().list(filePath) };
+  } catch (err) {
+    logMainEvent('ERROR', 'history:list failed', err);
+    return { versions: [], error: 'Could not read the version history.' };
+  }
+});
+
+ipcMain.handle('history:read', async (event, req) => {
+  if (!isFromMainFrame(event)) return { error: SENDER_FRAME_ERROR_MESSAGE };
+  if (!req || typeof req.path !== 'string' || !pathAllowlist.has(req.path)) return { error: 'Unknown document.' };
+  try {
+    const bytes = getVersionHistory().read(req.path, req.id);
+    // A version that is not in THIS document's index reads as missing, which is
+    // also what stops an id from one document reaching another's blob.
+    if (bytes === null) return { error: 'That version is no longer available.' };
+    return { bytes: new Uint8Array(bytes) };
+  } catch (err) {
+    logMainEvent('ERROR', 'history:read failed', err);
+    return { error: 'Could not read that version.' };
+  }
+});
+
+ipcMain.handle('history:clear', async (event, filePath) => {
+  if (!isFromMainFrame(event)) return { cleared: false, error: SENDER_FRAME_ERROR_MESSAGE };
+  if (typeof filePath !== 'string' || !pathAllowlist.has(filePath)) return { cleared: false };
+  try {
+    getVersionHistory().clear(filePath);
+    return { cleared: true };
+  } catch (err) {
+    logMainEvent('ERROR', 'history:clear failed', err);
+    return { cleared: false, error: 'Could not clear the version history.' };
   }
 });
 
