@@ -108,6 +108,20 @@ references and defined names are now re-anchored through every structural edit, 
 listed below; an English/French UI (`src/i18n/`, DEFER-6 resolved — the owner is confirmed French-
 speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked too (P4.1 fully closed).
 
+## 3.9.0 — built 2026-09-30, NOT YET INSTALLED
+
+`release\Atlas-Setup-3.9.0.exe`, 136.2 MB, unsigned.
+SHA256 `39710E3EE3A14CF22B4BDB62567B62682CDED862C2D033709D2F82AB1C1BB4C1`.
+
+Installing needs an elevated run (perMachine), which could not be done overnight
+— the owner has to accept the UAC prompt. **Until it is installed, the machine is
+still running 3.8.0 and still has the toolbar-menu bug**, which is what prompted
+this release.
+
+After installing, run `docs/RELEASE.md` step 8, and note it now includes the
+PROGID-1 `reg query` checks — those were verified on 3.8.0 already, so this is a
+re-check rather than a first run.
+
 ## What is left
 1. **Code signing (P5.1)** — the only item needing the owner's money. `docs/RELEASE.md` lists the
    certificate options and what changes in `electron-builder.yml`.
