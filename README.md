@@ -51,6 +51,17 @@ a New Document menu that starts from a real Office/LibreOffice-compatible
 template, five themes with WCAG-checked contrast, English/French UI, recent
 files, drag-and-drop, and a shortcuts modal (`Ctrl+/`).
 
+**Version history** keeps a copy of a document each time you save it, for every
+format, and the toolbar's Version history panel lists them with the option to put
+any of them back. A markdown document you're actively writing is also captured
+every couple of minutes, so the history reflects the writing rather than just the
+saving. Saving the same content twice doesn't make a second copy and identical
+content is only stored once, so pressing Ctrl+S out of habit costs nothing.
+Restoring is only offered when your current version is already saved — otherwise
+an older copy could replace work that exists nowhere else. Each document keeps its
+last 100 versions, and the history lives in the app's own data directory, not
+beside your file.
+
 ## How it works
 
 Opening a file goes through one pipeline regardless of how it arrived

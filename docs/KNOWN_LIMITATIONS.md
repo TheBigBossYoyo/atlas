@@ -437,6 +437,28 @@ is invisible to it, which is why the fidelity detector (`src/docx/fidelity/`) ex
 alongside these. And they skip silently when LibreOffice is not installed, so a green
 suite does not prove they ran.
 
+## Version history: what it captures, and what it doesn't
+
+A version is recorded every time a document is written, for every format, because
+that capture happens in the main process at the moment of the write. On top of
+that, a **markdown** document being actively edited is captured every two minutes.
+
+**The other formats have no periodic capture.** A `.docx`, `.xlsx` or `.pptx`
+would have to be re-serialised in full on a timer to do the same, which is a real
+cost to impose continuously; they get a version on every save instead, which is
+what Word's own history gives you. If that matters for a long unsaved editing
+session, save.
+
+**Restoring requires the current version to be saved.** Restoring writes the
+chosen version over the document, and the state being replaced only survives if it
+was itself already written. Rather than silently destroy unsaved work, the button
+is disabled and the panel says so.
+
+**Limits.** 100 versions or 256 MB per document, whichever comes first, pruned
+oldest-first. History lives under the app's own data directory keyed by a hash of
+the document's path — so it is not carried along if you move or rename the file,
+and it is not visible to anyone you send the document to.
+
 ## Export
 
 Export targets and fidelity vary by format — see the README's Export table
