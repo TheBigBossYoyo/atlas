@@ -10,6 +10,21 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 
 ## [Unreleased]
 
+### Added
+
+- **Version history: see how a document got to where it is, and go back.** Every
+  time you save, Atlas keeps a copy of what the document looked like. Open
+  **Version history** in the toolbar to see them listed with when they were taken,
+  and put any of them back. A markdown document you are actively writing is also
+  captured every couple of minutes, so the history shows the writing rather than
+  just the saving.
+
+  Saving the same thing twice does not make a second copy, and identical content
+  is only ever stored once — so leaning on Ctrl+S costs nothing. Restoring is
+  offered only when the current version is already saved, so nothing you have
+  written can be replaced by an older copy without being kept itself. Each
+  document keeps its most recent 100 versions.
+
 ### Fixed
 
 - **Spreadsheets: a cell edit no longer loses everything after the first letter.**

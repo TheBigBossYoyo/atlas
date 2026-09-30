@@ -60,6 +60,9 @@ import { useToast } from './hooks/useToast';
 import { useUnhandledErrorReporter } from './hooks/useUnhandledErrorReporter';
 import { scrollIntoViewRespectingMotionPreference } from './utils/motionPreference';
 import { getTextFileMeta, carryTextFileMeta } from './utils/textDecoding';
+import type { DocumentVersion } from './electron';
+import { VersionHistoryPanel } from './components/VersionHistoryPanel';
+import { useAutoCapture, useVersionHistory } from './hooks/useVersionHistory';
 
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
@@ -821,6 +824,79 @@ function AppShell() {
   const [viewMode, setViewMode] = useState<ViewMode>('preview');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // VERSIONS-1 — a document's version history. Versions are recorded in the main
+  // process when a document is WRITTEN (see `recordVersionAfterWrite`), so every
+  // format gets them; this is the renderer's read side plus the two things only
+  // it can do — capture what is on screen but not yet saved, and put a version
+  // back.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const versionHistory = useVersionHistory(file?.path ?? null);
+  const documentDirty = isMarkdownDocument ? isDirty : viewerDirty;
+
+  // Periodic capture, text documents only. `localMarkdown` is already a string in
+  // this component, so snapshotting it costs nothing; the binary formats would
+  // each have to re-serialise a whole document on a timer, which is a real cost
+  // to impose for a feature nobody asked to run continuously. Those get a version
+  // on every save instead, which is what Word's own history gives you.
+  const captureMarkdownBytes = useCallback(
+    () => (isMarkdownDocument && file ? new TextEncoder().encode(localMarkdown) : null),
+    [file, isMarkdownDocument, localMarkdown],
+  );
+  useAutoCapture(versionHistory, isMarkdownDocument && isDirty, captureMarkdownBytes);
+
+  // Versions are recorded in main, on write, so nothing in this component sees a
+  // save happen. Two cheap triggers keep the list honest without polling:
+  // whenever the panel is opened (so it is always current when looked at), and
+  // whenever the document stops being dirty, which is what a completed save looks
+  // like from here — and works for every format, not just markdown.
+  const refreshHistory = versionHistory.refresh;
+  useEffect(() => {
+    if (historyOpen) void refreshHistory();
+  }, [historyOpen, refreshHistory]);
+  useEffect(() => {
+    if (!documentDirty) void refreshHistory();
+  }, [documentDirty, refreshHistory]);
+
+  const captureVersionNow = useCallback(async (): Promise<void> => {
+    const bytes = captureMarkdownBytes();
+    if (bytes === null) return;
+    const stored = await versionHistory.captureNow(bytes);
+    showToast(stored ? t('history.captured') : t('history.captureUnchanged'), stored ? 'success' : 'info');
+  }, [captureMarkdownBytes, showToast, t, versionHistory]);
+
+  /**
+   * Puts a version back by writing its bytes over the document and reopening it.
+   *
+   * Writing is what makes this work for every format — the renderer does not have
+   * to understand a .docx to restore one — and main records a version of whatever
+   * it writes, so the restore itself lands in the timeline. The panel only offers
+   * this when the document has no unsaved changes, because the state being
+   * replaced survives only if it was already written somewhere.
+   */
+  const restoreVersion = useCallback(
+    async (version: DocumentVersion): Promise<void> => {
+      if (!file || !window.electronAPI?.saveBinaryFile) return;
+      const bytes = await versionHistory.readVersion(version.id);
+      if (bytes === null) {
+        showToast(t('history.restoreFailed'), 'error');
+        return;
+      }
+      const result = await window.electronAPI.saveBinaryFile({
+        content: bytes,
+        suggestedName: fileName ?? 'document',
+        existingPath: file.path,
+      });
+      if (!result?.saved || !result.path) {
+        showToast(t('history.restoreFailed'), 'error');
+        return;
+      }
+      await openFileFromPath(result.path);
+      await versionHistory.refresh();
+      showToast(t('history.restored', { when: new Date(version.at).toLocaleString() }), 'success');
+    },
+    [file, fileName, openFileFromPath, showToast, t, versionHistory],
+  );
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [newMenuOpen, setNewMenuOpen] = useState(false);
 
@@ -1268,6 +1344,7 @@ function AppShell() {
         onExport={(fmt) => void handleExport(fmt)}
         onOpenSearch={openSearch}
         onShowShortcuts={() => setShortcutsOpen(true)}
+        onShowHistory={file ? () => setHistoryOpen((open) => !open) : undefined}
         onIncreaseFont={increase}
         onDecreaseFont={decrease}
         onResetFont={reset}
@@ -1375,6 +1452,15 @@ function AppShell() {
 
         {hasContent && <StatusBar fileName={fileName} isDirty={combinedDirty} />}
       </ViewerProvider>
+
+      <VersionHistoryPanel
+        open={historyOpen && Boolean(file)}
+        onClose={() => setHistoryOpen(false)}
+        history={versionHistory}
+        onRestore={restoreVersion}
+        documentDirty={documentDirty}
+        onCaptureNow={isMarkdownDocument ? captureVersionNow : null}
+      />
 
       <ShortcutsModal isOpen={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 

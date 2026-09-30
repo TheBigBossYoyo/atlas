@@ -1,6 +1,7 @@
 import { FileText, Upload, BookOpen, Clock, X } from 'lucide-react';
 import type { RecentFile } from '../types';
-import { useTranslate, type TranslateFn } from '../i18n';
+import { useTranslate } from '../i18n';
+import { formatRelativeTime } from '../utils/formatRelativeTime';
 
 interface WelcomeScreenProps {
   onOpenFile: () => void;
@@ -8,18 +9,6 @@ interface WelcomeScreenProps {
   recent: readonly RecentFile[];
   onOpenRecent?: (file: RecentFile) => void;
   onRemoveRecent?: (key: string) => void;
-}
-
-function formatRelative(ts: number, t: TranslateFn): string {
-  const diff = Date.now() - ts;
-  const min = Math.floor(diff / 60000);
-  if (min < 1) return t('welcome.relative.justNow');
-  if (min < 60) return t('welcome.relative.minutesAgo', { count: min });
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return t('welcome.relative.hoursAgo', { count: hr });
-  const d = Math.floor(hr / 24);
-  if (d < 7) return t('welcome.relative.daysAgo', { count: d });
-  return new Date(ts).toLocaleDateString();
 }
 
 const FEATURE_KEYS: readonly { emoji: string; key: string }[] = [
@@ -85,7 +74,7 @@ export function WelcomeScreen({
                       title={file.path || file.name}
                     >
                       <span className="recent__name">{file.name}</span>
-                      <span className="recent__time">{formatRelative(file.openedAt, t)}</span>
+                      <span className="recent__time">{formatRelativeTime(file.openedAt, t)}</span>
                     </button>
                     {onRemoveRecent && (
                       <button

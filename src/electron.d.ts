@@ -64,7 +64,7 @@ type PrintToPdfResult =
   | { readonly ok: false; readonly error: string };
 
 /** VERSIONS-1 — one recorded state of a document, as the history panel lists it. */
-interface DocumentVersion {
+export interface DocumentVersion {
   /** Content hash: two versions holding identical bytes share one id. */
   readonly id: string
   /** When it was recorded (epoch ms). */
@@ -75,7 +75,7 @@ interface DocumentVersion {
   readonly label: string | null
 }
 
-type VersionSnapshotResult =
+export type VersionSnapshotResult =
   | { stored: true; id: string; at: number }
   | { stored: false; reason?: 'unchanged' | 'invalidPath'; id?: string; error?: string }
 

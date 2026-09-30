@@ -11,8 +11,7 @@ import {
   Keyboard,
   Plus,
   Minus,
-  RotateCcw,
-} from 'lucide-react';
+  RotateCcw, History } from 'lucide-react';
 import type { FormatId } from '../formats/types';
 import type { Theme, ThemeMeta, ViewMode, ExportFormat } from '../types';
 import type { NewDocumentFormat } from '../electron';
@@ -54,6 +53,8 @@ interface ToolbarProps {
   onExport: (format: ExportFormat) => void;
   onOpenSearch: () => void;
   onShowShortcuts: () => void;
+  /** VERSIONS-1 — opens the version history panel; absent when no document is open. */
+  onShowHistory?: () => void;
   onIncreaseFont: () => void;
   onDecreaseFont: () => void;
   onResetFont: () => void;
@@ -95,6 +96,7 @@ export function Toolbar({
   onExport,
   onOpenSearch,
   onShowShortcuts,
+  onShowHistory,
   onIncreaseFont,
   onDecreaseFont,
   onResetFont,
@@ -228,6 +230,20 @@ export function Toolbar({
         <ThemeMenu current={theme} themes={themes} onSelect={onSelectTheme} />
 
         <LanguageMenu />
+
+        {/* VERSIONS-1 — only when a document is open: there is nothing to have a
+            history of otherwise. `toolbar__nodrag` is not optional here, it is
+            what makes the button clickable at all (see NEWDOC-DRAG-1). */}
+        {onShowHistory && (
+          <button
+            className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
+            onClick={onShowHistory}
+            title={t('history.triggerTitle')}
+            aria-label={t('history.trigger')}
+          >
+            <History size={18} />
+          </button>
+        )}
 
         <button
           className="toolbar__btn toolbar__btn--icon toolbar__nodrag"
