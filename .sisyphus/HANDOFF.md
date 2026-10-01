@@ -108,19 +108,32 @@ references and defined names are now re-anchored through every structural edit, 
 listed below; an English/French UI (`src/i18n/`, DEFER-6 resolved — the owner is confirmed French-
 speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked too (P4.1 fully closed).
 
-## 3.9.0 — built 2026-09-30, NOT YET INSTALLED
+## 3.10.0 — built 2026-10-01
+
+`release\Atlas-Setup-3.10.0.exe`, 136.2 MB, unsigned.
+SHA256 `A59FB1F3FF2B3311DB8E92A4948C8A1ABA662B6140B4EC4EA184DB49C30247B6`.
+
+Version history now captures every editable format between saves, not just
+markdown (VERSIONS-2), and a restored text version keeps the file's own encoding
+and line endings. Verified in the packed `app.asar` before shipping: the new
+i18n string, the renderer text encoder and the history IPC are all present, as is
+3.9.0's drag-region fix.
+
+Installing needs an elevated run (perMachine), so it needs the owner at the
+machine to accept the UAC prompt.
+
+After installing, run `docs/RELEASE.md` step 8. The PROGID-1 `reg query` checks
+in it were verified on 3.8.0 and re-verified on 3.9.0, so that is a re-check
+rather than a first run.
+
+## 3.9.0 — built 2026-09-30, installed 2026-10-01
 
 `release\Atlas-Setup-3.9.0.exe`, 136.2 MB, unsigned.
 SHA256 `39710E3EE3A14CF22B4BDB62567B62682CDED862C2D033709D2F82AB1C1BB4C1`.
 
-Installing needs an elevated run (perMachine), which could not be done overnight
-— the owner has to accept the UAC prompt. **Until it is installed, the machine is
-still running 3.8.0 and still has the toolbar-menu bug**, which is what prompted
-this release.
-
-After installing, run `docs/RELEASE.md` step 8, and note it now includes the
-PROGID-1 `reg query` checks — those were verified on 3.8.0 already, so this is a
-re-check rather than a first run.
+Installed with the owner present (UAC accepted, installer exit 0), and the
+toolbar-menu fix confirmed in the installed `app.asar`. Superseded by 3.10.0
+above.
 
 ## What is left
 1. **Code signing (P5.1)** — the only item needing the owner's money. `docs/RELEASE.md` lists the
