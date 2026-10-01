@@ -8,6 +8,37 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Added
+
+- **Spreadsheet formulas now do conditionals and lookups.** `=1>0` used to be a
+  syntax error, which meant `IF` did not exist — and with it nothing conditional,
+  no lookups and no criteria. A formula that used any of them displayed as plain
+  text instead of a result.
+
+  Working now: the comparison operators, `IF`, `IFERROR`, `AND`/`OR`/`NOT`,
+  `SUMIF`/`COUNTIF`/`AVERAGEIF`, `VLOOKUP`/`HLOOKUP`/`INDEX`/`MATCH`,
+  `ROUND`/`ROUNDUP`/`ROUNDDOWN`/`ABS`/`INT`/`SIGN`/`SQRT`/`MOD`/`POWER`,
+  `LEFT`/`RIGHT`/`MID`/`LEN`/`TRIM`/`UPPER`/`LOWER`, `COUNTBLANK`, `PRODUCT`,
+  `MEDIAN` and the `IS...` type tests.
+
+  Dates (`TODAY`, `DATE`, `YEAR`, ...), `XLOOKUP`, `SUMPRODUCT` and array
+  formulas are still not evaluated, and a formula Atlas cannot evaluate still
+  shows its own text rather than a wrong answer. `VLOOKUP` and `MATCH` do exact
+  matching only: Excel's default is an approximate match that returns a
+  confidently wrong row on unsorted data, so asking for it is refused rather than
+  answered incorrectly.
+
+### Fixed
+
+- **An error inside a formula is now reported instead of hiding the formula.**
+  `=SUM(1/0,1)` shows `#DIV/0!`, the way a spreadsheet should, rather than
+  falling back to displaying the formula text.
+- **A blank cell is consistent now.** It counted as zero when referenced
+  directly but as empty inside a range, so the two disagreed about the same
+  cell. It is now blank either way, and still zero in arithmetic.
+
 ## [3.11.0] — 2026-10-01 (spreadsheet cell formatting, read and applied)
 
 ### Added

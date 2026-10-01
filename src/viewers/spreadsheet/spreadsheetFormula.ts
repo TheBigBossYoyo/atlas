@@ -102,6 +102,15 @@ function numberValue(n: number): Value {
 function toNumeric(value: Value): number | { readonly code: string } {
   if (value.kind === 'error') return { code: value.code }
   if (value.kind === 'number') return value.value
+  // SHEETFN-1 — a comparison resolves to the text "TRUE"/"FALSE" (see
+  // `boolValue`), and Excel treats those as 1/0 in arithmetic, so `=(A1>2)*5`
+  // gives 5 rather than #VALUE!.
+  const upper = value.value.trim().toUpperCase()
+  if (upper === 'TRUE') return 1
+  if (upper === 'FALSE') return 0
+  // A blank cell is 0 in arithmetic, which is what lets `=A1+1` work on an
+  // empty cell while `ISBLANK(A1)` still reports it as blank.
+  if (upper === '') return 0
   const parsed = Number.parseFloat(value.value)
   return Number.isNaN(parsed) ? { code: '#VALUE!' } : parsed
 }
@@ -119,6 +128,70 @@ function valueToText(value: Value): string {
   if (value.kind === 'number') return formatNumericResult(value.value)
   if (value.kind === 'text') return value.value
   return value.code
+}
+
+const COMPARISON_OPS: ReadonlySet<string> = new Set(['=', '<>', '<', '<=', '>', '>='])
+
+/**
+ * Compares two values the way a spreadsheet does.
+ *
+ * Two rules worth stating, because both differ from JavaScript's own `==`:
+ *   - a number is never equal to text, and in an ORDERING comparison every
+ *     number sorts before every text value (Excel's documented type ordering),
+ *     rather than the two being coerced into each other;
+ *   - text compares case-INSENSITIVELY (`="a"="A"` is TRUE in Excel), which is
+ *     the single most surprising difference for anyone expecting JS semantics.
+ */
+function compareValues(op: string, left: Value, right: Value): Value {
+  if (left.kind === 'error') return left
+  if (right.kind === 'error') return right
+
+  let ordering: number
+  if (left.kind === 'number' && right.kind === 'number') {
+    ordering = left.value === right.value ? 0 : left.value < right.value ? -1 : 1
+  } else if (left.kind === 'text' && right.kind === 'text') {
+    const a = left.value.toUpperCase()
+    const b = right.value.toUpperCase()
+    ordering = a === b ? 0 : a < b ? -1 : 1
+  } else {
+    // Mixed types: numbers sort before text, and are never equal to it.
+    ordering = left.kind === 'number' ? -1 : 1
+  }
+
+  switch (op) {
+    case '=': return boolValue(ordering === 0)
+    case '<>': return boolValue(ordering !== 0)
+    case '<': return boolValue(ordering < 0)
+    case '<=': return boolValue(ordering <= 0)
+    case '>': return boolValue(ordering > 0)
+    case '>=': return boolValue(ordering >= 0)
+    default: throw new FormulaSyntaxError(`Unknown comparison: ${op}`)
+  }
+}
+
+/**
+ * A boolean result, as the TEXT "TRUE"/"FALSE".
+ *
+ * Excel has a real boolean type; this evaluator has number/text/error. Text is
+ * the honest choice of the three: it displays as a user expects (`TRUE`), and
+ * `toNumeric` below maps it back to 1/0 so `=(A1>2)*5` still arithmetically
+ * works. Representing it as the number 1/0 instead would display `1` where
+ * every spreadsheet shows `TRUE`.
+ */
+function boolValue(on: boolean): Value {
+  return { kind: 'text', value: on ? 'TRUE' : 'FALSE' }
+}
+
+/** Reads a value's truthiness for `IF`/`AND`/`OR`: a number is false only at 0, and `"TRUE"`/`"FALSE"` round-trip. */
+function truthy(value: Value): boolean | { readonly code: string } {
+  if (value.kind === 'error') return { code: value.code }
+  if (value.kind === 'number') return value.value !== 0
+  const upper = value.value.trim().toUpperCase()
+  if (upper === 'TRUE') return true
+  if (upper === 'FALSE' || upper === '') return false
+  const parsed = Number.parseFloat(value.value)
+  if (!Number.isNaN(parsed)) return parsed !== 0
+  return { code: '#VALUE!' }
 }
 
 /** A minimal recursive-descent parser/evaluator over the token stream produced by `tokenize`. */
@@ -148,11 +221,32 @@ class FormulaParser {
   }
 
   parseTopLevel(): Value {
-    const result = this.parseConcat()
+    const result = this.parseComparison()
     if (this.position !== this.tokens.length) {
       throw new FormulaSyntaxError('Unexpected trailing tokens')
     }
     return result
+  }
+
+  /**
+   * SHEETFN-1 — `= <> < <= > >=`, the lowest-precedence operators, below `&`
+   * exactly as in Excel (`="a"&"b"="ab"` compares the concatenation).
+   *
+   * The tokenizer has recognised these since the `&` work, but nothing ever
+   * parsed them: `=1>0` fell through to a syntax error, and the whole
+   * conditional half of a spreadsheet — IF, COUNTIF, any comparison at all —
+   * was unreachable.
+   */
+  private parseComparison(): Value {
+    let left = this.parseConcat()
+    for (;;) {
+      const token = this.peek()
+      if (token?.kind !== 'op' || !COMPARISON_OPS.has(token.text)) break
+      this.consume()
+      const right = this.parseConcat()
+      left = compareValues(token.text, left, right)
+    }
+    return left
   }
 
   /** `&` text concatenation — the lowest-precedence operator this evaluator supports, matching real Excel (`="1"&1+1` concatenates "1" with the already-computed `1+1`, not `("1"&1)+1`). */
@@ -243,7 +337,9 @@ class FormulaParser {
     if (token.kind === 'number') return { kind: 'number', value: token.value }
     if (token.kind === 'string') return { kind: 'text', value: token.text }
     if (token.kind === 'lparen') {
-      const inner = this.parseExpression()
+      // `parseComparison`, not `parseExpression`: `=(A1>2)*1` has to compare
+      // inside the parentheses before multiplying.
+      const inner = this.parseComparison()
       const close = this.consume()
       if (close.kind !== 'rparen') throw new FormulaSyntaxError('Expected closing parenthesis')
       return inner
@@ -259,30 +355,31 @@ class FormulaParser {
 
   private resolveSingleRef(refText: string): Value {
     const coord = parseRefToken(refText)
-    const text = this.lookup(coord.row, coord.col)
-    if (text.trim() === '') return numberValue(0)
-    const parsed = Number.parseFloat(text)
-    return Number.isNaN(parsed) ? { kind: 'text', value: text } : { kind: 'number', value: parsed }
+    // SHEETFN-1 — the same `cellValue` a RANGE member goes through, so a blank
+    // cell reads as blank either way. It used to resolve to the number 0 here
+    // and to blank inside a range, which made `ISBLANK(A1)` impossible to
+    // answer correctly and meant the two paths disagreed about the same cell.
+    // Arithmetic is unaffected: `toNumeric` maps blank to 0, as Excel does.
+    return cellValue(this.lookup(coord.row, coord.col))
   }
 
-  /** Parses `SUM(...)`-style calls, including range arguments (only meaningful inside a function call). */
+  /**
+   * Parses `SUM(...)`-style calls.
+   *
+   * Each argument is collected as an `Arg` — a scalar value or a 2-D block for
+   * a range — and handed to `applyFunction` whole. The previous version
+   * flattened everything into a list of numbers here, before any function saw
+   * it, which made every non-aggregate function impossible to express.
+   */
   private parseFunctionCall(name: string): Value {
     const open = this.consume()
     if (open.kind !== 'lparen') throw new FormulaSyntaxError(`Expected "(" after function name ${name}`)
 
-    const numbers: number[] = []
-    // Every argument's resolved value, in order — `SUM`-family functions
-    // only ever read `numbers`/`nonEmptyCount` below, but a text function
-    // (`CONCATENATE`) needs each argument's own text, numeric args included
-    // (`CONCATENATE(A1,1)` should splice in "1", not drop it).
-    const values: Value[] = []
-    let nonEmptyCount = 0
+    const args: Arg[] = []
 
     const collectArg = (): void => {
       const first = this.peek()
-      // A range only ever appears as a bare `A1:B3` function argument. Not
-      // fed into `values` — no function here takes a range as a text
-      // argument, only `SUM`/`AVERAGE`/etc.'s own numeric aggregation below.
+      // A range only ever appears as a bare `A1:B3` function argument.
       if (first?.kind === 'ref') {
         const next = this.tokens[this.position + 1]
         if (next?.kind === 'colon') {
@@ -292,29 +389,22 @@ class FormulaParser {
           if (endToken.kind !== 'ref') throw new FormulaSyntaxError('Expected cell reference after ":"')
           const start = parseRefToken(startRef.text)
           const end = parseRefToken(endToken.text)
+          const rows: Value[][] = []
           for (let r = Math.min(start.row, end.row); r <= Math.max(start.row, end.row); r++) {
+            const row: Value[] = []
             for (let c = Math.min(start.col, end.col); c <= Math.max(start.col, end.col); c++) {
-              const text = this.lookup(r, c)
-              if (text.trim() === '') continue
-              nonEmptyCount += 1
-              const parsed = Number.parseFloat(text)
-              if (!Number.isNaN(parsed)) numbers.push(parsed)
+              row.push(cellValue(this.lookup(r, c)))
             }
+            rows.push(row)
           }
+          args.push({ kind: 'range', cells: rows })
           return
         }
       }
-      // `parseConcat` (not the narrower `parseExpression`) so an argument can
-      // itself use `&`, e.g. `CONCATENATE(A1&"!", B1)`.
-      const value = this.parseConcat()
-      if (value.kind === 'error') throw new FormulaSyntaxError(value.code)
-      values.push(value)
-      if (value.kind === 'number') {
-        numbers.push(value.value)
-        nonEmptyCount += 1
-      } else if (value.value.trim() !== '') {
-        nonEmptyCount += 1
-      }
+      // `parseComparison` (not the narrower `parseExpression`) so an argument
+      // can itself be a comparison or use `&` — `IF(A1>2,"big","small")`
+      // depends on it.
+      args.push({ kind: 'value', value: this.parseComparison() })
     }
 
     if (this.peek()?.kind !== 'rparen') {
@@ -328,8 +418,25 @@ class FormulaParser {
     const close = this.consume()
     if (close.kind !== 'rparen') throw new FormulaSyntaxError(`Expected ")" to close ${name}(`)
 
-    return applyFunction(name, numbers, nonEmptyCount, values)
+    return applyFunction(name, args)
   }
+}
+
+/**
+ * One argument to a function: a scalar, or a rectangular block of cells.
+ *
+ * A range keeps its SHAPE (rows of values) rather than being flattened,
+ * because `VLOOKUP` and `INDEX` address it by row and column.
+ */
+type Arg =
+  | { readonly kind: 'value'; readonly value: Value }
+  | { readonly kind: 'range'; readonly cells: ReadonlyArray<ReadonlyArray<Value>> }
+
+/** A cell's display text as a value: blank stays blank (not 0 — `COUNT` and `AVERAGE` must be able to tell them apart). */
+function cellValue(text: string): Value {
+  if (text.trim() === '') return { kind: 'text', value: '' }
+  const parsed = Number.parseFloat(text)
+  return Number.isNaN(parsed) ? { kind: 'text', value: text } : { kind: 'number', value: parsed }
 }
 
 // Delegates to `cellRef.ts`'s own `parseCellRef` (single source of truth for
@@ -342,32 +449,440 @@ function parseRefToken(refText: string): CellCoord {
   return coord
 }
 
-const FUNCTIONS = new Set(['SUM', 'AVERAGE', 'MIN', 'MAX', 'COUNT', 'COUNTA', 'CONCATENATE'])
+// ---------------------------------------------------------------------------
+// SHEETFN-1 — the function library.
+//
+// Before this there were seven functions (SUM, AVERAGE, MIN, MAX, COUNT,
+// COUNTA, CONCATENATE) and no comparison operators, which meant no IF: the
+// entire conditional half of a spreadsheet was unreachable, and any formula
+// using it displayed as literal text.
+//
+// Each function reads the `Arg`s it actually needs. The aggregates flatten
+// ranges and scalars together; the rest address their arguments directly.
+// ---------------------------------------------------------------------------
 
-function applyFunction(name: string, numbers: ReadonlyArray<number>, nonEmptyCount: number, values: ReadonlyArray<Value>): Value {
-  if (!FUNCTIONS.has(name)) {
-    throw new FormulaSyntaxError(`Unsupported function: ${name}`)
+/** Every number in the arguments, from scalars and ranges alike — what the aggregates operate on. */
+function flattenNumbers(args: ReadonlyArray<Arg>): number[] | { readonly code: string } {
+  const out: number[] = []
+  for (const arg of args) {
+    if (arg.kind === 'value') {
+      if (arg.value.kind === 'error') return { code: arg.value.code }
+      if (arg.value.kind === 'number') out.push(arg.value.value)
+      else {
+        // A scalar text argument that looks numeric counts (`SUM("1",2)` is 3
+        // in Excel); one that does not is an error, not a silent zero.
+        const trimmed = arg.value.value.trim()
+        if (trimmed === '') continue
+        const parsed = Number.parseFloat(trimmed)
+        if (Number.isNaN(parsed)) return { code: '#VALUE!' }
+        out.push(parsed)
+      }
+      continue
+    }
+    for (const row of arg.cells) {
+      for (const cell of row) {
+        // Inside a RANGE, text and blanks are skipped rather than erroring —
+        // that is what makes `SUM(A1:A9)` work on a column with a header.
+        if (cell.kind === 'error') return { code: cell.code }
+        if (cell.kind === 'number') out.push(cell.value)
+      }
+    }
   }
+  return out
+}
+
+/** Every cell/scalar in the arguments, flat, for COUNTA and the lookup helpers. */
+function flattenValues(args: ReadonlyArray<Arg>): Value[] {
+  const out: Value[] = []
+  for (const arg of args) {
+    if (arg.kind === 'value') out.push(arg.value)
+    else for (const row of arg.cells) for (const cell of row) out.push(cell)
+  }
+  return out
+}
+
+function isBlank(value: Value): boolean {
+  return value.kind === 'text' && value.value.trim() === ''
+}
+
+/** The first argument as a scalar; a 1x1 range counts, as Excel allows. */
+function scalarOf(arg: Arg | undefined): Value | null {
+  if (!arg) return null
+  if (arg.kind === 'value') return arg.value
+  const first = arg.cells[0]?.[0]
+  return first ?? null
+}
+
+function numberOf(arg: Arg | undefined): number | { readonly code: string } {
+  const value = scalarOf(arg)
+  if (!value) return { code: '#VALUE!' }
+  return toNumeric(value)
+}
+
+function textOf(arg: Arg | undefined): string | { readonly code: string } {
+  const value = scalarOf(arg)
+  if (!value) return { code: '#VALUE!' }
+  if (value.kind === 'error') return { code: value.code }
+  return valueToText(value)
+}
+
+/**
+ * A COUNTIF/SUMIF criterion: `">10"`, `"<=3"`, `"<>x"`, or a bare value meaning
+ * equality.
+ *
+ * Returns a predicate over a cell value. The comparison itself goes through
+ * `compareValues`, so a criterion inherits exactly the same type and
+ * case-insensitivity rules as a `>` written out in a formula — rather than a
+ * second, subtly different comparison implementation.
+ */
+function criterionMatcher(criterion: Value): (cell: Value) => boolean {
+  let op = '='
+  let operand: Value = criterion
+
+  if (criterion.kind === 'text') {
+    const match = /^(<=|>=|<>|<|>|=)?\s*(.*)$/.exec(criterion.value.trim())
+    if (match) {
+      op = match[1] ?? '='
+      const rest = match[2]
+      const parsed = Number.parseFloat(rest)
+      operand =
+        rest !== '' && !Number.isNaN(parsed) && String(parsed) === rest.trim()
+          ? { kind: 'number', value: parsed }
+          : { kind: 'text', value: rest }
+    }
+  }
+
+  return (cell: Value): boolean => {
+    // A blank cell matches no criterion except an explicit "" one, matching
+    // Excel — otherwise `COUNTIF(A1:A99,"<10")` would count every empty row.
+    if (isBlank(cell) && !(operand.kind === 'text' && operand.value === '')) return false
+    const result = compareValues(op, cell, operand)
+    return result.kind === 'text' && result.value === 'TRUE'
+  }
+}
+
+/** The cells of a range argument, or `null` when the argument is not a range. */
+function rangeOf(arg: Arg | undefined): ReadonlyArray<ReadonlyArray<Value>> | null {
+  if (!arg) return null
+  if (arg.kind === 'range') return arg.cells
+  return [[arg.value]]
+}
+
+const AGGREGATES: ReadonlySet<string> = new Set(['SUM', 'AVERAGE', 'MIN', 'MAX', 'COUNT', 'PRODUCT', 'MEDIAN'])
+
+function applyAggregate(name: string, numbers: ReadonlyArray<number>): Value {
   switch (name) {
     case 'SUM':
       return numberValue(numbers.reduce((sum, n) => sum + n, 0))
     case 'AVERAGE':
-      return numbers.length === 0 ? { kind: 'error', code: '#DIV/0!' } : numberValue(numbers.reduce((s, n) => s + n, 0) / numbers.length)
+      return numbers.length === 0
+        ? { kind: 'error', code: '#DIV/0!' }
+        : numberValue(numbers.reduce((s, n) => s + n, 0) / numbers.length)
     case 'MIN':
+      // 0 for an empty set, not an error — Excel's own behaviour, and the
+      // behaviour this function already had before the library grew.
       return numberValue(numbers.length === 0 ? 0 : Math.min(...numbers))
     case 'MAX':
       return numberValue(numbers.length === 0 ? 0 : Math.max(...numbers))
     case 'COUNT':
       return numberValue(numbers.length)
+    case 'PRODUCT':
+      return numberValue(numbers.length === 0 ? 0 : numbers.reduce((p, n) => p * n, 1))
+    case 'MEDIAN': {
+      if (numbers.length === 0) return { kind: 'error', code: '#NUM!' }
+      const sorted = [...numbers].sort((a, b) => a - b)
+      const mid = Math.floor(sorted.length / 2)
+      return numberValue(sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid])
+    }
+    default:
+      throw new FormulaSyntaxError(`Unsupported aggregate: ${name}`)
+  }
+}
+
+const FUNCTIONS: ReadonlySet<string> = new Set([
+  // aggregates
+  'SUM', 'AVERAGE', 'MIN', 'MAX', 'COUNT', 'COUNTA', 'COUNTBLANK', 'PRODUCT', 'MEDIAN',
+  // logic
+  'IF', 'IFERROR', 'AND', 'OR', 'NOT', 'TRUE', 'FALSE',
+  // conditional aggregates
+  'SUMIF', 'COUNTIF', 'AVERAGEIF',
+  // lookup
+  'VLOOKUP', 'HLOOKUP', 'INDEX', 'MATCH',
+  // maths
+  'ROUND', 'ROUNDUP', 'ROUNDDOWN', 'ABS', 'INT', 'SQRT', 'MOD', 'POWER', 'SIGN',
+  // text
+  'CONCATENATE', 'CONCAT', 'LEFT', 'RIGHT', 'MID', 'LEN', 'TRIM', 'UPPER', 'LOWER',
+  // type tests
+  'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISERROR',
+])
+
+function applyFunction(name: string, args: ReadonlyArray<Arg>): Value {
+  if (!FUNCTIONS.has(name)) {
+    throw new FormulaSyntaxError(`Unsupported function: ${name}`)
+  }
+
+  // --- logic, first: these are the only functions that must see an ERROR
+  // argument rather than propagate it, which is the whole point of IFERROR.
+  if (name === 'IFERROR') {
+    const value = scalarOf(args[0])
+    if (!value) return { kind: 'error', code: '#VALUE!' }
+    if (value.kind === 'error') return scalarOf(args[1]) ?? { kind: 'text', value: '' }
+    return value
+  }
+  if (name === 'ISERROR') {
+    const value = scalarOf(args[0])
+    return boolValue(value?.kind === 'error')
+  }
+
+  switch (name) {
+    case 'IF': {
+      const condition = scalarOf(args[0])
+      if (!condition) return { kind: 'error', code: '#VALUE!' }
+      const test = truthy(condition)
+      if (typeof test !== 'boolean') return { kind: 'error', code: test.code }
+      // A missing third argument is FALSE, as in Excel, not an error.
+      const branch = test ? scalarOf(args[1]) : scalarOf(args[2])
+      return branch ?? boolValue(false)
+    }
+    case 'AND':
+    case 'OR': {
+      const values = flattenValues(args).filter(v => !isBlank(v))
+      if (values.length === 0) return { kind: 'error', code: '#VALUE!' }
+      let result = name === 'AND'
+      for (const value of values) {
+        const test = truthy(value)
+        if (typeof test !== 'boolean') return { kind: 'error', code: test.code }
+        result = name === 'AND' ? result && test : result || test
+      }
+      return boolValue(result)
+    }
+    case 'NOT': {
+      const value = scalarOf(args[0])
+      if (!value) return { kind: 'error', code: '#VALUE!' }
+      const test = truthy(value)
+      return typeof test === 'boolean' ? boolValue(!test) : { kind: 'error', code: test.code }
+    }
+    case 'TRUE':
+      return boolValue(true)
+    case 'FALSE':
+      return boolValue(false)
+
     case 'COUNTA':
-      return numberValue(nonEmptyCount)
+      return numberValue(flattenValues(args).filter(v => !isBlank(v) && v.kind !== 'error').length)
+    case 'COUNTBLANK':
+      return numberValue(flattenValues(args).filter(isBlank).length)
+
     case 'CONCATENATE':
-      // Every element of `values` is already error-free by the time it gets
-      // here — `collectArg` throws a `FormulaSyntaxError` (falling the whole
-      // formula back to `{ok:false}`, the same as any other unsupported
-      // shape) the moment an argument itself evaluates to an error, before
-      // it's ever pushed onto this array.
-      return { kind: 'text', value: values.map(valueToText).join('') }
+    case 'CONCAT': {
+      const parts: string[] = []
+      for (const value of flattenValues(args)) {
+        if (value.kind === 'error') return value
+        parts.push(valueToText(value))
+      }
+      return { kind: 'text', value: parts.join('') }
+    }
+
+    case 'SUMIF':
+    case 'COUNTIF':
+    case 'AVERAGEIF': {
+      const range = rangeOf(args[0])
+      const criterion = scalarOf(args[1])
+      if (!range || !criterion) return { kind: 'error', code: '#VALUE!' }
+      const matches = criterionMatcher(criterion)
+      // SUMIF's optional third argument sums a PARALLEL range instead of the
+      // tested one — the common "sum column B where column A says x" shape.
+      const sumRange = args[2] ? rangeOf(args[2]) : range
+      let count = 0
+      let total = 0
+      let numeric = 0
+      for (let r = 0; r < range.length; r += 1) {
+        for (let c = 0; c < range[r].length; c += 1) {
+          if (!matches(range[r][c])) continue
+          count += 1
+          const target = sumRange?.[r]?.[c]
+          if (target?.kind === 'number') {
+            total += target.value
+            numeric += 1
+          }
+        }
+      }
+      if (name === 'COUNTIF') return numberValue(count)
+      if (name === 'SUMIF') return numberValue(total)
+      return numeric === 0 ? { kind: 'error', code: '#DIV/0!' } : numberValue(total / numeric)
+    }
+
+    case 'VLOOKUP':
+    case 'HLOOKUP': {
+      const key = scalarOf(args[0])
+      const table = rangeOf(args[1])
+      const indexArg = numberOf(args[2])
+      if (!key || !table) return { kind: 'error', code: '#VALUE!' }
+      if (typeof indexArg !== 'number') return { kind: 'error', code: indexArg.code }
+      const index = Math.trunc(indexArg)
+      if (index < 1) return { kind: 'error', code: '#VALUE!' }
+
+      // Only EXACT match is supported. Excel's default is the approximate
+      // (sorted-range) match, which silently returns a wrong row on unsorted
+      // data — implementing the default wrongly would be worse than being
+      // explicit, so a request for approximate matching is refused rather
+      // than approximated. See docs/KNOWN_LIMITATIONS.md.
+      if (args[3]) {
+        const approx = truthy(scalarOf(args[3]) ?? boolValue(false))
+        if (approx === true) throw new FormulaSyntaxError('VLOOKUP approximate match is not supported')
+      }
+
+      const vertical = name === 'VLOOKUP'
+      const lineCount = vertical ? table.length : (table[0]?.length ?? 0)
+      for (let i = 0; i < lineCount; i += 1) {
+        const probe = vertical ? table[i]?.[0] : table[0]?.[i]
+        if (!probe) continue
+        const equal = compareValues('=', probe, key)
+        if (equal.kind === 'text' && equal.value === 'TRUE') {
+          const found = vertical ? table[i]?.[index - 1] : table[index - 1]?.[i]
+          return found ?? { kind: 'error', code: '#REF!' }
+        }
+      }
+      return { kind: 'error', code: '#N/A' }
+    }
+
+    case 'INDEX': {
+      const table = rangeOf(args[0])
+      const rowArg = numberOf(args[1])
+      if (!table) return { kind: 'error', code: '#VALUE!' }
+      if (typeof rowArg !== 'number') return { kind: 'error', code: rowArg.code }
+      const rowIndex = Math.trunc(rowArg)
+      // A single-row or single-column range can be addressed with one index,
+      // which is how INDEX/MATCH is almost always written.
+      if (args[2] === undefined) {
+        if (table.length === 1) {
+          return table[0][rowIndex - 1] ?? { kind: 'error', code: '#REF!' }
+        }
+        return table[rowIndex - 1]?.[0] ?? { kind: 'error', code: '#REF!' }
+      }
+      const colArg = numberOf(args[2])
+      if (typeof colArg !== 'number') return { kind: 'error', code: colArg.code }
+      return table[rowIndex - 1]?.[Math.trunc(colArg) - 1] ?? { kind: 'error', code: '#REF!' }
+    }
+
+    case 'MATCH': {
+      const key = scalarOf(args[0])
+      const table = rangeOf(args[1])
+      if (!key || !table) return { kind: 'error', code: '#VALUE!' }
+      if (args[2]) {
+        const type = numberOf(args[2])
+        // Same reasoning as VLOOKUP: only exact (type 0) is implemented.
+        if (typeof type === 'number' && type !== 0) {
+          throw new FormulaSyntaxError('MATCH only supports exact match (match_type 0)')
+        }
+      }
+      const flat = table.length === 1 ? table[0] : table.map(row => row[0])
+      for (let i = 0; i < flat.length; i += 1) {
+        const equal = compareValues('=', flat[i], key)
+        if (equal.kind === 'text' && equal.value === 'TRUE') return numberValue(i + 1)
+      }
+      return { kind: 'error', code: '#N/A' }
+    }
+
+    case 'LEN': {
+      const text = textOf(args[0])
+      return typeof text === 'string' ? numberValue(text.length) : { kind: 'error', code: text.code }
+    }
+    case 'TRIM':
+    case 'UPPER':
+    case 'LOWER': {
+      const text = textOf(args[0])
+      if (typeof text !== 'string') return { kind: 'error', code: text.code }
+      const out = name === 'TRIM' ? text.trim().replace(/\s+/g, ' ') : name === 'UPPER' ? text.toUpperCase() : text.toLowerCase()
+      return { kind: 'text', value: out }
+    }
+    case 'LEFT':
+    case 'RIGHT': {
+      const text = textOf(args[0])
+      if (typeof text !== 'string') return { kind: 'error', code: text.code }
+      const countArg = args[1] === undefined ? 1 : numberOf(args[1])
+      if (typeof countArg !== 'number') return { kind: 'error', code: countArg.code }
+      const count = Math.trunc(countArg)
+      if (count < 0) return { kind: 'error', code: '#VALUE!' }
+      return { kind: 'text', value: name === 'LEFT' ? text.slice(0, count) : count === 0 ? '' : text.slice(-count) }
+    }
+    case 'MID': {
+      const text = textOf(args[0])
+      if (typeof text !== 'string') return { kind: 'error', code: text.code }
+      const startArg = numberOf(args[1])
+      const countArg = numberOf(args[2])
+      if (typeof startArg !== 'number') return { kind: 'error', code: startArg.code }
+      if (typeof countArg !== 'number') return { kind: 'error', code: countArg.code }
+      const start = Math.trunc(startArg)
+      if (start < 1) return { kind: 'error', code: '#VALUE!' }
+      return { kind: 'text', value: text.slice(start - 1, start - 1 + Math.max(0, Math.trunc(countArg))) }
+    }
+
+    case 'ISBLANK': {
+      const value = scalarOf(args[0])
+      return boolValue(value ? isBlank(value) : false)
+    }
+    case 'ISNUMBER': {
+      const value = scalarOf(args[0])
+      return boolValue(value?.kind === 'number')
+    }
+    case 'ISTEXT': {
+      const value = scalarOf(args[0])
+      return boolValue(value?.kind === 'text' && value.value.trim() !== '')
+    }
+
+    default:
+      break
+  }
+
+  // --- maths and the aggregates, all of which propagate an error operand.
+  if (AGGREGATES.has(name)) {
+    const numbers = flattenNumbers(args)
+    if (!Array.isArray(numbers)) return { kind: 'error', code: numbers.code }
+    return applyAggregate(name, numbers)
+  }
+
+  const first = numberOf(args[0])
+  if (typeof first !== 'number') return { kind: 'error', code: first.code }
+  switch (name) {
+    case 'ABS':
+      return numberValue(Math.abs(first))
+    case 'INT':
+      return numberValue(Math.floor(first))
+    case 'SIGN':
+      return numberValue(Math.sign(first))
+    case 'SQRT':
+      return first < 0 ? { kind: 'error', code: '#NUM!' } : numberValue(Math.sqrt(first))
+    case 'ROUND':
+    case 'ROUNDUP':
+    case 'ROUNDDOWN': {
+      const digitsArg = args[1] === undefined ? 0 : numberOf(args[1])
+      if (typeof digitsArg !== 'number') return { kind: 'error', code: digitsArg.code }
+      const factor = Math.pow(10, Math.trunc(digitsArg))
+      const scaled = first * factor
+      // ROUNDUP/ROUNDDOWN are away-from-zero and toward-zero, NOT ceil/floor —
+      // they differ for negative numbers, which is where a naive
+      // implementation is wrong.
+      const rounded =
+        name === 'ROUND'
+          ? Math.sign(scaled) * Math.round(Math.abs(scaled))
+          : name === 'ROUNDUP'
+            ? Math.sign(scaled) * Math.ceil(Math.abs(scaled))
+            : Math.sign(scaled) * Math.floor(Math.abs(scaled))
+      return numberValue(rounded / factor)
+    }
+    case 'MOD': {
+      const divisor = numberOf(args[1])
+      if (typeof divisor !== 'number') return { kind: 'error', code: divisor.code }
+      if (divisor === 0) return { kind: 'error', code: '#DIV/0!' }
+      // Excel's MOD takes the sign of the DIVISOR; JavaScript's % takes the
+      // sign of the dividend, so `MOD(-3,2)` is 1 in Excel and -1 in JS.
+      return numberValue(first - divisor * Math.floor(first / divisor))
+    }
+    case 'POWER': {
+      const exponent = numberOf(args[1])
+      if (typeof exponent !== 'number') return { kind: 'error', code: exponent.code }
+      return numberValue(Math.pow(first, exponent))
+    }
     default:
       throw new FormulaSyntaxError(`Unsupported function: ${name}`)
   }

@@ -28,8 +28,10 @@ how much you can do with it depends on the format:
 - PPTX and ODP: same idea, a custom slide editor (no editing library). Edit text in place,
   move and resize shapes, add or reorder slides, use speaker notes and
   presenter view, and save through the original package.
-- XLSX, ODS, and legacy spreadsheets: cell editing, a small in-house formula
-  evaluator, row/column/sheet operations, and saving that keeps the original
+- XLSX, ODS, and legacy spreadsheets: cell editing, an in-house formula
+  evaluator (comparisons, `IF`/`IFERROR`, `SUMIF`/`COUNTIF`,
+  `VLOOKUP`/`INDEX`/`MATCH`, rounding, text and type-test functions — no dates
+  or array formulas yet), row/column/sheet operations, and saving that keeps the original
   file's styles and charts intact for `.xlsx`/`.xlsm`. A workbook's own cell
   formatting — bold, italic, font size and colour, fills and alignment — is read
   from the file and drawn in the grid, and you can apply bold, italic, underline,

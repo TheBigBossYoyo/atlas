@@ -32,9 +32,9 @@ below) export or print, but not edit the source file in place.
 
 Spreadsheet/CSV editing (wave3/sheets, extended in waves 5/8 — see
 "Spreadsheets" below for the full save-path/formula-rewriting detail): cell
-edit, formulas (a small in-house evaluator — no full spreadsheet formula
-engine — with unsupported formulas falling back to their cached literal
-value), insert/delete rows and columns, add/rename/delete sheets, undo/redo,
+edit, formulas (an in-house evaluator — not a complete spreadsheet formula
+engine; see "Formulas" below for exactly what it covers — with unsupported
+formulas falling back to their cached literal value), insert/delete rows and columns, add/rename/delete sheets, undo/redo,
 and copy/paste. `.xlsx`/`.xlsm` save through the *original* package (styles,
 number formats, charts, filters and tables survive); `.xlsb`/`.xls`/`.ods`/
 `.fods` and `.csv`/`.tsv` save via a fresh SheetJS write, where per-cell
@@ -251,6 +251,62 @@ this reference syntax). String literals inside formulas are never touched.
 
 Number/date/currency formatting follows the workbook's own stored format,
 not an explicit user-chosen locale.
+
+### Formulas
+
+SheetJS's community build has no formula engine at all — it only ever reads the
+cached value a real spreadsheet application already computed — so anything typed
+into Atlas is evaluated by `spreadsheetFormula.ts`.
+
+Until SHEETFN-1 that evaluator had seven functions and, although its tokenizer
+recognised `< > <= >= <>`, nothing that PARSED a comparison: `=1>0` was a syntax
+error, so `IF` was unreachable and with it every conditional, lookup and
+criterion formula. Those now work.
+
+Supported: `+ - * / ^`, parentheses, unary minus, `&`, the comparison operators,
+A1/`$A$1` references and `A1:B3` ranges, and these functions —
+
+| Group | Functions |
+| --- | --- |
+| Aggregate | SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, COUNTBLANK, PRODUCT, MEDIAN |
+| Logic | IF, IFERROR, AND, OR, NOT, TRUE, FALSE |
+| Conditional | SUMIF (incl. a parallel sum range), COUNTIF, AVERAGEIF |
+| Lookup | VLOOKUP, HLOOKUP, INDEX, MATCH |
+| Maths | ROUND, ROUNDUP, ROUNDDOWN, ABS, INT, SIGN, SQRT, MOD, POWER |
+| Text | CONCATENATE, CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER |
+| Type tests | ISBLANK, ISNUMBER, ISTEXT, ISERROR |
+
+**Not supported, and falling back to the literal formula text:** dates and times
+(TODAY, NOW, DATE, YEAR, MONTH, DAY — the evaluator has no date type yet),
+XLOOKUP, SUMPRODUCT, array formulas and spilled ranges, structured table
+references (`Table1[Column]`), defined names, cross-sheet references inside the
+evaluator (a saved file's cross-sheet refs are re-anchored correctly, but typing
+`=Sheet2!A1` is not evaluated), TEXT and the other format-string functions, and
+every statistical, financial and engineering function.
+
+**VLOOKUP and MATCH do exact matching only.** Excel's DEFAULT for both is
+approximate, which on unsorted data returns a confidently wrong row; asking for
+it (`VLOOKUP(...,TRUE)`, or a non-zero `match_type`) is refused and falls back to
+literal text rather than answered wrongly.
+
+**Deliberate spreadsheet-not-JavaScript semantics**, each pinned by a test
+because each is where a from-scratch evaluator goes wrong: text compares
+case-insensitively (`="a"="A"` is TRUE); a number is never equal to text and
+sorts before it; `MOD` takes the sign of its divisor (`MOD(-3,2)` is 1, where
+JavaScript's `%` gives -1); `ROUNDUP`/`ROUNDDOWN` go away from and toward zero
+rather than up and down (`ROUNDUP(-1.1)` is -2); a blank cell is 0 in arithmetic
+but still blank to `ISBLANK` and matches no `<`/`>` criterion; and a comparison
+resolves to the text `TRUE`/`FALSE`, which arithmetic reads back as 1/0.
+
+**An error now propagates out of an aggregate** (`SUM(1/0,1)` reports `#DIV/0!`)
+instead of making the whole formula fall back to literal text, matching Excel.
+Non-numeric TEXT is still skipped inside a range — which is what lets
+`SUM(A1:A9)` work on a column with a header — but is `#VALUE!` as a bare
+argument.
+
+**There is no recalculation dependency graph.** A formula is evaluated when its
+own cell is read, so a chain updates correctly, but there is no cycle detection
+beyond the existing `#REF!` guard and no explicit recalculation order.
 
 **Cell formatting is now READ and rendered (SHEETFMT-1), not yet applied.** Until
 this, Atlas drew every workbook as unstyled text — a file whose header row was

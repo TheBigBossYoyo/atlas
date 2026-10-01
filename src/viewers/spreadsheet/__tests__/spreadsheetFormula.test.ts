@@ -93,7 +93,11 @@ describe('evaluateFormula — unsupported / malformed input falls back to null',
   const lookup = gridLookup([['1']])
 
   it('rejects an unknown function', () => {
-    expect(evaluateFormula('VLOOKUP(A1, A1:A1, 1)', lookup)).toEqual({ ok: false })
+    // Was `VLOOKUP` until SHEETFN-1 implemented it. Deliberately a function
+    // Excel really has, so this keeps testing "a name we do not implement"
+    // rather than "a name nobody would type".
+    expect(evaluateFormula('XLOOKUP(A1, A1:A1, A1:A1)', lookup)).toEqual({ ok: false })
+    expect(evaluateFormula('SUMPRODUCT(A1:A1, A1:A1)', lookup)).toEqual({ ok: false })
   })
 
   it('rejects unbalanced parentheses', () => {
