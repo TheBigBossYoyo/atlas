@@ -51,6 +51,24 @@ export function useViewerSave(): () => Promise<boolean> {
   return useViewerCtx().save
 }
 
+/**
+ * VERSIONS-2 — the active viewer plugs in "serialise my current state" so the
+ * periodic version capture can record it without saving to disk.
+ */
+export function useRegisterViewerCapture(): (capture: (() => Promise<Uint8Array | null>) | null) => void {
+  return useViewerCtx().registerCapture
+}
+
+/** Serialises the active viewer's current state, or resolves `null` if it registered none. */
+export function useViewerCapture(): () => Promise<Uint8Array | null> {
+  return useViewerCtx().capture
+}
+
+/** Whether the active viewer can produce bytes for the version history — reactive, so the shell can offer or hide the action. */
+export function useViewerCanCapture(): boolean {
+  return useViewerCtx().canCapture
+}
+
 /** The active viewer calls this to plug its own "Save As" implementation into the shared contract. */
 export function useRegisterViewerSaveAs(): (saveAs: (() => Promise<boolean>) | null) => void {
   return useViewerCtx().registerSaveAs

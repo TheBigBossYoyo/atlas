@@ -33,6 +33,7 @@ type InternalState = {
   stats: ViewerStats | null
   isDirty: boolean
   canFind: boolean
+  canCapture: boolean
 }
 
 const INITIAL_STATE_EXCEPT_PATH = {
@@ -40,6 +41,7 @@ const INITIAL_STATE_EXCEPT_PATH = {
   stats: null,
   isDirty: false,
   canFind: false,
+  canCapture: false,
 } as const
 
 export function ViewerProvider({
@@ -75,6 +77,10 @@ export function ViewerProvider({
 
   // Mirrors `saveRef` above, for the "Save As" side of the contract.
   const saveAsRef = useRef<(() => Promise<boolean>) | null>(null)
+
+  // VERSIONS-2 — and again for "serialise what you have", which the periodic
+  // version capture uses. A viewer that cannot do it cheaply registers nothing.
+  const captureRef = useRef<(() => Promise<Uint8Array | null>) | null>(null)
 
   // Same reasoning as `saveRef` above: the active viewer's find-overlay
   // opener is an implementation detail swapped in/out via `registerFind`,
@@ -112,6 +118,23 @@ export function ViewerProvider({
       return false
     }
     return saveRef.current()
+  }, [])
+
+  const registerCapture = useCallback((capture: (() => Promise<Uint8Array | null>) | null) => {
+    captureRef.current = capture
+    setState(prev => (prev.canCapture === (capture !== null) ? prev : { ...prev, canCapture: capture !== null }))
+  }, [])
+
+  const capture = useCallback(async (): Promise<Uint8Array | null> => {
+    if (captureRef.current === null) return null
+    try {
+      return await captureRef.current()
+    } catch {
+      // A capture is a best-effort extra. A viewer that throws while serialising
+      // must not surface an error to someone who only pressed a key two minutes
+      // ago — the next capture will try again.
+      return null
+    }
   }, [])
 
   const registerSaveAs = useCallback((saveAs: (() => Promise<boolean>) | null) => {
@@ -161,6 +184,9 @@ export function ViewerProvider({
       save,
       registerSaveAs,
       saveAs,
+      registerCapture,
+      capture,
+      canCapture: state.canCapture,
       reportSavedPath,
       getExportableContent,
       canFind: state.canFind,
@@ -172,6 +198,7 @@ export function ViewerProvider({
       state.stats,
       state.isDirty,
       state.canFind,
+      state.canCapture,
       setNavItems,
       setStats,
       setDirty,
@@ -179,6 +206,8 @@ export function ViewerProvider({
       save,
       registerSaveAs,
       saveAs,
+      registerCapture,
+      capture,
       reportSavedPath,
       getExportableContent,
       registerFind,

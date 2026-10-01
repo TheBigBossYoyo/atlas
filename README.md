@@ -53,8 +53,9 @@ files, drag-and-drop, and a shortcuts modal (`Ctrl+/`).
 
 **Version history** keeps a copy of a document each time you save it, for every
 format, and the toolbar's Version history panel lists them with the option to put
-any of them back. A markdown document you're actively writing is also captured
-every couple of minutes, so the history reflects the writing rather than just the
+any of them back. A document you're actively editing is also captured
+every couple of minutes — a Word document, a spreadsheet and a slide deck as much
+as a markdown file — so the history reflects the writing rather than just the
 saving. Saving the same content twice doesn't make a second copy and identical
 content is only stored once, so pressing Ctrl+S out of habit costs nothing.
 Restoring is only offered when your current version is already saved — otherwise

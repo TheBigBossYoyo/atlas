@@ -241,3 +241,85 @@ export function decodeTextBufferWithMeta(buffer: ArrayBuffer): { content: string
 
   return { content: normalizeNewlines(decoded), meta: { encoding, bom, newline: detectNewline(decoded) } }
 }
+
+// ---------------------------------------------------------------------------
+// VERSIONS-2 — the encode mirror
+// ---------------------------------------------------------------------------
+
+/** Reverse of `WINDOWS_1252_HIGH_RANGE`: Unicode code point -> the one cp1252 byte (0x80-0x9F) that maps to it. */
+const WINDOWS_1252_REVERSE = new Map<number, number>()
+WINDOWS_1252_HIGH_RANGE.forEach((codePoint, index) => {
+  // The unassigned slots (0x81, 0x8D, 0x8F, 0x90, 0x9D) already round-trip
+  // through the Latin-1 identity fast path in `encodeWindows1252`, so only the
+  // slots with a distinct high code point are registered here — registering the
+  // others would shadow that range.
+  if (!WINDOWS_1252_REVERSE.has(codePoint)) WINDOWS_1252_REVERSE.set(codePoint, 0x80 + index)
+})
+
+/** The cp1252 bytes for `content`, or `null` if any character has no Windows-1252 representation. */
+function encodeWindows1252(content: string): Uint8Array | null {
+  const bytes = new Uint8Array(content.length)
+  for (let i = 0; i < content.length; i += 1) {
+    const codePoint = content.charCodeAt(i)
+    if (codePoint <= 0xff && !(codePoint >= 0x80 && codePoint <= 0x9f)) {
+      // 0x00-0x7F and 0xA0-0xFF are Windows-1252 identity with Unicode.
+      bytes[i] = codePoint
+      continue
+    }
+    const mapped = WINDOWS_1252_REVERSE.get(codePoint)
+    if (mapped === undefined) return null
+    bytes[i] = mapped
+  }
+  return bytes
+}
+
+function withBom(prefix: ReadonlyArray<number>, body: Uint8Array): Uint8Array {
+  const out = new Uint8Array(prefix.length + body.length)
+  out.set(prefix, 0)
+  out.set(body, prefix.length)
+  return out
+}
+
+/**
+ * Re-encodes LF-normalized text to the bytes its file is actually written with.
+ *
+ * VERSIONS-2 — the renderer mirror of `electron/lib/textDecoding.cjs`'s
+ * `encodeTextBuffer`, needed so a version captured from what is on screen holds
+ * the same bytes a save would have written. Without it, a periodic capture of a
+ * CRLF or UTF-16 file produced plain UTF-8 LF, which looks harmless in the
+ * version list and then silently changes the file's encoding the moment that
+ * version is restored (restoring writes the stored bytes verbatim).
+ *
+ * Deliberately a mirror rather than a shared module: the decode half is already
+ * duplicated the same way (see `decodeTextBufferWithMeta` above), because main
+ * reaches for `Buffer` and the renderer only has `TextEncoder`. A test pins the
+ * two against each other so they cannot drift apart silently.
+ *
+ * Falls back to lossless UTF-8 when the text no longer fits its original
+ * charset, which is what main does too — the alternative is either throwing or
+ * mangling the character the user just typed.
+ */
+export function encodeTextBytes(content: string, meta: TextFileMeta): Uint8Array {
+  const withNewline = meta.newline === 'crlf' ? content.replace(/\n/g, '\r\n') : content
+  const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text)
+
+  if (meta.encoding === 'utf-16le' || meta.encoding === 'utf-16be') {
+    const body = new Uint8Array(withNewline.length * 2)
+    const view = new DataView(body.buffer)
+    const littleEndian = meta.encoding === 'utf-16le'
+    for (let i = 0; i < withNewline.length; i += 1) {
+      view.setUint16(i * 2, withNewline.charCodeAt(i), littleEndian)
+    }
+    if (!meta.bom) return body
+    return withBom(littleEndian ? [0xff, 0xfe] : [0xfe, 0xff], body)
+  }
+
+  if (meta.encoding === 'windows-1252') {
+    // Windows-1252 has no BOM convention, so `meta.bom` is never true for it
+    // (`decodeTextBufferWithMeta` never sets it) and there is nothing to prepend.
+    return encodeWindows1252(withNewline) ?? utf8(withNewline)
+  }
+
+  const body = utf8(withNewline)
+  return meta.bom ? withBom([0xef, 0xbb, 0xbf], body) : body
+}

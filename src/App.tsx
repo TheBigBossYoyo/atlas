@@ -50,6 +50,8 @@ import {
   useViewerIsDirty,
   useViewerSave,
   useViewerSaveAs,
+  useViewerCanCapture,
+  useViewerCapture,
   useGetExportableContent,
 } from './viewers/shared/useViewerContext';
 import type { ExportableContent } from './viewers/shared/viewerContextValue';
@@ -59,7 +61,7 @@ import { translateWriteError } from './i18n/translateWriteError';
 import { useToast } from './hooks/useToast';
 import { useUnhandledErrorReporter } from './hooks/useUnhandledErrorReporter';
 import { scrollIntoViewRespectingMotionPreference } from './utils/motionPreference';
-import { getTextFileMeta, carryTextFileMeta } from './utils/textDecoding';
+import { getTextFileMeta, carryTextFileMeta, encodeTextBytes } from './utils/textDecoding';
 import type { DocumentVersion } from './electron';
 import { VersionHistoryPanel } from './components/VersionHistoryPanel';
 import { useAutoCapture, useVersionHistory } from './hooks/useVersionHistory';
@@ -133,6 +135,10 @@ interface ViewerSessionBridgeProps {
   onDirtyChange: (dirty: boolean) => void;
   saveRef: React.MutableRefObject<() => Promise<boolean>>;
   saveAsRef: React.MutableRefObject<() => Promise<boolean>>;
+  /** VERSIONS-2 — the active viewer's registered "serialise what you have", for the periodic version capture. */
+  captureRef: React.MutableRefObject<() => Promise<Uint8Array | null>>;
+  /** Whether that viewer registered one, as reactive state — `captureRef` cannot drive a render. */
+  onCanCaptureChange: (canCapture: boolean) => void;
   exportContentRef: React.MutableRefObject<() => ExportableContent | null>;
   /** Re-derive the exportable-content format whenever the active file
    * changes — see the effect below for why this can't just key off
@@ -154,6 +160,8 @@ function ViewerSessionBridge({
   onDirtyChange,
   saveRef,
   saveAsRef,
+  captureRef,
+  onCanCaptureChange,
   exportContentRef,
   filePath,
   onExportableFormatChange,
@@ -161,6 +169,8 @@ function ViewerSessionBridge({
   const dirty = useViewerIsDirty();
   const save = useViewerSave();
   const saveAs = useViewerSaveAs();
+  const capture = useViewerCapture();
+  const canCapture = useViewerCanCapture();
   const getExportableContent = useGetExportableContent();
 
   // REF-EFFECT-1 - layout effects for this block: a key (Ctrl+W, Ctrl+S)
@@ -177,6 +187,14 @@ function ViewerSessionBridge({
   useLayoutEffect(() => {
     saveAsRef.current = saveAs;
   }, [saveAs, saveAsRef]);
+
+  useLayoutEffect(() => {
+    captureRef.current = capture;
+  }, [capture, captureRef]);
+
+  useLayoutEffect(() => {
+    onCanCaptureChange(canCapture);
+  }, [canCapture, onCanCaptureChange]);
 
   useLayoutEffect(() => {
     exportContentRef.current = getExportableContent;
@@ -231,6 +249,13 @@ function AppShell() {
   // non-markdown viewer is active, the same way `viewerSaveRef` already lets
   // plain Ctrl+S reach it.
   const viewerSaveAsRef = useRef<() => Promise<boolean>>(async () => false);
+  // VERSIONS-2 — and the same lift for "serialise what you have right now",
+  // which is how a `.docx`/`.xlsx`/`.pptx` gets the periodic version capture
+  // markdown already had. Resolves `null` when the active viewer registered
+  // nothing (a read-only format, a viewer still loading), which the capture
+  // treats as "nothing to record" rather than an error.
+  const viewerCaptureRef = useRef<() => Promise<Uint8Array | null>>(async () => null);
+  const [viewerCanCapture, setViewerCanCapture] = useState(false);
   // UX-12 — the active viewer's registered `getExportableContent` (a
   // Phase-3 placeholder today; see viewerContextValue.ts), lifted the same
   // way `viewerSaveRef` lifts `save`. `exportableContentFormat` mirrors just
@@ -834,16 +859,32 @@ function AppShell() {
   const versionHistory = useVersionHistory(file?.path ?? null);
   const documentDirty = isMarkdownDocument ? isDirty : viewerDirty;
 
-  // Periodic capture, text documents only. `localMarkdown` is already a string in
-  // this component, so snapshotting it costs nothing; the binary formats would
-  // each have to re-serialise a whole document on a timer, which is a real cost
-  // to impose for a feature nobody asked to run continuously. Those get a version
-  // on every save instead, which is what Word's own history gives you.
-  const captureMarkdownBytes = useCallback(
-    () => (isMarkdownDocument && file ? new TextEncoder().encode(localMarkdown) : null),
-    [file, isMarkdownDocument, localMarkdown],
-  );
-  useAutoCapture(versionHistory, isMarkdownDocument && isDirty, captureMarkdownBytes);
+  /**
+   * Periodic capture, for every format (VERSIONS-2).
+   *
+   * Markdown is served here, because `localMarkdown` is already a string in this
+   * component — but it goes through the file's recorded encoding/BOM/newline
+   * rather than a plain UTF-8 encode, because restoring a version writes its
+   * bytes verbatim and a captured CRLF file would otherwise come back as LF.
+   *
+   * Every other format answers through the viewer contract: the active viewer
+   * registers `capture` (see `registerCapture` in `viewerContextValue.ts`) and
+   * serialises itself the way its own save would. A viewer that registered
+   * nothing — a read-only format, or one still loading — resolves `null`, which
+   * the timer reads as "nothing to record".
+   */
+  const captureDocumentBytes = useCallback((): Uint8Array | null | Promise<Uint8Array | null> => {
+    if (!file) return null;
+    if (isMarkdownDocument) return encodeTextBytes(localMarkdown, getTextFileMeta(file.path));
+    return viewerCaptureRef.current();
+  }, [file, isMarkdownDocument, localMarkdown]);
+  useAutoCapture(versionHistory, documentDirty, captureDocumentBytes);
+
+  // Markdown is captured from `localMarkdown` right here, so it never needs a
+  // registration; every other format can only be captured if its viewer plugged
+  // one in. A format with no editor (a PDF, an image) registers nothing, and the
+  // panel simply does not offer the action.
+  const canCaptureNow = isMarkdownDocument || viewerCanCapture;
 
   // Versions are recorded in main, on write, so nothing in this component sees a
   // save happen. Two cheap triggers keep the list honest without polling:
@@ -859,11 +900,17 @@ function AppShell() {
   }, [documentDirty, refreshHistory]);
 
   const captureVersionNow = useCallback(async (): Promise<void> => {
-    const bytes = captureMarkdownBytes();
-    if (bytes === null) return;
+    const bytes = await captureDocumentBytes();
+    if (bytes === null) {
+      // The panel only offers this when `canCaptureNow` says a capture is
+      // possible, so landing here means the viewer changed its mind between the
+      // render and the click — say so rather than appearing to do nothing.
+      showToast(t('history.captureUnavailable'), 'info');
+      return;
+    }
     const stored = await versionHistory.captureNow(bytes);
     showToast(stored ? t('history.captured') : t('history.captureUnchanged'), stored ? 'success' : 'info');
-  }, [captureMarkdownBytes, showToast, t, versionHistory]);
+  }, [captureDocumentBytes, showToast, t, versionHistory]);
 
   /**
    * Puts a version back by writing its bytes over the document and reopening it.
@@ -1382,6 +1429,8 @@ function AppShell() {
           onDirtyChange={setViewerDirty}
           saveRef={viewerSaveRef}
           saveAsRef={viewerSaveAsRef}
+          captureRef={viewerCaptureRef}
+          onCanCaptureChange={setViewerCanCapture}
           exportContentRef={exportContentRef}
           filePath={filePath || null}
           onExportableFormatChange={setExportableContentFormat}
@@ -1459,7 +1508,7 @@ function AppShell() {
         history={versionHistory}
         onRestore={restoreVersion}
         documentDirty={documentDirty}
-        onCaptureNow={isMarkdownDocument ? captureVersionNow : null}
+        onCaptureNow={canCaptureNow ? captureVersionNow : null}
       />
 
       <ShortcutsModal isOpen={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />

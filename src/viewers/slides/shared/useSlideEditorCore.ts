@@ -12,6 +12,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 
 import type { SlideData } from '../../shared/SlideDeck.types'
 import {
+  useRegisterViewerCapture,
   useRegisterViewerSave,
   useRegisterViewerSaveAs,
   useReportSavedPath,
@@ -131,6 +132,7 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
   const registerSaveAs = useRegisterViewerSaveAs()
+  const registerCapture = useRegisterViewerCapture()
   const reportSavedPath = useReportSavedPath()
   useEffect(() => {
     setDirty(savedPkg !== null && history.present.pkg !== savedPkg)
@@ -189,6 +191,20 @@ export function useSlideEditorCore({ buffer, filePath, parseDeck, saveFilter }: 
     registerSaveAs(saveAs)
     return () => registerSaveAs(null)
   }, [registerSaveAs, saveAs])
+
+  // VERSIONS-2 — periodic version capture: the same package `write` would have
+  // written, without writing it. It joins the edit queue for the same reason a
+  // save does — `presentRef` is only current once whatever re-parse is in flight
+  // has finished — and leaves `savedPkg` alone, so the document stays dirty.
+  const capture = useCallback(async (): Promise<Uint8Array> => {
+    await queueRef.current
+    return writeOfficePackage(presentRef.current.pkg)
+  }, [])
+
+  useEffect(() => {
+    registerCapture(capture)
+    return () => registerCapture(null)
+  }, [registerCapture, capture])
 
   useViewerShortcuts(
     useCallback(

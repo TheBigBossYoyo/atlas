@@ -43,6 +43,7 @@ import { friendlyDocxErrorMessage, type Range } from '../editor'
 import type { Document as DocxDocument } from '../model'
 import { useTranslate, type TranslateFn } from '../../i18n'
 import {
+  useRegisterViewerCapture,
   useRegisterViewerSave,
   useRegisterViewerSaveAs,
   useReportSavedPath,
@@ -134,6 +135,7 @@ export function useDocxSave({
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
   const registerSaveAs = useRegisterViewerSaveAs()
+  const registerCapture = useRegisterViewerCapture()
 
   const [savePath, setSavePath] = useState(filePath)
   const [lastSavedRevision, setLastSavedRevision] = useState(0)
@@ -317,6 +319,30 @@ export function useDocxSave({
     registerSaveAs(handleSaveAs)
     return () => registerSaveAs(null)
   }, [registerSaveAs, handleSaveAs])
+
+  /**
+   * VERSIONS-2 — serialises the document for the version history WITHOUT saving.
+   *
+   * Three differences from `handleSave`, all of them deliberate:
+   *   - It reads `documentModelRef.current` instead of calling
+   *     `flushHeaderFooterEdits()`. That flush commits a pending field edit to
+   *     History, which is a real state change — fine when the user asked to
+   *     save, not something a two-minute timer may do behind their back. The
+   *     cost is that a header/footer field still being typed into is captured
+   *     as it was before the edit; the next save picks it up.
+   *   - It never touches `lastSavedRevision`. A capture must leave the document
+   *     dirty, or the shell would think the unsaved work had been written.
+   *   - It skips the fidelity check. That is a message about a file the user now
+   *     has on disk; nothing was written here, so there is nothing to warn about.
+   */
+  const capture = useCallback(async (): Promise<Uint8Array | null> => {
+    return saveDocx({ ...bundle, document: documentModelRef.current })
+  }, [bundle, documentModelRef])
+
+  useEffect(() => {
+    registerCapture(capture)
+    return () => registerCapture(null)
+  }, [registerCapture, capture])
 
   return { savePath, handleSave, handleSaveAs, fidelityWarningMessage, dismissFidelityWarning }
 }

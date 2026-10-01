@@ -127,8 +127,10 @@ describe('VersionHistoryPanel (VERSIONS-1)', () => {
     renderPanel()
     expect(screen.getByRole('button', { name: /Save a version now/i })).toBeInTheDocument()
 
-    // Binary formats have no cheap in-memory bytes to capture, so the action is
-    // absent rather than present and broken.
+    // VERSIONS-2 — every editable format can be captured now (each viewer
+    // registers its own serializer), but a format with no editor at all — a PDF,
+    // an image — still cannot. There the action is absent rather than present
+    // and broken.
     renderPanel({ onCaptureNow: null })
     expect(screen.queryAllByRole('button', { name: /Save a version now/i })).toHaveLength(1)
   })

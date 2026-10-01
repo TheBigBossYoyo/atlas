@@ -441,13 +441,30 @@ suite does not prove they ran.
 
 A version is recorded every time a document is written, for every format, because
 that capture happens in the main process at the moment of the write. On top of
-that, a **markdown** document being actively edited is captured every two minutes.
+that, a document being actively edited is captured every two minutes — for every
+editable format, not just markdown (VERSIONS-2): each editor registers how to
+serialise itself (`registerCapture` in `src/viewers/shared/viewerContextValue.ts`)
+and the shell's timer asks whichever one is active.
 
-**The other formats have no periodic capture.** A `.docx`, `.xlsx` or `.pptx`
-would have to be re-serialised in full on a timer to do the same, which is a real
-cost to impose continuously; they get a version on every save instead, which is
-what Word's own history gives you. If that matters for a long unsaved editing
-session, save.
+**A format with no editor has nothing to capture between saves.** A PDF or an
+image registers nothing, so the panel's "Save a version now" is absent rather
+than present and inert, and those documents get a version on every write only.
+
+**A header or footer field still being typed into is captured as it was.**
+Committing that pending edit is a real change to the document's history, which a
+background timer must not make on the user's behalf; the next save picks it up.
+
+**A capture is not a save**, and will not become one: it records bytes into the
+history and leaves the file on disk and the document's unsaved-changes state
+exactly as they were. `tests/e2e/version-history-formats.spec.ts` asserts the
+file is byte-identical after a capture, for precisely this reason.
+
+**Captured text carries its file's own encoding.** A version is restored by
+writing its bytes verbatim, so capturing a CRLF or UTF-16 file as plain UTF-8 LF
+would have quietly converted it on restore. `encodeTextBytes` in
+`src/utils/textDecoding.ts` reapplies the recorded convention; it is a mirror of
+main's `encodeTextBuffer`, and `src/__tests__/encodeTextBytesParity.test.ts` pins
+the two together byte for byte so they cannot drift.
 
 **Restoring requires the current version to be saved.** Restoring writes the
 chosen version over the document, and the state being replaced only survives if it

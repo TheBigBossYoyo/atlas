@@ -145,6 +145,7 @@ export const messages = {
   'history.restoreFailed': 'Cette version n’a pas pu être restaurée.',
   'history.captured': 'Version enregistrée.',
   'history.captureUnchanged': 'Rien n’a changé depuis la dernière version.',
+  'history.captureUnavailable': 'Ce document ne peut pas être capturé pour le moment.',
   'shortcuts.title': 'Raccourcis clavier',
   'shortcuts.closeAria': 'Fermer',
   'shortcuts.sectionFile': 'Fichier',

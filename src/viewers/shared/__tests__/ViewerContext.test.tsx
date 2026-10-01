@@ -8,6 +8,7 @@ import {
   useGetExportableContent,
   useNavItems,
   useOpenViewerFind,
+  useRegisterViewerCapture,
   useRegisterViewerFind,
   useRegisterViewerSave,
   useRegisterViewerSaveAs,
@@ -17,6 +18,8 @@ import {
   useSetViewerStats,
   useViewerIsDirty,
   useViewerSave,
+  useViewerCanCapture,
+  useViewerCapture,
   useViewerSaveAs,
   useViewerStats,
 } from '../useViewerContext'
@@ -319,6 +322,124 @@ describe('ViewerContext', () => {
     await result.current.save()
     expect(viewerSave).toHaveBeenCalledTimes(1)
     expect(viewerSaveAs).toHaveBeenCalledTimes(1)
+  })
+
+  // ---------------------------------------------------------------------------
+  // VERSIONS-2 — the version-capture capability contract
+  //
+  // This is what makes version history work for every format: each editable
+  // viewer plugs in "serialise what I have right now", and the shell's periodic
+  // capture calls it without knowing anything about the format.
+  // ---------------------------------------------------------------------------
+
+  it('capture() resolves null, and canCapture is false, when no viewer registered one', async () => {
+    // A read-only format (a PDF, an image) registers nothing. The shell reads
+    // that as "nothing to record" — it must not be an error, and the UI must not
+    // offer an action that would do nothing.
+    const wrapper = makeWrapper('/a.pdf')
+    const { result } = renderHook(
+      () => ({ capture: useViewerCapture(), canCapture: useViewerCanCapture() }),
+      { wrapper },
+    )
+
+    expect(result.current.canCapture).toBe(false)
+    await expect(result.current.capture()).resolves.toBeNull()
+  })
+
+  it('registerCapture flips canCapture and capture() returns the registered bytes', async () => {
+    const wrapper = makeWrapper('/a.docx')
+    const { result } = renderHook(
+      () => ({
+        capture: useViewerCapture(),
+        canCapture: useViewerCanCapture(),
+        registerCapture: useRegisterViewerCapture(),
+      }),
+      { wrapper },
+    )
+
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04])
+    const viewerCapture = vi.fn().mockResolvedValue(bytes)
+
+    act(() => {
+      result.current.registerCapture(viewerCapture)
+    })
+
+    expect(result.current.canCapture).toBe(true)
+    await expect(result.current.capture()).resolves.toBe(bytes)
+    expect(viewerCapture).toHaveBeenCalledTimes(1)
+  })
+
+  it('registerCapture(null) unregisters, and canCapture goes back to false', async () => {
+    const wrapper = makeWrapper('/a.docx')
+    const { result } = renderHook(
+      () => ({
+        capture: useViewerCapture(),
+        canCapture: useViewerCanCapture(),
+        registerCapture: useRegisterViewerCapture(),
+      }),
+      { wrapper },
+    )
+
+    const viewerCapture = vi.fn().mockResolvedValue(new Uint8Array([1]))
+
+    act(() => {
+      result.current.registerCapture(viewerCapture)
+    })
+    act(() => {
+      result.current.registerCapture(null)
+    })
+
+    expect(result.current.canCapture).toBe(false)
+    await expect(result.current.capture()).resolves.toBeNull()
+    expect(viewerCapture).not.toHaveBeenCalled()
+  })
+
+  it('a capture that throws resolves null instead of propagating', async () => {
+    // A capture is a best-effort extra on a two-minute timer. If re-serialising
+    // fails — a writer rejecting the model, an edit queue caught mid-flight —
+    // the person typing must see nothing at all, and the next tick tries again.
+    const wrapper = makeWrapper('/a.pptx')
+    const { result } = renderHook(
+      () => ({ capture: useViewerCapture(), registerCapture: useRegisterViewerCapture() }),
+      { wrapper },
+    )
+
+    act(() => {
+      result.current.registerCapture(async () => {
+        throw new Error('the package could not be written')
+      })
+    })
+
+    await expect(result.current.capture()).resolves.toBeNull()
+  })
+
+  it('capture is a separate registration from save', async () => {
+    // The distinction the whole feature rests on: a save writes to disk and
+    // moves the saved baseline, a capture must do neither. Wiring one to the
+    // other would make the periodic capture silently save the user's document
+    // every two minutes.
+    const wrapper = makeWrapper('/a.xlsx')
+    const { result } = renderHook(
+      () => ({
+        save: useViewerSave(),
+        registerSave: useRegisterViewerSave(),
+        capture: useViewerCapture(),
+        registerCapture: useRegisterViewerCapture(),
+      }),
+      { wrapper },
+    )
+
+    const viewerSave = vi.fn().mockResolvedValue(true)
+    const viewerCapture = vi.fn().mockResolvedValue(new Uint8Array([1]))
+
+    act(() => {
+      result.current.registerSave(viewerSave)
+      result.current.registerCapture(viewerCapture)
+    })
+
+    await result.current.capture()
+    expect(viewerCapture).toHaveBeenCalledTimes(1)
+    expect(viewerSave).not.toHaveBeenCalled()
   })
 
   // ---------------------------------------------------------------------------

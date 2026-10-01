@@ -36,10 +36,11 @@ import {
   type SpreadsheetDocument,
 } from './spreadsheetDocument'
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
-import { carryTextFileMeta, findTextFileMeta } from '../../utils/textDecoding'
+import { carryTextFileMeta, encodeTextBytes, findTextFileMeta, getTextFileMeta } from '../../utils/textDecoding'
 import { writeWorkbookThroughOriginal } from './xlsxPassthrough'
 import { useUndoableState } from './useUndoableState'
 import {
+  useRegisterViewerCapture,
   useRegisterViewerSave,
   useRegisterViewerSaveAs,
   useReportSavedPath,
@@ -80,6 +81,41 @@ function withExtension(name: string, extension: string): string {
 
 /** Formats whose package Atlas can patch in place, keeping styles and everything it does not model. */
 const PASSTHROUGH_BOOK_TYPES: ReadonlySet<string> = new Set(['xlsx', 'xlsm'])
+
+/**
+ * VERSIONS-2 — the document's bytes, for the version history, without writing
+ * anything. `writeToDisk` below produces the same bytes the same way for the
+ * workbook case; keeping both here, next to each other, is what stops a capture
+ * and a save from disagreeing about what this document is.
+ *
+ * The delimited case re-applies the recorded encoding/BOM/newline itself, which
+ * `writeToDisk` instead leaves to `save-file` in main. That is not a shortcut:
+ * a version is restored by writing its bytes verbatim, so a CSV captured as
+ * plain UTF-8 LF would quietly convert a CRLF/UTF-16 file on restore.
+ */
+async function serializeForHistory(
+  doc: SpreadsheetDocument,
+  target: SpreadsheetSaveTarget,
+  originalBuffer: ArrayBuffer | null,
+  metaSourcePath: string,
+): Promise<Uint8Array> {
+  if (target.kind === 'workbook') {
+    const throughOriginal =
+      originalBuffer && PASSTHROUGH_BOOK_TYPES.has(target.bookType)
+        ? await writeWorkbookThroughOriginal(originalBuffer, doc)
+        : null
+    return throughOriginal ?? (await writeWorkbookBytesWithTables(doc, target.bookType))
+  }
+
+  const sourceMeta = findTextFileMeta(metaSourcePath)
+  const body = sourceMeta
+    ? documentToDelimitedText(doc, target.delimiter, { newline: 'lf' })
+    : documentToDelimitedText(doc, target.delimiter)
+  const text = target.trailingNewline && body.length > 0 ? body + (sourceMeta ? '\n' : '\r\n') : body
+  // With no recorded meta the text already carries the historical CRLF output,
+  // so it is encoded as-is rather than run through the newline rewrite again.
+  return sourceMeta ? encodeTextBytes(text, getTextFileMeta(metaSourcePath)) : new TextEncoder().encode(text)
+}
 
 async function writeToDisk(
   doc: SpreadsheetDocument,
@@ -226,6 +262,7 @@ export function useSpreadsheetEditor(
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
   const registerSaveAs = useRegisterViewerSaveAs()
+  const registerCapture = useRegisterViewerCapture()
   const reportSavedPath = useReportSavedPath()
 
   useEffect(() => {
@@ -368,6 +405,21 @@ export function useSpreadsheetEditor(
     registerSaveAs(handleSaveAs)
     return () => registerSaveAs(null)
   }, [registerSaveAs, handleSaveAs])
+
+  // VERSIONS-2 — periodic version capture. Serializes the CURRENT document, in
+  // whatever format this document is saved as, and reports neither a save error
+  // nor a fallback warning: nothing was written, so there is nothing to tell the
+  // user about, and the save that follows will say it anyway.
+  const capture = useCallback(
+    (): Promise<Uint8Array> =>
+      serializeForHistory(history.present, target, originalBuffer, savePath ?? filePath),
+    [history.present, target, originalBuffer, savePath, filePath],
+  )
+
+  useEffect(() => {
+    registerCapture(capture)
+    return () => registerCapture(null)
+  }, [registerCapture, capture])
 
   // Ctrl+Z/Ctrl+Y (and Ctrl+Shift+Z as the common redo alternative) at the
   // active-viewer shortcut precedence tier (see DocxViewer's identical use

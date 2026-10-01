@@ -57,6 +57,25 @@ export type ViewerContextValue = {
   registerSaveAs: (saveAs: (() => Promise<boolean>) | null) => void
   saveAs: () => Promise<boolean>
   /**
+   * VERSIONS-2 — the active viewer plugs in "serialise what I have right now"
+   * so a version can be recorded WITHOUT saving.
+   *
+   * Same shape as `registerSave`, and separate from it on purpose: a save writes
+   * to disk and moves the document's saved baseline, while a capture must leave
+   * both untouched. Returning `null` means this viewer cannot produce bytes
+   * cheaply, and the periodic capture simply skips it rather than guessing.
+   */
+  registerCapture: (capture: (() => Promise<Uint8Array | null>) | null) => void
+  /** Serialises the active viewer's current state, or `null` if it registered none. */
+  capture: () => Promise<Uint8Array | null>
+  /**
+   * Whether anything is registered — reactive, unlike `capture` itself, so the
+   * shell can decide whether to offer "Save a version now" at all. Same split
+   * as `canFind`/`openFind` below and for the same reason: a ref cannot drive a
+   * render, and an action offered but silently inert is worse than one absent.
+   */
+  canCapture: boolean
+  /**
    * A viewer whose save landed somewhere other than the path it was opened
    * from (Save As) reports it here, so the shell can move the document's tab,
    * title and later saves to the new file. Without it the tab keeps pointing

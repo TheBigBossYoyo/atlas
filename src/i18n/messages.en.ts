@@ -142,6 +142,7 @@ export const messages = {
   'history.restoreFailed': 'That version could not be restored.',
   'history.captured': 'Saved a version.',
   'history.captureUnchanged': 'Nothing has changed since the last version.',
+  'history.captureUnavailable': 'This document cannot be captured right now.',
   'shortcuts.title': 'Keyboard Shortcuts',
   'shortcuts.closeAria': 'Close',
   'shortcuts.sectionFile': 'File',

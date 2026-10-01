@@ -8,6 +8,30 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Added
+
+- **Version history now covers every kind of document you can edit, not just
+  markdown.** A Word document, a spreadsheet, a slide deck or a source file you
+  are working on is captured every couple of minutes, the same way a markdown
+  file already was — so an hour of editing a `.docx` without pressing Ctrl+S is
+  recoverable, and the panel's **Save a version now** works wherever a document
+  can be edited at all.
+
+  A capture is not a save: it records what the document looks like right now and
+  leaves the file on disk, and your unsaved-changes state, exactly as they were.
+  A format with nothing to edit — a PDF, an image — still gets a version on every
+  write, and does not offer the button rather than offering one that does nothing.
+
+### Fixed
+
+- **A restored version of a text file keeps the file's own line endings and
+  encoding.** A version is put back by writing its bytes over the document, and a
+  capture taken between saves recorded plain UTF-8 with Unix line endings — so
+  restoring one could quietly turn a Windows-line-ending or UTF-16 file into
+  something else. Captures now carry the convention the file was opened with.
+
 ## [3.9.0] — 2026-09-30 (version history; the toolbar menus made clickable again)
 
 ### Added

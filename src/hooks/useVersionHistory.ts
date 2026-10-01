@@ -131,18 +131,30 @@ export function useVersionHistory(filePath: string | null): VersionHistoryState 
 export const AUTO_CAPTURE_INTERVAL_MS = 2 * 60 * 1000
 
 /**
+ * Produces the document's current bytes, or `null` when there are none to take.
+ *
+ * VERSIONS-2 — asynchronous because most formats are: a `.docx`, `.xlsx` or
+ * `.pptx` has to be re-zipped from the in-memory model, which markdown (already
+ * a string) does not.
+ */
+export type CaptureSource = () => Uint8Array | null | Promise<Uint8Array | null>
+
+/**
  * Captures the document periodically while it differs from what was last
  * recorded.
  *
  * `getBytes` is called only when a capture is actually due, never on render: for
  * a large document, serialising it is the expensive part and doing it on a timer
  * that usually has nothing to do would be a tax on every open document.
+ *
+ * VERSIONS-2 — one tick at a time. Re-serialising a large binary document can
+ * easily outlast the interval, and letting ticks overlap would pile several
+ * full re-zips of the same document on top of each other, each one competing
+ * for the main thread the user is typing on. A tick that arrives while the
+ * previous one is still working is dropped rather than queued: the next one is
+ * two minutes away and will capture a strictly newer state anyway.
  */
-export function useAutoCapture(
-  history: VersionHistoryState,
-  enabled: boolean,
-  getBytes: () => Uint8Array | null,
-): void {
+export function useAutoCapture(history: VersionHistoryState, enabled: boolean, getBytes: CaptureSource): void {
   const getBytesRef = useRef(getBytes)
   useEffect(() => {
     getBytesRef.current = getBytes
@@ -153,13 +165,27 @@ export function useAutoCapture(
     captureRef.current = history.captureNow
   }, [history.captureNow])
 
+  const inFlightRef = useRef(false)
+
   useEffect(() => {
     if (!enabled || !history.available) return undefined
     const timer = setInterval(() => {
-      const bytes = getBytesRef.current()
-      // The store refuses content identical to the newest version, so an idle
-      // document costs one comparison here and nothing on disk.
-      if (bytes !== null && bytes.length > 0) void captureRef.current(bytes)
+      if (inFlightRef.current) return
+      inFlightRef.current = true
+      void (async () => {
+        try {
+          const bytes = await getBytesRef.current()
+          // The store refuses content identical to the newest version, so an
+          // idle document costs one comparison here and nothing on disk.
+          if (bytes !== null && bytes.length > 0) await captureRef.current(bytes)
+        } catch {
+          // A format that cannot serialise right now (an edit queue mid-flight,
+          // a model the writer rejects) must not break the timer for the rest of
+          // the session, and must not interrupt someone who is mid-sentence.
+        } finally {
+          inFlightRef.current = false
+        }
+      })()
     }, AUTO_CAPTURE_INTERVAL_MS)
     return () => clearInterval(timer)
   }, [enabled, history.available])

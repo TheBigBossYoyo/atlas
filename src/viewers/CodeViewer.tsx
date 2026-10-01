@@ -7,6 +7,7 @@ import { getLangForExt } from './extToLang'
 import type { CodeEditorApi } from './code/CodeEditor'
 import { useCodeRun } from './code/useCodeRun'
 import {
+  useRegisterViewerCapture,
   useRegisterViewerFind,
   useRegisterViewerSave,
   useSetNavItems,
@@ -15,7 +16,7 @@ import {
 } from './shared/useViewerContext'
 import { useTranslate } from '../i18n'
 import { translateWriteError } from '../i18n/translateWriteError'
-import { getTextFileMeta, carryTextFileMeta } from '../utils/textDecoding'
+import { getTextFileMeta, carryTextFileMeta, encodeTextBytes } from '../utils/textDecoding'
 import './__styles__/viewer-code.css'
 
 /** USR-18 — CodeMirror is a sizeable chunk; only code files pay for it. */
@@ -66,6 +67,7 @@ function CodeViewerBase({ file }: ViewerProps) {
   const setStats = useSetViewerStats()
   const setDirty = useSetViewerDirty()
   const registerSave = useRegisterViewerSave()
+  const registerCapture = useRegisterViewerCapture()
   const registerFind = useRegisterViewerFind()
 
   const apiRef = useRef<CodeEditorApi | null>(null)
@@ -128,6 +130,22 @@ function CodeViewerBase({ file }: ViewerProps) {
     registerSave(save)
     return () => registerSave(null)
   }, [registerSave, save])
+
+  // VERSIONS-2 — periodic version capture, so an unsaved hour of editing in here
+  // is recoverable too. `save` hands main the text plus `meta` and lets it do
+  // the re-encoding; a capture has to do that itself, because a version is
+  // restored by writing its bytes verbatim — storing plain UTF-8 LF would turn a
+  // CRLF or UTF-16 source file into an LF one the moment it was restored.
+  const capture = useCallback(async (): Promise<Uint8Array | null> => {
+    const api = apiRef.current
+    if (!api) return null
+    return encodeTextBytes(api.getText(), getTextFileMeta(savePath))
+  }, [savePath])
+
+  useEffect(() => {
+    registerCapture(capture)
+    return () => registerCapture(null)
+  }, [registerCapture, capture])
 
   useEffect(() => {
     registerFind(() => apiRef.current?.openSearch())
