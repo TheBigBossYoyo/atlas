@@ -38,6 +38,7 @@ import { useCallback, useMemo, useState } from 'react'
 import type { EditableGridCell, GridCell, GridColumn, Item, GridMouseEventArgs } from '@glideapps/glide-data-grid'
 
 import { useGridTheme, type CustomGridTheme } from './useGridTheme'
+import { DEFAULT_CELL_FORMAT, type ResolvedCellFormat } from '../spreadsheet/xlsxCellStyles'
 
 const DEFAULT_COLUMN_WIDTH_PX = 120
 /** Sample at most this many rows per column to guess whether it's numeric. */
@@ -75,6 +76,22 @@ export type UseSpreadsheetGridOptions = {
   readonly formulas?: ReadonlyArray<ReadonlyArray<string | undefined>>
   /** Grid-space cells drawn as a header (bold on the header background) — Excel table header rows (USR-17). */
   readonly isHeaderCell?: (row: number, col: number) => boolean
+  /**
+   * SHEETFMT-1 — the workbook's own formatting for a cell, so the grid draws a
+   * bold header, a filled cell and a right-aligned column the way the file says
+   * rather than as plain text.
+   *
+   * A lookup rather than the style table itself, because the GRID's row index
+   * is not the SHEET's: frozen rows are lifted into their own strip and a row
+   * search filters rows out, so the caller (which owns that mapping already)
+   * has to be the one to resolve it. Passing the table directly would paint a
+   * filtered sheet's formats onto the wrong rows.
+   *
+   * Omitted for a format that carries no styling (`.csv`) or whose styles could
+   * not be read — then every cell renders exactly as it did before this
+   * existed.
+   */
+  readonly cellFormat?: (row: number, col: number) => ResolvedCellFormat
 }
 
 export type UseSpreadsheetGridResult = {
@@ -114,6 +131,35 @@ function isColumnNumeric(rows: ReadonlyArray<ReadonlyArray<string>>, col: number
   return totalSampled > 0 && numericCount / totalSampled >= NUMERIC_SAMPLE_THRESHOLD
 }
 
+/**
+ * Builds glide-data-grid's `baseFontStyle` from a cell's format.
+ *
+ * The grid draws onto a canvas with `ctx.font`, so weight, style and size all
+ * travel as one CSS shorthand string — `"italic 700 14px"` — and the family is
+ * appended by the grid from its own `fontFamily`. Only the parts the file
+ * actually specifies are emitted, so an unstyled cell keeps the theme's own
+ * font string untouched rather than being pinned to a hardcoded size.
+ *
+ * Underline and strike-through are NOT here: canvas `ctx.font` has no notion of
+ * either, and drawing them would mean a custom cell renderer. They are read
+ * (`ResolvedCellFormat` carries them, and a save preserves them) but not yet
+ * drawn — a gap worth being explicit about rather than silently dropping.
+ */
+function fontStyleFor(format: ResolvedCellFormat, base: string): string | undefined {
+  const parts: string[] = []
+  if (format.italic) parts.push('italic')
+  if (format.bold) parts.push('700')
+  if (format.fontSize !== undefined) {
+    // `base` is the theme's own `"13px"`-shaped string; a cell-specified point
+    // size replaces it. 1pt = 4/3 px at the 96dpi the rest of the app assumes.
+    parts.push(`${Math.round(format.fontSize * (4 / 3))}px`)
+  } else {
+    parts.push(base)
+  }
+  const style = parts.join(' ')
+  return style === base ? undefined : style
+}
+
 export function useSpreadsheetGrid({
   rows,
   colCount,
@@ -122,6 +168,7 @@ export function useSpreadsheetGrid({
   onCellEdited: onCellEditedOption,
   formulas,
   isHeaderCell,
+  cellFormat,
 }: UseSpreadsheetGridOptions): UseSpreadsheetGridResult {
   const theme = useGridTheme()
   const [hoveredRow, setHoveredRow] = useState<number | undefined>()
@@ -152,6 +199,22 @@ export function useSpreadsheetGrid({
       if (isHovered) bgCell = theme.bgRowHover
       const isHeader = isHeaderCell?.(row, col) ?? false
 
+      if (isHeader) {
+        return {
+          kind: 'text' as const,
+          data: editableValue,
+          displayData: cellValue,
+          allowOverlay: onCellEditedOption !== undefined,
+          themeOverride: { bgCell: theme.bgHeader, baseFontStyle: `600 ${theme.baseFontStyle}` },
+        } as GridCell
+      }
+
+      // SHEETFMT-1 — the workbook's own formatting for this cell. The default
+      // format produces an empty override, so an unstyled workbook renders
+      // byte-for-byte as it did before this existed.
+      const format = cellFormat?.(row, col) ?? DEFAULT_CELL_FORMAT
+      const fontStyle = fontStyleFor(format, theme.baseFontStyle)
+
       return {
         kind: 'text' as const,
         data: editableValue,
@@ -160,12 +223,19 @@ export function useSpreadsheetGrid({
         // the caller actually wired up `onCellEdited` below — otherwise the
         // grid stays honestly read-only exactly as before.
         allowOverlay: onCellEditedOption !== undefined,
-        themeOverride: isHeader
-          ? { bgCell: theme.bgHeader, baseFontStyle: `600 ${theme.baseFontStyle}` }
-          : { bgCell },
+        // A cell's own fill wins over the zebra striping and the hover
+        // highlight: those are Atlas's reading aids, while a fill is content
+        // the author chose, and losing it under a hover would hide exactly the
+        // cell being pointed at.
+        contentAlign: format.align,
+        themeOverride: {
+          bgCell: format.fill ?? bgCell,
+          ...(format.color ? { textDark: format.color } : {}),
+          ...(fontStyle ? { baseFontStyle: fontStyle } : {}),
+        },
       } as GridCell
     },
-    [rows, formulas, theme, hoveredRow, onCellEditedOption, isHeaderCell],
+    [rows, formulas, theme, hoveredRow, onCellEditedOption, isHeaderCell, cellFormat],
   )
 
   const onCellEdited = useMemo(() => {

@@ -1,0 +1,242 @@
+/**
+ * SHEETFMT-1 — the workbook's own cell formatting, through the real viewer.
+ *
+ * Atlas rendered every spreadsheet as unstyled text: a file whose header row is
+ * bold white-on-blue with a currency column looked exactly like a CSV. The unit
+ * tests in `src/viewers/spreadsheet/__tests__/xlsxCellStyles.test.ts` cover
+ * reading `styles.xml`; these cover the part that can only break in the wiring —
+ * that what was read reaches the cell the grid draws, through the sheet
+ * selection, the frozen-row strip, a search filter and a row insert, each of
+ * which shifts the grid's coordinates away from the file's.
+ *
+ * The fixture is a real OOXML package, built here, because the whole claim is
+ * about what Excel's own output means.
+ */
+import { act, render, waitFor } from '@testing-library/react'
+import JSZip from 'jszip'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { CompactSelection, type GridSelection, type Item } from '@glideapps/glide-data-grid'
+
+import type { LoadedFile } from '../../formats/types'
+import { ViewerProvider } from '../shared/ViewerContext'
+import { SpreadsheetViewer } from '../SpreadsheetViewer'
+
+type CapturedCell = {
+  readonly displayData: string
+  readonly contentAlign?: 'left' | 'center' | 'right'
+  readonly themeOverride?: {
+    readonly bgCell?: string
+    readonly textDark?: string
+    readonly baseFontStyle?: string
+  }
+}
+type CapturedProps = {
+  readonly getCellContent: (loc: readonly [number, number]) => CapturedCell
+  readonly rows: number
+  readonly onCellEdited?: (cell: Item, newValue: unknown) => void
+  readonly onGridSelectionChange?: (selection: GridSelection) => void
+}
+
+let lastDataEditorProps: CapturedProps | null = null
+
+vi.mock('@glideapps/glide-data-grid', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@glideapps/glide-data-grid')>()
+  return {
+    ...actual,
+    DataEditor: (props: CapturedProps) => {
+      lastDataEditorProps = props
+      return null
+    },
+  }
+})
+
+const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+const rels = (items: string): string =>
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${items}</Relationships>`
+
+/**
+ * A workbook whose A1:C1 header row is bold, white on blue and centred, with a
+ * red right-aligned total in B3 and everything else plain — enough that each
+ * assertion below distinguishes a real read from a default.
+ */
+async function buildFormattedWorkbook(): Promise<ArrayBuffer> {
+  const zip = new JSZip()
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+      `<Default Extension="xml" ContentType="application/xml"/>` +
+      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+      `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+  )
+  zip.file('_rels/.rels', rels(`<Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/>`))
+  zip.file(
+    'xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="${NS}" xmlns:r="${REL}"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+  )
+  zip.file(
+    'xl/_rels/workbook.xml.rels',
+    rels(
+      `<Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/>` +
+        `<Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/>`,
+    ),
+  )
+  zip.file(
+    'xl/worksheets/sheet1.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="${NS}">` +
+      `<dimension ref="A1:C3"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData>` +
+      `<row r="1">` +
+      `<c r="A1" s="1" t="inlineStr"><is><t>Item</t></is></c>` +
+      `<c r="B1" s="1" t="inlineStr"><is><t>Qty</t></is></c>` +
+      `<c r="C1" s="1" t="inlineStr"><is><t>Note</t></is></c>` +
+      `</row>` +
+      `<row r="2">` +
+      `<c r="A2" t="inlineStr"><is><t>Paper</t></is></c>` +
+      `<c r="B2"><v>3</v></c>` +
+      `<c r="C2" t="inlineStr"><is><t>plain</t></is></c>` +
+      `</row>` +
+      `<row r="3">` +
+      `<c r="A3" t="inlineStr"><is><t>Total</t></is></c>` +
+      `<c r="B3" s="2"><v>3</v></c>` +
+      `</row>` +
+      `</sheetData></worksheet>`,
+  )
+  zip.file(
+    'xl/styles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="${NS}">` +
+      `<fonts count="3">` +
+      `<font><sz val="11"/><name val="Calibri"/></font>` +
+      `<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>` +
+      `<font><sz val="11"/><color rgb="FFFF0000"/><name val="Calibri"/></font>` +
+      `</fonts>` +
+      `<fills count="3">` +
+      `<fill><patternFill patternType="none"/></fill>` +
+      `<fill><patternFill patternType="gray125"/></fill>` +
+      `<fill><patternFill patternType="solid"><fgColor rgb="FF0070C0"/><bgColor indexed="64"/></patternFill></fill>` +
+      `</fills>` +
+      `<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>` +
+      `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
+      `<cellXfs count="3">` +
+      `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
+      `<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1">` +
+      `<alignment horizontal="center"/></xf>` +
+      `<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1">` +
+      `<alignment horizontal="right"/></xf>` +
+      `</cellXfs></styleSheet>`,
+  )
+  return zip.generateAsync({ type: 'arraybuffer' })
+}
+
+async function mount(content: ArrayBuffer, path = '/tmp/report.xlsx'): Promise<void> {
+  const file: LoadedFile = { kind: 'binary', content, path, format: 'xlsx' }
+  render(
+    <ViewerProvider filePath={file.path}>
+      <SpreadsheetViewer file={file} />
+    </ViewerProvider>,
+  )
+  await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+  // The grid's first paint comes from the parse; the formatting arrives with
+  // the zip read that follows it, so the cell is read after that settles.
+  await waitFor(() => expect(lastDataEditorProps!.getCellContent([0, 0]).displayData).toBe('Item'))
+}
+
+/** `[col, row]` in grid coordinates, matching glide-data-grid's own ordering. */
+function cell(col: number, row: number): CapturedCell {
+  return lastDataEditorProps!.getCellContent([col, row])
+}
+
+/** Clicking a cell. The toolbar's row/column actions act on the selection, so they do nothing without one. */
+function selectCell(col: number, row: number): void {
+  lastDataEditorProps!.onGridSelectionChange?.({
+    current: { cell: [col, row], range: { x: col, y: row, width: 1, height: 1 }, rangeStack: [] },
+    columns: CompactSelection.empty(),
+    rows: CompactSelection.empty(),
+  })
+}
+
+beforeEach(() => {
+  lastDataEditorProps = null
+  window.electronAPI = {
+    saveBinaryFile: vi.fn().mockResolvedValue({ saved: true, path: '/tmp/report.xlsx', name: 'report.xlsx' }),
+    saveFile: vi.fn(),
+  } as unknown as typeof window.electronAPI
+})
+
+describe('SpreadsheetViewer — the workbook its own formatting (SHEETFMT-1)', () => {
+  it('draws a bold, filled, centred header row', async () => {
+    await mount(await buildFormattedWorkbook())
+
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+    const header = cell(0, 0)
+    expect(header.themeOverride?.textDark).toBe('#FFFFFF')
+    expect(header.themeOverride?.baseFontStyle).toContain('700')
+    expect(header.contentAlign).toBe('center')
+  })
+
+  it('leaves an unstyled cell exactly as it was before formatting was read', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+
+    // The whole-feature safety property: a cell the file does not style must
+    // not acquire a colour, a font or an alignment. Without this, reading
+    // `fonts[0]` as a format pinned every workbook to its stored font size and
+    // overrode the user's own theme.
+    const plain = cell(2, 1)
+    expect(plain.themeOverride?.textDark).toBeUndefined()
+    expect(plain.themeOverride?.baseFontStyle).toBeUndefined()
+    expect(plain.contentAlign).toBeUndefined()
+  })
+
+  it('applies a per-cell colour and alignment to the right cell', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(1, 2).themeOverride?.textDark).toBe('#FF0000'))
+    expect(cell(1, 2).contentAlign).toBe('right')
+    // ...and not to its neighbours.
+    expect(cell(0, 2).themeOverride?.textDark).toBeUndefined()
+    expect(cell(2, 2).themeOverride?.textDark).toBeUndefined()
+  })
+
+  it('keeps formatting on the right rows after a row is inserted above it', async () => {
+    // The coordinate trap this feature's design is built around: `cellStyles`
+    // is indexed by the cell's position in the FILE, while the grid's rows
+    // shift as soon as one is inserted. Reading formats by the current index
+    // slides every one of them a row out of place.
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(1, 2).themeOverride?.textDark).toBe('#FF0000'))
+
+    // Insert above the red total's own row, so it is pushed down by one.
+    act(() => selectCell(1, 2))
+    const insertRow = document.querySelector<HTMLButtonElement>('[aria-label*="Insert row" i]')
+    expect(insertRow, 'the toolbar should offer Insert row').not.toBeNull()
+    act(() => insertRow!.click())
+    await waitFor(() => expect(cell(0, 3).displayData).toBe('Total'))
+
+    // The red total moved from row 2 to row 3, and its formatting came with it.
+    expect(cell(1, 3).themeOverride?.textDark).toBe('#FF0000')
+    // The inserted row is genuinely new, so it carries no formatting at all.
+    expect(cell(1, 2).themeOverride?.textDark).toBeUndefined()
+  })
+
+  it('renders a workbook with no styles.xml unstyled rather than failing', async () => {
+    // Every `.csv`, `.xls` and SheetJS-written file takes this path.
+    const bare = new JSZip()
+    bare.file('nope.txt', 'not a workbook')
+    await expect(
+      (async () => {
+        const file: LoadedFile = {
+          kind: 'binary',
+          content: await bare.generateAsync({ type: 'arraybuffer' }),
+          path: '/tmp/bare.xlsx',
+          format: 'xlsx',
+        }
+        render(
+          <ViewerProvider filePath={file.path}>
+            <SpreadsheetViewer file={file} />
+          </ViewerProvider>,
+        )
+      })(),
+    ).resolves.not.toThrow()
+  })
+})

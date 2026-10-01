@@ -11,7 +11,16 @@
  */
 import { useEffect, useRef, useState } from 'react'
 
-import { attachFrozenPanes, attachSheetSources, attachTables, parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
+import {
+  attachCellStyles,
+  attachFrozenPanes,
+  attachSheetSources,
+  attachTables,
+  cellStyleRequests,
+  parseWorkbookBuffer,
+  type ParsedSheet,
+} from './spreadsheetGrid'
+import { readWorkbookCellStyles } from '../spreadsheet/xlsxCellStyles'
 import { XLSX_WORKER_BYTE_THRESHOLD } from './sizeThresholds'
 import type { SpreadsheetWorkerRequest, SpreadsheetWorkerResponse } from './spreadsheetWorker.worker'
 import { readFrozenPanes } from '../spreadsheet/spreadsheetPanes'
@@ -37,9 +46,11 @@ export function useSpreadsheetWorkbook(buffer: ArrayBuffer | null): SpreadsheetW
     let cancelled = false
     let worker: Worker | undefined
 
-    // Runs synchronously (there is no `await` anywhere in this body — every
-    // branch below is itself synchronous), so `worker` is already assigned
-    // by the time this IIFE returns and the effect's own cleanup runs.
+    // The WORKER branch below runs synchronously up to the point `worker` is
+    // assigned, so it is already set by the time this IIFE yields and the
+    // effect's own cleanup runs. (The small-file branch does await — frozen
+    // panes, tables, part paths and, since SHEETFMT-1, cell styles are all
+    // read from the zip — but it returns before ever reaching the worker.)
     // Nested in a callback, rather than at the effect's top level, so it
     // synchronizes with the external parse/Worker call instead of reading as
     // derivable state (mirrors DocxViewer's load effect).
@@ -63,11 +74,17 @@ export function useSpreadsheetWorkbook(buffer: ArrayBuffer | null): SpreadsheetW
             readSheetTables(buffer),
             readSheetPartPaths(buffer),
           ])
+          const withSources = attachSheetSources(
+            attachTables(attachFrozenPanes(sheets, paneMap), tableMap),
+            partPaths,
+          )
+      // SHEETFMT-1 — cell formatting is read last, because it needs each
+      // sheet's `sourcePath` (from `attachSheetSources` above) to know which
+      // worksheet part to scan. It returns `null` for any format with no
+      // `styles.xml`, which is the "render unstyled" path Atlas had before.
+          const styles = await readWorkbookCellStyles(buffer, cellStyleRequests(withSources))
           if (!cancelled) {
-            setState({
-              status: 'ready',
-              sheets: attachSheetSources(attachTables(attachFrozenPanes(sheets, paneMap), tableMap), partPaths),
-            })
+            setState({ status: 'ready', sheets: attachCellStyles(withSources, styles?.styles ?? null) })
           }
         } catch (err) {
           if (!cancelled) setState({ status: 'error', error: err instanceof Error ? err.message : String(err) })

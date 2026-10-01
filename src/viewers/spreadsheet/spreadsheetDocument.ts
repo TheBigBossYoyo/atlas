@@ -40,6 +40,12 @@ import type { CellLookup } from './spreadsheetFormula'
 import { parseCellRange } from './cellRef'
 import type { FrozenPanes, MergeRange, ParsedSheet } from '../shared/spreadsheetGrid'
 import {
+  DEFAULT_CELL_FORMAT,
+  formatAt,
+  type ResolvedCellFormat,
+  type SheetCellStyles,
+} from './xlsxCellStyles'
+import {
   tablesAfterColumnDelete,
   tablesAfterColumnInsert,
   tablesAfterRowDelete,
@@ -73,6 +79,39 @@ export type EditableSheet = {
   readonly colSources?: ReadonlyArray<number | null>
   /** `"row:col"` (current indexes) of every cell edited since load. */
   readonly editedCells?: ReadonlySet<string>
+  /**
+   * SHEETFMT-1 — the formatting this sheet's cells carry in the file, indexed
+   * by the cell's ORIGINAL row/column (the same coordinates `rowSources`/
+   * `colSources` map back to), so a row insert or delete moves formats with
+   * the rows they belong to instead of shifting them all down. Resolve a
+   * current cell's format through `formatForCell` rather than indexing this
+   * directly. Absent for CSV/TSV and for any format with no styles to read.
+   */
+  readonly cellStyles?: SheetCellStyles
+}
+
+/**
+ * The format for a cell at its CURRENT row/column.
+ *
+ * Goes through `rowSources`/`colSources` because the two coordinate systems
+ * diverge the moment a row or column is inserted or deleted: `cellStyles` is
+ * indexed by where a cell was in the FILE, while `row`/`col` here are where it
+ * is now. Inserting a row above a styled block and then reading formats by the
+ * current index would slide every format in the sheet one row out of place —
+ * a bug that looks like "the formatting is subtly wrong" rather than like a
+ * mapping error.
+ *
+ * A row or column Atlas added itself has no original index (`null`), and
+ * correctly has no formatting.
+ */
+export function formatForCell(sheet: EditableSheet, row: number, col: number): ResolvedCellFormat {
+  if (!sheet.cellStyles) return DEFAULT_CELL_FORMAT
+  const sourceRow = sheet.rowSources ? sheet.rowSources[row] : row
+  const sourceCol = sheet.colSources ? sheet.colSources[col] : col
+  if (sourceRow === null || sourceRow === undefined || sourceCol === null || sourceCol === undefined) {
+    return DEFAULT_CELL_FORMAT
+  }
+  return formatAt(sheet.cellStyles, sourceRow, sourceCol)
 }
 
 /** Key for `editedCells`. */
@@ -134,6 +173,7 @@ export function createDocument(parsedSheets: ReadonlyArray<ParsedSheet>): Spread
         rowHeightsPx: sheet.grid.rowHeightsPx,
         ...(sheet.freeze ? { freeze: sheet.freeze } : {}),
         ...(sheet.tables ? { tables: sheet.tables } : {}),
+        ...(sheet.cellStyles ? { cellStyles: sheet.cellStyles } : {}),
         ...(sheet.sourcePath !== undefined
           ? {
               sourcePath: sheet.sourcePath,

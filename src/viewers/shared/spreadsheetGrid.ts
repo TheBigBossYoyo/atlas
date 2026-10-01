@@ -41,6 +41,7 @@
 import * as XLSX from 'xlsx'
 import { formatCellText } from './xlsxCellFormat'
 import type { SheetTable } from '../spreadsheet/spreadsheetTables'
+import type { SheetCellStyles, WorkbookCellStyles } from '../spreadsheet/xlsxCellStyles'
 import { checkWorkbookZipBudgetSync, SpreadsheetZipBombError } from '../spreadsheet/spreadsheetZipBudget'
 import { t } from '../../i18n'
 
@@ -67,6 +68,21 @@ export type SheetGrid = {
    * formula" without re-walking the worksheet a second time.
    */
   readonly formulas: ReadonlyArray<ReadonlyArray<string | undefined>>
+  /**
+   * The sheet's used range origin, in absolute sheet coordinates — `rows[0][0]`
+   * IS this cell.
+   *
+   * SHEETFMT-1 needs it: cell formatting is read from the worksheet XML, where
+   * every cell carries an absolute address (`B3`), while this grid is indexed
+   * from the used range. A sheet whose data starts at B3 would otherwise have
+   * every format landing a row and a column off.
+   *
+   * Optional, defaulting to 0 (= A1), so a hand-built grid — every spreadsheet
+   * unit test constructs one — does not have to state an origin it has no
+   * opinion about. `sheetToGrid` always sets it from the real `!ref`.
+   */
+  readonly originRow?: number
+  readonly originCol?: number
 }
 
 /** Frozen-pane split, in leading column/row counts (T4/DAT-10 remainder). */
@@ -91,6 +107,45 @@ export type ParsedSheet = {
   readonly tables?: ReadonlyArray<SheetTable>
   /** Worksheet part this sheet was parsed from (OOXML only) — lets a save write through the original file. */
   readonly sourcePath?: string
+  /**
+   * SHEETFMT-1 — the cell formatting this sheet carries (bold, fills, borders,
+   * alignment, number formats), read from `xl/styles.xml` plus each cell's own
+   * `s` index. `undefined` for any format that has no styles part to read
+   * (`.csv`, `.xls`, `.ods`) and whenever that part could not be read, which is
+   * the "render unstyled" case Atlas behaved as before this existed.
+   */
+  readonly cellStyles?: SheetCellStyles
+}
+
+/**
+ * Attaches each sheet's cell formatting, by worksheet part path.
+ *
+ * Keyed by `sourcePath` rather than by index because that is what
+ * `readWorkbookCellStyles` returns and what survives a sheet reorder — the same
+ * reason `attachTables`/`attachFrozenPanes` key by sheet name.
+ */
+export function attachCellStyles(
+  sheets: ReadonlyArray<ParsedSheet>,
+  styles: WorkbookCellStyles | null,
+): ParsedSheet[] {
+  if (!styles) return [...sheets]
+  return sheets.map(sheet => {
+    const cellStyles = sheet.sourcePath ? styles.get(sheet.sourcePath) : undefined
+    return cellStyles ? { ...sheet, cellStyles } : sheet
+  })
+}
+
+/** The arguments `readWorkbookCellStyles` needs for each sheet, derived from sheets that already carry their `sourcePath`. */
+export function cellStyleRequests(
+  sheets: ReadonlyArray<ParsedSheet>,
+): Array<{ sourcePath?: string; rowCount: number; colCount: number; offsetRow: number; offsetCol: number }> {
+  return sheets.map(sheet => ({
+    sourcePath: sheet.sourcePath,
+    rowCount: sheet.grid.rows.length,
+    colCount: sheet.grid.colCount,
+    offsetRow: sheet.grid.originRow ?? 0,
+    offsetCol: sheet.grid.originCol ?? 0,
+  }))
 }
 
 /** Attaches each sheet's worksheet part path, by workbook order (USR-17 save-through-original). */
@@ -132,7 +187,7 @@ const EMPTY_GRID: SheetGrid = {
   merges: [],
   colWidthsPx: [],
   rowHeightsPx: [],
-  formulas: [],
+  formulas: [], originRow: 0, originCol: 0,
 }
 
 /**
@@ -208,7 +263,7 @@ export function sheetToGrid(ws: XLSX.WorkSheet): SheetGrid {
     }
   }
 
-  return { rows, colCount, merges, colWidthsPx, rowHeightsPx, formulas }
+  return { rows, colCount, merges, colWidthsPx, rowHeightsPx, formulas, originRow: range.s.r, originCol: range.s.c }
 }
 
 /** Sheet visibility state (0=visible, 1=hidden, 2=very hidden) → `hidden` (T4/DAT-11). */

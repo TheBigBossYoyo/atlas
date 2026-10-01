@@ -8,6 +8,27 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Added
+
+- **Spreadsheets now show the formatting they actually have.** Atlas used to draw
+  every workbook as plain text: a file whose header row is bold white-on-blue
+  with a currency column looked exactly like a CSV. Bold, italic, font size and
+  family, text colour, cell fills and alignment are now read from the file and
+  drawn in the grid.
+
+  The formatting was never lost — saving always kept it — it was simply never
+  read, because the spreadsheet library Atlas uses does not expose cell styles at
+  all. Atlas now reads them out of the file itself.
+
+  A cell the file does not style is drawn exactly as before, so an unstyled
+  workbook looks unchanged, and your own theme's font is still used wherever the
+  file does not ask for a specific one.
+
+  Applying formatting from inside Atlas — a bold button, a number-format picker,
+  a fill colour — is the next step and is not in this release.
+
 ## [3.10.0] — 2026-10-01 (version history for every editable format)
 
 ### Added

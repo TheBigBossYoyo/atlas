@@ -30,7 +30,10 @@ how much you can do with it depends on the format:
   presenter view, and save through the original package.
 - XLSX, ODS, and legacy spreadsheets: cell editing, a small in-house formula
   evaluator, row/column/sheet operations, and saving that keeps the original
-  file's styles and charts intact for `.xlsx`/`.xlsm`.
+  file's styles and charts intact for `.xlsx`/`.xlsm`. A workbook's own cell
+  formatting — bold, italic, font size and colour, fills and alignment — is read
+  from the file and drawn in the grid. Applying formatting from Atlas is not
+  there yet; see [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 - CSV and TSV: the same grid engine as the spreadsheets, full editing.
 - PDF: view-only. Text selection, search, print, thumbnails, and
   password-protected files.

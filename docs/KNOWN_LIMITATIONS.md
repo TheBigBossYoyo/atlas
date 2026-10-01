@@ -252,6 +252,50 @@ this reference syntax). String literals inside formulas are never touched.
 Number/date/currency formatting follows the workbook's own stored format,
 not an explicit user-chosen locale.
 
+**Cell formatting is now READ and rendered (SHEETFMT-1), not yet applied.** Until
+this, Atlas drew every workbook as unstyled text — a file whose header row was
+bold white-on-blue with a currency column looked exactly like a CSV. The styles
+were never lost (the save path keeps the whole original `styles.xml`), they were
+simply never read, because SheetJS's community build does not expose them: with
+`cellStyles: true` a cell comes back as `{t,v,w,z,s:{patternType:'none'}}`, where
+the number format is real and `s` is a stub with no font, fill or border in it.
+`xlsxCellStyles.ts` therefore reads `xl/styles.xml` and each cell's own `s` index
+out of the package XML directly.
+
+What is drawn: **bold**, *italic*, font size and family, font colour, a solid
+fill, and horizontal alignment. What is read and preserved but NOT yet drawn:
+underline and strike-through (the grid is a canvas, and `ctx.font` has no notion
+of either — they need a custom cell renderer), cell borders, vertical alignment
+and wrapped text. A theme colour (`<color theme="4">`) is deliberately left
+unresolved rather than guessed, since that needs the theme part's colour scheme
+and a wrong colour is worse than inheriting. Gradient and pattern fills other
+than `solid` are ignored rather than approximated.
+
+Two details that cost real bugs to get right, both pinned by tests:
+  - **`fonts[0]` is the workbook's DEFAULT font, not a format.** Nearly every
+    `<xf>` references it and it almost always states a size and a family, so
+    reporting those as per-cell formatting made Atlas override its own theme
+    font for every workbook, styled or not. Font 0 is the baseline; only what
+    differs from it is formatting.
+  - **Formats are indexed by a cell's ORIGINAL row/column**, and resolved
+    through `rowSources`/`colSources` (`formatForCell`). Inserting a row above a
+    styled block and reading formats by the current index slides every format in
+    the sheet one row out of place.
+
+**You still cannot APPLY formatting.** There is no bold button, number-format
+picker, fill colour or border control for a spreadsheet cell — the editing
+toolbar has structural operations (insert/delete row and column), paste and
+undo/redo only. That is the next step, and the `<xf>`/`<numFmt>` interning
+machinery it needs already exists in `xlsxPassthrough.ts` for the number formats
+an edit already assigns.
+
+**Cost.** Reading styles adds one regex scan of each worksheet part: 62 ms for a
+100k-row, 4-column sheet (400k cells, ~10 MB of XML), measured by
+`xlsxCellStylesScale.test.ts`, and off the main thread entirely for a file that
+size since it runs in the parsing Worker. A format is NOT stored per cell —
+`styleIds` holds one small integer per cell into a shared `formats` table, which
+is the same indirection OOXML's own `s` attribute expresses.
+
 ## Text / Code
 
 Source code opens in a CodeMirror 6 editor (find/replace, go to line,

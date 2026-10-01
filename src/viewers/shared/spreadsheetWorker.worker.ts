@@ -16,7 +16,16 @@
  * Chromium exposes `DOMParser` on the Worker global scope, so this works
  * unmodified here.
  */
-import { attachFrozenPanes, attachSheetSources, attachTables, parseWorkbookBuffer, type ParsedSheet } from './spreadsheetGrid'
+import {
+  attachCellStyles,
+  attachFrozenPanes,
+  attachSheetSources,
+  attachTables,
+  cellStyleRequests,
+  parseWorkbookBuffer,
+  type ParsedSheet,
+} from './spreadsheetGrid'
+import { readWorkbookCellStyles } from '../spreadsheet/xlsxCellStyles'
 import { readFrozenPanes } from '../spreadsheet/spreadsheetPanes'
 import { readSheetPartPaths, readSheetTables } from '../spreadsheet/spreadsheetTables'
 
@@ -36,9 +45,16 @@ self.onmessage = async (event: MessageEvent<SpreadsheetWorkerRequest>) => {
       readSheetTables(event.data.buffer),
       readSheetPartPaths(event.data.buffer),
     ])
+    const withSources = attachSheetSources(attachTables(attachFrozenPanes(sheets, paneMap), tableMap), partPaths)
+    // SHEETFMT-1 — cell formatting needs each sheet's `sourcePath` to know
+    // which worksheet part to scan, so it is read after `attachSheetSources`.
+    // This is the large-file path, which is exactly where doing it off the main
+    // thread matters: a 100k-row sheet's style scan is the same size as its
+    // value parse.
+    const styles = await readWorkbookCellStyles(event.data.buffer, cellStyleRequests(withSources))
     const response: SpreadsheetWorkerResponse = {
       ok: true,
-      sheets: attachSheetSources(attachTables(attachFrozenPanes(sheets, paneMap), tableMap), partPaths),
+      sheets: attachCellStyles(withSources, styles?.styles ?? null),
     }
     self.postMessage(response)
   } catch (err) {

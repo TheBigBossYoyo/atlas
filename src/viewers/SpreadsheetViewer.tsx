@@ -21,7 +21,8 @@ import { useGridCellAnnouncement } from './shared/useGridCellAnnouncement'
 import { commitGridEdit, useGridBlankMargin } from './shared/useGridBlankMargin'
 import { ViewerLoading } from '../components/ViewerLoading'
 import { SearchOverlay } from '../components/SearchOverlay'
-import { createDocument } from './spreadsheet/spreadsheetDocument'
+import { createDocument, formatForCell } from './spreadsheet/spreadsheetDocument'
+import { DEFAULT_CELL_FORMAT, type ResolvedCellFormat } from './spreadsheet/xlsxCellStyles'
 import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from './spreadsheet/useSpreadsheetEditor'
 import { bookTypeForExtension } from './spreadsheet/spreadsheetWrite'
 import { SpreadsheetEditToolbar } from './spreadsheet/SpreadsheetEditToolbar'
@@ -259,6 +260,19 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     [sheetRowForGridRow, activeSheet],
   )
 
+  // SHEETFMT-1 — the workbook's own cell formatting, resolved from the GRID's
+  // row to the SHEET's (frozen rows are lifted out and a search filters rows,
+  // so the two differ) and then on to the cell's ORIGINAL row inside
+  // `formatForCell`, so a row insert moves formats with their rows.
+  const cellFormat = useCallback(
+    (row: number, col: number): ResolvedCellFormat => {
+      const sheetRow = sheetRowForGridRow(row)
+      if (!activeSheet || sheetRow === undefined) return DEFAULT_CELL_FORMAT
+      return formatForCell(activeSheet, sheetRow, col)
+    },
+    [activeSheet, sheetRowForGridRow],
+  )
+
   const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited } = useSpreadsheetGrid({
     rows: bodyRows,
     colCount: gridColCount,
@@ -267,6 +281,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     onCellEdited: handleCellEdited,
     formulas: bodyFormulas,
     isHeaderCell: activeSheet?.tables?.length ? isHeaderCell : undefined,
+    cellFormat: activeSheet?.cellStyles ? cellFormat : undefined,
   })
 
   const gridFind = useGridFind(bodyRows)

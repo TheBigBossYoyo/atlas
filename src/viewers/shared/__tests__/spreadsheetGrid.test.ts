@@ -90,6 +90,10 @@ describe('sheetToGrid', () => {
       colWidthsPx: [],
       rowHeightsPx: [],
       formulas: [],
+      // SHEETFMT-1 — an empty grid still states its origin, so a caller
+      // resolving cell formatting against it reads A1 rather than `undefined`.
+      originRow: 0,
+      originCol: 0,
     })
   })
 
