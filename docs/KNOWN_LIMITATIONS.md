@@ -282,12 +282,40 @@ Two details that cost real bugs to get right, both pinned by tests:
     styled block and reading formats by the current index slides every format in
     the sheet one row out of place.
 
-**You still cannot APPLY formatting.** There is no bold button, number-format
-picker, fill colour or border control for a spreadsheet cell — the editing
-toolbar has structural operations (insert/delete row and column), paste and
-undo/redo only. That is the next step, and the `<xf>`/`<numFmt>` interning
-machinery it needs already exists in `xlsxPassthrough.ts` for the number formats
-an edit already assigns.
+**Applying formatting (SHEETFMT-2) now works for `.xlsx`/`.xlsm`.** The editing
+toolbar has bold, italic, underline, strike-through, horizontal alignment, a text
+colour, a fill colour and a number-format picker, applied to the whole selected
+range. Verified externally: LibreOffice reads all of it back out of the files
+Atlas writes (`libreOfficeCellFormat.test.ts`, which also checks an unformatted
+control does NOT produce those declarations, so the comparison can fail).
+
+What it does NOT yet cover:
+  - **Borders.** Reading a border is modelled (`bordered`), applying one is not —
+    a border is per-edge with a style and a colour each, which needs more UI than
+    one button and more model than a boolean.
+  - **Vertical alignment and wrapped text**, for the same reason the grid does
+    not draw them: both need a custom canvas cell renderer.
+  - **Font family and size.** The model and the writer handle both
+    (`CellFormatPatch.fontName`/`fontSize`); there is no control for them yet.
+  - **A `.csv`/`.tsv` cannot carry formatting at all**, so the formatting group
+    is absent there rather than present and silently lossy.
+  - **Underline and strike-through are written and preserved, but the canvas grid
+    does not draw them** — so a cell can be underlined in the saved file while
+    Atlas itself shows it plain. That is the one place the editor currently lies
+    about its own result.
+
+Two implementation notes worth keeping:
+  - **A cell that was only RE-FORMATTED keeps its verbatim clone**, with just its
+    `s` index changed. Rebuilding it from display text to make it bold would
+    downgrade it — a date would come back as the string it renders as, rich text
+    would flatten — which is exactly the loss the passthrough exists to avoid.
+  - **Every `<font>`, `<fill>` and `<xf>` is interned** by serialized form, so
+    formatting a range adds one table entry rather than one per cell, and saving
+    the same document twice adds none. Excel caps `cellXfs` at 64k and a naive
+    implementation reaches it in one long session. `styles.xml`'s fixed element
+    order (numFmts, fonts, fills, borders, cellStyleXfs, cellXfs) is asserted
+    directly, because breaking it produces a file Excel refuses to open while
+    every value-level test still passes.
 
 **Cost.** Reading styles adds one regex scan of each worksheet part: 62 ms for a
 100k-row, 4-column sheet (400k cells, ~10 MB of XML), measured by

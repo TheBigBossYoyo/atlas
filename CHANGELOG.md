@@ -26,8 +26,22 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   workbook looks unchanged, and your own theme's font is still used wherever the
   file does not ask for a specific one.
 
-  Applying formatting from inside Atlas — a bold button, a number-format picker,
-  a fill colour — is the next step and is not in this release.
+- **And you can now apply it.** The spreadsheet toolbar has bold, italic,
+  underline, strike-through, alignment, a text colour, a fill colour and a
+  number-format picker, applied to whatever you have selected. The toggles show
+  the selected cell's current state, so pressing Bold on an already-bold cell
+  clears it.
+
+  It writes real spreadsheet formatting, not an Atlas-only annotation: Excel,
+  LibreOffice and anything else that opens `.xlsx` sees the same thing. That is
+  checked against LibreOffice itself rather than assumed.
+
+  Formatting a cell you have not typed in keeps everything else about it — a date
+  stays a date, a formula stays a formula, and a cell's cached value is not
+  rebuilt from the text you see on screen.
+
+  Borders, font family and font size are not in this release. Underline and
+  strike-through are saved correctly but the grid does not draw them yet.
 
 ## [3.10.0] — 2026-10-01 (version history for every editable format)
 

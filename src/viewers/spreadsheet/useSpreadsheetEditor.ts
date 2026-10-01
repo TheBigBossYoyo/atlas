@@ -33,6 +33,8 @@ import {
   pasteRange as pasteRangeOp,
   renameSheet as renameSheetOp,
   setCellValue as setCellValueOp,
+  setRowsFormat as setRowsFormatOp,
+  type CellFormatPatch,
   type SpreadsheetDocument,
 } from './spreadsheetDocument'
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
@@ -222,6 +224,14 @@ export type UseSpreadsheetEditorResult = {
   readonly insertColumnAt: (sheetIndex: number, atIndex: number) => void
   readonly deleteColumnAt: (sheetIndex: number, atIndex: number) => void
   readonly pasteRange: (sheetIndex: number, row: number, col: number, values: ReadonlyArray<ReadonlyArray<string>>) => void
+  /** SHEETFMT-2 — applies a formatting patch to the given sheet rows across a column span. */
+  readonly setRowsFormat: (
+    sheetIndex: number,
+    rows: ReadonlyArray<number>,
+    colA: number,
+    colB: number,
+    patch: CellFormatPatch,
+  ) => void
   readonly addSheet: (name?: string) => void
   readonly renameSheet: (sheetIndex: number, name: string) => void
   readonly deleteSheet: (sheetIndex: number) => void
@@ -343,6 +353,16 @@ export function useSpreadsheetEditor(
   const pasteRange = useCallback(
     (sheetIndex: number, row: number, col: number, values: ReadonlyArray<ReadonlyArray<string>>) =>
       mutate((doc) => pasteRangeOp(doc, sheetIndex, row, col, values)),
+    [mutate],
+  )
+  const setRowsFormat = useCallback(
+    (
+      sheetIndex: number,
+      rows: ReadonlyArray<number>,
+      colA: number,
+      colB: number,
+      patch: CellFormatPatch,
+    ) => mutate((doc) => setRowsFormatOp(doc, sheetIndex, rows, colA, colB, patch)),
     [mutate],
   )
   const addSheet = useCallback((name?: string) => mutate((doc) => addSheetOp(doc, name)), [mutate])
@@ -508,6 +528,7 @@ export function useSpreadsheetEditor(
     insertColumnAt,
     deleteColumnAt,
     pasteRange,
+    setRowsFormat,
     addSheet,
     renameSheet,
     deleteSheet,

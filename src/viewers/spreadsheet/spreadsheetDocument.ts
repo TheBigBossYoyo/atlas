@@ -80,6 +80,16 @@ export type EditableSheet = {
   /** `"row:col"` (current indexes) of every cell edited since load. */
   readonly editedCells?: ReadonlySet<string>
   /**
+   * SHEETFMT-2 — formatting the user applied in Atlas, by CURRENT `cellKey`
+   * (so, unlike `cellStyles` below, it is remapped as rows and columns move,
+   * exactly like `editedCells`).
+   *
+   * A patch, not a whole format: "make this bold" must leave the fill the file
+   * gave the cell alone, and the save path needs to know which properties were
+   * actually chosen so it can clone the rest of the cell's original `<xf>`.
+   */
+  readonly formatOverrides?: ReadonlyMap<string, CellFormatPatch>
+  /**
    * SHEETFMT-1 — the formatting this sheet's cells carry in the file, indexed
    * by the cell's ORIGINAL row/column (the same coordinates `rowSources`/
    * `colSources` map back to), so a row insert or delete moves formats with
@@ -105,18 +115,142 @@ export type EditableSheet = {
  * correctly has no formatting.
  */
 export function formatForCell(sheet: EditableSheet, row: number, col: number): ResolvedCellFormat {
-  if (!sheet.cellStyles) return DEFAULT_CELL_FORMAT
+  const patch = sheet.formatOverrides?.get(cellKey(row, col))
+  if (!sheet.cellStyles) return mergeFormat(DEFAULT_CELL_FORMAT, patch)
   const sourceRow = sheet.rowSources ? sheet.rowSources[row] : row
   const sourceCol = sheet.colSources ? sheet.colSources[col] : col
   if (sourceRow === null || sourceRow === undefined || sourceCol === null || sourceCol === undefined) {
-    return DEFAULT_CELL_FORMAT
+    // A row or column Atlas added itself has no formatting from the file, but
+    // can perfectly well have formatting the user applied to it since.
+    return mergeFormat(DEFAULT_CELL_FORMAT, patch)
   }
-  return formatAt(sheet.cellStyles, sourceRow, sourceCol)
+  return mergeFormat(formatAt(sheet.cellStyles, sourceRow, sourceCol), patch)
+}
+
+/**
+ * Applies a formatting patch to every cell in a rectangular range.
+ *
+ * Patches COMPOSE rather than replace: pressing bold and then filling a cell
+ * leaves it bold and filled. Clearing a property is `null` in the patch, which
+ * survives into the stored override so a save can write "explicitly not bold"
+ * over a cell the file made bold.
+ *
+ * Returns the same document reference when the range is empty or out of bounds,
+ * matching every other operation in this module so `mutate` can detect a no-op
+ * and keep it off the undo stack.
+ */
+export function setRangeFormat(
+  doc: SpreadsheetDocument,
+  sheetIndex: number,
+  range: { readonly row0: number; readonly col0: number; readonly row1: number; readonly col1: number },
+  patch: CellFormatPatch,
+): SpreadsheetDocument {
+  const sheet = doc.sheets[sheetIndex]
+  if (!sheet) return doc
+  const row0 = Math.max(0, Math.min(range.row0, range.row1))
+  const row1 = Math.min(sheet.rows.length - 1, Math.max(range.row0, range.row1))
+  const rows: number[] = []
+  for (let r = row0; r <= row1; r += 1) rows.push(r)
+  return setRowsFormat(doc, sheetIndex, rows, range.col0, range.col1, patch)
+}
+
+/**
+ * Applies a formatting patch to an explicit LIST of rows, across a column span.
+ *
+ * The list, rather than a row range, is what the grid actually needs: a row
+ * search hides rows, so a contiguous block of selected grid rows can map to a
+ * non-contiguous set of sheet rows. Formatting the rows in between — the ones
+ * filtered out of view, which the user cannot see and did not select — would be
+ * a silent edit to hidden data.
+ */
+export function setRowsFormat(
+  doc: SpreadsheetDocument,
+  sheetIndex: number,
+  rows: ReadonlyArray<number>,
+  colA: number,
+  colB: number,
+  patch: CellFormatPatch,
+): SpreadsheetDocument {
+  const sheet = doc.sheets[sheetIndex]
+  if (!sheet) return doc
+  if (Object.keys(patch).length === 0) return doc
+
+  const col0 = Math.max(0, Math.min(colA, colB))
+  const col1 = Math.min(sheet.colCount - 1, Math.max(colA, colB))
+  if (col1 < col0) return doc
+
+  const inRange = rows.filter(r => r >= 0 && r < sheet.rows.length)
+  if (inRange.length === 0) return doc
+
+  const next = new Map(sheet.formatOverrides ?? [])
+  for (const r of inRange) {
+    for (let c = col0; c <= col1; c += 1) {
+      const key = cellKey(r, c)
+      next.set(key, { ...next.get(key), ...patch })
+    }
+  }
+  return replaceSheet(doc, sheetIndex, { ...sheet, formatOverrides: next })
 }
 
 /** Key for `editedCells`. */
 export function cellKey(row: number, col: number): string {
   return `${row}:${col}`
+}
+
+/**
+ * SHEETFMT-2 — a formatting change the user asked for.
+ *
+ * Every property is optional and "absent" means "leave whatever the cell
+ * already had", which is what makes a bold button composable with a fill
+ * button. `null` is distinct from absent and means "clear this back to the
+ * default" — the only way to express removing a fill the file put there.
+ */
+export type CellFormatPatch = {
+  readonly bold?: boolean
+  readonly italic?: boolean
+  readonly underline?: boolean
+  readonly strike?: boolean
+  readonly fontSize?: number | null
+  readonly fontName?: string | null
+  readonly color?: string | null
+  readonly fill?: string | null
+  readonly align?: 'left' | 'center' | 'right' | null
+  readonly numberFormat?: string | null
+}
+
+/** Applies a patch over a resolved format, for rendering. `null` in the patch clears back to the default. */
+export function mergeFormat(base: ResolvedCellFormat, patch: CellFormatPatch | undefined): ResolvedCellFormat {
+  if (!patch) return base
+  const pick = <T,>(patched: T | null | undefined, current: T | undefined): T | undefined =>
+    patched === undefined ? current : patched === null ? undefined : patched
+  return {
+    ...base,
+    bold: patch.bold ?? base.bold,
+    italic: patch.italic ?? base.italic,
+    underline: patch.underline ?? base.underline,
+    strike: patch.strike ?? base.strike,
+    fontSize: pick(patch.fontSize, base.fontSize),
+    fontName: pick(patch.fontName, base.fontName),
+    color: pick(patch.color, base.color),
+    fill: pick(patch.fill, base.fill),
+    align: pick(patch.align, base.align),
+    numberFormat: pick(patch.numberFormat, base.numberFormat),
+  }
+}
+
+/** Remaps `formatOverrides` after rows or columns move, dropping the ones that were deleted. Mirrors `remapEditedCells`. */
+function remapFormatOverrides(
+  overrides: ReadonlyMap<string, CellFormatPatch> | undefined,
+  remap: (row: number, col: number) => readonly [number, number] | null,
+): ReadonlyMap<string, CellFormatPatch> | undefined {
+  if (!overrides) return undefined
+  const next = new Map<string, CellFormatPatch>()
+  for (const [key, patch] of overrides) {
+    const [row, col] = key.split(':').map(Number)
+    const moved = remap(row, col)
+    if (moved) next.set(cellKey(moved[0], moved[1]), patch)
+  }
+  return next
 }
 
 /** Remaps `editedCells` after rows or columns move, dropping the ones that were deleted. */
@@ -502,6 +636,7 @@ export function insertRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
   const sources = sheet.rowSources ? [...sheet.rowSources] : null
   if (sources) sources.splice(atIndex, 0, null)
   const editedCells = remapEditedCells(sheet.editedCells, (r, c) => [r >= atIndex ? r + 1 : r, c])
+  const formatOverrides = remapFormatOverrides(sheet.formatOverrides, (r, c) => [r >= atIndex ? r + 1 : r, c])
   return replaceSheet(
     doc,
     sheetIndex,
@@ -514,6 +649,7 @@ export function insertRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
       ...tables,
       ...(sources ? { rowSources: sources } : {}),
       ...(editedCells ? { editedCells } : {}),
+      ...(formatOverrides ? { formatOverrides } : {}),
     }),
   )
 }
@@ -549,6 +685,9 @@ export function deleteRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
   const editedCells = remapEditedCells(sheet.editedCells, (r, c) =>
     r === atIndex ? null : [r > atIndex ? r - 1 : r, c],
   )
+  const formatOverrides = remapFormatOverrides(sheet.formatOverrides, (r, c) =>
+    r === atIndex ? null : [r > atIndex ? r - 1 : r, c],
+  )
   return replaceSheet(
     doc,
     sheetIndex,
@@ -561,6 +700,7 @@ export function deleteRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
       ...tables,
       ...(rowSources ? { rowSources } : {}),
       ...(editedCells ? { editedCells } : {}),
+      ...(formatOverrides ? { formatOverrides } : {}),
     }),
   )
 }
@@ -607,7 +747,8 @@ export function insertColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
         : {}),
       ...(() => {
         const editedCells = remapEditedCells(sheet.editedCells, (r, c) => [r, c >= atIndex ? c + 1 : c])
-        return editedCells ? { editedCells } : {}
+        const formatOverrides = remapFormatOverrides(sheet.formatOverrides, (r, c) => [r, c >= atIndex ? c + 1 : c])
+        return { ...(editedCells ? { editedCells } : {}), ...(formatOverrides ? { formatOverrides } : {}) }
       })(),
     }),
   )
@@ -650,7 +791,10 @@ export function deleteColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
         const editedCells = remapEditedCells(sheet.editedCells, (r, c) =>
           c === atIndex ? null : [r, c > atIndex ? c - 1 : c],
         )
-        return editedCells ? { editedCells } : {}
+        const formatOverrides = remapFormatOverrides(sheet.formatOverrides, (r, c) =>
+          c === atIndex ? null : [r, c > atIndex ? c - 1 : c],
+        )
+        return { ...(editedCells ? { editedCells } : {}), ...(formatOverrides ? { formatOverrides } : {}) }
       })(),
     }),
   )

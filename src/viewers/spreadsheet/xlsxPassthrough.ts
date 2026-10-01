@@ -97,7 +97,7 @@ import {
   serializeXmlPart,
   xmlSafeText,
 } from '../../office/ooxmlDom'
-import { cellKey, type EditableSheet, type SpreadsheetDocument } from './spreadsheetDocument'
+import { cellKey, type CellFormatPatch, type EditableSheet, type SpreadsheetDocument } from './spreadsheetDocument'
 import { encodeCol, rewriteTableXml, tableHeaderNames } from './spreadsheetTables'
 import { remapSqref, type IndexSources } from './spreadsheetRangeShift'
 import { rewriteFormulaReferences, type SheetChange } from './formulaRefs'
@@ -197,6 +197,11 @@ type StylesContext = {
   readonly numFmtCodeById: Map<number, string>
   nextCustomNumFmtId: number
   dirty: boolean
+  /** SHEETFMT-2 — `<fonts>`/`<fills>`, for applying formatting the user chose. Created on demand (a styles part with `cellXfs` but no `fonts` is legal). */
+  fontsEl: Element | null
+  fillsEl: Element | null
+  readonly fonts: Element[]
+  readonly fills: Element[]
 }
 
 function loadStylesContext(stylesXml: string | undefined): StylesContext | null {
@@ -225,6 +230,9 @@ function loadStylesContext(stylesXml: string | undefined): StylesContext | null 
     if (id >= nextCustomNumFmtId) nextCustomNumFmtId = id + 1
   }
 
+  const fontsEl = firstChildElement(root, 'fonts')
+  const fillsEl = firstChildElement(root, 'fills')
+
   return {
     doc,
     root,
@@ -234,7 +242,221 @@ function loadStylesContext(stylesXml: string | undefined): StylesContext | null 
     numFmtCodeById,
     nextCustomNumFmtId,
     dirty: false,
+    fontsEl,
+    fillsEl,
+    fonts: fontsEl ? childElements(fontsEl, 'font') : [],
+    fills: fillsEl ? childElements(fillsEl, 'fill') : [],
   }
+}
+
+// ---------------------------------------------------------------------------
+// SHEETFMT-2 — writing the formatting the user applied
+//
+// Every piece below INTERNS: it looks for an existing `<font>`/`<fill>`/`<xf>`
+// that already says what is wanted and reuses it, only appending a new one when
+// none matches. Without that, bolding the same column twice in one session
+// grows `styles.xml` by a table entry per cell per save, and Excel has a hard
+// limit (64k cellXfs) that a long editing session would genuinely reach.
+//
+// Interning compares SERIALIZED XML rather than attribute-by-attribute: the
+// elements involved carry child elements (`<b/>`, `<color rgb="…"/>`,
+// `<patternFill>`) as well as attributes, so a field-wise comparison would have
+// to know the whole schema to be correct, and would silently treat two
+// different fonts as equal the moment the schema grew a property it didn't list.
+// ---------------------------------------------------------------------------
+
+/** `<fonts>`/`<fills>` must exist in CT_Stylesheet's fixed element order: numFmts, fonts, fills, borders, cellStyleXfs, cellXfs. */
+function ensureTable(ctx: StylesContext, localName: 'fonts' | 'fills'): Element {
+  const existing = localName === 'fonts' ? ctx.fontsEl : ctx.fillsEl
+  if (existing) return existing
+  const el = ctx.doc.createElementNS(ctx.root.namespaceURI, localName)
+  // Insert before `<borders>`/`<cellStyleXfs>`/`<cellXfs>` — whichever comes
+  // first — so the fixed order is kept whether or not the others are present.
+  const after = localName === 'fonts' ? ['fills', 'borders', 'cellStyleXfs', 'cellXfs'] : ['borders', 'cellStyleXfs', 'cellXfs']
+  let anchor: Element | null = null
+  for (const name of after) {
+    anchor = firstChildElement(ctx.root, name)
+    if (anchor) break
+  }
+  ctx.root.insertBefore(el, anchor)
+  if (localName === 'fonts') ctx.fontsEl = el
+  else ctx.fillsEl = el
+  ctx.dirty = true
+  return el
+}
+
+/** Finds `candidate` among `list` by serialized form, or appends it. Returns the index, which IS the id a cell/xf references. */
+function internInTable(ctx: StylesContext, localName: 'fonts' | 'fills', list: Element[], candidate: Element): number {
+  const key = new XMLSerializer().serializeToString(candidate)
+  for (let i = 0; i < list.length; i += 1) {
+    if (new XMLSerializer().serializeToString(list[i]) === key) return i
+  }
+  const table = ensureTable(ctx, localName)
+  table.appendChild(candidate)
+  list.push(candidate)
+  table.setAttribute('count', String(list.length))
+  ctx.dirty = true
+  return list.length - 1
+}
+
+/** Sets or removes a boolean run property (`<b/>`, `<i/>`, `<u/>`, `<strike/>`) on a `<font>`. */
+function setFontToggle(ctx: StylesContext, font: Element, localName: string, on: boolean): void {
+  const existing = firstChildElement(font, localName)
+  if (on) {
+    if (!existing) font.appendChild(ctx.doc.createElementNS(ctx.root.namespaceURI, localName))
+    else existing.removeAttribute('val')
+    return
+  }
+  if (existing) font.removeChild(existing)
+}
+
+/** Sets or removes a `<sz val>`/`<name val>`/`<color rgb>` child of a `<font>`. */
+function setFontValue(ctx: StylesContext, font: Element, localName: string, attr: string, value: string | null): void {
+  const existing = firstChildElement(font, localName)
+  if (value === null) {
+    if (existing) font.removeChild(existing)
+    return
+  }
+  const el = existing ?? ctx.doc.createElementNS(ctx.root.namespaceURI, localName)
+  // A colour carries exactly one of rgb/theme/indexed; replacing rgb without
+  // clearing the others would leave Excel honouring the stale theme reference.
+  if (localName === 'color') {
+    el.removeAttribute('theme')
+    el.removeAttribute('indexed')
+    el.removeAttribute('tint')
+  }
+  el.setAttribute(attr, value)
+  if (!existing) font.appendChild(el)
+}
+
+/** `#RRGGBB` (or `RRGGBB`) -> the `AARRGGBB` OOXML wants. */
+function toArgb(hex: string): string {
+  const bare = hex.replace('#', '').toUpperCase()
+  return bare.length === 8 ? bare : `FF${bare}`
+}
+
+/** The font id for `base` with `patch`'s run properties applied, interning the result. */
+function ensureFontId(ctx: StylesContext, baseFontId: number, patch: CellFormatPatch): number {
+  const base = ctx.fonts[baseFontId] ?? ctx.fonts[0]
+  const font = base
+    ? (base.cloneNode(true) as Element)
+    : ctx.doc.createElementNS(ctx.root.namespaceURI, 'font')
+
+  if (patch.bold !== undefined) setFontToggle(ctx, font, 'b', patch.bold)
+  if (patch.italic !== undefined) setFontToggle(ctx, font, 'i', patch.italic)
+  if (patch.underline !== undefined) setFontToggle(ctx, font, 'u', patch.underline)
+  if (patch.strike !== undefined) setFontToggle(ctx, font, 'strike', patch.strike)
+  if (patch.fontSize !== undefined) {
+    setFontValue(ctx, font, 'sz', 'val', patch.fontSize === null ? null : String(patch.fontSize))
+  }
+  if (patch.fontName !== undefined) setFontValue(ctx, font, 'name', 'val', patch.fontName)
+  if (patch.color !== undefined) {
+    setFontValue(ctx, font, 'color', 'rgb', patch.color === null ? null : toArgb(patch.color))
+  }
+
+  return internInTable(ctx, 'fonts', ctx.fonts, font)
+}
+
+/** The fill id for a solid `colorHex`, or fill 0 (none) when clearing. Interned. */
+function ensureFillId(ctx: StylesContext, colorHex: string | null): number {
+  if (colorHex === null) return 0 // `<fill><patternFill patternType="none"/></fill>` is always index 0 per the spec's reserved first two entries
+  const fill = ctx.doc.createElementNS(ctx.root.namespaceURI, 'fill')
+  const pattern = ctx.doc.createElementNS(ctx.root.namespaceURI, 'patternFill')
+  pattern.setAttribute('patternType', 'solid')
+  const fg = ctx.doc.createElementNS(ctx.root.namespaceURI, 'fgColor')
+  fg.setAttribute('rgb', toArgb(colorHex))
+  pattern.appendChild(fg)
+  // Excel writes `<bgColor indexed="64"/>` (automatic) alongside; omitting it
+  // is legal but makes the file look unlike every other producer's output, and
+  // some readers key off it.
+  const bg = ctx.doc.createElementNS(ctx.root.namespaceURI, 'bgColor')
+  bg.setAttribute('indexed', '64')
+  pattern.appendChild(bg)
+  fill.appendChild(pattern)
+  return internInTable(ctx, 'fills', ctx.fills, fill)
+}
+
+/**
+ * The `s` index for a cell that had `baseStyleIndexStr` and should now also
+ * carry `patch`.
+ *
+ * Everything the patch does not mention is inherited from the base `<xf>` by
+ * cloning it, which is what makes "make this bold" keep the cell's existing
+ * number format, border and fill. Returns `null` when there is no styles part
+ * to write into, and the caller leaves the cell's style alone.
+ */
+function ensureXfWithFormat(
+  ctx: StylesContext | null,
+  baseStyleIndexStr: string | null,
+  patch: CellFormatPatch,
+): string | null {
+  if (!ctx) return null
+  const baseIdx = baseStyleIndexStr !== null ? Number(baseStyleIndexStr) : NaN
+  const base = Number.isFinite(baseIdx) ? ctx.xfs[baseIdx] : undefined
+
+  const xf = base ? (base.cloneNode(true) as Element) : ctx.doc.createElementNS(ctx.root.namespaceURI, 'xf')
+  if (!base) {
+    xf.setAttribute('numFmtId', '0')
+    xf.setAttribute('fontId', '0')
+    xf.setAttribute('fillId', '0')
+    xf.setAttribute('borderId', '0')
+    xf.setAttribute('xfId', '0')
+  }
+
+  const touchesFont =
+    patch.bold !== undefined ||
+    patch.italic !== undefined ||
+    patch.underline !== undefined ||
+    patch.strike !== undefined ||
+    patch.fontSize !== undefined ||
+    patch.fontName !== undefined ||
+    patch.color !== undefined
+  if (touchesFont) {
+    const baseFontId = Number(xf.getAttribute('fontId') ?? '0')
+    xf.setAttribute('fontId', String(ensureFontId(ctx, Number.isFinite(baseFontId) ? baseFontId : 0, patch)))
+    xf.setAttribute('applyFont', '1')
+  }
+
+  if (patch.fill !== undefined) {
+    xf.setAttribute('fillId', String(ensureFillId(ctx, patch.fill)))
+    xf.setAttribute('applyFill', '1')
+  }
+
+  if (patch.numberFormat !== undefined) {
+    const numFmtId = patch.numberFormat === null ? 0 : ensureCustomNumFmtId(ctx, patch.numberFormat)
+    xf.setAttribute('numFmtId', String(numFmtId))
+    xf.setAttribute('applyNumberFormat', '1')
+  }
+
+  if (patch.align !== undefined) {
+    let alignment = firstChildElement(xf, 'alignment')
+    if (patch.align === null) {
+      if (alignment) {
+        alignment.removeAttribute('horizontal')
+        // An `<alignment>` with nothing left on it is noise; drop it.
+        if (alignment.attributes.length === 0) xf.removeChild(alignment)
+      }
+    } else {
+      if (!alignment) {
+        alignment = ctx.doc.createElementNS(ctx.root.namespaceURI, 'alignment')
+        xf.appendChild(alignment)
+      }
+      alignment.setAttribute('horizontal', patch.align)
+    }
+    xf.setAttribute('applyAlignment', '1')
+  }
+
+  // Intern against the existing cellXfs by serialized form, same reasoning as
+  // the font/fill tables above.
+  const key = new XMLSerializer().serializeToString(xf)
+  for (let i = 0; i < ctx.xfs.length; i += 1) {
+    if (new XMLSerializer().serializeToString(ctx.xfs[i]) === key) return String(i)
+  }
+  ctx.cellXfsEl.appendChild(xf)
+  ctx.xfs.push(xf)
+  ctx.cellXfsEl.setAttribute('count', String(ctx.xfs.length))
+  ctx.dirty = true
+  return String(ctx.xfs.length - 1)
 }
 
 function resolveNumFmtCode(ctx: StylesContext, numFmtId: number): string {
@@ -637,20 +859,36 @@ function rebuildSheetData(
       const text = sheet.rows[row]?.[col] ?? ''
       const formula = sheet.formulas[row]?.[col]
       const address = encodeCell(row, col)
+      // SHEETFMT-2 — formatting the user applied to this cell, if any.
+      const formatPatch = sheet.formatOverrides?.get(cellKey(row, col))
 
       // Untouched cells are copied verbatim — that is what keeps dates dates,
       // percentages percentages, and rich text rich.
+      //
+      // A cell the user only RE-FORMATTED takes this path too, and that is the
+      // point: cloning keeps its type, its cached formula value and its rich
+      // text, and only its `s` index changes. Rebuilding it from display text
+      // just to make it bold would quietly downgrade it (a date would come back
+      // as a string, rich text would flatten), which is exactly the loss this
+      // whole passthrough exists to avoid.
       if (originalCell && edited !== undefined && !edited.has(cellKey(row, col))) {
         const clone = originalCell.cloneNode(true) as Element
         clone.setAttribute('r', address)
         rewriteClonedFormula(clone, sheet, changesByOriginalName)
+        if (formatPatch) {
+          const restyled = ensureXfWithFormat(stylesCtx, clone.getAttribute('s'), formatPatch)
+          if (restyled !== null) clone.setAttribute('s', restyled)
+        }
         rowElement.appendChild(clone)
         continue
       }
 
-      const style = originalCell?.getAttribute('s') ?? null
+      const originalStyle = originalCell?.getAttribute('s') ?? null
+      const style = formatPatch ? (ensureXfWithFormat(stylesCtx, originalStyle, formatPatch) ?? originalStyle) : originalStyle
       if (text === '' && formula === undefined) {
-        // Keep an empty-but-styled cell so its formatting survives.
+        // Keep an empty-but-styled cell so its formatting survives — including
+        // a cell that is empty precisely BECAUSE the user only filled it with a
+        // colour or a border and has not typed in it yet.
         if (style !== null) rowElement.appendChild(buildCell(doc, namespace, address, '', undefined, style, stylesCtx))
         continue
       }

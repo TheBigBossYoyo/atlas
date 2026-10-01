@@ -406,3 +406,46 @@ export async function buildSharedStringsWorkbook(): Promise<ArrayBuffer> {
   return zip.generateAsync({ type: 'arraybuffer' })
 }
 
+// ---------------------------------------------------------------------------
+// A workbook whose `xl/styles.xml` has `<cellXfs>` but NO `<fonts>` or
+// `<fills>` table at all — legal per the schema, and the case the format
+// writer has to create those tables for, in CT_Stylesheet's fixed element
+// order (SHEETFMT-2).
+// ---------------------------------------------------------------------------
+
+export async function buildMinimalStylesWorkbook(): Promise<ArrayBuffer> {
+  const zip = new JSZip()
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+      `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+      `<Default Extension="xml" ContentType="application/xml"/>` +
+      `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
+      `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+      `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+  )
+  zip.file('_rels/.rels', rels(`<Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/>`))
+  zip.file(
+    'xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${REL}"><sheets><sheet name="Bare" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+  )
+  zip.file(
+    'xl/_rels/workbook.xml.rels',
+    rels(
+      `<Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/>` +
+        `<Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/>`,
+    ),
+  )
+  zip.file(
+    'xl/worksheets/sheet1.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+      `<dimension ref="A1:A1"/><sheetViews><sheetView workbookViewId="0"/></sheetViews>` +
+      `<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Bare</t></is></c></row></sheetData></worksheet>`,
+  )
+  zip.file(
+    'xl/styles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+      `<cellXfs count="1"><xf numFmtId="0"/></cellXfs></styleSheet>`,
+  )
+  return zip.generateAsync({ type: 'arraybuffer' })
+}

@@ -22,6 +22,7 @@ import {
   insertRowAt,
   renameSheet,
   setCellValue,
+  setRangeFormat,
   type SpreadsheetDocument,
 } from '../spreadsheetDocument'
 import { readSheetPartPaths, readSheetTables } from '../spreadsheetTables'
@@ -35,6 +36,7 @@ import {
   buildStyledWorkbook,
   buildWorkbookWithOwnedParts,
   buildWorkbookWithSharedImage,
+  buildMinimalStylesWorkbook,
 } from './styledWorkbook'
 
 import { validateOfficeFile } from '../../../../scripts/lib/officeValidator.mjs'
@@ -57,6 +59,47 @@ describe('spreadsheet saves pass spec-level OPC/ODF validation', () => {
 
     const result = validateOfficeFile(Buffer.from(bytes!))
     expect(result.format).toEqual({ family: 'opc', kind: 'xlsx' })
+    expect(errorsOnly(result.issues)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal after applying cell formatting (SHEETFMT-2)', async () => {
+    // Applying formatting is the one save path that MODIFIES `xl/styles.xml`
+    // rather than copying it, and CT_Stylesheet fixes its element order
+    // (numFmts, fonts, fills, borders, cellStyleXfs, cellXfs). Appending a
+    // `<fonts>` or `<fills>` table in the wrong place produces a file Excel
+    // refuses to open while every value-level test still passes, so this is
+    // the check that matters most for this feature.
+    const original = await buildStyledWorkbook()
+    const doc = setRangeFormat(await load(original), 0, { row0: 1, col0: 0, row1: 2, col1: 2 }, {
+      bold: true,
+      italic: true,
+      fill: '#FF00FF',
+      color: '#FFFFFF',
+      align: 'center',
+      numberFormat: '0.00',
+    })
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
+    expect(result.format).toEqual({ family: 'opc', kind: 'xlsx' })
+    expect(errorsOnly(result.issues)).toEqual([])
+  })
+
+  it('writeWorkbookThroughOriginal after formatting a workbook whose styles have no fonts or fills table', async () => {
+    // A styles part with `cellXfs` but no `<fonts>`/`<fills>` is legal, and is
+    // what the format writer has to CREATE those tables for — in the right
+    // place. Worth its own case: the path that creates them is different from
+    // the path that appends to existing ones.
+    const original = await buildMinimalStylesWorkbook()
+    const doc = setRangeFormat(await load(original), 0, { row0: 0, col0: 0, row1: 0, col1: 0 }, {
+      bold: true,
+      fill: '#00B0F0',
+    })
+    const bytes = await writeWorkbookThroughOriginal(original, doc)
+    expect(bytes).not.toBeNull()
+
+    const result = validateOfficeFile(Buffer.from(bytes!))
     expect(errorsOnly(result.issues)).toEqual([])
   })
 

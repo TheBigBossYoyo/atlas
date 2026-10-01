@@ -231,6 +231,75 @@
   color: var(--text-primary);
 }
 
+/* SHEETFMT-2 — cell formatting controls. */
+
+/* An active toggle has to be obvious at a glance, and readable in all five
+   themes, so it uses the accent token rather than a hardcoded colour. */
+.spreadsheet-edit-toolbar button.is-active {
+  color: var(--bg-primary);
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+.spreadsheet-edit-toolbar button.is-active:hover:not(:disabled) {
+  color: var(--bg-primary);
+  background-color: var(--accent);
+}
+
+.spreadsheet-edit-toolbar__text-color-icon {
+  font-weight: 700;
+  /* Matches the 14px lucide icons beside it so the row of buttons stays even. */
+  font-size: 14px;
+  line-height: 14px;
+}
+
+.spreadsheet-edit-toolbar__popover-host {
+  position: relative;
+  display: flex;
+}
+
+.spreadsheet-edit-toolbar__popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 25%);
+}
+
+.spreadsheet-edit-toolbar__swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 20px);
+  gap: 4px;
+}
+
+.spreadsheet-edit-toolbar__swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  /* A fixed border rather than the shared button border, so a white swatch is
+     still visible against the popover's own background. */
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.spreadsheet-edit-toolbar__clear {
+  justify-content: center;
+}
+
+.spreadsheet-edit-toolbar__numfmt {
+  /* Wide enough for "Thousands (1,234.00)" without pushing the save button off
+     the row at a narrow window. */
+  max-width: 170px;
+}
+
 .spreadsheet-viewer__save-error {
   padding: 6px 16px;
   font-size: 12px;

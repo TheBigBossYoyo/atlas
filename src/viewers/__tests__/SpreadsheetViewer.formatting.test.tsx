@@ -12,7 +12,7 @@
  * The fixture is a real OOXML package, built here, because the whole claim is
  * about what Excel's own output means.
  */
-import { act, render, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import JSZip from 'jszip'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompactSelection, type GridSelection, type Item } from '@glideapps/glide-data-grid'
@@ -149,8 +149,13 @@ function cell(col: number, row: number): CapturedCell {
 
 /** Clicking a cell. The toolbar's row/column actions act on the selection, so they do nothing without one. */
 function selectCell(col: number, row: number): void {
+  selectRange(col, row, 1, 1)
+}
+
+/** Dragging out a rectangle, in grid coordinates. */
+function selectRange(col: number, row: number, width: number, height: number): void {
   lastDataEditorProps!.onGridSelectionChange?.({
-    current: { cell: [col, row], range: { x: col, y: row, width: 1, height: 1 }, rangeStack: [] },
+    current: { cell: [col, row], range: { x: col, y: row, width, height }, rangeStack: [] },
     columns: CompactSelection.empty(),
     rows: CompactSelection.empty(),
   })
@@ -217,6 +222,71 @@ describe('SpreadsheetViewer — the workbook its own formatting (SHEETFMT-1)', (
     expect(cell(1, 3).themeOverride?.textDark).toBe('#FF0000')
     // The inserted row is genuinely new, so it carries no formatting at all.
     expect(cell(1, 2).themeOverride?.textDark).toBeUndefined()
+  })
+
+  it('applies bold from the toolbar to the selected cell, and shows the toggle as pressed', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+
+    act(() => selectCell(0, 1)) // "Paper", plain in the fixture
+    const bold = await screen.findByRole('button', { name: /^Bold$/i })
+    expect(bold).toHaveAttribute('aria-pressed', 'false')
+
+    act(() => bold.click())
+
+    await waitFor(() => expect(cell(0, 1).themeOverride?.baseFontStyle).toContain('700'))
+    // The toggle now reflects the cell it is pointed at — a formatting button
+    // that never looks pressed leaves the user guessing whether it worked.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Bold$/i })).toHaveAttribute('aria-pressed', 'true'))
+  })
+
+  it('un-bolds a cell the file made bold', async () => {
+    // The toggle has to send the opposite of the CURRENT state, so pressing it
+    // on the file's own bold header clears it rather than re-applying bold.
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.baseFontStyle).toContain('700'))
+
+    act(() => selectCell(0, 0))
+    const bold = await screen.findByRole('button', { name: /^Bold$/i })
+    await waitFor(() => expect(bold).toHaveAttribute('aria-pressed', 'true'))
+
+    act(() => bold.click())
+
+    await waitFor(() => expect(cell(0, 0).themeOverride?.baseFontStyle ?? '').not.toContain('700'))
+  })
+
+  it('applies a fill from the colour popover', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+
+    act(() => selectCell(0, 1))
+    act(() => screen.getByRole('button', { name: /Fill color/i }).click())
+    // The swatches are real buttons labelled by their hex, deliberately not a
+    // role="menu" grid (see the component's own note).
+    act(() => screen.getByRole('button', { name: '#FF0000' }).click())
+
+    await waitFor(() => expect(cell(0, 1).themeOverride?.bgCell).toBe('#FF0000'))
+  })
+
+  it('applies a format to every cell in a multi-cell selection', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+
+    // A 2x2 block starting at A2.
+    act(() => selectRange(0, 1, 2, 2))
+    act(() => screen.getByRole('button', { name: /Align right/i }).click())
+
+    await waitFor(() => expect(cell(0, 1).contentAlign).toBe('right'))
+    expect(cell(1, 1).contentAlign).toBe('right')
+    expect(cell(0, 2).contentAlign).toBe('right')
+    expect(cell(1, 2).contentAlign).toBe('right')
+    // ...and not outside it.
+    expect(cell(2, 1).contentAlign).toBeUndefined()
+  })
+
+  it('leaves the formatting controls disabled until something is selected', async () => {
+    await mount(await buildFormattedWorkbook())
+    expect(await screen.findByRole('button', { name: /^Bold$/i })).toBeDisabled()
   })
 
   it('renders a workbook with no styles.xml unstyled rather than failing', async () => {

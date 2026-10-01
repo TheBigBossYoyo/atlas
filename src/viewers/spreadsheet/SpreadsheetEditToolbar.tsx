@@ -8,10 +8,30 @@
  * comment on why selection tracking lives there and not in `useGridFind`);
  * they're disabled when nothing is selected rather than guessing a target.
  */
-import { useState } from 'react'
-import { ArrowLeftToLine, ArrowRightToLine, ArrowUpToLine, ArrowDownToLine, ClipboardPaste, Redo2, Save, Trash2, Undo2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  ArrowLeftToLine,
+  ArrowRightToLine,
+  ArrowUpToLine,
+  ArrowDownToLine,
+  Bold,
+  ClipboardPaste,
+  Italic,
+  PaintBucket,
+  Redo2,
+  Save,
+  Strikethrough,
+  Trash2,
+  Underline,
+  Undo2,
+} from 'lucide-react'
 
 import { tsvToRows } from './spreadsheetClipboard'
+import type { CellFormatPatch } from './spreadsheetDocument'
+import type { ResolvedCellFormat } from './xlsxCellStyles'
 import { useTranslate } from '../../i18n'
 
 export type SaveFormatOption = {
@@ -33,6 +53,134 @@ export type SpreadsheetEditToolbarProps = {
   readonly onSave: () => void
   readonly saveFormats: ReadonlyArray<SaveFormatOption>
   readonly onSaveAs: (formatId: string) => void
+  /**
+   * SHEETFMT-2 — applies a formatting patch to the current selection.
+   *
+   * Omitted for a format with nowhere to store formatting (`.csv`/`.tsv` are
+   * plain text), and the whole formatting group is then absent rather than
+   * present and inert.
+   */
+  readonly onFormat?: (patch: CellFormatPatch) => void
+  /**
+   * The formatting the selected cell currently has, so a toggle can show its
+   * state — a bold button that never looks pressed leaves the user guessing
+   * whether it worked.
+   */
+  readonly selectionFormat?: ResolvedCellFormat
+}
+
+/**
+ * The number formats offered, as the `formatCode` each one writes.
+ *
+ * Codes, not names: a `formatCode` is what `styles.xml` stores and what every
+ * other spreadsheet program reads, so these round-trip to Excel exactly. The
+ * empty code is General (no format), which is how a format is cleared.
+ */
+const NUMBER_FORMATS: ReadonlyArray<{ readonly code: string; readonly labelKey: string }> = [
+  { code: '', labelKey: 'spreadsheetToolbar.numFmtGeneral' },
+  { code: '0', labelKey: 'spreadsheetToolbar.numFmtInteger' },
+  { code: '0.00', labelKey: 'spreadsheetToolbar.numFmtTwoDecimals' },
+  { code: '#,##0.00', labelKey: 'spreadsheetToolbar.numFmtThousands' },
+  { code: '0%', labelKey: 'spreadsheetToolbar.numFmtPercent' },
+  { code: '0.00%', labelKey: 'spreadsheetToolbar.numFmtPercentTwo' },
+  { code: 'yyyy-mm-dd', labelKey: 'spreadsheetToolbar.numFmtDate' },
+  { code: 'yyyy-mm-dd hh:mm', labelKey: 'spreadsheetToolbar.numFmtDateTime' },
+  { code: '@', labelKey: 'spreadsheetToolbar.numFmtText' },
+]
+
+/** The swatches offered for a fill or a text colour. Office's own default palette row, which is what people expect to see. */
+const COLOR_SWATCHES: ReadonlyArray<string> = [
+  '#000000', '#FFFFFF', '#C00000', '#FF0000', '#FFC000', '#FFFF00',
+  '#92D050', '#00B050', '#00B0F0', '#0070C0', '#002060', '#7030A0',
+]
+
+/**
+ * A colour swatch popover.
+ *
+ * Deliberately a plain `<button>` grid inside a `role="dialog"` rather than a
+ * `role="menu"`: the A11Y work in this repo (pass 4) found that menu semantics
+ * make a screen reader announce positional noise for a grid of swatches, and
+ * real buttons are both simpler and better announced. Mirrors
+ * `src/docx/editor/toolbar/Toolbar.tsx`'s own `ColorPickerPopover` for the same
+ * reason.
+ */
+function ColorPopover({
+  icon,
+  title,
+  clearLabel,
+  onSelect,
+  disabled,
+}: {
+  readonly icon: React.ReactNode
+  readonly title: string
+  readonly clearLabel: string
+  readonly onSelect: (hex: string | null) => void
+  readonly disabled: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDown = (event: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <div className="spreadsheet-edit-toolbar__popover-host" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        disabled={disabled}
+        title={title}
+        aria-label={title}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+      >
+        {icon}
+      </button>
+      {open && (
+        <div className="spreadsheet-edit-toolbar__popover" role="dialog" aria-label={title}>
+          <div className="spreadsheet-edit-toolbar__swatches">
+            {COLOR_SWATCHES.map(hex => (
+              <button
+                key={hex}
+                type="button"
+                className="spreadsheet-edit-toolbar__swatch"
+                style={{ background: hex }}
+                aria-label={hex}
+                title={hex}
+                onClick={() => {
+                  onSelect(hex)
+                  setOpen(false)
+                }}
+              />
+            ))}
+          </div>
+          <button
+            type="button"
+            className="spreadsheet-edit-toolbar__clear"
+            onClick={() => {
+              onSelect(null)
+              setOpen(false)
+            }}
+          >
+            {clearLabel}
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -73,6 +221,8 @@ export function SpreadsheetEditToolbar({
   onSave,
   saveFormats,
   onSaveAs,
+  onFormat,
+  selectionFormat,
 }: SpreadsheetEditToolbarProps) {
   const t = useTranslate()
   const [saveFormat, setSaveFormat] = useState(saveFormats[0]?.id ?? '')
@@ -93,6 +243,101 @@ export function SpreadsheetEditToolbar({
           <Redo2 size={14} />
         </button>
       </div>
+
+      {onFormat && (
+        <div className="spreadsheet-edit-toolbar__group" role="group" aria-label={t('spreadsheetToolbar.formatGroupAria')}>
+          {([
+            ['bold', Bold, 'spreadsheetToolbar.bold'],
+            ['italic', Italic, 'spreadsheetToolbar.italic'],
+            ['underline', Underline, 'spreadsheetToolbar.underline'],
+            ['strike', Strikethrough, 'spreadsheetToolbar.strike'],
+          ] as const).map(([key, Icon, labelKey]) => {
+            const on = selectionFormat?.[key] ?? false
+            return (
+              <button
+                key={key}
+                type="button"
+                // A toggle, so its state is what `aria-pressed` is for — and
+                // the click sends the OPPOSITE of the current state rather
+                // than always `true`, which is what makes it a toggle rather
+                // than a one-way switch.
+                aria-pressed={on}
+                className={on ? 'is-active' : undefined}
+                onClick={() => onFormat({ [key]: !on })}
+                disabled={!selection}
+                title={t(labelKey)}
+                aria-label={t(labelKey)}
+              >
+                <Icon size={14} />
+              </button>
+            )
+          })}
+
+          {([
+            ['left', AlignLeft, 'spreadsheetToolbar.alignLeft'],
+            ['center', AlignCenter, 'spreadsheetToolbar.alignCenter'],
+            ['right', AlignRight, 'spreadsheetToolbar.alignRight'],
+          ] as const).map(([align, Icon, labelKey]) => {
+            const on = selectionFormat?.align === align
+            return (
+              <button
+                key={align}
+                type="button"
+                aria-pressed={on}
+                className={on ? 'is-active' : undefined}
+                // Pressing the active alignment clears it, so there is a way
+                // back to "whatever this column's default is".
+                onClick={() => onFormat({ align: on ? null : align })}
+                disabled={!selection}
+                title={t(labelKey)}
+                aria-label={t(labelKey)}
+              >
+                <Icon size={14} />
+              </button>
+            )
+          })}
+
+          <ColorPopover
+            icon={<span className="spreadsheet-edit-toolbar__text-color-icon">A</span>}
+            title={t('spreadsheetToolbar.textColor')}
+            clearLabel={t('spreadsheetToolbar.clearColor')}
+            disabled={!selection}
+            onSelect={hex => onFormat({ color: hex })}
+          />
+          <ColorPopover
+            icon={<PaintBucket size={14} />}
+            title={t('spreadsheetToolbar.fillColor')}
+            clearLabel={t('spreadsheetToolbar.clearFill')}
+            disabled={!selection}
+            onSelect={hex => onFormat({ fill: hex })}
+          />
+
+          <select
+            className="spreadsheet-edit-toolbar__numfmt"
+            // Reads the SELECTION's own format, so it shows what the cell has
+            // rather than a sticky last-chosen value.
+            value={selectionFormat?.numberFormat ?? ''}
+            onChange={event => onFormat({ numberFormat: event.target.value === '' ? null : event.target.value })}
+            disabled={!selection}
+            title={t('spreadsheetToolbar.numberFormat')}
+            aria-label={t('spreadsheetToolbar.numberFormat')}
+          >
+            {/* An unrecognised format the FILE already uses has to be offered
+                as an option, or picking anything else would be the only way to
+                leave this control and the cell's own format would read as
+                "General". */}
+            {selectionFormat?.numberFormat !== undefined &&
+              !NUMBER_FORMATS.some(f => f.code === selectionFormat.numberFormat) && (
+                <option value={selectionFormat.numberFormat}>{selectionFormat.numberFormat}</option>
+              )}
+            {NUMBER_FORMATS.map(format => (
+              <option key={format.code} value={format.code}>
+                {t(format.labelKey)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="spreadsheet-edit-toolbar__group">
         <button

@@ -21,7 +21,7 @@ import { useGridCellAnnouncement } from './shared/useGridCellAnnouncement'
 import { commitGridEdit, useGridBlankMargin } from './shared/useGridBlankMargin'
 import { ViewerLoading } from '../components/ViewerLoading'
 import { SearchOverlay } from '../components/SearchOverlay'
-import { createDocument, formatForCell } from './spreadsheet/spreadsheetDocument'
+import { createDocument, formatForCell, type CellFormatPatch } from './spreadsheet/spreadsheetDocument'
 import { DEFAULT_CELL_FORMAT, type ResolvedCellFormat } from './spreadsheet/xlsxCellStyles'
 import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from './spreadsheet/useSpreadsheetEditor'
 import { bookTypeForExtension } from './spreadsheet/spreadsheetWrite'
@@ -308,6 +308,44 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     return sheetRow === undefined ? null : { row: sheetRow, col: cell[0] }
   }, [gridFind.gridSelection, sheetRowForGridRow])
 
+  /**
+   * SHEETFMT-2 — the selected rectangle as explicit SHEET rows plus a column
+   * span.
+   *
+   * Rows are listed, not given as a range, because a row search hides rows: a
+   * contiguous block of selected grid rows can map to a non-contiguous set of
+   * sheet rows, and formatting the ones in between would silently restyle data
+   * the user cannot see. `sheetRowForGridRow` returns `undefined` for the blank
+   * margin past the data, which is simply dropped.
+   */
+  const selectedRange = useMemo(() => {
+    const range = gridFind.gridSelection?.current?.range
+    if (!range) return null
+    const rows: number[] = []
+    for (let i = 0; i < Math.max(range.height, 1); i += 1) {
+      const sheetRow = sheetRowForGridRow(range.y + i)
+      if (sheetRow !== undefined) rows.push(sheetRow)
+    }
+    if (rows.length === 0) return null
+    return { rows, colA: range.x, colB: range.x + Math.max(range.width, 1) - 1 }
+  }, [gridFind.gridSelection, sheetRowForGridRow])
+
+  const handleFormat = useCallback(
+    (patch: CellFormatPatch) => {
+      if (activeSheetIndex < 0 || !selectedRange) return
+      editor.setRowsFormat(activeSheetIndex, selectedRange.rows, selectedRange.colA, selectedRange.colB, patch)
+    },
+    [editor, activeSheetIndex, selectedRange],
+  )
+
+  // What the selected cell currently looks like, so the toolbar's toggles can
+  // show their state instead of leaving the user guessing whether a click
+  // landed.
+  const selectionFormat = useMemo(
+    () => (activeSheet && selection ? formatForCell(activeSheet, selection.row, selection.col) : undefined),
+    [activeSheet, selection],
+  )
+
   const handleGridPaste = useCallback(
     (target: Item, values: readonly (readonly string[])[]): boolean => {
       if (activeSheetIndex < 0) return false
@@ -498,6 +536,8 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         onInsertColumnLeft={(col) => activeSheetIndex >= 0 && editor.insertColumnAt(activeSheetIndex, col)}
         onDeleteColumn={(col) => activeSheetIndex >= 0 && editor.deleteColumnAt(activeSheetIndex, col)}
         onPaste={(row, col, values) => activeSheetIndex >= 0 && editor.pasteRange(activeSheetIndex, row, col, values)}
+        onFormat={handleFormat}
+        selectionFormat={selectionFormat}
         onSave={() => void editor.handleSave()}
         saveFormats={saveFormats}
         onSaveAs={handleSaveAs}
