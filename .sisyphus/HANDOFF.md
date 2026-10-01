@@ -108,7 +108,7 @@ references and defined names are now re-anchored through every structural edit, 
 listed below; an English/French UI (`src/i18n/`, DEFER-6 resolved — the owner is confirmed French-
 speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked too (P4.1 fully closed).
 
-## 3.10.0 — built 2026-10-01
+## 3.10.0 — built 2026-10-01, NOT INSTALLED (UAC declined)
 
 `release\Atlas-Setup-3.10.0.exe`, 136.2 MB, unsigned.
 SHA256 `A59FB1F3FF2B3311DB8E92A4948C8A1ABA662B6140B4EC4EA184DB49C30247B6`.
@@ -119,8 +119,18 @@ and line endings. Verified in the packed `app.asar` before shipping: the new
 i18n string, the renderer text encoder and the history IPC are all present, as is
 3.9.0's drag-region fix.
 
-Installing needs an elevated run (perMachine), so it needs the owner at the
-machine to accept the UAC prompt.
+Installing needs an elevated run (perMachine). The elevation was attempted on
+2026-10-01 and the UAC prompt was **declined** ("L'operation a ete annulee par
+l'utilisateur"), so it was not retried. **The machine is still running 3.9.0**,
+which has version history for saves but no periodic capture outside markdown.
+
+To install it, run from the project root:
+
+```
+powershell -Command "Start-Process 'release\Atlas-Setup-3.10.0.exe' -ArgumentList '/S' -Verb RunAs -Wait"
+```
+
+Drop `-ArgumentList '/S'` to watch the installer UI instead of running silently.
 
 After installing, run `docs/RELEASE.md` step 8. The PROGID-1 `reg query` checks
 in it were verified on 3.8.0 and re-verified on 3.9.0, so that is a re-check
