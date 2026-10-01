@@ -108,7 +108,7 @@ references and defined names are now re-anchored through every structural edit, 
 listed below; an English/French UI (`src/i18n/`, DEFER-6 resolved — the owner is confirmed French-
 speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked too (P4.1 fully closed).
 
-## 3.11.0 — built 2026-10-01
+## 3.11.0 — built 2026-10-01, NOT INSTALLED (UAC declined)
 
 `release\Atlas-Setup-3.11.0.exe`, 136.2 MB, unsigned.
 SHA256 `F56EA7F5284B9B596F7D6C45B7BC5A62423BB36B2A9FF2F0DE0CB03E151210B4`.
@@ -126,8 +126,10 @@ broken scan otherwise looks exactly like a missing feature).
 
 Full gate before release: 4127 unit tests, 176 e2e, types and lint clean.
 
-Installing needs an elevated run (perMachine), so it needs the owner at the
-machine to accept the UAC prompt:
+Installing needs an elevated run (perMachine). The elevation was attempted and
+the UAC prompt was declined, so it was not retried — most likely nobody was at
+the machine. **Until it is installed, the machine runs 3.10.0**, which has no
+spreadsheet cell formatting at all. To install:
 
 ```
 powershell -Command "Start-Process 'release\Atlas-Setup-3.11.0.exe' -ArgumentList '/S' -Verb RunAs -Wait"
