@@ -36,7 +36,7 @@ import {
   type SpreadsheetDocument,
 } from './spreadsheetDocument'
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
-import { carryTextFileMeta, encodeTextBytes, findTextFileMeta, getTextFileMeta } from '../../utils/textDecoding'
+import { carryTextFileMeta, encodeTextBytes, findTextFileMeta, type TextFileMeta } from '../../utils/textDecoding'
 import { writeWorkbookThroughOriginal } from './xlsxPassthrough'
 import { useUndoableState } from './useUndoableState'
 import {
@@ -83,16 +83,81 @@ function withExtension(name: string, extension: string): string {
 const PASSTHROUGH_BOOK_TYPES: ReadonlySet<string> = new Set(['xlsx', 'xlsm'])
 
 /**
- * VERSIONS-2 — the document's bytes, for the version history, without writing
- * anything. `writeToDisk` below produces the same bytes the same way for the
- * workbook case; keeping both here, next to each other, is what stops a capture
- * and a save from disagreeing about what this document is.
+ * VERSIONS-2 — the workbook's bytes, and whether producing them meant giving up
+ * on rewriting the user's own file.
  *
- * The delimited case re-applies the recorded encoding/BOM/newline itself, which
- * `writeToDisk` instead leaves to `save-file` in main. That is not a shortcut:
- * a version is restored by writing its bytes verbatim, so a CSV captured as
- * plain UTF-8 LF would quietly convert a CRLF/UTF-16 file on restore.
+ * Factored out of `writeToDisk` so the version capture and the real save cannot
+ * disagree about what this document is: a capture is restored by writing its
+ * bytes back, so a capture built by a second, parallel copy of this logic would
+ * mean "restore an earlier version" quietly produced a different file than
+ * "save" would have.
+ *
+ * `usedFallbackWriter` only matters to the save (it is the downgrade worth
+ * telling the user about — see `writeToDisk`'s own note on SHEET-4); the capture
+ * ignores it, because nothing was written for the user to be warned about.
  */
+async function workbookBytes(
+  doc: SpreadsheetDocument,
+  target: Extract<SpreadsheetSaveTarget, { kind: 'workbook' }>,
+  originalBuffer: ArrayBuffer | null,
+): Promise<{ readonly bytes: Uint8Array; readonly usedFallbackWriter: boolean }> {
+  // USR-17 — rewrite the file the user opened (keeping every style, chart
+  // and filter Atlas does not model) whenever that is possible; the
+  // fresh-workbook writer is the fallback for other formats and for
+  // structural changes it cannot express.
+  //
+  // SHEET-4 — `writeWorkbookThroughOriginal` also returns `null` on
+  // several genuine internal failures on an eligible xlsx/xlsm (a
+  // non-OOXML/corrupt buffer, missing relationships, a sheet whose part
+  // isn't a plain worksheet, ...) — not just "not eligible at all". Both
+  // shapes used to fall through to the same fresh-workbook writer with no
+  // way for the caller to tell them apart, so a genuine downgrade (styles,
+  // charts, filters and tables NOT carried over — see
+  // `docs/KNOWN_LIMITATIONS.md`'s xlsx promise) silently reported success
+  // exactly like an unremarkable non-eligible save (CSV-origin document,
+  // legacy format) did. `attemptedThroughOriginal` distinguishes the two:
+  // only "eligible AND attempted AND still came back null" counts as a
+  // fallback worth telling the user about.
+  const attemptedThroughOriginal = Boolean(originalBuffer) && PASSTHROUGH_BOOK_TYPES.has(target.bookType)
+  const throughOriginal = attemptedThroughOriginal
+    ? await writeWorkbookThroughOriginal(originalBuffer!, doc)
+    : null
+  return {
+    bytes: throughOriginal ?? (await writeWorkbookBytesWithTables(doc, target.bookType)),
+    usedFallbackWriter: attemptedThroughOriginal && throughOriginal === null,
+  }
+}
+
+/**
+ * The delimited text for this document, plus the metadata its file is written
+ * with (`undefined` for a document that was never loaded from disk).
+ *
+ * SHEET-7/8 — a CSV/TSV read from disk keeps its own encoding, BOM and line
+ * endings: the text is emitted `\n`-only and `meta` says what to reapply,
+ * exactly as markdown/code saves do. A file never loaded from disk keeps the
+ * historical output (CRLF, no BOM) in the text itself and has no `meta`.
+ *
+ * Shared by the save and the version capture for the same reason
+ * `workbookBytes` is — but the two do different things with `meta`: the save
+ * hands it to `save-file` and lets main re-encode, while a capture has to encode
+ * itself, because the bytes are what gets stored and later written back.
+ */
+function delimitedText(
+  doc: SpreadsheetDocument,
+  target: Extract<SpreadsheetSaveTarget, { kind: 'delimited' }>,
+  metaSourcePath: string,
+): { readonly text: string; readonly meta: TextFileMeta | undefined } {
+  const meta = findTextFileMeta(metaSourcePath)
+  const body = meta
+    ? documentToDelimitedText(doc, target.delimiter, { newline: 'lf' })
+    : documentToDelimitedText(doc, target.delimiter)
+  return {
+    text: target.trailingNewline && body.length > 0 ? body + (meta ? '\n' : '\r\n') : body,
+    meta,
+  }
+}
+
+/** VERSIONS-2 — the document's bytes for the version history, without writing anything. */
 async function serializeForHistory(
   doc: SpreadsheetDocument,
   target: SpreadsheetSaveTarget,
@@ -100,21 +165,12 @@ async function serializeForHistory(
   metaSourcePath: string,
 ): Promise<Uint8Array> {
   if (target.kind === 'workbook') {
-    const throughOriginal =
-      originalBuffer && PASSTHROUGH_BOOK_TYPES.has(target.bookType)
-        ? await writeWorkbookThroughOriginal(originalBuffer, doc)
-        : null
-    return throughOriginal ?? (await writeWorkbookBytesWithTables(doc, target.bookType))
+    return (await workbookBytes(doc, target, originalBuffer)).bytes
   }
-
-  const sourceMeta = findTextFileMeta(metaSourcePath)
-  const body = sourceMeta
-    ? documentToDelimitedText(doc, target.delimiter, { newline: 'lf' })
-    : documentToDelimitedText(doc, target.delimiter)
-  const text = target.trailingNewline && body.length > 0 ? body + (sourceMeta ? '\n' : '\r\n') : body
-  // With no recorded meta the text already carries the historical CRLF output,
-  // so it is encoded as-is rather than run through the newline rewrite again.
-  return sourceMeta ? encodeTextBytes(text, getTextFileMeta(metaSourcePath)) : new TextEncoder().encode(text)
+  const { text, meta } = delimitedText(doc, target, metaSourcePath)
+  // No recorded meta means the text already carries its own CRLF convention, so
+  // it is encoded as-is rather than run through the newline rewrite a second time.
+  return meta ? encodeTextBytes(text, meta) : new TextEncoder().encode(text)
 }
 
 async function writeToDisk(
@@ -129,29 +185,7 @@ async function writeToDisk(
   const filters = [{ name: target.filterName, extensions: [target.extension] }]
 
   if (target.kind === 'workbook') {
-    // USR-17 — rewrite the file the user opened (keeping every style, chart
-    // and filter Atlas does not model) whenever that is possible; the
-    // fresh-workbook writer is the fallback for other formats and for
-    // structural changes it cannot express.
-    //
-    // SHEET-4 — `writeWorkbookThroughOriginal` also returns `null` on
-    // several genuine internal failures on an eligible xlsx/xlsm (a
-    // non-OOXML/corrupt buffer, missing relationships, a sheet whose part
-    // isn't a plain worksheet, ...) — not just "not eligible at all". Both
-    // shapes used to fall through to the same fresh-workbook writer with no
-    // way for the caller to tell them apart, so a genuine downgrade (styles,
-    // charts, filters and tables NOT carried over — see
-    // `docs/KNOWN_LIMITATIONS.md`'s xlsx promise) silently reported success
-    // exactly like an unremarkable non-eligible save (CSV-origin document,
-    // legacy format) did. `attemptedThroughOriginal` distinguishes the two:
-    // only "eligible AND attempted AND still came back null" counts as a
-    // fallback worth telling the user about.
-    const attemptedThroughOriginal = Boolean(originalBuffer) && PASSTHROUGH_BOOK_TYPES.has(target.bookType)
-    const throughOriginal = attemptedThroughOriginal
-      ? await writeWorkbookThroughOriginal(originalBuffer!, doc)
-      : null
-    const usedFallbackWriter = attemptedThroughOriginal && throughOriginal === null
-    const bytes = throughOriginal ?? (await writeWorkbookBytesWithTables(doc, target.bookType))
+    const { bytes, usedFallbackWriter } = await workbookBytes(doc, target, originalBuffer)
     const result = await window.electronAPI?.saveBinaryFile?.({
       content: bytes,
       suggestedName,
@@ -161,16 +195,10 @@ async function writeToDisk(
     return { saved: result?.saved ?? false, path: result?.path, error: result?.error, usedFallbackWriter }
   }
 
-  // SHEET-7/8 — a CSV/TSV read from disk keeps its own encoding, BOM and line
-  // endings: emit `\n`-only text and let `save-file` reapply the recorded
-  // convention, exactly as markdown/code saves do (`encodeTextBuffer` expects
-  // `\n` input, so the text must not carry CRLF or a BOM of its own). A file
-  // never loaded from disk keeps the historical output (CRLF, no BOM).
-  const sourceMeta = findTextFileMeta(metaSourcePath)
-  const body = sourceMeta
-    ? documentToDelimitedText(doc, target.delimiter, { newline: 'lf' })
-    : documentToDelimitedText(doc, target.delimiter)
-  const text = target.trailingNewline && body.length > 0 ? body + (sourceMeta ? '\n' : '\r\n') : body
+  // The text goes out `\n`-only with `meta` alongside it and main does the
+  // re-encoding (`encodeTextBuffer` expects `\n` input, so the text must not
+  // carry CRLF or a BOM of its own) — see `delimitedText` for the rest.
+  const { text, meta: sourceMeta } = delimitedText(doc, target, metaSourcePath)
   const result = await window.electronAPI?.saveFile?.({
     content: text,
     suggestedName,
