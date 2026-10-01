@@ -8,7 +8,7 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
-## [Unreleased]
+## [3.10.0] — 2026-10-01 (version history for every editable format)
 
 ### Added
 
