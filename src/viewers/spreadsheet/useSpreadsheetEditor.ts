@@ -438,11 +438,24 @@ export function useSpreadsheetEditor(
   // whatever format this document is saved as, and reports neither a save error
   // nor a fallback warning: nothing was written, so there is nothing to tell the
   // user about, and the save that follows will say it anyway.
-  const capture = useCallback(
-    (): Promise<Uint8Array> =>
-      serializeForHistory(history.present, target, originalBuffer, savePath ?? filePath),
-    [history.present, target, originalBuffer, savePath, filePath],
-  )
+  //
+  // What it needs is read through a ref so the registered function's identity
+  // never changes. `history.present` changes on every cell edit, so registering
+  // a callback that closed over it directly made the registration effect tear
+  // down and re-register per edit — and `registerCapture` moves reactive state
+  // (`canCapture`), so each of those re-rendered the whole viewer subtree,
+  // overlay cell editor included, for no reason. Staleness is not a concern at
+  // the other end: this is called from a two-minute timer, never from a path
+  // that could run between a commit and its effects.
+  const captureInputsRef = useRef({ doc: history.present, target, originalBuffer, metaPath: savePath ?? filePath })
+  useEffect(() => {
+    captureInputsRef.current = { doc: history.present, target, originalBuffer, metaPath: savePath ?? filePath }
+  }, [history.present, target, originalBuffer, savePath, filePath])
+
+  const capture = useCallback((): Promise<Uint8Array> => {
+    const { doc, target: t, originalBuffer: buffer, metaPath } = captureInputsRef.current
+    return serializeForHistory(doc, t, buffer, metaPath)
+  }, [])
 
   useEffect(() => {
     registerCapture(capture)

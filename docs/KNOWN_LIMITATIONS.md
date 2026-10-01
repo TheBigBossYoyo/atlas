@@ -450,6 +450,14 @@ and the shell's timer asks whichever one is active.
 image registers nothing, so the panel's "Save a version now" is absent rather
 than present and inert, and those documents get a version on every write only.
 
+**The cost is measured, not assumed.** Capturing a 36-page `.docx` with images
+takes ~170 ms of wall clock and produces **zero** renderer long tasks — JSZip's
+`generateAsync` chunks the deflate, so the thread the user is typing on is never
+blocked. `tests/e2e/version-capture-perf.spec.ts` holds that to the same 200 ms
+budget `perf.spec.ts` uses, and proves its own observer is alive first (see the
+note there: work driven over the debugger protocol is invisible to the
+long-tasks API, which made an earlier version of that test unable to fail).
+
 **A header or footer field still being typed into is captured as it was.**
 Committing that pending edit is a real change to the document's history, which a
 background timer must not make on the user's behalf; the next save picks it up.

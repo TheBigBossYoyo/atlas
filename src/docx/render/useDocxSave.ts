@@ -334,10 +334,22 @@ export function useDocxSave({
    *     dirty, or the shell would think the unsaved work had been written.
    *   - It skips the fidelity check. That is a message about a file the user now
    *     has on disk; nothing was written here, so there is nothing to warn about.
+   *
+   * Registered through a ref so the registered function's identity never
+   * changes: `registerCapture` moves reactive state in the provider, so a
+   * registration that churned on every `bundle` identity change would re-render
+   * the whole viewer subtree for nothing.
    */
-  const capture = useCallback(async (): Promise<Uint8Array | null> => {
-    return saveDocx({ ...bundle, document: documentModelRef.current })
-  }, [bundle, documentModelRef])
+  const captureBundleRef = useRef(bundle)
+  useEffect(() => {
+    captureBundleRef.current = bundle
+  }, [bundle])
+
+  const capture = useCallback(
+    async (): Promise<Uint8Array | null> =>
+      saveDocx({ ...captureBundleRef.current, document: documentModelRef.current }),
+    [documentModelRef],
+  )
 
   useEffect(() => {
     registerCapture(capture)

@@ -4,10 +4,11 @@
  * same contract DocxViewer's own save/dirty plumbing uses.
  */
 import { act, render, screen, waitFor } from '@testing-library/react'
+import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ViewerProvider } from '../../shared/ViewerContext'
-import { useViewerIsDirty, useViewerSave } from '../../shared/useViewerContext'
+import { useViewerCanCapture, useViewerCapture, useViewerIsDirty, useViewerSave } from '../../shared/useViewerContext'
 import { createDocument } from '../spreadsheetDocument'
 import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from '../useSpreadsheetEditor'
 import type { ParsedSheet } from '../../shared/spreadsheetGrid'
@@ -48,6 +49,12 @@ function ViewerDirtyProbe() {
   return <span data-testid="dirty">{String(isDirty)}</span>
 }
 
+/** VERSIONS-2 — whether the editor has offered the version history a way to serialize this document. */
+function ViewerCaptureProbe() {
+  const canCapture = useViewerCanCapture()
+  return <span data-testid="can-capture">{String(canCapture)}</span>
+}
+
 function ViewerSaveProbe() {
   const save = useViewerSave()
   return (
@@ -62,9 +69,10 @@ type HarnessProps = {
   readonly onReady: (api: ReturnType<typeof useSpreadsheetEditor>) => void
   /** SHEET-4 — the bytes the workbook was "opened" from, threaded straight through to `writeWorkbookThroughOriginal` (USR-17's save-through-original). */
   readonly originalBuffer?: ArrayBuffer | null
+  readonly children?: React.ReactNode
 }
 
-function Harness({ target, onReady, originalBuffer = null }: HarnessProps) {
+function Harness({ target, onReady, originalBuffer = null, children }: HarnessProps) {
   const doc = createDocument([sheetFixture([['a', 'b'], ['1', '2']])])
   const editor = useSpreadsheetEditor(doc, '/tmp/sample.xlsx', target, true, originalBuffer)
   onReady(editor)
@@ -72,17 +80,25 @@ function Harness({ target, onReady, originalBuffer = null }: HarnessProps) {
     <>
       <ViewerDirtyProbe />
       <ViewerSaveProbe />
+      <ViewerCaptureProbe />
       {editor.saveError && <span data-testid="save-error">{editor.saveError}</span>}
       {editor.saveWarning && <span data-testid="save-warning">{editor.saveWarning}</span>}
+      {children}
     </>
   )
 }
 
-function renderHarness(target: SpreadsheetSaveTarget, originalBuffer?: ArrayBuffer | null) {
+function renderHarness(
+  target: SpreadsheetSaveTarget,
+  originalBuffer?: ArrayBuffer | null,
+  children?: React.ReactNode,
+) {
   let latest: ReturnType<typeof useSpreadsheetEditor> | null = null
   const utils = render(
     <ViewerProvider filePath="/tmp/sample.xlsx">
-      <Harness target={target} originalBuffer={originalBuffer} onReady={(api) => { latest = api }} />
+      <Harness target={target} originalBuffer={originalBuffer} onReady={(api) => { latest = api }}>
+        {children}
+      </Harness>
     </ViewerProvider>,
   )
   return { ...utils, getEditor: () => latest! }
@@ -116,6 +132,38 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('useSpreadsheetEditor — version capture (VERSIONS-2)', () => {
+  it('offers a capture, and serializes the document as it currently stands', async () => {
+    // Lifted out through an effect, not assigned during render — the repo's lint
+    // treats a render-time write to an outer variable as the side effect it is.
+    const captureRef: { current: (() => Promise<Uint8Array | null>) | null } = { current: null }
+    function CaptureGrabber() {
+      const capture = useViewerCapture()
+      useEffect(() => {
+        captureRef.current = capture
+      }, [capture])
+      return null
+    }
+
+    const { getEditor } = renderHarness(WORKBOOK_TARGET, undefined, <CaptureGrabber />)
+    await waitFor(() => expect(screen.getByTestId('can-capture')).toHaveTextContent('true'))
+
+    act(() => getEditor().setCellValue(0, 0, 0, 'captured'))
+    await waitFor(() => expect(screen.getByTestId('dirty')).toHaveTextContent('true'))
+
+    const bytes = await captureRef.current!()
+    expect(bytes).not.toBeNull()
+    // A real xlsx package, not an empty or placeholder buffer.
+    expect(Array.from(bytes!.subarray(0, 2))).toEqual([0x50, 0x4b])
+
+    // And nothing was written: a capture that saved would be a worse bug than
+    // no capture at all.
+    expect(window.electronAPI!.saveBinaryFile).not.toHaveBeenCalled()
+    expect(screen.getByTestId('dirty')).toHaveTextContent('true')
+  })
+
 })
 
 describe('useSpreadsheetEditor — dirty tracking', () => {
