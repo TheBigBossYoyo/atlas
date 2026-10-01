@@ -486,9 +486,23 @@ and it is not visible to anyone you send the document to.
 
 ## Export
 
-Export targets and fidelity vary by format — see the README's Export table
-for the current, per-format matrix (kept as the single source of truth
-there so this document doesn't drift out of sync with it).
+This section used to point at "the README's Export table" as the single source
+of truth. **There is no such table in the README** — it was either never written
+or removed, so the pointer led nowhere. The matrix below is read from
+`src/components/ExportMenu.tsx`, which is where the menu is actually built.
+
+| Format | Export targets |
+| --- | --- |
+| Markdown | HTML, PDF, DOCX, Markdown |
+| DOCX, ODT, RTF, PPTX, ODP | PDF |
+| XLSX, ODS | PDF (a real table PDF from the parsed workbook), CSV, Save a copy |
+| CSV, TSV | PDF, CSV |
+| Text, code | PDF, HTML |
+| PDF | Save a copy (the original bytes — not a re-render) |
+| `.doc`, `.ppt` (legacy) | none offered — these viewers are text-only previews with no render surface the PDF/HTML helpers can print, so no item is shown rather than one that always fails |
+
+Printing (`window.print`) is wired for PDF and DOCX. The other formats export to
+PDF instead of printing directly.
 
 ## The installer is unsigned, by decision
 
