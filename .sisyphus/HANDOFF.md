@@ -108,7 +108,32 @@ references and defined names are now re-anchored through every structural edit, 
 listed below; an English/French UI (`src/i18n/`, DEFER-6 resolved — the owner is confirmed French-
 speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked too (P4.1 fully closed).
 
-## 3.10.0 — built 2026-10-01, NOT INSTALLED (UAC declined)
+## 3.11.0 — built 2026-10-01
+
+`release\Atlas-Setup-3.11.0.exe`, 136.2 MB, unsigned.
+SHA256 `F56EA7F5284B9B596F7D6C45B7BC5A62423BB36B2A9FF2F0DE0CB03E151210B4`.
+
+Spreadsheet cell formatting, both halves: the formatting a workbook already has
+is read and drawn (SHEETFMT-1 — Atlas used to render every workbook as plain
+text), and bold/italic/underline/strike, alignment, text and fill colour and a
+number format can now be APPLIED and saved into the original package
+(SHEETFMT-2). LibreOffice reads back everything Atlas writes.
+
+Verified in the packed `app.asar` before shipping, by scanning all 278 JS chunks
+(the spreadsheet code is lazily split across several, so probing one chunk gives
+a false negative — the verifier reports how many it actually read, because a
+broken scan otherwise looks exactly like a missing feature).
+
+Full gate before release: 4127 unit tests, 176 e2e, types and lint clean.
+
+Installing needs an elevated run (perMachine), so it needs the owner at the
+machine to accept the UAC prompt:
+
+```
+powershell -Command "Start-Process 'release\Atlas-Setup-3.11.0.exe' -ArgumentList '/S' -Verb RunAs -Wait"
+```
+
+## 3.10.0 — built 2026-10-01, installed 2026-10-01
 
 `release\Atlas-Setup-3.10.0.exe`, 136.2 MB, unsigned.
 SHA256 `A59FB1F3FF2B3311DB8E92A4948C8A1ABA662B6140B4EC4EA184DB49C30247B6`.
@@ -119,18 +144,11 @@ and line endings. Verified in the packed `app.asar` before shipping: the new
 i18n string, the renderer text encoder and the history IPC are all present, as is
 3.9.0's drag-region fix.
 
-Installing needs an elevated run (perMachine). The elevation was attempted on
-2026-10-01 and the UAC prompt was **declined** ("L'operation a ete annulee par
-l'utilisateur"), so it was not retried. **The machine is still running 3.9.0**,
-which has version history for saves but no periodic capture outside markdown.
-
-To install it, run from the project root:
-
-```
-powershell -Command "Start-Process 'release\Atlas-Setup-3.10.0.exe' -ArgumentList '/S' -Verb RunAs -Wait"
-```
-
-Drop `-ArgumentList '/S'` to watch the installer UI instead of running silently.
+Installed on 2026-10-01 at the owner's request (UAC accepted, installer exit 0,
+`Atlas.exe` reports 3.10.0.0), with the feature confirmed in the installed
+`app.asar` and the PROGID-1 registry checks re-verified. A first elevation
+attempt that day was declined at the UAC prompt and was not retried; the owner
+asked for it again explicitly and it went through. Superseded by 3.11.0 above.
 
 After installing, run `docs/RELEASE.md` step 8. The PROGID-1 `reg query` checks
 in it were verified on 3.8.0 and re-verified on 3.9.0, so that is a re-check
