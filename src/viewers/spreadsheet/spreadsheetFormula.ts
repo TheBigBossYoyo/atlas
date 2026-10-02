@@ -30,6 +30,7 @@
  * "1" with the ALREADY-COMPUTED `1+1`, not `("1"&1)+1`.
  */
 import { parseCellRef, type CellCoord } from './cellRef'
+import { applyNumberFormat } from './formatNumber'
 import {
   isoDateFromSerial,
   weekdayFromSerial,
@@ -697,13 +698,15 @@ const FUNCTIONS: ReadonlySet<string> = new Set([
   // logic
   'IF', 'IFERROR', 'AND', 'OR', 'NOT', 'TRUE', 'FALSE',
   // conditional aggregates
-  'SUMIF', 'COUNTIF', 'AVERAGEIF',
+  'SUMIF', 'COUNTIF', 'AVERAGEIF', 'SUMIFS', 'COUNTIFS', 'AVERAGEIFS',
   // lookup
-  'VLOOKUP', 'HLOOKUP', 'INDEX', 'MATCH',
+  'VLOOKUP', 'HLOOKUP', 'INDEX', 'MATCH', 'XLOOKUP',
+  // array-ish
+  'SUMPRODUCT',
   // maths
   'ROUND', 'ROUNDUP', 'ROUNDDOWN', 'ABS', 'INT', 'SQRT', 'MOD', 'POWER', 'SIGN',
   // text
-  'CONCATENATE', 'CONCAT', 'LEFT', 'RIGHT', 'MID', 'LEN', 'TRIM', 'UPPER', 'LOWER',
+  'CONCATENATE', 'CONCAT', 'LEFT', 'RIGHT', 'MID', 'LEN', 'TRIM', 'UPPER', 'LOWER', 'TEXT',
   // type tests
   'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISERROR',
   // dates
@@ -803,6 +806,130 @@ function applyFunction(name: string, args: ReadonlyArray<Arg>): Value {
       if (name === 'COUNTIF') return numberValue(count)
       if (name === 'SUMIF') return numberValue(total)
       return numeric === 0 ? { kind: 'error', code: '#DIV/0!' } : numberValue(total / numeric)
+    }
+
+    case 'SUMIFS':
+    case 'COUNTIFS':
+    case 'AVERAGEIFS': {
+      // The multi-criteria forms, whose argument ORDER differs from the
+      // single-criterion ones in a way that is easy to get backwards:
+      //   SUMIFS(sumRange, criteriaRange1, criteria1, ...)   -- sum range FIRST
+      //   SUMIF(criteriaRange, criteria, [sumRange])         -- sum range LAST
+      // COUNTIFS has no sum range at all.
+      const counting = name === 'COUNTIFS'
+      const sumRange = counting ? null : rangeOf(args[0])
+      const pairsFrom = counting ? 0 : 1
+      if (!counting && !sumRange) return { kind: 'error', code: '#VALUE!' }
+
+      const conditions: Array<{
+        readonly cells: ReadonlyArray<ReadonlyArray<Value>>
+        readonly matches: (cell: Value) => boolean
+      }> = []
+      for (let i = pairsFrom; i + 1 < args.length + 1 && args[i] !== undefined; i += 2) {
+        const cells = rangeOf(args[i])
+        const criterion = scalarOf(args[i + 1])
+        if (!cells || !criterion) return { kind: 'error', code: '#VALUE!' }
+        conditions.push({ cells, matches: criterionMatcher(criterion) })
+      }
+      if (conditions.length === 0) return { kind: 'error', code: '#VALUE!' }
+
+      const rowCount = conditions[0].cells.length
+      let count = 0
+      let total = 0
+      let numeric = 0
+      for (let r = 0; r < rowCount; r += 1) {
+        const colCount = conditions[0].cells[r]?.length ?? 0
+        for (let c = 0; c < colCount; c += 1) {
+          // EVERY condition has to match the same position — that is what
+          // makes these the "and" forms.
+          const all = conditions.every(condition => {
+            const cell = condition.cells[r]?.[c]
+            return cell !== undefined && condition.matches(cell)
+          })
+          if (!all) continue
+          count += 1
+          const target = counting ? undefined : sumRange?.[r]?.[c]
+          if (target?.kind === 'number') {
+            total += target.value
+            numeric += 1
+          }
+        }
+      }
+      if (name === 'COUNTIFS') return numberValue(count)
+      if (name === 'SUMIFS') return numberValue(total)
+      return numeric === 0 ? { kind: 'error', code: '#DIV/0!' } : numberValue(total / numeric)
+    }
+
+    case 'XLOOKUP': {
+      // XLOOKUP(key, lookupRange, resultRange, [ifNotFound]) — the modern
+      // replacement for VLOOKUP, and the one people reach for now. Exact match
+      // only, same reasoning as VLOOKUP: its own default IS exact, so unlike
+      // VLOOKUP nothing has to be refused here.
+      const key = scalarOf(args[0])
+      const lookupRange = rangeOf(args[1])
+      const resultRange = rangeOf(args[2])
+      if (!key || !lookupRange || !resultRange) return { kind: 'error', code: '#VALUE!' }
+
+      const flatten = (cells: ReadonlyArray<ReadonlyArray<Value>>): ReadonlyArray<Value> =>
+        cells.length === 1 ? cells[0] : cells.map(row => row[0])
+      const keys = flatten(lookupRange)
+      const results = flatten(resultRange)
+
+      for (let i = 0; i < keys.length; i += 1) {
+        const equal = compareValues('=', keys[i], key)
+        if (equal.kind === 'text' && equal.value === 'TRUE') {
+          return results[i] ?? { kind: 'error', code: '#REF!' }
+        }
+      }
+      // The fourth argument is what XLOOKUP is liked for: a fallback instead
+      // of wrapping the whole call in IFERROR.
+      return args[3] ? (scalarOf(args[3]) ?? { kind: 'error', code: '#N/A' }) : { kind: 'error', code: '#N/A' }
+    }
+
+    case 'SUMPRODUCT': {
+      const ranges = args.map(rangeOf)
+      if (ranges.some(r => r === null) || ranges.length === 0) return { kind: 'error', code: '#VALUE!' }
+      const first = ranges[0]!
+      // Every range must be the same shape; Excel reports #VALUE! otherwise
+      // rather than quietly summing the overlap.
+      for (const range of ranges) {
+        if (range!.length !== first.length) return { kind: 'error', code: '#VALUE!' }
+        for (let r = 0; r < first.length; r += 1) {
+          if ((range![r]?.length ?? 0) !== (first[r]?.length ?? 0)) return { kind: 'error', code: '#VALUE!' }
+        }
+      }
+      let total = 0
+      for (let r = 0; r < first.length; r += 1) {
+        for (let c = 0; c < (first[r]?.length ?? 0); c += 1) {
+          let product = 1
+          for (const range of ranges) {
+            const cell = range![r][c]
+            if (cell.kind === 'error') return cell
+            // Text and blanks count as zero, which is Excel's rule and the
+            // reason SUMPRODUCT works on a column with a header.
+            product *= cell.kind === 'number' ? cell.value : 0
+          }
+          total += product
+        }
+      }
+      return numberValue(total)
+    }
+
+    case 'TEXT': {
+      // Now implementable because SHEETFN-3 brought in a real OOXML number
+      // formatter; before that there was nothing to format WITH.
+      const value = scalarOf(args[0])
+      const formatCode = textOf(args[1])
+      if (!value) return { kind: 'error', code: '#VALUE!' }
+      if (typeof formatCode !== 'string') return { kind: 'error', code: formatCode.code }
+      if (value.kind === 'error') return value
+      const numeric = toNumeric(value)
+      if (typeof numeric !== 'number') {
+        // TEXT on something non-numeric returns it unchanged, as Excel does.
+        return { kind: 'text', value: valueToText(value) }
+      }
+      const formatted = applyNumberFormat(numeric, formatCode)
+      return { kind: 'text', value: formatted ?? formatNumericResult(numeric) }
     }
 
     case 'VLOOKUP':

@@ -100,11 +100,14 @@ describe('evaluateFormula — unsupported / malformed input falls back to null',
   const lookup = gridLookup([['1']])
 
   it('rejects an unknown function', () => {
-    // Was `VLOOKUP` until SHEETFN-1 implemented it. Deliberately a function
-    // Excel really has, so this keeps testing "a name we do not implement"
-    // rather than "a name nobody would type".
-    expect(evaluateFormula('XLOOKUP(A1, A1:A1, A1:A1)', lookup)).toEqual({ ok: false })
-    expect(evaluateFormula('SUMPRODUCT(A1:A1, A1:A1)', lookup)).toEqual({ ok: false })
+    // These examples keep going stale as the library grows: it was `VLOOKUP`
+    // until SHEETFN-1, then `XLOOKUP`/`SUMPRODUCT` until SHEETFN-4. Financial
+    // and statistical functions are the ones explicitly out of scope (see
+    // `docs/KNOWN_LIMITATIONS.md`), so they are the stable choice — and still
+    // real Excel functions, which keeps this testing "a name we do not
+    // implement" rather than "a name nobody would type".
+    expect(evaluateFormula('PMT(0.05, 12, 1000)', lookup)).toEqual({ ok: false })
+    expect(evaluateFormula('STDEV(A1:A1)', lookup)).toEqual({ ok: false })
   })
 
   it('rejects unbalanced parentheses', () => {

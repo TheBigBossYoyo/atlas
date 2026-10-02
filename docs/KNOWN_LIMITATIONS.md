@@ -270,19 +270,24 @@ A1/`$A$1` references and `A1:B3` ranges, and these functions —
 | --- | --- |
 | Aggregate | SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, COUNTBLANK, PRODUCT, MEDIAN |
 | Logic | IF, IFERROR, AND, OR, NOT, TRUE, FALSE |
-| Conditional | SUMIF (incl. a parallel sum range), COUNTIF, AVERAGEIF |
-| Lookup | VLOOKUP, HLOOKUP, INDEX, MATCH |
+| Conditional | SUMIF (incl. a parallel sum range), COUNTIF, AVERAGEIF, SUMIFS, COUNTIFS, AVERAGEIFS |
+| Lookup | VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH |
+| Array-ish | SUMPRODUCT |
 | Maths | ROUND, ROUNDUP, ROUNDDOWN, ABS, INT, SIGN, SQRT, MOD, POWER |
-| Text | CONCATENATE, CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER |
+| Text | CONCATENATE, CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER, TEXT |
 | Type tests | ISBLANK, ISNUMBER, ISTEXT, ISERROR |
 | Dates | TODAY, NOW, DATE, YEAR, MONTH, DAY, WEEKDAY, DAYS, EDATE, EOMONTH |
 
 **Not supported, and falling back to the literal formula text:**
-XLOOKUP, SUMPRODUCT, array formulas and spilled ranges, structured table
+array formulas and spilled ranges, structured table
 references (`Table1[Column]`), defined names, cross-sheet references inside the
 evaluator (a saved file's cross-sheet refs are re-anchored correctly, but typing
 `=Sheet2!A1` is not evaluated), TEXT and the other format-string functions, and
 every statistical, financial and engineering function.
+
+`XLOOKUP` is exact-match only too, but unlike `VLOOKUP` that is also Excel's own
+default, so nothing has to be refused: its fourth argument (the not-found
+fallback) works, which is most of why it is preferred.
 
 **VLOOKUP and MATCH do exact matching only.** Excel's DEFAULT for both is
 approximate, which on unsorted data returns a confidently wrong row; asking for

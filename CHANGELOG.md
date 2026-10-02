@@ -40,6 +40,8 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   cell could be underlined in the file while Atlas showed it plain. That is
   fixed.
 
+- **More formula functions:** `XLOOKUP` (with its not-found fallback),
+  `SUMIFS`/`COUNTIFS`/`AVERAGEIFS`, `SUMPRODUCT` and `TEXT`.
 - **Date formulas work.** `TODAY`, `NOW`, `DATE`, `YEAR`, `MONTH`, `DAY`,
   `WEEKDAY`, `DAYS`, `EDATE` and `EOMONTH`, and they show dates rather than the
   five-digit numbers a spreadsheet stores underneath. `=TODAY()+7` gives a date;
