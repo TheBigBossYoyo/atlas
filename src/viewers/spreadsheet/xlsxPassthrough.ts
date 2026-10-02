@@ -99,6 +99,7 @@ import {
 } from '../../office/ooxmlDom'
 import { cellKey, type CellFormatPatch, type EditableSheet, type SpreadsheetDocument } from './spreadsheetDocument'
 import { hasAnyBorder, NO_BORDER, type CellBorder } from './xlsxCellStyles'
+import { serialFromDate } from './excelDate'
 import { encodeCol, rewriteTableXml, tableHeaderNames } from './spreadsheetTables'
 import { remapSqref, type IndexSources } from './spreadsheetRangeShift'
 import { rewriteFormulaReferences, type SheetChange } from './formulaRefs'
@@ -609,27 +610,16 @@ const PERCENT_TEXT = /^-?\d+(\.\d+)?%$/
 const ISO_DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})$/
 
 /**
- * Excel's own serial-date numbering: whole days since the fictitious
- * 1899-12-30 "day zero" (one day before 1900-01-01, which is itself day 1) —
- * the classic epoch trick that also reproduces Excel's well-known "1900 was
- * a leap year" bug for any real date on or after 1900-03-01 without special
- * cased for it, since the phantom Feb-29-1900 falls before this range.
- * Returns `null` for a string that parses as digits but isn't a real
- * calendar date (`2024-02-30`, `2024-13-01`) — `Date.UTC` itself normalizes
- * those into a DIFFERENT valid date instead of rejecting them, so the
- * round-trip-through-UTC-components check below is what actually catches it.
+ * The serial for an ISO date the user typed.
+ *
+ * SHEETFN-2 — the epoch arithmetic (and the round-trip check that rejects
+ * `2024-02-30`, which `Date.UTC` would otherwise normalize into a different
+ * day) now lives in `excelDate.ts`, shared with the formula evaluator's own
+ * date functions. Two copies of an epoch is exactly the thing that drifts by a
+ * day and then disagrees about what a cell means.
  */
 function excelSerialFromIsoDate(match: RegExpExecArray): number | null {
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
-  const asUtc = Date.UTC(year, month - 1, day)
-  const roundTrip = new Date(asUtc)
-  if (roundTrip.getUTCFullYear() !== year || roundTrip.getUTCMonth() !== month - 1 || roundTrip.getUTCDate() !== day) {
-    return null
-  }
-  const epoch = Date.UTC(1899, 11, 30)
-  return Math.round((asUtc - epoch) / 86_400_000)
+  return serialFromDate({ year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) })
 }
 
 type OriginalSheet = {

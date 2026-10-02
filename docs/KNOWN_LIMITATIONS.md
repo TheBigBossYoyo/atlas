@@ -275,9 +275,9 @@ A1/`$A$1` references and `A1:B3` ranges, and these functions —
 | Maths | ROUND, ROUNDUP, ROUNDDOWN, ABS, INT, SIGN, SQRT, MOD, POWER |
 | Text | CONCATENATE, CONCAT, LEFT, RIGHT, MID, LEN, TRIM, UPPER, LOWER |
 | Type tests | ISBLANK, ISNUMBER, ISTEXT, ISERROR |
+| Dates | TODAY, NOW, DATE, YEAR, MONTH, DAY, WEEKDAY, DAYS, EDATE, EOMONTH |
 
-**Not supported, and falling back to the literal formula text:** dates and times
-(TODAY, NOW, DATE, YEAR, MONTH, DAY — the evaluator has no date type yet),
+**Not supported, and falling back to the literal formula text:**
 XLOOKUP, SUMPRODUCT, array formulas and spilled ranges, structured table
 references (`Table1[Column]`), defined names, cross-sheet references inside the
 evaluator (a saved file's cross-sheet refs are re-anchored correctly, but typing
@@ -303,6 +303,37 @@ instead of making the whole formula fall back to literal text, matching Excel.
 Non-numeric TEXT is still skipped inside a range — which is what lets
 `SUM(A1:A9)` work on a column with a header — but is `#VALUE!` as a bare
 argument.
+
+**Dates (SHEETFN-2).** A spreadsheet date is a serial number — days since the
+epoch — and in Excel the cell's number FORMAT is what makes it display as a
+date. Atlas does not yet apply a cell's number format to a formula RESULT, so
+the evaluator tracks which numbers mean dates and renders those as ISO
+(`2026-10-02`). That flag propagates through `+` and `-` the way Excel's own type
+inference does: a date plus a number is a date, so `=TODAY()+7` shows a date,
+while a date minus a date is a plain count of days. Multiplying a date is not a
+date. A cell holding `YYYY-MM-DD` text is read as the date it is, so `YEAR(A1)`
+and `A1+7` work on a column of typed dates.
+
+Only the ISO form is recognised. A cell showing `15/03/2023` (a workbook's own
+`dd/mm/yyyy` format) is NOT read as a date — reading it would need the cell's
+real stored value rather than its display text, which the evaluator does not
+have. Applying a cell's number format to a formula result, and reading a
+formatted date back, are the same missing piece and are tracked together.
+
+**Excel's 1900 leap-year bug is modelled, including the part Excel gets wrong.**
+Excel believes 1900-02-29 existed, which shifts every serial from 1900-03-01
+onward by one day. Both epochs are implemented, so a date before March 1900
+converts correctly instead of landing a day late, and serial 60 — the day that
+never existed — is refused rather than answered for. This matters only for dates
+in January and February 1900, but being quietly one day wrong is worse than
+refusing.
+
+**Cell text parses strictly (SHEETFN-2).** The evaluator used
+`Number.parseFloat` on a cell's display text, which reads a leading number and
+ignores the rest: a cell showing `2026-10-02` was the number 2026, and one
+showing `15/03/2023` was 15. A column of dates therefore summed to a total of
+its day-of-month numbers. The whole text must now be a number (or an ISO date),
+and anything else is text — which, inside a range, is skipped.
 
 **There is no recalculation dependency graph.** A formula is evaluated when its
 own cell is read, so a chain updates correctly, but there is no cycle detection

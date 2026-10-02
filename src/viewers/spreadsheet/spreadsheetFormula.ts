@@ -30,6 +30,15 @@
  * "1" with the ALREADY-COMPUTED `1+1`, not `("1"&1)+1`.
  */
 import { parseCellRef, type CellCoord } from './cellRef'
+import {
+  isoDateFromSerial,
+  weekdayFromSerial,
+  isoDateTimeFromSerial,
+  nowSerial,
+  serialFromDate,
+  serialFromIsoDate,
+  todaySerial,
+} from './excelDate'
 
 export type CellLookup = (row: number, col: number) => string
 
@@ -91,7 +100,24 @@ function tokenize(formula: string): Token[] {
 }
 
 /** A resolved value flowing through evaluation: either numeric, text, or a spreadsheet error code. */
-type Value = { readonly kind: 'number'; readonly value: number } | { readonly kind: 'text'; readonly value: string } | { readonly kind: 'error'; readonly code: string }
+/**
+ * SHEETFN-2 — `dateKind` marks a number that MEANS a date.
+ *
+ * A spreadsheet date is a serial number, so `TODAY()` is really 46266. In Excel
+ * the cell's number FORMAT is what makes that display as a date; Atlas does not
+ * yet apply a cell's number format to a formula result (see
+ * `docs/KNOWN_LIMITATIONS.md`), so without this a date formula would show its
+ * serial and be useless.
+ *
+ * The flag rides on the value and is propagated by `+`/`-` the way Excel's own
+ * type inference does — date + number is a date, date - date is a plain count
+ * of days — so `=TODAY()+7` displays as a date while `=B1-A1` displays as a
+ * number of days.
+ */
+type Value =
+  | { readonly kind: 'number'; readonly value: number; readonly dateKind?: 'date' | 'datetime' }
+  | { readonly kind: 'text'; readonly value: string }
+  | { readonly kind: 'error'; readonly code: string }
 
 function numberValue(n: number): Value {
   if (Number.isNaN(n)) return { kind: 'error', code: '#VALUE!' }
@@ -128,6 +154,28 @@ function valueToText(value: Value): string {
   if (value.kind === 'number') return formatNumericResult(value.value)
   if (value.kind === 'text') return value.value
   return value.code
+}
+
+/** Tags a numeric value as a date, leaving anything else alone. */
+function dated(value: Value, dateKind: 'date' | 'datetime' | undefined): Value {
+  if (dateKind === undefined || value.kind !== 'number') return value
+  return { ...value, dateKind }
+}
+
+/**
+ * The serial behind a value, for a date function's argument.
+ *
+ * Accepts a serial (what a date formula produces) AND an `YYYY-MM-DD` string
+ * (what a cell holding a typed date shows), because both are what a user will
+ * point `YEAR(...)` at and neither is obviously the "real" one from where they
+ * are sitting.
+ */
+function toSerial(value: Value): number | { readonly code: string } {
+  if (value.kind === 'error') return { code: value.code }
+  if (value.kind === 'number') return value.value
+  const fromIso = serialFromIsoDate(value.value)
+  if (fromIso !== null) return fromIso
+  return { code: '#VALUE!' }
 }
 
 const COMPARISON_OPS: ReadonlySet<string> = new Set(['=', '<>', '<', '<=', '>', '>='])
@@ -322,9 +370,22 @@ class FormulaParser {
     const b = toNumeric(right)
     if (typeof a !== 'number') return { kind: 'error', code: a.code }
     if (typeof b !== 'number') return { kind: 'error', code: b.code }
+
+    // SHEETFN-2 — Excel's own date arithmetic: adding or subtracting a plain
+    // number keeps a date a date, and subtracting one date from another gives
+    // a plain count of days. Multiplying a date is not a date.
+    const leftDate = left.kind === 'number' ? left.dateKind : undefined
+    const rightDate = right.kind === 'number' ? right.dateKind : undefined
+    let resultDate: 'date' | 'datetime' | undefined
+    if (op === '+') {
+      resultDate = leftDate && rightDate ? undefined : (leftDate ?? rightDate)
+    } else if (op === '-') {
+      resultDate = leftDate && rightDate ? undefined : leftDate
+    }
+
     switch (op) {
-      case '+': return numberValue(a + b)
-      case '-': return numberValue(a - b)
+      case '+': return dated(numberValue(a + b), resultDate)
+      case '-': return dated(numberValue(a - b), resultDate)
       case '*': return numberValue(a * b)
       case '/': return b === 0 ? { kind: 'error', code: '#DIV/0!' } : numberValue(a / b)
       case '^': return numberValue(Math.pow(a, b))
@@ -432,11 +493,30 @@ type Arg =
   | { readonly kind: 'value'; readonly value: Value }
   | { readonly kind: 'range'; readonly cells: ReadonlyArray<ReadonlyArray<Value>> }
 
-/** A cell's display text as a value: blank stays blank (not 0 — `COUNT` and `AVERAGE` must be able to tell them apart). */
+/**
+ * A cell's display text as a value.
+ *
+ * Blank stays blank, not 0 — `COUNT` and `AVERAGE` have to tell them apart.
+ *
+ * SHEETFN-2 — parsing is STRICT: the whole text must be a number. It used to
+ * use `Number.parseFloat`, which reads a leading number and ignores the rest,
+ * so a cell showing `2026-10-02` was the number 2026 and one showing
+ * `15/03/2023` was 15. A column of dates therefore summed to a total of its
+ * day-of-month numbers, and `YEAR(A1)` on a date cell answered for 1905.
+ *
+ * An ISO date is recognised as the date it is, which is what makes
+ * `YEAR(A1)`/`A1+7` work on a column of typed dates — the common real case.
+ */
 function cellValue(text: string): Value {
-  if (text.trim() === '') return { kind: 'text', value: '' }
-  const parsed = Number.parseFloat(text)
-  return Number.isNaN(parsed) ? { kind: 'text', value: text } : { kind: 'number', value: parsed }
+  const trimmed = text.trim()
+  if (trimmed === '') return { kind: 'text', value: '' }
+
+  const serial = serialFromIsoDate(trimmed)
+  if (serial !== null) return { kind: 'number', value: serial, dateKind: 'date' }
+
+  // `Number(...)` rejects trailing junk where `parseFloat` would accept it.
+  const parsed = Number(trimmed)
+  return Number.isNaN(parsed) ? { kind: 'text', value: trimmed } : { kind: 'number', value: parsed }
 }
 
 // Delegates to `cellRef.ts`'s own `parseCellRef` (single source of truth for
@@ -614,6 +694,8 @@ const FUNCTIONS: ReadonlySet<string> = new Set([
   'CONCATENATE', 'CONCAT', 'LEFT', 'RIGHT', 'MID', 'LEN', 'TRIM', 'UPPER', 'LOWER',
   // type tests
   'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISERROR',
+  // dates
+  'TODAY', 'NOW', 'DATE', 'YEAR', 'MONTH', 'DAY', 'WEEKDAY', 'DAYS', 'EDATE', 'EOMONTH',
 ])
 
 function applyFunction(name: string, args: ReadonlyArray<Arg>): Value {
@@ -817,6 +899,87 @@ function applyFunction(name: string, args: ReadonlyArray<Arg>): Value {
       return { kind: 'text', value: text.slice(start - 1, start - 1 + Math.max(0, Math.trunc(countArg))) }
     }
 
+    case 'TODAY':
+      return dated(numberValue(todaySerial()), 'date')
+    case 'NOW':
+      return dated(numberValue(nowSerial()), 'datetime')
+
+    case 'DATE': {
+      const parts = [numberOf(args[0]), numberOf(args[1]), numberOf(args[2])]
+      for (const part of parts) {
+        if (typeof part !== 'number') return { kind: 'error', code: part.code }
+      }
+      const [year, month, day] = parts as number[]
+      const serial = serialFromDate({
+        year: Math.trunc(year),
+        month: Math.trunc(month),
+        day: Math.trunc(day),
+      })
+      // `#NUM!` is what Excel reports for a date it cannot build, and
+      // `serialFromDate` rejects an impossible day rather than rolling it over
+      // into a different one.
+      return serial === null ? { kind: 'error', code: '#NUM!' } : dated(numberValue(serial), 'date')
+    }
+
+    case 'YEAR':
+    case 'MONTH':
+    case 'DAY':
+    case 'WEEKDAY': {
+      const value = scalarOf(args[0])
+      if (!value) return { kind: 'error', code: '#VALUE!' }
+      const serial = toSerial(value)
+      if (typeof serial !== 'number') return { kind: 'error', code: serial.code }
+      const date = dateFromSerialChecked(serial)
+      if (!date) return { kind: 'error', code: '#NUM!' }
+      if (name === 'YEAR') return numberValue(date.year)
+      if (name === 'MONTH') return numberValue(date.month)
+      if (name === 'DAY') return numberValue(date.day)
+      // WEEKDAY's default numbering is 1 = Sunday. Derived from the calendar,
+      // not from `serial % 7`: Excel's two epochs (see `excelDate.ts`) make the
+      // modulo answer off by one for part of the range. 1900-01-01 was a
+      // Monday, not a Sunday — which is exactly the kind of remembered fact
+      // that made the first version of this wrong.
+      const weekday = weekdayFromSerial(serial)
+      return weekday === null ? { kind: 'error', code: '#NUM!' } : numberValue(weekday + 1)
+    }
+
+    case 'DAYS': {
+      // DAYS(end, start) -- end first, matching Excel, which is the opposite
+      // order from how it reads aloud.
+      const end = scalarOf(args[0])
+      const start = scalarOf(args[1])
+      if (!end || !start) return { kind: 'error', code: '#VALUE!' }
+      const endSerial = toSerial(end)
+      const startSerial = toSerial(start)
+      if (typeof endSerial !== 'number') return { kind: 'error', code: endSerial.code }
+      if (typeof startSerial !== 'number') return { kind: 'error', code: startSerial.code }
+      return numberValue(Math.floor(endSerial) - Math.floor(startSerial))
+    }
+
+    case 'EDATE':
+    case 'EOMONTH': {
+      const value = scalarOf(args[0])
+      const monthsArg = numberOf(args[1])
+      if (!value) return { kind: 'error', code: '#VALUE!' }
+      if (typeof monthsArg !== 'number') return { kind: 'error', code: monthsArg.code }
+      const serial = toSerial(value)
+      if (typeof serial !== 'number') return { kind: 'error', code: serial.code }
+      const date = dateFromSerialChecked(serial)
+      if (!date) return { kind: 'error', code: '#NUM!' }
+
+      const months = Math.trunc(monthsArg)
+      const targetMonthIndex = date.month - 1 + months
+      const targetYear = date.year + Math.floor(targetMonthIndex / 12)
+      const targetMonth = ((targetMonthIndex % 12) + 12) % 12 + 1
+      const lastDay = daysInMonth(targetYear, targetMonth)
+      // EDATE clamps the day to the target month's length -- Excel's own
+      // behaviour, and the reason EDATE("2026-01-31",1) is the 28th of
+      // February rather than an error or the 3rd of March.
+      const day = name === 'EOMONTH' ? lastDay : Math.min(date.day, lastDay)
+      const result = serialFromDate({ year: targetYear, month: targetMonth, day })
+      return result === null ? { kind: 'error', code: '#NUM!' } : dated(numberValue(result), 'date')
+    }
+
     case 'ISBLANK': {
       const value = scalarOf(args[0])
       return boolValue(value ? isBlank(value) : false)
@@ -888,6 +1051,19 @@ function applyFunction(name: string, args: ReadonlyArray<Arg>): Value {
   }
 }
 
+/** A serial's calendar date, or `null` — re-exported through a name that reads at the call sites above. */
+function dateFromSerialChecked(serial: number): { year: number; month: number; day: number } | null {
+  const iso = isoDateFromSerial(serial)
+  if (!iso) return null
+  const [year, month, day] = iso.split('-').map(Number)
+  return { year, month, day }
+}
+
+/** Days in a month, with the real leap-year rule (not Excel's 1900 quirk, which only affects February 1900). */
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate()
+}
+
 /** Strips a fixed-point rounding artifact (e.g. `0.30000000000000004`) before stringifying a computed number. */
 function formatNumericResult(value: number): string {
   const rounded = Math.round(value * 1e10) / 1e10
@@ -909,7 +1085,17 @@ export function evaluateFormula(formula: string, lookup: CellLookup): FormulaRes
     if (tokens.length === 0) return { ok: false }
     const value = new FormulaParser(tokens, lookup).parseTopLevel()
     if (value.kind === 'error') return { ok: true, text: value.code }
-    if (value.kind === 'number') return { ok: true, text: formatNumericResult(value.value) }
+    if (value.kind === 'number') {
+      // SHEETFN-2 — a value the evaluator knows is a date is rendered as one,
+      // rather than as the serial number it is underneath. See `Value`'s own
+      // note on why the flag exists rather than relying on the cell's format.
+      if (value.dateKind !== undefined) {
+        const rendered =
+          value.dateKind === 'datetime' ? isoDateTimeFromSerial(value.value) : isoDateFromSerial(value.value)
+        if (rendered !== null) return { ok: true, text: rendered }
+      }
+      return { ok: true, text: formatNumericResult(value.value) }
+    }
     return { ok: true, text: value.value }
   } catch {
     return { ok: false }

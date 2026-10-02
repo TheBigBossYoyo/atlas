@@ -38,8 +38,17 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   cell could be underlined in the file while Atlas showed it plain. That is
   fixed.
 
+- **Date formulas work.** `TODAY`, `NOW`, `DATE`, `YEAR`, `MONTH`, `DAY`,
+  `WEEKDAY`, `DAYS`, `EDATE` and `EOMONTH`, and they show dates rather than the
+  five-digit numbers a spreadsheet stores underneath. `=TODAY()+7` gives a date;
+  `=B1-A1` on two dates gives the number of days between them.
+
 ### Fixed
 
+- **A cell holding a date is no longer read as a number.** `2026-10-02` was
+  being read as the number 2026 and `15/03/2023` as 15, so a column of dates
+  added up to a total of its day numbers. Cell text now has to be a whole
+  number to count as one, and an ISO date is read as the date it is.
 - **An error inside a formula is now reported instead of hiding the formula.**
   `=SUM(1/0,1)` shows `#DIV/0!`, the way a spreadsheet should, rather than
   falling back to displaying the formula text.
