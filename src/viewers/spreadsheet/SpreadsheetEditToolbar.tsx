@@ -99,6 +99,28 @@ const NUMBER_FORMATS: ReadonlyArray<{ readonly code: string; readonly labelKey: 
  *
  * The weight is `thin`, matching what Excel's own border buttons apply.
  */
+/**
+ * SHEETFMT-4 — the fonts offered.
+ *
+ * A short list of families that are actually present on Windows and that Excel
+ * itself defaults to, rather than a font enumeration: a picker listing fonts
+ * the saved file will be opened without is worse than a short list that works.
+ * The empty value means "the workbook's own default", which is how a cell's
+ * font is cleared.
+ */
+const FONT_FAMILIES: ReadonlyArray<string> = [
+  'Calibri',
+  'Arial',
+  'Times New Roman',
+  'Courier New',
+  'Georgia',
+  'Verdana',
+  'Consolas',
+]
+
+/** Point sizes, matching the set Excel's own size dropdown offers. */
+const FONT_SIZES: ReadonlyArray<number> = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72]
+
 const BORDER_PRESETS: ReadonlyArray<{
   readonly id: string
   readonly labelKey: string
@@ -351,6 +373,49 @@ export function SpreadsheetEditToolbar({
 
       {onFormat && (
         <div className="spreadsheet-edit-toolbar__group" role="group" aria-label={t('spreadsheetToolbar.formatGroupAria')}>
+          <select
+            className="spreadsheet-edit-toolbar__font"
+            value={selectionFormat?.fontName ?? ''}
+            onChange={event => onFormat({ fontName: event.target.value === '' ? null : event.target.value })}
+            disabled={!selection}
+            title={t('spreadsheetToolbar.fontFamily')}
+            aria-label={t('spreadsheetToolbar.fontFamily')}
+          >
+            <option value="">{t('spreadsheetToolbar.fontDefault')}</option>
+            {/* A family the FILE uses that is not in the list has to be offered,
+                or the control would show the default and picking anything else
+                would be the only way to leave it. */}
+            {selectionFormat?.fontName !== undefined && !FONT_FAMILIES.includes(selectionFormat.fontName) && (
+              <option value={selectionFormat.fontName}>{selectionFormat.fontName}</option>
+            )}
+            {FONT_FAMILIES.map(family => (
+              <option key={family} value={family}>
+                {family}
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="spreadsheet-edit-toolbar__fontsize"
+            value={selectionFormat?.fontSize ?? ''}
+            onChange={event =>
+              onFormat({ fontSize: event.target.value === '' ? null : Number(event.target.value) })
+            }
+            disabled={!selection}
+            title={t('spreadsheetToolbar.fontSize')}
+            aria-label={t('spreadsheetToolbar.fontSize')}
+          >
+            <option value="">{t('spreadsheetToolbar.fontDefault')}</option>
+            {selectionFormat?.fontSize !== undefined && !FONT_SIZES.includes(selectionFormat.fontSize) && (
+              <option value={selectionFormat.fontSize}>{selectionFormat.fontSize}</option>
+            )}
+            {FONT_SIZES.map(size => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+
           {([
             ['bold', Bold, 'spreadsheetToolbar.bold'],
             ['italic', Italic, 'spreadsheetToolbar.italic'],

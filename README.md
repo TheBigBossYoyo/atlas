@@ -34,10 +34,10 @@ how much you can do with it depends on the format:
   functions — no array formulas yet), row/column/sheet operations, and saving that keeps the original
   file's styles and charts intact for `.xlsx`/`.xlsm`. A workbook's own cell
   formatting — bold, italic, font size and colour, fills and alignment — is read
-  from the file and drawn in the grid, and you can apply bold, italic, underline,
-  strike-through, alignment, text and fill colours, cell borders and a number
-  format to a selection. Font family and size, and per-edge border control, are
-  not there yet; see [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
+  from the file and drawn in the grid, and you can apply a font and size, bold,
+  italic, underline, strike-through, alignment, text and fill colours, cell
+  borders and a number format to a selection. Per-edge border control is not
+  there yet; see [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 - CSV and TSV: the same grid engine as the spreadsheets, full editing.
 - PDF: view-only. Text selection, search, print, thumbnails, and
   password-protected files.

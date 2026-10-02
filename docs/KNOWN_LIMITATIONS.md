@@ -381,10 +381,10 @@ Two details that cost real bugs to get right, both pinned by tests:
     styled block and reading formats by the current index slides every format in
     the sheet one row out of place.
 
-**Applying formatting (SHEETFMT-2) now works for `.xlsx`/`.xlsm`.** The editing
-toolbar has bold, italic, underline, strike-through, horizontal alignment, a text
-colour, a fill colour and a number-format picker, applied to the whole selected
-range. Verified externally: LibreOffice reads all of it back out of the files
+**Applying formatting (SHEETFMT-2/3/4) now works for `.xlsx`/`.xlsm`.** The
+editing toolbar has a font family and size, bold, italic, underline,
+strike-through, horizontal alignment, a text colour, a fill colour, cell borders
+and a number-format picker, applied to the whole selected range. Verified externally: LibreOffice reads all of it back out of the files
 Atlas writes (`libreOfficeCellFormat.test.ts`, which also checks an unformatted
 control does NOT produce those declarations, so the comparison can fail).
 
@@ -413,8 +413,11 @@ What it does NOT yet cover:
   - **Vertical alignment and wrapped text** are read and preserved but not
     drawn: both change how the text is LAID OUT, which the decorator approach
     cannot do (it runs after the grid has already placed the text).
-  - **Font family and size.** The model and the writer handle both
-    (`CellFormatPatch.fontName`/`fontSize`); there is no control for them yet.
+  - **A font family is offered from a short list**, not enumerated from the
+    system: Calibri, Arial, Times New Roman, Courier New, Georgia, Verdana,
+    Consolas. A picker listing fonts the saved file may be opened without is
+    worse than a short list that works everywhere. A family the FILE already
+    uses is added to the list so it can be kept.
   - **A `.csv`/`.tsv` cannot carry formatting at all**, so the formatting group
     is absent there rather than present and silently lossy.
 

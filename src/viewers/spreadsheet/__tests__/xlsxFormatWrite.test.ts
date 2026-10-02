@@ -327,6 +327,28 @@ describe('writing applied cell formatting (SHEETFMT-2)', () => {
     expect(seen, `styles.xml element order: ${seen.join(', ')}`).toEqual(expectedOrder)
   })
 
+  it('writes a font family and size (SHEETFMT-4)', async () => {
+    const doc = await load(original)
+    const formatted = setRangeFormat(doc, 0, only({ row: 1, col: 0 }), {
+      fontName: 'Georgia',
+      fontSize: 18,
+    })
+    const out = await saved(original, formatted)
+
+    const index = Number(styleOf(out.sheet, 'A2'))
+    const fontId = Number(/\bfontId="(\d+)"/.exec(cellXfs(out.styles)[index])![1])
+    const font = fonts(out.styles)[fontId]
+    expect(font).toContain('val="Georgia"')
+    expect(font).toContain('val="18"')
+
+    // And it comes back as the font that was chosen, not as the workbook's
+    // default (which the reader treats as the baseline).
+    const reloaded = await load(asArrayBuffer(out.bytes))
+    const back = formatForCell(reloaded.sheets[0], 1, 0)
+    expect(back.fontName).toBe('Georgia')
+    expect(back.fontSize).toBe(18)
+  })
+
   it('round-trips through the reader: what was written is what comes back', async () => {
     // The two halves of this feature are separate code; this is the only test
     // that holds them to each other.

@@ -12,7 +12,7 @@
  * The fixture is a real OOXML package, built here, because the whole claim is
  * about what Excel's own output means.
  */
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import JSZip from 'jszip'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompactSelection, type GridSelection, type Item } from '@glideapps/glide-data-grid'
@@ -28,6 +28,7 @@ type CapturedCell = {
     readonly bgCell?: string
     readonly textDark?: string
     readonly baseFontStyle?: string
+    readonly fontFamily?: string
   }
 }
 type CapturedProps = {
@@ -340,6 +341,29 @@ describe('SpreadsheetViewer — the workbook its own formatting (SHEETFMT-1)', (
     await waitFor(() => expect(strokesFor(0, 1)).toBe(4))
     // A neighbour the preset did not cover draws nothing.
     expect(strokesFor(2, 1)).toBe(0)
+  })
+
+  it('applies a font family and size, and shows both in the grid (SHEETFMT-4)', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+
+    act(() => selectCell(0, 1))
+    const family = screen.getByRole('combobox', { name: /^Font$/i })
+    const size = screen.getByRole('combobox', { name: /Font size/i })
+
+    fireEvent.change(family, { target: { value: 'Georgia' } })
+    fireEvent.change(size, { target: { value: '18' } })
+
+    // Both have to reach the RENDERER, not just the file: the family travels
+    // on its own theme field (the grid appends `fontFamily` to the font
+    // shorthand itself), and the size inside the shorthand.
+    await waitFor(() => expect(cell(0, 1).themeOverride?.fontFamily).toBe('Georgia'))
+    // 18pt at 96dpi is 24px.
+    expect(cell(0, 1).themeOverride?.baseFontStyle).toContain('24px')
+
+    // And the controls now report the cell's own font.
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /^Font$/i })).toHaveValue('Georgia'))
+    expect(screen.getByRole('combobox', { name: /Font size/i })).toHaveValue('18')
   })
 
   it('leaves the formatting controls disabled until something is selected', async () => {

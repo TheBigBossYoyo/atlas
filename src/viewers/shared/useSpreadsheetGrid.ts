@@ -155,9 +155,12 @@ function isColumnNumeric(rows: ReadonlyArray<ReadonlyArray<string>>, col: number
  * font string untouched rather than being pinned to a hardcoded size.
  *
  * Underline and strike-through are NOT here: canvas `ctx.font` has no notion of
- * either, and drawing them would mean a custom cell renderer. They are read
- * (`ResolvedCellFormat` carries them, and a save preserves them) but not yet
- * drawn — a gap worth being explicit about rather than silently dropping.
+ * either. They are drawn separately, by `drawCellDecorations` (SHEETFMT-3).
+ *
+ * The font FAMILY is not here either, but for a different reason: the grid
+ * appends its own `fontFamily` to this shorthand, so a family set here would be
+ * followed by a second one and ignored. It goes through `fontFamily` on the
+ * theme override instead.
  */
 function fontStyleFor(format: ResolvedCellFormat, base: string): string | undefined {
   const parts: string[] = []
@@ -373,6 +376,12 @@ export function useSpreadsheetGrid({
           bgCell: format.fill ?? bgCell,
           ...(format.color ? { textDark: format.color } : {}),
           ...(fontStyle ? { baseFontStyle: fontStyle } : {}),
+          // SHEETFMT-4 — the family is its own theme field, not part of the
+          // font shorthand (the grid appends `fontFamily` to that shorthand
+          // itself, so a family inside it would be ignored). Without this the
+          // font picker would write a family into the file that Atlas never
+          // showed — the same way underline was saved but not drawn.
+          ...(format.fontName ? { fontFamily: format.fontName } : {}),
         },
       } as GridCell
     },

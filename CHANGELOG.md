@@ -30,6 +30,8 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   confidently wrong row on unsorted data, so asking for it is refused rather than
   answered incorrectly.
 
+- **A font and size picker for spreadsheet cells**, alongside the rest of the
+  formatting controls.
 - **Cell borders, and underline and strike-through that you can actually see.**
   The toolbar has a Borders button (all, bottom, top, none), and the grid now
   draws borders, underline and strike-through.
