@@ -34,6 +34,37 @@ import JSZip from 'jszip'
 
 import { childElements, firstChildElement, parseXmlPart } from '../../office/ooxmlDom'
 
+/**
+ * One border edge.
+ *
+ * OOXML defines 13 border styles (`thin`, `hair`, `dotted`, `dashDotDot`, …).
+ * They collapse to a WEIGHT plus a colour here, because that is the honest
+ * limit of what a 1-pixel canvas grid line can express: drawing `dashDotDot`
+ * as a solid line is already an approximation, and pretending to model the
+ * difference between `hair` and `dotted` would be a lie in the type. The
+ * original style string is not kept, because the writer re-emits a weight, not
+ * the style it was read from — see `docs/KNOWN_LIMITATIONS.md`.
+ */
+export type CellBorderEdge = {
+  readonly weight: 'thin' | 'medium' | 'thick'
+  /** `#rrggbb`, or `undefined` for the automatic/theme colour. */
+  readonly color: string | undefined
+} | undefined
+
+export type CellBorder = {
+  readonly top: CellBorderEdge
+  readonly right: CellBorderEdge
+  readonly bottom: CellBorderEdge
+  readonly left: CellBorderEdge
+}
+
+export const NO_BORDER: CellBorder = { top: undefined, right: undefined, bottom: undefined, left: undefined }
+
+/** True when any edge has a border. */
+export function hasAnyBorder(border: CellBorder): boolean {
+  return border.top !== undefined || border.right !== undefined || border.bottom !== undefined || border.left !== undefined
+}
+
 /** A cell format, resolved from the `<xf>`/`<font>`/`<fill>`/`<border>` tables into something a renderer can use directly. */
 export type ResolvedCellFormat = {
   readonly bold: boolean
@@ -50,8 +81,14 @@ export type ResolvedCellFormat = {
   readonly align: 'left' | 'center' | 'right' | undefined
   readonly valign: 'top' | 'middle' | 'bottom' | undefined
   readonly wrap: boolean
-  /** True when the `<xf>` references a border definition with any visible edge. */
-  readonly bordered: boolean
+  /**
+   * SHEETFMT-3 — the cell's four border edges, each `undefined` for no border.
+   *
+   * Was a single `bordered: boolean`, which was all the grid could use when it
+   * drew no borders at all. Drawing them needs to know WHICH edges and how
+   * heavy, so the real shape is read now.
+   */
+  readonly border: CellBorder
   /** The resolved number-format code (`'0.00%'`, `'dd/mm/yyyy'`, …), or `undefined` for General. */
   readonly numberFormat: string | undefined
 }
@@ -68,7 +105,7 @@ export const DEFAULT_CELL_FORMAT: ResolvedCellFormat = {
   align: undefined,
   valign: undefined,
   wrap: false,
-  bordered: false,
+  border: NO_BORDER,
   numberFormat: undefined,
 }
 
@@ -205,15 +242,55 @@ function readFill(el: Element): string | undefined {
   return readColor(firstChildElement(pattern, 'fgColor')) ?? readColor(firstChildElement(pattern, 'bgColor'))
 }
 
-/** True when a `<border>` has any edge with a real style (`none`, and an edge with no `style` at all, do not count). */
-function hasVisibleBorder(el: Element): boolean {
-  for (const edge of ['left', 'right', 'top', 'bottom', 'diagonal']) {
-    const edgeEl = firstChildElement(el, edge)
-    if (!edgeEl) continue
-    const style = edgeEl.getAttribute('style')
-    if (style && style !== 'none') return true
+/**
+ * Maps an OOXML border style to the weight a canvas line can draw.
+ *
+ * `double` is deliberately reported as `thick` rather than modelled: drawing
+ * two parallel lines inside a grid cell needs more room than a cell border has,
+ * and a heavy single line is closer to it than a thin one.
+ */
+function edgeWeight(style: string | null): 'thin' | 'medium' | 'thick' | null {
+  if (!style || style === 'none') return null
+  switch (style) {
+    case 'hair':
+    case 'thin':
+    case 'dotted':
+    case 'dashed':
+    case 'dashDot':
+    case 'dashDotDot':
+      return 'thin'
+    case 'medium':
+    case 'mediumDashed':
+    case 'mediumDashDot':
+    case 'mediumDashDotDot':
+    case 'slantDashDot':
+      return 'medium'
+    case 'thick':
+    case 'double':
+      return 'thick'
+    default:
+      // An unknown style still means "there IS a border here" — drawing a thin
+      // line is far closer than drawing nothing.
+      return 'thin'
   }
-  return false
+}
+
+function readEdge(border: Element, name: string): CellBorderEdge {
+  const el = firstChildElement(border, name)
+  if (!el) return undefined
+  const weight = edgeWeight(el.getAttribute('style'))
+  if (!weight) return undefined
+  return { weight, color: readColor(firstChildElement(el, 'color')) }
+}
+
+/** A `<border>`'s four edges. `diagonal` is read and ignored — the grid has no way to draw one. */
+function readBorder(el: Element): CellBorder {
+  return {
+    top: readEdge(el, 'top'),
+    right: readEdge(el, 'right'),
+    bottom: readEdge(el, 'bottom'),
+    left: readEdge(el, 'left'),
+  }
 }
 
 function readAlign(el: Element | null): Pick<ResolvedCellFormat, 'align' | 'valign' | 'wrap'> {
@@ -279,7 +356,7 @@ export function parseStyleTable(stylesXml: string): StyleTable | null {
   const fills = fillsEl ? childElements(fillsEl, 'fill').map(readFill) : []
 
   const bordersEl = firstChildElement(root, 'borders')
-  const borders = bordersEl ? childElements(bordersEl, 'border').map(hasVisibleBorder) : []
+  const borders = bordersEl ? childElements(bordersEl, 'border').map(readBorder) : []
 
   const numFmtCodes = new Map<number, string>()
   const numFmtsEl = firstChildElement(root, 'numFmts')
@@ -306,7 +383,7 @@ export function parseStyleTable(stylesXml: string): StyleTable | null {
     const fillId = Number(xf.getAttribute('fillId') ?? '')
     const fill = Number.isInteger(fillId) ? fills[fillId] : undefined
     const borderId = Number(xf.getAttribute('borderId') ?? '')
-    const bordered = Number.isInteger(borderId) ? (borders[borderId] ?? false) : false
+    const border = Number.isInteger(borderId) ? (borders[borderId] ?? NO_BORDER) : NO_BORDER
     const numFmtId = Number(xf.getAttribute('numFmtId') ?? '0')
     const code = Number.isFinite(numFmtId) && numFmtId !== 0
       ? (numFmtCodes.get(numFmtId) ?? BUILTIN_NUMFMT_CODES.get(numFmtId))
@@ -321,7 +398,7 @@ export function parseStyleTable(stylesXml: string): StyleTable | null {
       fontName: font?.name === baseFont?.name ? undefined : font?.name,
       color: font?.color === baseFont?.color ? undefined : font?.color,
       fill,
-      bordered,
+      border,
       numberFormat: code === '' ? undefined : code,
       ...readAlign(firstChildElement(xf, 'alignment')),
     }

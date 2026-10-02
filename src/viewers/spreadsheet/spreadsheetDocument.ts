@@ -42,6 +42,8 @@ import type { FrozenPanes, MergeRange, ParsedSheet } from '../shared/spreadsheet
 import {
   DEFAULT_CELL_FORMAT,
   formatAt,
+  NO_BORDER,
+  type CellBorder,
   type ResolvedCellFormat,
   type SheetCellStyles,
 } from './xlsxCellStyles'
@@ -216,6 +218,14 @@ export type CellFormatPatch = {
   readonly fill?: string | null
   readonly align?: 'left' | 'center' | 'right' | null
   readonly numberFormat?: string | null
+  /**
+   * SHEETFMT-3 — which edges to put a border on.
+   *
+   * A whole `CellBorder` rather than per-edge flags, so "box this cell" and
+   * "underline this row" are one patch each. `null` clears every edge, which is
+   * the only way back from a border the file applied.
+   */
+  readonly border?: CellBorder | null
 }
 
 /** Applies a patch over a resolved format, for rendering. `null` in the patch clears back to the default. */
@@ -235,6 +245,7 @@ export function mergeFormat(base: ResolvedCellFormat, patch: CellFormatPatch | u
     fill: pick(patch.fill, base.fill),
     align: pick(patch.align, base.align),
     numberFormat: pick(patch.numberFormat, base.numberFormat),
+    border: patch.border === undefined ? base.border : (patch.border ?? NO_BORDER),
   }
 }
 

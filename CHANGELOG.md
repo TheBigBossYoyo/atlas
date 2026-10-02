@@ -30,6 +30,14 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   confidently wrong row on unsorted data, so asking for it is refused rather than
   answered incorrectly.
 
+- **Cell borders, and underline and strike-through that you can actually see.**
+  The toolbar has a Borders button (all, bottom, top, none), and the grid now
+  draws borders, underline and strike-through.
+
+  Underline and strike-through were being saved correctly but never drawn, so a
+  cell could be underlined in the file while Atlas showed it plain. That is
+  fixed.
+
 ### Fixed
 
 - **An error inside a formula is now reported instead of hiding the formula.**

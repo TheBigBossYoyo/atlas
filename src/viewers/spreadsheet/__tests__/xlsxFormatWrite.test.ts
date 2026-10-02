@@ -60,6 +60,13 @@ function cellXfs(stylesXml: string): string[] {
   return block[1].match(/<xf\b[\s\S]*?(?:\/>|<\/xf>)/g) ?? []
 }
 
+/** The `<border>` entries of `<borders>`, in order, so index n is what an xf's `borderId="n"` means. */
+function borderList(stylesXml: string): string[] {
+  const block = /<borders\b[^>]*>([\s\S]*?)<\/borders>/.exec(stylesXml)
+  if (!block) return []
+  return block[1].match(/<border[\s>][\s\S]*?<\/border>|<border\s*\/>/g) ?? []
+}
+
 /** The `<font>` entries of `<fonts>`, in order, so index n is what an xf's `fontId="n"` means. */
 function fonts(stylesXml: string): string[] {
   const block = /<fonts\b[^>]*>([\s\S]*?)<\/fonts>/.exec(stylesXml)
@@ -215,6 +222,87 @@ describe('writing applied cell formatting (SHEETFMT-2)', () => {
     const index = Number(styleOf(out.sheet, 'A1'))
     const fontId = Number(/\bfontId="(\d+)"/.exec(cellXfs(out.styles)[index])![1])
     expect(fonts(out.styles)[fontId]).not.toContain('<b')
+  })
+
+  it('writes a border as real per-edge <border> entries (SHEETFMT-3)', async () => {
+    const doc = await load(original)
+    const formatted = setRangeFormat(doc, 0, only({ row: 1, col: 0 }), {
+      border: {
+        top: { weight: 'thin', color: undefined },
+        right: { weight: 'medium', color: '#FF0000' },
+        bottom: { weight: 'thin', color: undefined },
+        left: { weight: 'thin', color: undefined },
+      },
+    })
+    const out = await saved(original, formatted)
+
+    const index = Number(styleOf(out.sheet, 'A2'))
+    const borderId = Number(/\bborderId="(\d+)"/.exec(cellXfs(out.styles)[index])![1])
+    const borders = borderList(out.styles)
+    const border = borders[borderId]
+    expect(border, `borderId ${borderId} should resolve`).toBeTruthy()
+    expect(border).toContain('<left style="thin"')
+    expect(border).toContain('<right style="medium"')
+    // An explicit colour is written as rgb; an automatic one as indexed="64",
+    // which is what Excel itself writes when no colour was chosen.
+    expect(border).toContain('rgb="FFFF0000"')
+    expect(border).toContain('indexed="64"')
+  })
+
+  it('writes the border edges in CT_Border\'s required order', async () => {
+    // left, right, top, bottom, diagonal. Out of order is a file Excel
+    // refuses, and no value-level assertion would notice.
+    const doc = await load(original)
+    const formatted = setRangeFormat(doc, 0, only({ row: 1, col: 0 }), {
+      border: {
+        top: { weight: 'thin', color: undefined },
+        right: undefined,
+        bottom: { weight: 'thin', color: undefined },
+        left: undefined,
+      },
+    })
+    const out = await saved(original, formatted)
+    const index = Number(styleOf(out.sheet, 'A2'))
+    const borderId = Number(/\bborderId="(\d+)"/.exec(cellXfs(out.styles)[index])![1])
+    const border = borderList(out.styles)[borderId]
+
+    const order = (border.match(/<(left|right|top|bottom|diagonal)\b/g) ?? []).map(m => m.slice(1))
+    expect(order).toEqual(['left', 'right', 'top', 'bottom', 'diagonal'])
+  })
+
+  it('clears a border back to border 0', async () => {
+    const doc = await load(original)
+    const boxed = setRangeFormat(doc, 0, only({ row: 1, col: 0 }), {
+      border: {
+        top: { weight: 'thin', color: undefined },
+        right: { weight: 'thin', color: undefined },
+        bottom: { weight: 'thin', color: undefined },
+        left: { weight: 'thin', color: undefined },
+      },
+    })
+    const cleared = setRangeFormat(boxed, 0, only({ row: 1, col: 0 }), { border: null })
+    const out = await saved(original, cleared)
+
+    const index = Number(styleOf(out.sheet, 'A2'))
+    expect(/\bborderId="0"/.test(cellXfs(out.styles)[index])).toBe(true)
+  })
+
+  it('round-trips a border through the reader', async () => {
+    const doc = await load(original)
+    const formatted = setRangeFormat(doc, 0, only({ row: 1, col: 0 }), {
+      border: {
+        top: undefined,
+        right: undefined,
+        bottom: { weight: 'medium', color: '#0000FF' },
+        left: undefined,
+      },
+    })
+    const out = await saved(original, formatted)
+
+    const reloaded = await load(asArrayBuffer(out.bytes))
+    const back = formatForCell(reloaded.sheets[0], 1, 0)
+    expect(back.border.bottom).toEqual({ weight: 'medium', color: '#0000FF' })
+    expect(back.border.top).toBeUndefined()
   })
 
   it("keeps styles.xml's fixed element order, including when it has to create the tables", async () => {

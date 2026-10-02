@@ -88,6 +88,49 @@ describeMaybe('LibreOffice reads the cell formatting Atlas applied (SHEETFMT-2)'
     expect(plainStyles, 'the unformatted control should have no red fill').not.toMatch(/#ff0000/)
   }, 120_000)
 
+  it('sees a cell border Atlas applied (SHEETFMT-3)', async () => {
+    const original = await buildStyledWorkbook()
+    const doc = await load(original)
+    const formatted = setRangeFormat(doc, 0, { row0: 1, col0: 0, row1: 1, col1: 0 }, {
+      border: {
+        top: undefined,
+        right: undefined,
+        bottom: { weight: 'medium', color: '#FF0000' },
+        left: undefined,
+      },
+    })
+    const bytes = await writeWorkbookThroughOriginal(original, formatted)
+    expect(bytes).not.toBeNull()
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-lo-border-'))
+    const file = path.join(dir, 'bordered.xlsx')
+    fs.writeFileSync(file, Buffer.from(bytes!))
+
+    const out = convert(soffice!, file, CONVERT.calcHtml, dir)
+    expect(out, 'LibreOffice could not read the bordered workbook').not.toBeNull()
+    const styles = css(fs.readFileSync(out!, 'utf8'))
+
+    // LibreOffice emits per-edge LONGHAND properties, not the `border-bottom:`
+    // shorthand — checked against its real output rather than assumed. The
+    // colour is what proves it is reading Atlas's own border rather than
+    // drawing a default grid line, and the three `none` edges prove it read
+    // which edges Atlas asked for.
+    expect(styles, `no bottom border colour in LibreOffice's output`).toMatch(
+      /border-bottom-color:\s*#ff0000/,
+    )
+    expect(styles).toMatch(/border-bottom-style:\s*solid/)
+    expect(styles).toMatch(/border-top-style:\s*none/)
+    expect(styles).toMatch(/border-left-style:\s*none/)
+
+    // Control: the unformatted workbook has no such edge.
+    const plainBytes = await writeWorkbookThroughOriginal(original, doc)
+    const plainFile = path.join(dir, 'plain.xlsx')
+    fs.writeFileSync(plainFile, Buffer.from(plainBytes!))
+    const plainOut = convert(soffice!, plainFile, CONVERT.calcHtml, dir)
+    expect(plainOut).not.toBeNull()
+    expect(css(fs.readFileSync(plainOut!, 'utf8'))).not.toMatch(/border-bottom-color:\s*#ff0000/)
+  }, 120_000)
+
   it('sees a number format Atlas applied', async () => {
     const original = await buildStyledWorkbook()
     const doc = await load(original)

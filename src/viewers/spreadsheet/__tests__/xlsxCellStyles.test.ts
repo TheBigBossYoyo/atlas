@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_CELL_FORMAT,
   formatAt,
+  hasAnyBorder,
   parseStyleTable,
   readSheetStyleIds,
   readWorkbookCellStyles,
@@ -128,11 +129,38 @@ describe('parseStyleTable (SHEETFMT-1)', () => {
     expect(xfs[0].fill).toBeUndefined() // patternType="none"
   })
 
-  it('reports a border only when an edge has a real style', () => {
+  it('reads each border edge, not just whether there is one', () => {
     const xfs = parseStyleTable(richStyles())!.xfs
-    expect(xfs[3].bordered).toBe(true) // bottom="thin"
-    expect(xfs[4].bordered).toBe(false) // every edge style="none"
-    expect(xfs[0].bordered).toBe(false) // no styles at all
+    // The fixture's border 1 has only a thin black bottom edge.
+    expect(xfs[3].border.bottom).toEqual({ weight: 'thin', color: '#000000' })
+    expect(xfs[3].border.top).toBeUndefined()
+    expect(xfs[3].border.left).toBeUndefined()
+    expect(xfs[3].border.right).toBeUndefined()
+    expect(hasAnyBorder(xfs[3].border)).toBe(true)
+
+    // Border 2 sets every edge to style="none", which is NOT a border.
+    expect(hasAnyBorder(xfs[4].border)).toBe(false)
+    // And border 0's edges carry no style attribute at all.
+    expect(hasAnyBorder(xfs[0].border)).toBe(false)
+  })
+
+  it('collapses the 13 OOXML border styles onto drawable weights', () => {
+    // A canvas grid line cannot express `dashDotDot`; reporting it as a thin
+    // line is an approximation, reporting it as no border would lose it.
+    const styles = parseStyleTable(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="${NS}">` +
+        `<borders count="2">` +
+        `<border><left style="hair"/><right style="mediumDashDot"/><top style="double"/><bottom style="dotted"/></border>` +
+        `<border><left style="someFutureStyle"/></border>` +
+        `</borders>` +
+        `<cellXfs count="2"><xf borderId="0"/><xf borderId="1"/></cellXfs></styleSheet>`,
+    )!.xfs
+    expect(styles[0].border.left?.weight).toBe('thin')
+    expect(styles[0].border.right?.weight).toBe('medium')
+    expect(styles[0].border.top?.weight).toBe('thick') // `double` drawn heavy
+    expect(styles[0].border.bottom?.weight).toBe('thin')
+    // An unrecognised style still means a border is there.
+    expect(styles[1].border.left?.weight).toBe('thin')
   })
 
   it('reads alignment and wrapping', () => {

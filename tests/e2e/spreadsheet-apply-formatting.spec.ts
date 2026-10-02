@@ -74,6 +74,44 @@ async function clickCell(page: Page, col: number, row: number): Promise<void> {
   )
 }
 
+/**
+ * Counts pixels in the grid canvas matching `hex`, within `tolerance` per
+ * channel. Reads the canvas the grid actually drew into.
+ */
+async function countPixels(page: Page, hex: string, tolerance = 12): Promise<number> {
+  return page.evaluate(
+    ({ hex, tolerance }) => {
+      const target = {
+        r: parseInt(hex.slice(1, 3), 16),
+        g: parseInt(hex.slice(3, 5), 16),
+        b: parseInt(hex.slice(5, 7), 16),
+      }
+      const canvases = Array.from(document.querySelectorAll('.spreadsheet-viewer__grid canvas'))
+      let best: HTMLCanvasElement | null = null
+      for (const c of canvases) {
+        const canvas = c as HTMLCanvasElement
+        if (!best || canvas.width * canvas.height > best.width * best.height) best = canvas
+      }
+      if (!best) return -1
+      const ctx = best.getContext('2d', { willReadFrequently: true })
+      if (!ctx) return -2
+      const { data } = ctx.getImageData(0, 0, best.width, best.height)
+      let count = 0
+      for (let i = 0; i < data.length; i += 4) {
+        if (
+          Math.abs(data[i] - target.r) <= tolerance &&
+          Math.abs(data[i + 1] - target.g) <= tolerance &&
+          Math.abs(data[i + 2] - target.b) <= tolerance
+        ) {
+          count += 1
+        }
+      }
+      return count
+    },
+    { hex, tolerance },
+  )
+}
+
 /** The `<cellXfs>` entries of a saved styles part, in order — index n is a cell's `s="n"`. */
 function cellXfs(stylesXml: string): string[] {
   const block = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(stylesXml)
@@ -142,6 +180,45 @@ test('bold and a fill applied in the app land in the saved file as real OOXML st
       cellBlock.includes('Paper') || sharedStrings.includes('Paper'),
       `A2 should still hold "Paper": ${cellBlock}`,
     ).toBe(true)
+  } finally {
+    kill(app)
+  }
+})
+
+test('a border applied in the app is drawn on the canvas and saved to the file', async () => {
+  // Borders never reach the grid's theme -- they are drawn onto the canvas by
+  // `drawCell` -- so this is the only check that they appear at all. Reading
+  // pixels is also what distinguishes "the border was computed" from "the
+  // border was drawn", which no unit test can do for a canvas.
+  const file = writePlainWorkbook()
+  const { app, page } = await launch(file)
+  try {
+    await clickCell(page, 0, 1)
+    await page.getByRole('button', { name: /Borders/i }).click()
+    await page.getByRole('button', { name: /All borders/i }).click()
+    await page.waitForTimeout(800)
+
+    // The automatic border colour Atlas draws is #808080 (readable in every
+    // theme); a plain grid has none of it.
+    const grey = await countPixels(page, '#808080', 10)
+    expect(grey, `expected a drawn border, found ${grey} matching pixels`).toBeGreaterThan(50)
+
+    await page.keyboard.press('Control+s')
+    await page.waitForTimeout(3000)
+
+    const zip = await JSZip.loadAsync(fs.readFileSync(file))
+    const styles = await zip.file('xl/styles.xml')!.async('string')
+    const sheet = await zip.file('xl/worksheets/sheet1.xml')!.async('string')
+
+    const cellTag = /<c[^>]*\br="A2"[^>]*>/.exec(sheet)!
+    const index = Number(/\bs="(\d+)"/.exec(cellTag[0])![1])
+    const borderId = Number(/\bborderId="(\d+)"/.exec(cellXfs(styles)[index])![1])
+    expect(borderId, 'A2 should reference a real border, not border 0').toBeGreaterThan(0)
+
+    const borders = (/<borders\b[^>]*>([\s\S]*?)<\/borders>/.exec(styles)?.[1] ?? '').match(
+      /<border[\s>][\s\S]*?<\/border>|<border\s*\/>/g,
+    )!
+    expect(borders[borderId]).toContain('style="thin"')
   } finally {
     kill(app)
   }

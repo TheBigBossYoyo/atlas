@@ -294,6 +294,20 @@
   justify-content: center;
 }
 
+.spreadsheet-edit-toolbar__border-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 150px;
+}
+
+.spreadsheet-edit-toolbar__border-presets button {
+  justify-content: flex-start;
+  /* The popover's own background already separates it from the grid, so these
+     read as a list rather than a row of buttons. */
+  border-color: transparent;
+}
+
 .spreadsheet-edit-toolbar__numfmt {
   /* Wide enough for "Thousands (1,234.00)" without pushing the save button off
      the row at a narrow window. */

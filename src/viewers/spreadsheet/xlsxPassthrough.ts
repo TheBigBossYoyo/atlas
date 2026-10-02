@@ -98,6 +98,7 @@ import {
   xmlSafeText,
 } from '../../office/ooxmlDom'
 import { cellKey, type CellFormatPatch, type EditableSheet, type SpreadsheetDocument } from './spreadsheetDocument'
+import { hasAnyBorder, NO_BORDER, type CellBorder } from './xlsxCellStyles'
 import { encodeCol, rewriteTableXml, tableHeaderNames } from './spreadsheetTables'
 import { remapSqref, type IndexSources } from './spreadsheetRangeShift'
 import { rewriteFormulaReferences, type SheetChange } from './formulaRefs'
@@ -197,11 +198,13 @@ type StylesContext = {
   readonly numFmtCodeById: Map<number, string>
   nextCustomNumFmtId: number
   dirty: boolean
-  /** SHEETFMT-2 — `<fonts>`/`<fills>`, for applying formatting the user chose. Created on demand (a styles part with `cellXfs` but no `fonts` is legal). */
+  /** SHEETFMT-2/3 — `<fonts>`/`<fills>`/`<borders>`, for applying formatting the user chose. Created on demand (a styles part with `cellXfs` but none of these is legal). */
   fontsEl: Element | null
   fillsEl: Element | null
+  bordersEl: Element | null
   readonly fonts: Element[]
   readonly fills: Element[]
+  readonly borders: Element[]
 }
 
 function loadStylesContext(stylesXml: string | undefined): StylesContext | null {
@@ -232,6 +235,7 @@ function loadStylesContext(stylesXml: string | undefined): StylesContext | null 
 
   const fontsEl = firstChildElement(root, 'fonts')
   const fillsEl = firstChildElement(root, 'fills')
+  const bordersEl = firstChildElement(root, 'borders')
 
   return {
     doc,
@@ -244,8 +248,10 @@ function loadStylesContext(stylesXml: string | undefined): StylesContext | null 
     dirty: false,
     fontsEl,
     fillsEl,
+    bordersEl,
     fonts: fontsEl ? childElements(fontsEl, 'font') : [],
     fills: fillsEl ? childElements(fillsEl, 'fill') : [],
+    borders: bordersEl ? childElements(bordersEl, 'border') : [],
   }
 }
 
@@ -265,28 +271,34 @@ function loadStylesContext(stylesXml: string | undefined): StylesContext | null 
 // different fonts as equal the moment the schema grew a property it didn't list.
 // ---------------------------------------------------------------------------
 
-/** `<fonts>`/`<fills>` must exist in CT_Stylesheet's fixed element order: numFmts, fonts, fills, borders, cellStyleXfs, cellXfs. */
-function ensureTable(ctx: StylesContext, localName: 'fonts' | 'fills'): Element {
-  const existing = localName === 'fonts' ? ctx.fontsEl : ctx.fillsEl
+type StyleTableName = 'fonts' | 'fills' | 'borders'
+
+/** CT_Stylesheet's fixed element order. A styles part that breaks it is one Excel refuses to open. */
+const STYLE_TABLE_ORDER: ReadonlyArray<string> = ['numFmts', 'fonts', 'fills', 'borders', 'cellStyleXfs', 'cellXfs']
+
+/** Finds or creates one of the style tables, in CT_Stylesheet's required position. */
+function ensureTable(ctx: StylesContext, localName: StyleTableName): Element {
+  const existing = localName === 'fonts' ? ctx.fontsEl : localName === 'fills' ? ctx.fillsEl : ctx.bordersEl
   if (existing) return existing
   const el = ctx.doc.createElementNS(ctx.root.namespaceURI, localName)
-  // Insert before `<borders>`/`<cellStyleXfs>`/`<cellXfs>` — whichever comes
-  // first — so the fixed order is kept whether or not the others are present.
-  const after = localName === 'fonts' ? ['fills', 'borders', 'cellStyleXfs', 'cellXfs'] : ['borders', 'cellStyleXfs', 'cellXfs']
+  // Insert before the first table that must come AFTER this one, so the fixed
+  // order holds whichever of them the file happens to have.
+  const followers = STYLE_TABLE_ORDER.slice(STYLE_TABLE_ORDER.indexOf(localName) + 1)
   let anchor: Element | null = null
-  for (const name of after) {
+  for (const name of followers) {
     anchor = firstChildElement(ctx.root, name)
     if (anchor) break
   }
   ctx.root.insertBefore(el, anchor)
   if (localName === 'fonts') ctx.fontsEl = el
-  else ctx.fillsEl = el
+  else if (localName === 'fills') ctx.fillsEl = el
+  else ctx.bordersEl = el
   ctx.dirty = true
   return el
 }
 
 /** Finds `candidate` among `list` by serialized form, or appends it. Returns the index, which IS the id a cell/xf references. */
-function internInTable(ctx: StylesContext, localName: 'fonts' | 'fills', list: Element[], candidate: Element): number {
+function internInTable(ctx: StylesContext, localName: StyleTableName, list: Element[], candidate: Element): number {
   const key = new XMLSerializer().serializeToString(candidate)
   for (let i = 0; i < list.length; i += 1) {
     if (new XMLSerializer().serializeToString(list[i]) === key) return i
@@ -377,6 +389,46 @@ function ensureFillId(ctx: StylesContext, colorHex: string | null): number {
 }
 
 /**
+ * The border id for `border`, interning the result. Border 0 (no border) is
+ * reserved by the spec as the first `<borders>` entry, so clearing is free.
+ *
+ * The weight is written back as the matching OOXML style name. A border READ as
+ * `thin` from a `dashDotDot` edge is therefore re-emitted as `thin` — the dash
+ * pattern is lost on a cell whose border the user re-applied. That is a real,
+ * narrow loss (it needs the user to deliberately re-border a dashed cell), and
+ * the alternative — carrying a style string the grid cannot draw through the
+ * whole model — would mean the UI silently lying about what a cell looks like.
+ * See `docs/KNOWN_LIMITATIONS.md`.
+ */
+function ensureBorderId(ctx: StylesContext, border: CellBorder): number {
+  if (!hasAnyBorder(border)) return 0
+
+  const el = ctx.doc.createElementNS(ctx.root.namespaceURI, 'border')
+  // CT_Border fixes the edge order: left, right, top, bottom, diagonal.
+  for (const [name, edge] of [
+    ['left', border.left],
+    ['right', border.right],
+    ['top', border.top],
+    ['bottom', border.bottom],
+  ] as const) {
+    const edgeEl = ctx.doc.createElementNS(ctx.root.namespaceURI, name)
+    if (edge) {
+      edgeEl.setAttribute('style', edge.weight)
+      const color = ctx.doc.createElementNS(ctx.root.namespaceURI, 'color')
+      // `indexed="64"` is OOXML's automatic colour, which is what Excel writes
+      // when the user picks no particular border colour.
+      if (edge.color) color.setAttribute('rgb', toArgb(edge.color))
+      else color.setAttribute('indexed', '64')
+      edgeEl.appendChild(color)
+    }
+    el.appendChild(edgeEl)
+  }
+  el.appendChild(ctx.doc.createElementNS(ctx.root.namespaceURI, 'diagonal'))
+
+  return internInTable(ctx, 'borders', ctx.borders, el)
+}
+
+/**
  * The `s` index for a cell that had `baseStyleIndexStr` and should now also
  * carry `patch`.
  *
@@ -420,6 +472,11 @@ function ensureXfWithFormat(
   if (patch.fill !== undefined) {
     xf.setAttribute('fillId', String(ensureFillId(ctx, patch.fill)))
     xf.setAttribute('applyFill', '1')
+  }
+
+  if (patch.border !== undefined) {
+    xf.setAttribute('borderId', String(ensureBorderId(ctx, patch.border ?? NO_BORDER)))
+    xf.setAttribute('applyBorder', '1')
   }
 
   if (patch.numberFormat !== undefined) {

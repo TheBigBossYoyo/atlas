@@ -35,10 +35,17 @@
  * looks or copies, only what's pre-filled when you start editing it.
  */
 import { useCallback, useMemo, useState } from 'react'
-import type { EditableGridCell, GridCell, GridColumn, Item, GridMouseEventArgs } from '@glideapps/glide-data-grid'
+import type {
+  DrawCellCallback,
+  EditableGridCell,
+  GridCell,
+  GridColumn,
+  Item,
+  GridMouseEventArgs,
+} from '@glideapps/glide-data-grid'
 
 import { useGridTheme, type CustomGridTheme } from './useGridTheme'
-import { DEFAULT_CELL_FORMAT, type ResolvedCellFormat } from '../spreadsheet/xlsxCellStyles'
+import { DEFAULT_CELL_FORMAT, hasAnyBorder, type ResolvedCellFormat } from '../spreadsheet/xlsxCellStyles'
 
 const DEFAULT_COLUMN_WIDTH_PX = 120
 /** Sample at most this many rows per column to guess whether it's numeric. */
@@ -103,6 +110,13 @@ export type UseSpreadsheetGridResult = {
   readonly theme: CustomGridTheme
   /** Ready to pass straight to `DataEditor`'s `onCellEdited` prop; `undefined` when the caller didn't ask for editing. */
   readonly onCellEdited: ((cell: Item, newValue: EditableGridCell) => void) | undefined
+  /**
+   * SHEETFMT-3 — `DataEditor`'s `drawCell`, which draws underline, strike-through
+   * and cell borders on top of the grid's own rendering. `undefined` when no
+   * formatting was supplied, so a grid with nothing to decorate pays nothing
+   * and draws exactly as before.
+   */
+  readonly drawCell: DrawCellCallback | undefined
 }
 
 function columnTitle(index: number): string {
@@ -158,6 +172,133 @@ function fontStyleFor(format: ResolvedCellFormat, base: string): string | undefi
   }
   const style = parts.join(' ')
   return style === base ? undefined : style
+}
+
+const EDGE_WIDTH: Readonly<Record<'thin' | 'medium' | 'thick', number>> = {
+  thin: 1,
+  medium: 2,
+  thick: 3,
+}
+
+/**
+ * SHEETFMT-3 — draws the parts of a cell format that `themeOverride` cannot.
+ *
+ * glide-data-grid's per-cell theme covers the background, the text colour and
+ * the font shorthand, which is why bold, italic, size, colour, fill and
+ * alignment all worked through it. Three things it has no concept of:
+ *
+ *   - **underline and strike-through.** Canvas `ctx.font` has no notion of
+ *     either; they are lines, drawn over the text after it is laid out. Until
+ *     this, Atlas READ and SAVED them but never drew them — so a cell could be
+ *     underlined in the file while the grid showed it plain, which is the
+ *     editor misreporting its own result.
+ *   - **cell borders**, which are per-edge and sit on the cell rectangle rather
+ *     than being a property of the text.
+ *
+ * It runs as a decorator: `drawContent()` lets the grid draw the cell exactly
+ * as it always did, and the extra marks go on top. So a cell with none of these
+ * properties is drawn byte-identically to before.
+ *
+ * The text's horizontal extent is measured, not assumed, because the
+ * underline has to match the text and the text's position depends on the
+ * cell's own alignment.
+ */
+function drawCellDecorations(
+  ctx: CanvasRenderingContext2D,
+  rect: { x: number; y: number; width: number; height: number },
+  text: string,
+  format: ResolvedCellFormat,
+  align: 'left' | 'center' | 'right' | undefined,
+  padding: number,
+  textColor: string,
+): void {
+  if (format.underline || format.strike) {
+    const width = ctx.measureText(text).width
+    if (width > 0) {
+      const available = rect.width - padding * 2
+      // Mirrors how the grid itself places text for each alignment, so the
+      // line sits under the glyphs rather than under where they would be if
+      // every cell were left-aligned.
+      const left =
+        align === 'center'
+          ? rect.x + padding + Math.max(0, (available - width) / 2)
+          : align === 'right'
+            ? rect.x + rect.width - padding - Math.min(width, available)
+            : rect.x + padding
+      const drawn = Math.min(width, available)
+      const middle = rect.y + rect.height / 2
+
+      ctx.save()
+      ctx.beginPath()
+      ctx.strokeStyle = textColor
+      ctx.lineWidth = 1
+      if (format.underline) {
+        // Just below the baseline. The grid centres text vertically, so this is
+        // derived from the cell's middle rather than from a baseline the
+        // callback is not given.
+        const y = Math.round(middle + 6) + 0.5
+        ctx.moveTo(left, y)
+        ctx.lineTo(left + drawn, y)
+      }
+      if (format.strike) {
+        const y = Math.round(middle) + 0.5
+        ctx.moveTo(left, y)
+        ctx.lineTo(left + drawn, y)
+      }
+      ctx.stroke()
+      ctx.restore()
+    }
+  }
+
+  const border = format.border
+  if (!hasAnyBorder(border)) return
+
+  ctx.save()
+  for (const [side, edge] of [
+    ['top', border.top],
+    ['right', border.right],
+    ['bottom', border.bottom],
+    ['left', border.left],
+  ] as const) {
+    if (!edge) continue
+    const width = EDGE_WIDTH[edge.weight]
+    ctx.beginPath()
+    ctx.lineWidth = width
+    // `undefined` is OOXML's automatic colour. A mid grey reads as a border in
+    // both light and dark themes, which a hardcoded black does not.
+    ctx.strokeStyle = edge.color ?? '#808080'
+    // The half-pixel offset is what keeps a 1px line crisp rather than
+    // antialiased across two rows of pixels.
+    const inset = width / 2
+    switch (side) {
+      case 'top': {
+        const y = rect.y + inset
+        ctx.moveTo(rect.x, y)
+        ctx.lineTo(rect.x + rect.width, y)
+        break
+      }
+      case 'bottom': {
+        const y = rect.y + rect.height - inset
+        ctx.moveTo(rect.x, y)
+        ctx.lineTo(rect.x + rect.width, y)
+        break
+      }
+      case 'left': {
+        const x = rect.x + inset
+        ctx.moveTo(x, rect.y)
+        ctx.lineTo(x, rect.y + rect.height)
+        break
+      }
+      case 'right': {
+        const x = rect.x + rect.width - inset
+        ctx.moveTo(x, rect.y)
+        ctx.lineTo(x, rect.y + rect.height)
+        break
+      }
+    }
+    ctx.stroke()
+  }
+  ctx.restore()
 }
 
 export function useSpreadsheetGrid({
@@ -274,5 +415,25 @@ export function useSpreadsheetGrid({
     setHoveredRow(args.location[1] >= 0 ? args.location[1] : undefined)
   }, [])
 
-  return { columns, getCellContent, onColumnResize, onItemHovered, hoveredRow, theme, onCellEdited }
+  const drawCell = useMemo<DrawCellCallback | undefined>(() => {
+    if (!cellFormat) return undefined
+    return (args, drawContent) => {
+      drawContent()
+      const format = cellFormat(args.row, args.col)
+      if (format === DEFAULT_CELL_FORMAT) return
+      const cell = args.cell
+      const text = cell.kind === 'text' ? cell.displayData : ''
+      drawCellDecorations(
+        args.ctx,
+        args.rect,
+        text,
+        format,
+        cell.kind === 'text' ? cell.contentAlign : undefined,
+        args.theme.cellHorizontalPadding,
+        format.color ?? args.theme.textDark,
+      )
+    }
+  }, [cellFormat])
+
+  return { columns, getCellContent, onColumnResize, onItemHovered, hoveredRow, theme, onCellEdited, drawCell }
 }

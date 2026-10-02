@@ -273,7 +273,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     [activeSheet, sheetRowForGridRow],
   )
 
-  const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited } = useSpreadsheetGrid({
+  const { columns, getCellContent, onColumnResize, onItemHovered, theme, onCellEdited, drawCell } = useSpreadsheetGrid({
     rows: bodyRows,
     colCount: gridColCount,
     colWidthsPx: activeSheet?.colWidthsPx,
@@ -602,6 +602,10 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
                 onItemHovered={onItemHovered}
                 onColumnResize={onColumnResize}
                 onCellEdited={onCellEdited}
+                // SHEETFMT-3 — draws underline, strike-through and cell borders
+                // on top of the grid's own rendering; `undefined` when the
+                // workbook carries no formatting to decorate.
+                drawCell={drawCell}
                 onPaste={handleGridPaste}
                 onVisibleRegionChanged={handleVisibleRegionChanged}
                 gridSelection={gridFind.gridSelection}

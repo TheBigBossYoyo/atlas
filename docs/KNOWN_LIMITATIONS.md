@@ -345,20 +345,35 @@ range. Verified externally: LibreOffice reads all of it back out of the files
 Atlas writes (`libreOfficeCellFormat.test.ts`, which also checks an unformatted
 control does NOT produce those declarations, so the comparison can fail).
 
+**Borders, underline and strike-through are drawn too (SHEETFMT-3).** The grid's
+per-cell theme covers background, text colour and the font shorthand — which is
+why bold, italic, size, colour, fill and alignment all worked through it — but
+canvas `ctx.font` has no notion of underline or strike-through, and a border is
+not a text property at all. Those three are now drawn by a `drawCell` decorator
+that runs after the grid's own rendering, so a cell with none of them is drawn
+exactly as before. A border reads as its four edges with a weight and colour
+each, and the toolbar offers four presets (all, bottom, top, none).
+
+This closed the one place the editor misreported its own result: underline and
+strike-through were read and saved but never drawn, so a cell could be underlined
+in the file while Atlas showed it plain.
+
 What it does NOT yet cover:
-  - **Borders.** Reading a border is modelled (`bordered`), applying one is not —
-    a border is per-edge with a style and a colour each, which needs more UI than
-    one button and more model than a boolean.
-  - **Vertical alignment and wrapped text**, for the same reason the grid does
-    not draw them: both need a custom canvas cell renderer.
+  - **Per-edge border control.** The presets apply a whole-cell shape; Excel's
+    edge-by-edge matrix (and its ~13 border styles) needs a different UI.
+  - **Border styles collapse to three weights.** `hair`/`dotted`/`dashDotDot`
+    all read and draw as `thin`, `double` as `thick`, because a one-pixel canvas
+    line cannot express the difference. A border the user RE-applies is written
+    back as its weight, so a dashed edge becomes solid — a real but narrow loss,
+    needing the user to deliberately re-border an already-dashed cell.
+  - **Diagonal borders** are read and ignored; the grid cannot draw one.
+  - **Vertical alignment and wrapped text** are read and preserved but not
+    drawn: both change how the text is LAID OUT, which the decorator approach
+    cannot do (it runs after the grid has already placed the text).
   - **Font family and size.** The model and the writer handle both
     (`CellFormatPatch.fontName`/`fontSize`); there is no control for them yet.
   - **A `.csv`/`.tsv` cannot carry formatting at all**, so the formatting group
     is absent there rather than present and silently lossy.
-  - **Underline and strike-through are written and preserved, but the canvas grid
-    does not draw them** — so a cell can be underlined in the saved file while
-    Atlas itself shows it plain. That is the one place the editor currently lies
-    about its own result.
 
 Two implementation notes worth keeping:
   - **A cell that was only RE-FORMATTED keeps its verbatim clone**, with just its

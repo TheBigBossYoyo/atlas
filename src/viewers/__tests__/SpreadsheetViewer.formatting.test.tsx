@@ -32,6 +32,7 @@ type CapturedCell = {
 }
 type CapturedProps = {
   readonly getCellContent: (loc: readonly [number, number]) => CapturedCell
+  readonly drawCell?: (args: never, drawContent: () => void) => void
   readonly rows: number
   readonly onCellEdited?: (cell: Item, newValue: unknown) => void
   readonly onGridSelectionChange?: (selection: GridSelection) => void
@@ -145,6 +146,48 @@ async function mount(content: ArrayBuffer, path = '/tmp/report.xlsx'): Promise<v
 /** `[col, row]` in grid coordinates, matching glide-data-grid's own ordering. */
 function cell(col: number, row: number): CapturedCell {
   return lastDataEditorProps!.getCellContent([col, row])
+}
+
+/**
+ * How many separate lines the grid draws for one cell.
+ *
+ * Borders never reach `themeOverride` — they are drawn by `drawCell` onto the
+ * canvas — so `getCellContent` cannot show them and this has to exercise the
+ * real draw path. Counting `stroke()` calls is the closest a jsdom test can get
+ * to "the border appeared", and the pixel-level e2e covers the rest.
+ */
+function strokesFor(col: number, row: number): number {
+  let strokes = 0
+  const ctx = {
+    measureText: (text: string) => ({ width: text.length * 7 }),
+    save: () => {},
+    restore: () => {},
+    beginPath: () => {},
+    moveTo: () => {},
+    lineTo: () => {},
+    stroke: () => {
+      strokes += 1
+    },
+    strokeStyle: '',
+    lineWidth: 1,
+  }
+  lastDataEditorProps!.drawCell?.(
+    {
+      ctx: ctx as unknown as CanvasRenderingContext2D,
+      cell: lastDataEditorProps!.getCellContent([col, row]),
+      theme: { cellHorizontalPadding: 8, textDark: '#000000' },
+      rect: { x: 0, y: 0, width: 100, height: 30 },
+      col,
+      row,
+      hoverAmount: 0,
+      hoverX: undefined,
+      hoverY: undefined,
+      highlighted: false,
+      imageLoader: undefined,
+    } as never,
+    () => {},
+  )
+  return strokes
 }
 
 /** Clicking a cell. The toolbar's row/column actions act on the selection, so they do nothing without one. */
@@ -282,6 +325,21 @@ describe('SpreadsheetViewer — the workbook its own formatting (SHEETFMT-1)', (
     expect(cell(1, 2).contentAlign).toBe('right')
     // ...and not outside it.
     expect(cell(2, 1).contentAlign).toBeUndefined()
+  })
+
+  it('applies a border preset from the toolbar (SHEETFMT-3)', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+
+    act(() => selectCell(0, 1))
+    act(() => screen.getByRole('button', { name: /Borders/i }).click())
+    act(() => screen.getByRole('button', { name: /All borders/i }).click())
+
+    // Four edges means four separate stroked lines.
+    await waitFor(() => expect(lastDataEditorProps!.drawCell).toBeTypeOf('function'))
+    await waitFor(() => expect(strokesFor(0, 1)).toBe(4))
+    // A neighbour the preset did not cover draws nothing.
+    expect(strokesFor(2, 1)).toBe(0)
   })
 
   it('leaves the formatting controls disabled until something is selected', async () => {

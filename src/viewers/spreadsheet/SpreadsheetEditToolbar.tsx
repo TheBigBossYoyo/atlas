@@ -19,6 +19,7 @@ import {
   ArrowDownToLine,
   Bold,
   ClipboardPaste,
+  Grid2x2,
   Italic,
   PaintBucket,
   Redo2,
@@ -31,7 +32,7 @@ import {
 
 import { tsvToRows } from './spreadsheetClipboard'
 import type { CellFormatPatch } from './spreadsheetDocument'
-import type { ResolvedCellFormat } from './xlsxCellStyles'
+import type { CellBorder, ResolvedCellFormat } from './xlsxCellStyles'
 import { useTranslate } from '../../i18n'
 
 export type SaveFormatOption = {
@@ -88,6 +89,44 @@ const NUMBER_FORMATS: ReadonlyArray<{ readonly code: string; readonly labelKey: 
   { code: '@', labelKey: 'spreadsheetToolbar.numFmtText' },
 ]
 
+/**
+ * SHEETFMT-3 — the border presets offered.
+ *
+ * A short list of whole-cell shapes rather than Excel's full per-edge matrix:
+ * these four cover what people reach for (box a block, underline a header,
+ * clear it) and each is one unambiguous patch. Per-edge control needs a
+ * different UI — a 3x3 grid of edge toggles — and is not here yet.
+ *
+ * The weight is `thin`, matching what Excel's own border buttons apply.
+ */
+const BORDER_PRESETS: ReadonlyArray<{
+  readonly id: string
+  readonly labelKey: string
+  readonly border: CellBorder | null
+}> = [
+  {
+    id: 'all',
+    labelKey: 'spreadsheetToolbar.borderAll',
+    border: {
+      top: { weight: 'thin', color: undefined },
+      right: { weight: 'thin', color: undefined },
+      bottom: { weight: 'thin', color: undefined },
+      left: { weight: 'thin', color: undefined },
+    },
+  },
+  {
+    id: 'bottom',
+    labelKey: 'spreadsheetToolbar.borderBottom',
+    border: { top: undefined, right: undefined, bottom: { weight: 'thin', color: undefined }, left: undefined },
+  },
+  {
+    id: 'top',
+    labelKey: 'spreadsheetToolbar.borderTop',
+    border: { top: { weight: 'thin', color: undefined }, right: undefined, bottom: undefined, left: undefined },
+  },
+  { id: 'none', labelKey: 'spreadsheetToolbar.borderNone', border: null },
+]
+
 /** The swatches offered for a fill or a text colour. Office's own default palette row, which is what people expect to see. */
 const COLOR_SWATCHES: ReadonlyArray<string> = [
   '#000000', '#FFFFFF', '#C00000', '#FF0000', '#FFC000', '#FFFF00',
@@ -95,27 +134,59 @@ const COLOR_SWATCHES: ReadonlyArray<string> = [
 ]
 
 /**
- * A colour swatch popover.
+ * The border presets, in a popover.
  *
- * Deliberately a plain `<button>` grid inside a `role="dialog"` rather than a
- * `role="menu"`: the A11Y work in this repo (pass 4) found that menu semantics
- * make a screen reader announce positional noise for a grid of swatches, and
- * real buttons are both simpler and better announced. Mirrors
- * `src/docx/editor/toolbar/Toolbar.tsx`'s own `ColorPickerPopover` for the same
- * reason.
+ * Shares `PopoverShell` with the colour pickers below so the dismissal
+ * behaviour — outside click, Escape — is written once; a second copy of it is
+ * exactly the sort of thing that drifts into one of them not closing.
  */
-function ColorPopover({
-  icon,
+function BorderPopover({
   title,
-  clearLabel,
   onSelect,
   disabled,
+  t,
+}: {
+  readonly title: string
+  readonly onSelect: (border: CellBorder | null) => void
+  readonly disabled: boolean
+  readonly t: (key: string) => string
+}) {
+  return (
+    <PopoverShell icon={<Grid2x2 size={14} />} title={title} disabled={disabled}>
+      {(close) => (
+        <div className="spreadsheet-edit-toolbar__border-presets">
+          {BORDER_PRESETS.map(preset => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => {
+                onSelect(preset.border)
+                close()
+              }}
+            >
+              {t(preset.labelKey)}
+            </button>
+          ))}
+        </div>
+      )}
+    </PopoverShell>
+  )
+}
+
+/**
+ * A popover trigger plus its dismissal behaviour, shared by the colour and
+ * border pickers.
+ */
+function PopoverShell({
+  icon,
+  title,
+  disabled,
+  children,
 }: {
   readonly icon: React.ReactNode
   readonly title: string
-  readonly clearLabel: string
-  readonly onSelect: (hex: string | null) => void
   readonly disabled: boolean
+  readonly children: (close: () => void) => React.ReactNode
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
@@ -151,6 +222,40 @@ function ColorPopover({
       </button>
       {open && (
         <div className="spreadsheet-edit-toolbar__popover" role="dialog" aria-label={title}>
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A colour swatch popover.
+ *
+ * Deliberately a plain `<button>` grid inside a `role="dialog"` rather than a
+ * `role="menu"`: the A11Y work in this repo (pass 4) found that menu semantics
+ * make a screen reader announce positional noise for a grid of swatches, and
+ * real buttons are both simpler and better announced. Mirrors
+ * `src/docx/editor/toolbar/Toolbar.tsx`'s own `ColorPickerPopover` for the same
+ * reason.
+ */
+function ColorPopover({
+  icon,
+  title,
+  clearLabel,
+  onSelect,
+  disabled,
+}: {
+  readonly icon: React.ReactNode
+  readonly title: string
+  readonly clearLabel: string
+  readonly onSelect: (hex: string | null) => void
+  readonly disabled: boolean
+}) {
+  return (
+    <PopoverShell icon={icon} title={title} disabled={disabled}>
+      {(close) => (
+        <>
           <div className="spreadsheet-edit-toolbar__swatches">
             {COLOR_SWATCHES.map(hex => (
               <button
@@ -162,7 +267,7 @@ function ColorPopover({
                 title={hex}
                 onClick={() => {
                   onSelect(hex)
-                  setOpen(false)
+                  close()
                 }}
               />
             ))}
@@ -172,14 +277,14 @@ function ColorPopover({
             className="spreadsheet-edit-toolbar__clear"
             onClick={() => {
               onSelect(null)
-              setOpen(false)
+              close()
             }}
           >
             {clearLabel}
           </button>
-        </div>
+        </>
       )}
-    </div>
+    </PopoverShell>
   )
 }
 
@@ -310,6 +415,12 @@ export function SpreadsheetEditToolbar({
             clearLabel={t('spreadsheetToolbar.clearFill')}
             disabled={!selection}
             onSelect={hex => onFormat({ fill: hex })}
+          />
+          <BorderPopover
+            title={t('spreadsheetToolbar.borders')}
+            disabled={!selection}
+            onSelect={border => onFormat({ border })}
+            t={t}
           />
 
           <select
