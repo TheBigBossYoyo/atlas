@@ -36,6 +36,7 @@
  * is a substantial, separate undertaking, out of scope here.
  */
 import { evaluateFormula } from './spreadsheetFormula'
+import { applyNumberFormat } from './formatNumber'
 import type { CellLookup } from './spreadsheetFormula'
 import { parseCellRange } from './cellRef'
 import type { FrozenPanes, MergeRange, ParsedSheet } from '../shared/spreadsheetGrid'
@@ -570,7 +571,16 @@ export function recalculateSheet(sheet: EditableSheet): EditableSheet {
 
     const result = evaluateFormula(formula, lookup)
     if (result.ok) {
-      ensureRowWritable(r)[c] = result.text
+      // SHEETFN-3 — the CELL's own number format wins over the evaluator's
+      // rendering, so `=A1*1.2` in a currency column reads as currency and a
+      // date formula follows the workbook's own date convention rather than
+      // ISO. Falls back to the evaluator's text when the cell has no format or
+      // the code cannot be applied.
+      const formatted =
+        result.value === undefined
+          ? null
+          : applyNumberFormat(result.value, formatForCell(sheet, r, c).numberFormat)
+      ensureRowWritable(r)[c] = formatted ?? result.text
     } else if ((rows ?? sheet.rows)[r][c] === '') {
       ensureRowWritable(r)[c] = `=${formula}`
     }

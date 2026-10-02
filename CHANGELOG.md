@@ -43,6 +43,11 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   five-digit numbers a spreadsheet stores underneath. `=TODAY()+7` gives a date;
   `=B1-A1` on two dates gives the number of days between them.
 
+- **A formula result now follows the cell's number format.** A calculation in a
+  currency column reads as currency, and a date formula follows the workbook's
+  own date convention — a computed value and a typed one in the same column look
+  the same now, which they did not before.
+
 ### Fixed
 
 - **A cell holding a date is no longer read as a number.** `2026-10-02` was

@@ -43,7 +43,19 @@ import {
 export type CellLookup = (row: number, col: number) => string
 
 export type FormulaResult =
-  | { readonly ok: true; readonly text: string }
+  | {
+      readonly ok: true
+      readonly text: string
+      /**
+       * SHEETFN-3 — the numeric result, when there is one, so the caller can
+       * apply the CELL's own number format to it (`=A1*1.2` in a currency
+       * column should read as currency). `text` is the evaluator's own
+       * rendering, used when the cell has no format of its own.
+       */
+      readonly value?: number
+      /** Set when `value` is a date serial — see `Value`'s own note. */
+      readonly dateKind?: 'date' | 'datetime'
+    }
   | { readonly ok: false }
 
 type Token =
@@ -1092,9 +1104,11 @@ export function evaluateFormula(formula: string, lookup: CellLookup): FormulaRes
       if (value.dateKind !== undefined) {
         const rendered =
           value.dateKind === 'datetime' ? isoDateTimeFromSerial(value.value) : isoDateFromSerial(value.value)
-        if (rendered !== null) return { ok: true, text: rendered }
+        if (rendered !== null) {
+          return { ok: true, text: rendered, value: value.value, dateKind: value.dateKind }
+        }
       }
-      return { ok: true, text: formatNumericResult(value.value) }
+      return { ok: true, text: formatNumericResult(value.value), value: value.value }
     }
     return { ok: true, text: value.value }
   } catch {

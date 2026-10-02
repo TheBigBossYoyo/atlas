@@ -1,3 +1,10 @@
+/*
+ * SHEETFN-3 note: the successful cases assert with `toMatchObject`, not
+ * `toEqual`. A `FormulaResult` now also carries the numeric `value` (so the
+ * caller can apply the cell's own number format to it), and an exact-shape
+ * assertion fails on a field the test has no opinion about. The `{ok:false}`
+ * cases keep `toEqual`, where the whole shape IS the claim.
+ */
 import { describe, expect, it } from 'vitest'
 
 import { evaluateFormula, type CellLookup } from '../spreadsheetFormula'
@@ -8,27 +15,27 @@ function gridLookup(rows: ReadonlyArray<ReadonlyArray<string>>): CellLookup {
 
 describe('evaluateFormula — arithmetic', () => {
   it('evaluates a literal arithmetic expression', () => {
-    expect(evaluateFormula('1+2*3', gridLookup([]))).toEqual({ ok: true, text: '7' })
+    expect(evaluateFormula('1+2*3', gridLookup([]))).toMatchObject({ ok: true, text: '7' })
   })
 
   it('respects parentheses', () => {
-    expect(evaluateFormula('(1+2)*3', gridLookup([]))).toEqual({ ok: true, text: '9' })
+    expect(evaluateFormula('(1+2)*3', gridLookup([]))).toMatchObject({ ok: true, text: '9' })
   })
 
   it('handles unary minus', () => {
-    expect(evaluateFormula('-5+2', gridLookup([]))).toEqual({ ok: true, text: '-3' })
+    expect(evaluateFormula('-5+2', gridLookup([]))).toMatchObject({ ok: true, text: '-3' })
   })
 
   it('handles exponentiation', () => {
-    expect(evaluateFormula('2^10', gridLookup([]))).toEqual({ ok: true, text: '1024' })
+    expect(evaluateFormula('2^10', gridLookup([]))).toMatchObject({ ok: true, text: '1024' })
   })
 
   it('strips floating-point rounding noise', () => {
-    expect(evaluateFormula('0.1+0.2', gridLookup([]))).toEqual({ ok: true, text: '0.3' })
+    expect(evaluateFormula('0.1+0.2', gridLookup([]))).toMatchObject({ ok: true, text: '0.3' })
   })
 
   it('returns #DIV/0! for division by zero', () => {
-    expect(evaluateFormula('5/0', gridLookup([]))).toEqual({ ok: true, text: '#DIV/0!' })
+    expect(evaluateFormula('5/0', gridLookup([]))).toMatchObject({ ok: true, text: '#DIV/0!' })
   })
 })
 
@@ -39,19 +46,19 @@ describe('evaluateFormula — cell references', () => {
   ])
 
   it('resolves a single cell reference', () => {
-    expect(evaluateFormula('A1+B1', lookup)).toEqual({ ok: true, text: '30' })
+    expect(evaluateFormula('A1+B1', lookup)).toMatchObject({ ok: true, text: '30' })
   })
 
   it('resolves an absolute-anchored reference the same as a relative one', () => {
-    expect(evaluateFormula('$A$1+$B$1', lookup)).toEqual({ ok: true, text: '30' })
+    expect(evaluateFormula('$A$1+$B$1', lookup)).toMatchObject({ ok: true, text: '30' })
   })
 
   it('treats a blank referenced cell as zero', () => {
-    expect(evaluateFormula('A2+B2', lookup)).toEqual({ ok: true, text: '30' })
+    expect(evaluateFormula('A2+B2', lookup)).toMatchObject({ ok: true, text: '30' })
   })
 
   it('returns #VALUE! when a referenced cell holds non-numeric text used arithmetically', () => {
-    expect(evaluateFormula('C1+1', lookup)).toEqual({ ok: true, text: '#VALUE!' })
+    expect(evaluateFormula('C1+1', lookup)).toMatchObject({ ok: true, text: '#VALUE!' })
   })
 })
 
@@ -63,29 +70,29 @@ describe('evaluateFormula — functions', () => {
   ])
 
   it('SUM over a range', () => {
-    expect(evaluateFormula('SUM(A1:C2)', lookup)).toEqual({ ok: true, text: '15' })
+    expect(evaluateFormula('SUM(A1:C2)', lookup)).toMatchObject({ ok: true, text: '15' })
   })
 
   it('AVERAGE over a range ignores blanks', () => {
-    expect(evaluateFormula('AVERAGE(A1:A2)', lookup)).toEqual({ ok: true, text: '2.5' })
+    expect(evaluateFormula('AVERAGE(A1:A2)', lookup)).toMatchObject({ ok: true, text: '2.5' })
   })
 
   it('MIN and MAX over a range', () => {
-    expect(evaluateFormula('MIN(A1:C1)', lookup)).toEqual({ ok: true, text: '1' })
-    expect(evaluateFormula('MAX(A1:C1)', lookup)).toEqual({ ok: true, text: '3' })
+    expect(evaluateFormula('MIN(A1:C1)', lookup)).toMatchObject({ ok: true, text: '1' })
+    expect(evaluateFormula('MAX(A1:C1)', lookup)).toMatchObject({ ok: true, text: '3' })
   })
 
   it('COUNT counts only numeric cells, COUNTA counts every non-empty cell', () => {
-    expect(evaluateFormula('COUNT(A1:C3)', lookup)).toEqual({ ok: true, text: '6' })
-    expect(evaluateFormula('COUNTA(A1:C3)', lookup)).toEqual({ ok: true, text: '7' })
+    expect(evaluateFormula('COUNT(A1:C3)', lookup)).toMatchObject({ ok: true, text: '6' })
+    expect(evaluateFormula('COUNTA(A1:C3)', lookup)).toMatchObject({ ok: true, text: '7' })
   })
 
   it('is case-insensitive on function names', () => {
-    expect(evaluateFormula('sum(A1:A2)', lookup)).toEqual({ ok: true, text: '5' })
+    expect(evaluateFormula('sum(A1:A2)', lookup)).toMatchObject({ ok: true, text: '5' })
   })
 
   it('combines a function with arithmetic', () => {
-    expect(evaluateFormula('SUM(A1:A2)+10', lookup)).toEqual({ ok: true, text: '15' })
+    expect(evaluateFormula('SUM(A1:A2)+10', lookup)).toMatchObject({ ok: true, text: '15' })
   })
 })
 
@@ -132,40 +139,40 @@ describe('evaluateFormula — unsupported / malformed input falls back to null',
 // formula text instead of their evaluated value. These fixed that gap.
 describe('evaluateFormula — string literals and text concatenation (SHEET-6)', () => {
   it('evaluates a bare string literal', () => {
-    expect(evaluateFormula('"hello"', gridLookup([]))).toEqual({ ok: true, text: 'hello' })
+    expect(evaluateFormula('"hello"', gridLookup([]))).toMatchObject({ ok: true, text: 'hello' })
   })
 
   it('unescapes a doubled quote inside a string literal', () => {
-    expect(evaluateFormula('"say ""hi"""', gridLookup([]))).toEqual({ ok: true, text: 'say "hi"' })
+    expect(evaluateFormula('"say ""hi"""', gridLookup([]))).toMatchObject({ ok: true, text: 'say "hi"' })
   })
 
   it('concatenates a cell reference with a string literal (`=A1&"!"`)', () => {
     const lookup = gridLookup([['hello']])
-    expect(evaluateFormula('A1&"!"', lookup)).toEqual({ ok: true, text: 'hello!' })
+    expect(evaluateFormula('A1&"!"', lookup)).toMatchObject({ ok: true, text: 'hello!' })
   })
 
   it('formats a numeric operand the same way a numeric result displays when concatenating', () => {
     const lookup = gridLookup([['5']])
-    expect(evaluateFormula('A1&"!"', lookup)).toEqual({ ok: true, text: '5!' })
+    expect(evaluateFormula('A1&"!"', lookup)).toMatchObject({ ok: true, text: '5!' })
   })
 
   it('& binds looser than arithmetic, matching real spreadsheet precedence', () => {
-    expect(evaluateFormula('"1"&1+1', gridLookup([]))).toEqual({ ok: true, text: '12' })
+    expect(evaluateFormula('"1"&1+1', gridLookup([]))).toMatchObject({ ok: true, text: '12' })
   })
 
   it('chains multiple & operators left to right', () => {
     const lookup = gridLookup([['a', 'b', 'c']])
-    expect(evaluateFormula('A1&B1&C1', lookup)).toEqual({ ok: true, text: 'abc' })
+    expect(evaluateFormula('A1&B1&C1', lookup)).toMatchObject({ ok: true, text: 'abc' })
   })
 
   it('CONCATENATE joins string-literal and cell-reference arguments', () => {
     const lookup = gridLookup([['World']])
-    expect(evaluateFormula('CONCATENATE("Hello, ",A1,"!")', lookup)).toEqual({ ok: true, text: 'Hello, World!' })
+    expect(evaluateFormula('CONCATENATE("Hello, ",A1,"!")', lookup)).toMatchObject({ ok: true, text: 'Hello, World!' })
   })
 
   it('CONCATENATE is case-insensitive, like the other function names', () => {
     const lookup = gridLookup([['a', 'b']])
-    expect(evaluateFormula('concatenate(A1,B1)', lookup)).toEqual({ ok: true, text: 'ab' })
+    expect(evaluateFormula('concatenate(A1,B1)', lookup)).toMatchObject({ ok: true, text: 'ab' })
   })
 
   it('a text formula can depend on another text formula (dependency chaining)', () => {
@@ -173,15 +180,15 @@ describe('evaluateFormula — string literals and text concatenation (SHEET-6)',
     // needs to prove it can consume another formula CELL'S already-evaluated
     // display text through `lookup`, exactly like it always has for numbers.
     const lookup = gridLookup([['hello!', '']]) // B1 depends on A1's own evaluated text
-    expect(evaluateFormula('A1&" world"', lookup)).toEqual({ ok: true, text: 'hello! world' })
+    expect(evaluateFormula('A1&" world"', lookup)).toMatchObject({ ok: true, text: 'hello! world' })
   })
 
   it('a text formula can reference a numeric cell', () => {
     const lookup = gridLookup([['5', '']])
-    expect(evaluateFormula('"Total: "&A1', lookup)).toEqual({ ok: true, text: 'Total: 5' })
+    expect(evaluateFormula('"Total: "&A1', lookup)).toMatchObject({ ok: true, text: 'Total: 5' })
   })
 
   it('propagates an error operand through & instead of stringifying it', () => {
-    expect(evaluateFormula('1/0&"!"', gridLookup([]))).toEqual({ ok: true, text: '#DIV/0!' })
+    expect(evaluateFormula('1/0&"!"', gridLookup([]))).toMatchObject({ ok: true, text: '#DIV/0!' })
   })
 })

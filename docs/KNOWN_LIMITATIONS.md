@@ -335,9 +335,21 @@ showing `15/03/2023` was 15. A column of dates therefore summed to a total of
 its day-of-month numbers. The whole text must now be a number (or an ISO date),
 and anything else is text — which, inside a range, is skipped.
 
-**There is no recalculation dependency graph.** A formula is evaluated when its
-own cell is read, so a chain updates correctly, but there is no cycle detection
-beyond the existing `#REF!` guard and no explicit recalculation order.
+**Recalculation IS ordered.** An earlier version of this document claimed there
+was no dependency graph; that was wrong. `recalculateSheet` builds one
+(`topologicalFormulaOrder`) and evaluates in dependency order, reporting a
+circular reference rather than looping. What is missing is cross-SHEET
+dependency: a formula referencing another sheet is not evaluated at all (see
+above), so the order only covers one sheet's own cells.
+
+**A formula result now wears the cell's own number format (SHEETFN-3).** It used
+to be displayed exactly as the evaluator rendered it, so `=A1*1.2` in a currency
+column showed `15.6` where Excel shows `$15.60`, and a stored value and a
+computed one with the same format rendered differently in the same column. The
+formatting goes through SheetJS's `SSF` — the same engine that produces the
+display text for every value read from a workbook — so the two cannot disagree.
+A cell with no format, or a code `SSF` rejects, keeps the evaluator's own
+rendering rather than showing an error.
 
 **Cell formatting is now READ and rendered (SHEETFMT-1), not yet applied.** Until
 this, Atlas drew every workbook as unstyled text — a file whose header row was
