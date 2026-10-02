@@ -108,7 +108,34 @@ references and defined names are now re-anchored through every structural edit, 
 listed below; an English/French UI (`src/i18n/`, DEFER-6 resolved — the owner is confirmed French-
 speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked too (P4.1 fully closed).
 
-## 3.11.0 — built 2026-10-01, NOT INSTALLED (UAC declined)
+## 3.12.0 — built 2026-10-02, NOT INSTALLED
+
+`release\Atlas-Setup-3.12.0.exe`, 136.2 MB, unsigned.
+SHA256 `EF362307EC645645E8F3836FF00D4008EE76B089F47822D3F94BE5880CE0A456`.
+
+Supersedes 3.11.0 — install this one, not that. It is the whole spreadsheet
+wave: cell formatting read, applied and drawn (SHEETFMT-1..4) and the formula
+engine (SHEETFN-1..4).
+
+**The machine is still running 3.10.0**, which has none of it.
+
+Verified before shipping by scanning all 278 JS chunks for a marker from each
+piece of work (the verifier reports how many it actually read, because a broken
+scan otherwise looks exactly like a missing feature — which it did once).
+
+Gate: 4249 unit tests, 177 e2e, types and lint clean, bundle check passed.
+One e2e flake seen once during the re-verification run
+(`spreadsheet-edit-matrix.spec.ts` "Ctrl+S immediately after a second edit"),
+then 42/42 across three consecutive runs of that file — the known MATRIX-FLAKE-1
+overlay-timing class, in the file it has always been in.
+
+To install:
+
+```
+powershell -Command "Start-Process 'release\Atlas-Setup-3.12.0.exe' -ArgumentList '/S' -Verb RunAs -Wait"
+```
+
+## 3.11.0 — built 2026-10-01, superseded by 3.12.0 (never installed)
 
 `release\Atlas-Setup-3.11.0.exe`, 136.2 MB, unsigned.
 SHA256 `F56EA7F5284B9B596F7D6C45B7BC5A62423BB36B2A9FF2F0DE0CB03E151210B4`.
