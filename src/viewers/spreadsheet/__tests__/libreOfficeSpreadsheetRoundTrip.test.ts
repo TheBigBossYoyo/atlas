@@ -38,7 +38,7 @@ import { CONVERT, convert, findSoffice, htmlToText } from '../../../__tests__/he
 import { attachFrozenPanes, attachSheetSources, attachTables, parseWorkbookBuffer } from '../../shared/spreadsheetGrid'
 import { readFrozenPanes } from '../spreadsheetPanes'
 import { readSheetPartPaths, readSheetTables } from '../spreadsheetTables'
-import { createDocument, setCellValue } from '../spreadsheetDocument'
+import { createDocument, setCellValue, sortRows } from '../spreadsheetDocument'
 import { writeWorkbookBytesWithTables } from '../spreadsheetWrite'
 import { writeWorkbookThroughOriginal } from '../xlsxPassthrough'
 
@@ -169,6 +169,59 @@ describe.skipIf(SOFFICE === null)('LibreOffice reads the spreadsheets Atlas writ
       const patchedText = htmlToText(fs.readFileSync(patchedOut!, 'utf8'))
       expect(patchedText, 'the passthrough branch comparison is blind to a changed cell').not.toBe(before)
       expect(patchedText).toContain('CHANGED-BY-THE-SELF-CHECK')
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true })
+    }
+  }, 600_000)
+
+  /**
+   * SHEET-SORT-1/2 — does an OUTSIDE reader see the sorted order, and all of it?
+   *
+   * Sorting permutes `rowSources`, the per-row mapping the passthrough writer
+   * uses to decide which ORIGINAL row's bytes an untouched cell is copied from.
+   * Permuting the rows without permuting that mapping writes the right values
+   * in the wrong places, and Atlas's own model cannot see it: the model holds
+   * the sorted rows either way, and only the bytes on disk disagree. This asks
+   * LibreOffice instead.
+   */
+  it('a sorted workbook reads back sorted, with nothing lost, through the passthrough writer', async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-lo-sort-'))
+    try {
+      const buffer = readFixture('sample.xlsx')
+      const document = await loadDocument(buffer)
+      const original = path.join(workDir, 'sample.xlsx')
+      fs.writeFileSync(original, Buffer.from(readFixture('sample.xlsx')))
+      const beforeOut = convert(SOFFICE!, original, CONVERT.calcHtml, workDir)
+      expect(beforeOut).not.toBeNull()
+      const before = htmlToText(fs.readFileSync(beforeOut!, 'utf8'))
+      expect(before).not.toBe('')
+      // The fixture is Name/Value, Atlas/2, Phase/1 — so it starts NOT sorted
+      // by Value, which is what makes the assertion below mean something.
+      expect(before.indexOf('Atlas')).toBeLessThan(before.indexOf('Phase'))
+
+      // Sort by Value ascending, holding the heading row.
+      const result = sortRows(document, 0, { col: 1, direction: 'asc', headerRows: 1, atRow: 1 })
+      expect(result.refusal, 'the fixture should be sortable').toBeUndefined()
+      expect(result.sorted).toBe(true)
+
+      const throughOriginal = await writeWorkbookThroughOriginal(buffer, result.document)
+      expect(throughOriginal, 'the passthrough writer refused a sorted workbook').not.toBeNull()
+      const sorted = path.join(workDir, 'sorted.xlsx')
+      fs.writeFileSync(sorted, Buffer.from(throughOriginal!))
+      const sortedOut = convert(SOFFICE!, sorted, CONVERT.calcHtml, workDir)
+      expect(sortedOut, 'LibreOffice could not read the SORTED workbook').not.toBeNull()
+      const after = htmlToText(fs.readFileSync(sortedOut!, 'utf8'))
+
+      // 1. The order actually changed, as the outside reader sees it.
+      expect(after.indexOf('Phase'), 'LibreOffice did not see the sorted order').toBeLessThan(
+        after.indexOf('Atlas'),
+      )
+      // 2. Nothing was lost, duplicated or left behind: the same words, rearranged.
+      const words = (text: string): string[] => text.split(/\s+/).filter(Boolean).sort()
+      expect(words(after), 'the sort changed WHICH cells exist, not just their order').toEqual(words(before))
+      // 3. Each row stayed whole — the value travelled with its name.
+      expect(after).toMatch(/Phase[^A-Za-z]*1/)
+      expect(after).toMatch(/Atlas[^A-Za-z]*2/)
     } finally {
       fs.rmSync(workDir, { recursive: true, force: true })
     }
