@@ -192,7 +192,7 @@ export function setRowsFormat(
       next.set(key, { ...next.get(key), ...patch })
     }
   }
-  return replaceSheet(doc, sheetIndex, { ...sheet, formatOverrides: next })
+  return replaceSheetAndRecalculate(doc, sheetIndex, { ...sheet, formatOverrides: next })
 }
 
 /** Key for `editedCells`. */
@@ -306,9 +306,12 @@ function emptyFormulaRow(colCount: number): (string | undefined)[] {
  * "live" from the first render, matching what happens after any later edit.
  */
 export function createDocument(parsedSheets: ReadonlyArray<ParsedSheet>): SpreadsheetDocument {
-  return {
-    sheets: parsedSheets.map((sheet) =>
-      recalculateSheet({
+  // SHEETFN-5 — built first, then recalculated ONCE across the whole document,
+  // so a formula referencing another sheet resolves on load rather than only
+  // after the first edit. A per-sheet pass could not: the sheet it points at
+  // may not have been built yet.
+  return recalculateDocument({
+    sheets: parsedSheets.map((sheet) => ({
         name: sheet.name,
         hidden: sheet.hidden,
         rows: sheet.grid.rows,
@@ -328,9 +331,8 @@ export function createDocument(parsedSheets: ReadonlyArray<ParsedSheet>): Spread
               editedCells: new Set<string>(),
             }
           : {}),
-      }),
-    ),
-  }
+      })),
+  })
 }
 
 /** Builds a single-sheet document directly from CSV/TSV rows (no sheet/merge/width concept). */
@@ -364,14 +366,43 @@ function replaceSheet(doc: SpreadsheetDocument, sheetIndex: number, sheet: Edita
   return { sheets: doc.sheets.map((s, i) => (i === sheetIndex ? sheet : s)) }
 }
 
+/**
+ * Puts an edited sheet back and recalculates the WHOLE document.
+ *
+ * SHEETFN-5 — every operation used to recalculate only the sheet it touched,
+ * which is wrong the moment a formula crosses sheets: editing `Sheet2!B1` has
+ * to update `Sheet1!A1 = Sheet2!B1`, and a per-sheet pass never looks at
+ * Sheet1. It also covers formatting changes, because a cell's number format
+ * decides how a formula result is rendered (SHEETFN-3).
+ *
+ * `recalculateDocument` returns the same document object when nothing changed,
+ * so this stays a no-op for an edit that computes to what was already there —
+ * which the editor's undo history depends on.
+ */
+function replaceSheetAndRecalculate(
+  doc: SpreadsheetDocument,
+  sheetIndex: number,
+  sheet: EditableSheet,
+): SpreadsheetDocument {
+  return recalculateDocument(replaceSheet(doc, sheetIndex, sheet))
+}
+
 /** '#REF!' as a circular-reference result — see the module header: the same code this codebase already uses elsewhere for "this reference doesn't resolve" (`xlsxPassthrough.ts`, `formulaRefs.ts`), reused here rather than inventing a distinct "circular" error vocabulary. */
 const CIRCULAR_REFERENCE_ERROR = '#REF!'
 
-type FormulaCellEntry = { readonly row: number; readonly col: number; readonly formula: string }
-
-/** A cell reference/range shape, matching `spreadsheetFormula.ts`'s own tokenizer: `$?letters$?digits`, optionally `:$?letters$?digits` for a range. Built fresh per call (not a module-level `RegExp`) so concurrent/re-entrant use can't stomp on a shared `lastIndex`. */
+/**
+ * A cell reference/range shape, matching `spreadsheetFormula.ts`'s own
+ * tokenizer: an optional `SheetName!`/`'Sheet Name'!` qualifier, then
+ * `$?letters$?digits`, optionally `:$?letters$?digits` for a range. Built fresh
+ * per call (not a module-level `RegExp`) so concurrent/re-entrant use can't
+ * stomp on a shared `lastIndex`.
+ *
+ * SHEETFN-5 — the qualifier is captured, because a dependency on another
+ * sheet's cell has to be ordered against THAT sheet's formulas, not this
+ * sheet's cell of the same address.
+ */
 function referenceOrRangePattern(): RegExp {
-  return /\$?[A-Za-z]+\$?\d+(?::\$?[A-Za-z]+\$?\d+)?/g
+  return /(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_.]*))?!?(\$?[A-Za-z]+\$?\d+(?::\$?[A-Za-z]+\$?\d+)?)/g
 }
 
 /**
@@ -390,20 +421,31 @@ function referenceOrRangePattern(): RegExp {
  * than `evaluateFormula` itself already pays to compute that same formula's
  * result — not a new order of magnitude.
  */
-function formulaDependencyKeys(formula: string, rowCount: number, colCount: number): string[] {
+function formulaDependencyKeys(
+  formula: string,
+  rowCount: number,
+  colCount: number,
+  /** SHEETFN-5 — turns a reference's sheet qualifier (or its absence) into the key prefix for that sheet. */
+  keyFor: (sheet: string | undefined, row: number, col: number) => string | null = (_, row, col) =>
+    cellKey(row, col),
+): string[] {
   const deps: string[] = []
   const seen = new Set<string>()
   const pattern = referenceOrRangePattern()
   let match: RegExpExecArray | null
   while ((match = pattern.exec(formula)) !== null) {
-    const range = parseCellRange(match[0])
+    const sheet = match[1] ?? match[2]
+    const range = parseCellRange(match[3])
     if (!range) continue
-    const r1 = Math.min(range.end.row, rowCount - 1)
-    const c1 = Math.min(range.end.col, colCount - 1)
+    // A qualified reference may point at a sheet with a different extent, so
+    // the bound only applies to a reference on this sheet. Scanning wider than
+    // necessary is the safe direction (see this function's header).
+    const r1 = sheet === undefined ? Math.min(range.end.row, rowCount - 1) : range.end.row
+    const c1 = sheet === undefined ? Math.min(range.end.col, colCount - 1) : range.end.col
     for (let r = range.start.row; r <= r1; r++) {
       for (let c = range.start.col; c <= c1; c++) {
-        const key = cellKey(r, c)
-        if (!seen.has(key)) {
+        const key = keyFor(sheet, r, c)
+        if (key !== null && !seen.has(key)) {
           seen.add(key)
           deps.push(key)
         }
@@ -434,16 +476,20 @@ function markCycle(stack: ReadonlyArray<DfsFrame>, target: string, cyclic: Set<s
  * of this — see `frameFor`'s own comment for why a bare self-mention isn't
  * treated as a one-cell cycle here.
  */
-function topologicalFormulaOrder(
-  formulaCells: ReadonlyMap<string, FormulaCellEntry>,
-  rowCount: number,
-  colCount: number,
-): { readonly order: ReadonlyArray<FormulaCellEntry>; readonly cyclic: ReadonlySet<string> } {
+function topologicalFormulaOrder<T>(
+  formulaCells: ReadonlyMap<string, T>,
+  /**
+   * SHEETFN-5 — the dependencies of one entry, as keys into `formulaCells`.
+   * Passed in rather than computed here, so the same sort serves a single
+   * sheet's `r:c` keys and a whole document's `sheet|r:c` ones.
+   */
+  dependenciesOf: (key: string, entry: T) => ReadonlyArray<string>,
+): { readonly order: ReadonlyArray<T>; readonly cyclic: ReadonlySet<string> } {
   const IN_PROGRESS = 1
   const DONE = 2
   const state = new Map<string, typeof IN_PROGRESS | typeof DONE>()
   const cyclic = new Set<string>()
-  const order: FormulaCellEntry[] = []
+  const order: T[] = []
 
   const frameFor = (key: string): DfsFrame => {
     const entry = formulaCells.get(key)
@@ -463,9 +509,9 @@ function topologicalFormulaOrder(
     // (`=A1+1` stored at A1) is a narrower, pre-existing edge case this
     // still doesn't flag — see this function's own header — left as-is
     // rather than risk that same false positive.
-    const deps = entry
-      ? formulaDependencyKeys(entry.formula, rowCount, colCount).filter((k) => k !== key && formulaCells.has(k))
-      : []
+    const deps = entry === undefined
+      ? []
+      : dependenciesOf(key, entry).filter((k) => k !== key && formulaCells.has(k))
     state.set(key, IN_PROGRESS)
     return { key, deps, depIndex: 0 }
   }
@@ -536,37 +582,141 @@ function topologicalFormulaOrder(
  * elsewhere in a 100k-row sheet, not just the O(rows) the edit itself needs.
  */
 export function recalculateSheet(sheet: EditableSheet): EditableSheet {
-  const formulaCells = new Map<string, FormulaCellEntry>()
-  for (let r = 0; r < sheet.formulas.length; r++) {
-    const formulaRow = sheet.formulas[r]
-    for (let c = 0; c < formulaRow.length; c++) {
-      const formula = formulaRow[c]
-      if (formula === undefined) continue
-      formulaCells.set(cellKey(r, c), { row: r, col: c, formula })
+  // A single sheet has no way to resolve another one's cells. A qualified
+  // reference to its OWN name still works (Excel allows `=Sheet1!A1` on
+  // Sheet1); anything else is `#REF!`, which is honest — the alternative,
+  // silently reading this sheet's cell of the same address, would give a
+  // confidently wrong number.
+  const recalculated = recalculateDocument({ sheets: [sheet] })
+  return recalculated.sheets[0]
+}
+
+/** Everything one formula cell needs, across a whole document. */
+type DocumentFormulaEntry = {
+  readonly sheetIndex: number
+  readonly row: number
+  readonly col: number
+  readonly formula: string
+}
+
+/** The key a formula cell is ordered by, document-wide. */
+function documentCellKey(sheetIndex: number, row: number, col: number): string {
+  return `${sheetIndex}|${row}:${col}`
+}
+
+/**
+ * SHEETFN-5 — recalculates every formula in the document, across sheets.
+ *
+ * `recalculateSheet` could only ever see one sheet, so `=Sheet2!A1` was
+ * unresolvable and displayed as its own formula text. Resolving it needs three
+ * things at once, which is why this is document-level rather than a lookup
+ * passed into the per-sheet version:
+ *
+ *   - **a sheet-aware lookup**, so a reference reads the right sheet;
+ *   - **one dependency graph spanning all sheets**, so `Sheet1!A1 = Sheet2!B1`
+ *     is evaluated after `Sheet2!B1` even though they live in different sheets
+ *     — ordering per sheet would leave one of them reading a stale value, and
+ *     which one would depend on sheet order;
+ *   - **cycle detection across sheets**, so `Sheet1!A1 = Sheet2!A1` and
+ *     `Sheet2!A1 = Sheet1!A1` report a circular reference instead of looping or
+ *     silently settling on whatever was there before.
+ *
+ * Sheet names resolve case-insensitively, as Excel's do.
+ *
+ * Returns the SAME document object when nothing changed. The editor's undo
+ * history detects a no-op edit by reference (`if (next !== current)`), so
+ * always returning a fresh object would put a duplicate entry on the undo stack
+ * for every blocked action.
+ */
+export function recalculateDocument(doc: SpreadsheetDocument): SpreadsheetDocument {
+  const indexByName = new Map<string, number>()
+  doc.sheets.forEach((sheet, index) => {
+    // First wins, matching how a workbook with duplicate names would be read.
+    const key = sheet.name.toLowerCase()
+    if (!indexByName.has(key)) indexByName.set(key, index)
+  })
+
+  const formulaCells = new Map<string, DocumentFormulaEntry>()
+  doc.sheets.forEach((sheet, sheetIndex) => {
+    for (let r = 0; r < sheet.formulas.length; r++) {
+      const formulaRow = sheet.formulas[r]
+      for (let c = 0; c < formulaRow.length; c++) {
+        const formula = formulaRow[c]
+        if (formula === undefined) continue
+        formulaCells.set(documentCellKey(sheetIndex, r, c), { sheetIndex, row: r, col: c, formula })
+      }
     }
+  })
+
+  if (formulaCells.size === 0) return doc
+
+  /** Resolves a reference's sheet qualifier to a sheet index, or `null` for one that does not exist. */
+  const sheetIndexFor = (name: string | undefined, fallback: number): number | null => {
+    if (name === undefined) return fallback
+    return indexByName.get(name.toLowerCase()) ?? null
   }
 
-  if (formulaCells.size === 0) return sheet
+  const { order, cyclic } = topologicalFormulaOrder(formulaCells, (_key, entry) => {
+    const sheet = doc.sheets[entry.sheetIndex]
+    return formulaDependencyKeys(
+      entry.formula,
+      sheet.rows.length,
+      sheet.colCount,
+      (refSheet, row, col) => {
+        const index = sheetIndexFor(refSheet, entry.sheetIndex)
+        return index === null ? null : documentCellKey(index, row, col)
+      },
+    )
+  })
 
-  const { order, cyclic } = topologicalFormulaOrder(formulaCells, sheet.rows.length, sheet.colCount)
+  // Rows are copied lazily, per sheet, so a document whose formulas all
+  // re-compute to what they already showed returns unchanged.
+  const working = new Map<number, string[][]>()
+  const clonedRows = new Map<number, Set<number>>()
 
-  let rows: string[][] | null = null
-  const clonedRows = new Set<number>()
-  const lookup: CellLookup = (row, col) => (rows ?? sheet.rows)[row]?.[col] ?? ''
+  const rowsOf = (sheetIndex: number): ReadonlyArray<ReadonlyArray<string>> =>
+    working.get(sheetIndex) ?? doc.sheets[sheetIndex].rows
 
-  const ensureRowWritable = (r: number): string[] => {
-    if (rows === null) rows = sheet.rows.map((row) => row as string[])
-    if (!clonedRows.has(r)) {
+  const ensureRowWritable = (sheetIndex: number, r: number): string[] => {
+    let rows = working.get(sheetIndex)
+    if (rows === undefined) {
+      rows = doc.sheets[sheetIndex].rows.map((row) => row as string[])
+      working.set(sheetIndex, rows)
+      clonedRows.set(sheetIndex, new Set())
+    }
+    const cloned = clonedRows.get(sheetIndex)!
+    if (!cloned.has(r)) {
       rows[r] = [...rows[r]]
-      clonedRows.add(r)
+      cloned.add(r)
     }
     return rows[r]
   }
 
-  for (const { row: r, col: c, formula } of order) {
-    if (cyclic.has(cellKey(r, c))) {
-      ensureRowWritable(r)[c] = CIRCULAR_REFERENCE_ERROR
+  /**
+   * Writes a computed value, but only when it DIFFERS from what is already
+   * there.
+   *
+   * Without the comparison every recalculation allocates new row arrays for
+   * every formula cell, so the document is a new object even when nothing
+   * changed — which makes the identity contract in this function's own doc
+   * comment false, and costs a React re-render of the grid on every pass.
+   */
+  const write = (sheetIndex: number, r: number, c: number, text: string): void => {
+    if (rowsOf(sheetIndex)[r]?.[c] === text) return
+    ensureRowWritable(sheetIndex, r)[c] = text
+  }
+
+  for (const entry of order) {
+    const { sheetIndex, row: r, col: c, formula } = entry
+    if (cyclic.has(documentCellKey(sheetIndex, r, c))) {
+      write(sheetIndex, r, c, CIRCULAR_REFERENCE_ERROR)
       continue
+    }
+
+    const lookup: CellLookup = (row, col, refSheet) => {
+      const index = sheetIndexFor(refSheet, sheetIndex)
+      if (index === null) return null
+      return rowsOf(index)[row]?.[col] ?? ''
     }
 
     const result = evaluateFormula(formula, lookup)
@@ -579,14 +729,20 @@ export function recalculateSheet(sheet: EditableSheet): EditableSheet {
       const formatted =
         result.value === undefined
           ? null
-          : applyNumberFormat(result.value, formatForCell(sheet, r, c).numberFormat)
-      ensureRowWritable(r)[c] = formatted ?? result.text
-    } else if ((rows ?? sheet.rows)[r][c] === '') {
-      ensureRowWritable(r)[c] = `=${formula}`
+          : applyNumberFormat(result.value, formatForCell(doc.sheets[sheetIndex], r, c).numberFormat)
+      write(sheetIndex, r, c, formatted ?? result.text)
+    } else if (rowsOf(sheetIndex)[r][c] === '') {
+      write(sheetIndex, r, c, `=${formula}`)
     }
   }
 
-  return rows === null ? sheet : { ...sheet, rows }
+  if (working.size === 0) return doc
+  return {
+    sheets: doc.sheets.map((sheet, index) => {
+      const rows = working.get(index)
+      return rows === undefined ? sheet : { ...sheet, rows }
+    }),
+  }
 }
 
 /**
@@ -627,8 +783,8 @@ export function setCellValue(
   rows[row][col] = rawInput
 
   const editedCells = sheet.editedCells ? new Set(sheet.editedCells).add(cellKey(row, col)) : undefined
-  const updated = recalculateSheet({ ...sheet, rows, formulas, ...(editedCells ? { editedCells } : {}) })
-  return replaceSheet(doc, sheetIndex, updated)
+  const updated = { ...sheet, rows, formulas, ...(editedCells ? { editedCells } : {}) }
+  return replaceSheetAndRecalculate(doc, sheetIndex, updated)
 }
 
 /** Inserts one empty row at `atIndex` (0-based; may equal `rows.length` to append at the end). */
@@ -658,10 +814,10 @@ export function insertRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
   if (sources) sources.splice(atIndex, 0, null)
   const editedCells = remapEditedCells(sheet.editedCells, (r, c) => [r >= atIndex ? r + 1 : r, c])
   const formatOverrides = remapFormatOverrides(sheet.formatOverrides, (r, c) => [r >= atIndex ? r + 1 : r, c])
-  return replaceSheet(
+  return replaceSheetAndRecalculate(
     doc,
     sheetIndex,
-    recalculateSheet({
+    {
       ...sheet,
       rows,
       formulas,
@@ -671,7 +827,7 @@ export function insertRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
       ...(sources ? { rowSources: sources } : {}),
       ...(editedCells ? { editedCells } : {}),
       ...(formatOverrides ? { formatOverrides } : {}),
-    }),
+    },
   )
 }
 
@@ -709,10 +865,10 @@ export function deleteRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
   const formatOverrides = remapFormatOverrides(sheet.formatOverrides, (r, c) =>
     r === atIndex ? null : [r > atIndex ? r - 1 : r, c],
   )
-  return replaceSheet(
+  return replaceSheetAndRecalculate(
     doc,
     sheetIndex,
-    recalculateSheet({
+    {
       ...sheet,
       rows,
       formulas,
@@ -722,7 +878,7 @@ export function deleteRowAt(doc: SpreadsheetDocument, sheetIndex: number, atInde
       ...(rowSources ? { rowSources } : {}),
       ...(editedCells ? { editedCells } : {}),
       ...(formatOverrides ? { formatOverrides } : {}),
-    }),
+    },
   )
 }
 
@@ -752,10 +908,10 @@ export function insertColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
     return m
   })
 
-  return replaceSheet(
+  return replaceSheetAndRecalculate(
     doc,
     sheetIndex,
-    recalculateSheet({
+    {
       ...sheet,
       rows,
       formulas,
@@ -771,7 +927,7 @@ export function insertColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
         const formatOverrides = remapFormatOverrides(sheet.formatOverrides, (r, c) => [r, c >= atIndex ? c + 1 : c])
         return { ...(editedCells ? { editedCells } : {}), ...(formatOverrides ? { formatOverrides } : {}) }
       })(),
-    }),
+    },
   )
 }
 
@@ -796,10 +952,10 @@ export function deleteColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
       r1: m.r1,
     }))
 
-  return replaceSheet(
+  return replaceSheetAndRecalculate(
     doc,
     sheetIndex,
-    recalculateSheet({
+    {
       ...sheet,
       rows,
       formulas,
@@ -817,7 +973,7 @@ export function deleteColumnAt(doc: SpreadsheetDocument, sheetIndex: number, atI
         )
         return { ...(editedCells ? { editedCells } : {}), ...(formatOverrides ? { formatOverrides } : {}) }
       })(),
-    }),
+    },
   )
 }
 
@@ -892,10 +1048,10 @@ export function pasteRange(
     }
   }
 
-  return replaceSheet(
+  return replaceSheetAndRecalculate(
     doc,
     sheetIndex,
-    recalculateSheet({
+    {
       ...sheet,
       rows,
       formulas,
@@ -905,7 +1061,7 @@ export function pasteRange(
       ...(rowSources ? { rowSources } : {}),
       ...(colSources ? { colSources } : {}),
       ...(editedCells ? { editedCells } : {}),
-    }),
+    },
   )
 }
 
@@ -939,7 +1095,7 @@ export function renameSheet(doc: SpreadsheetDocument, sheetIndex: number, name: 
   if (!sheet || !trimmed) return doc
   if (doc.sheets.some((s, i) => i !== sheetIndex && s.name === trimmed)) return doc
 
-  return replaceSheet(doc, sheetIndex, { ...sheet, name: trimmed })
+  return replaceSheetAndRecalculate(doc, sheetIndex, { ...sheet, name: trimmed })
 }
 
 /** Deletes a sheet. A no-op if it's the only sheet left (a workbook must keep at least one). */

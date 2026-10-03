@@ -31,7 +31,8 @@ how much you can do with it depends on the format:
 - XLSX, ODS, and legacy spreadsheets: cell editing, an in-house formula
   evaluator (comparisons, `IF`/`IFERROR`, `SUMIF`/`COUNTIF`,
   `VLOOKUP`/`INDEX`/`MATCH`, rounding, text, date and type-test
-  functions — no array formulas yet), row/column/sheet operations, and saving that keeps the original
+  functions, and references across sheets — no array formulas yet),
+  row/column/sheet operations, and saving that keeps the original
   file's styles and charts intact for `.xlsx`/`.xlsm`. A workbook's own cell
   formatting — bold, italic, font size and colour, fills and alignment — is read
   from the file and drawn in the grid, and you can apply a font and size, bold,

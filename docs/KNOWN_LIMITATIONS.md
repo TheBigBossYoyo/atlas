@@ -280,10 +280,8 @@ A1/`$A$1` references and `A1:B3` ranges, and these functions —
 
 **Not supported, and falling back to the literal formula text:**
 array formulas and spilled ranges, structured table
-references (`Table1[Column]`), defined names, cross-sheet references inside the
-evaluator (a saved file's cross-sheet refs are re-anchored correctly, but typing
-`=Sheet2!A1` is not evaluated), TEXT and the other format-string functions, and
-every statistical, financial and engineering function.
+references (`Table1[Column]`), defined names, and every statistical, financial
+and engineering function.
 
 `XLOOKUP` is exact-match only too, but unlike `VLOOKUP` that is also Excel's own
 default, so nothing has to be refused: its fourth argument (the not-found
@@ -340,12 +338,25 @@ showing `15/03/2023` was 15. A column of dates therefore summed to a total of
 its day-of-month numbers. The whole text must now be a number (or an ISO date),
 and anything else is text — which, inside a range, is skipped.
 
-**Recalculation IS ordered.** An earlier version of this document claimed there
-was no dependency graph; that was wrong. `recalculateSheet` builds one
-(`topologicalFormulaOrder`) and evaluates in dependency order, reporting a
-circular reference rather than looping. What is missing is cross-SHEET
-dependency: a formula referencing another sheet is not evaluated at all (see
-above), so the order only covers one sheet's own cells.
+**Recalculation is ordered across the whole document (SHEETFN-5).** It used to
+be per sheet, which meant a formula referencing another sheet could not be
+evaluated at all. `recalculateDocument` now builds ONE dependency graph spanning
+every sheet and evaluates in dependency order, so `Sheet1!A1 = Sheet2!B1` is
+computed after `Sheet2!B1` regardless of sheet order, and a circular reference
+that spans two sheets is reported rather than looping or silently keeping a
+stale value. Sheet names resolve case-insensitively, as Excel's do, and a
+reference to a sheet that does not exist is `#REF!` — deliberately not an empty
+cell, which would make `=NoSuch!A1` evaluate to 0.
+
+Every edit now recalculates the whole document rather than one sheet, which is
+what makes an edit on one sheet update a formula on another. Recalculation
+writes a cell only when the computed value DIFFERS from what is there, so an
+unchanged document comes back as the same object and a sheet nothing referenced
+keeps its exact row arrays — no re-render of its grid.
+
+What is still missing: a 3-D range spanning sheets (`Sheet1:Sheet3!A1`) is read
+from its FIRST sheet only, and a range whose start and end name different sheets
+(`Sheet2!A1:Sheet3!B3`) is read entirely from the start's sheet.
 
 **A formula result now wears the cell's own number format (SHEETFN-3).** It used
 to be displayed exactly as the evaluator rendered it, so `=A1*1.2` in a currency

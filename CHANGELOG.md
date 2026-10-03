@@ -8,6 +8,19 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
+## [Unreleased]
+
+### Added
+
+- **Formulas can reference other sheets.** `=Data!A1`, `=SUM(Data!A1:A20)` and
+  `='Raw Data'!B3` all work now — before, a formula that named another sheet
+  showed its own text instead of a result.
+
+  Editing the sheet being referenced updates the sheet doing the referencing,
+  including through a chain of sheets, and a circular reference between two
+  sheets is reported as `#REF!` rather than quietly settling on an old value. A
+  reference to a sheet that does not exist is `#REF!` too, not zero.
+
 ## [3.12.0] — 2026-10-02 (spreadsheet formatting and formulas)
 
 ### Added

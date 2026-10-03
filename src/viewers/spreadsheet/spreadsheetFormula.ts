@@ -41,7 +41,21 @@ import {
   todaySerial,
 } from './excelDate'
 
-export type CellLookup = (row: number, col: number) => string
+/**
+ * Resolves a cell to its display text.
+ *
+ * SHEETFN-5 — `sheet` is the sheet NAME when the reference was qualified
+ * (`=Sheet2!A1`), and `undefined` for a plain reference, meaning "the sheet the
+ * formula lives on". A caller with only one sheet can ignore the parameter
+ * entirely, which is why it is last and optional: every existing single-sheet
+ * lookup keeps working unchanged.
+ *
+ * Returning `''` for a sheet that does not exist is NOT the contract — a
+ * missing sheet has to be distinguishable from an empty cell, or `=NoSuch!A1`
+ * would quietly evaluate to 0 instead of `#REF!`. A lookup that knows about
+ * sheets returns `null` for one it cannot find.
+ */
+export type CellLookup = (row: number, col: number, sheet?: string) => string | null
 
 export type FormulaResult =
   | {
@@ -62,7 +76,7 @@ export type FormulaResult =
 type Token =
   | { readonly kind: 'number'; readonly value: number }
   | { readonly kind: 'string'; readonly text: string }
-  | { readonly kind: 'ref'; readonly text: string }
+  | { readonly kind: 'ref'; readonly text: string; readonly sheet?: string }
   | { readonly kind: 'ident'; readonly text: string }
   | { readonly kind: 'op'; readonly text: string }
   | { readonly kind: 'lparen' }
@@ -75,8 +89,17 @@ type Token =
 // `"(?:[^"]|"")*"` accepts a doubled `""` as an escaped literal quote inside
 // the string, the same convention Excel itself uses. `&` joins the operator
 // character class alongside the existing arithmetic/comparison operators.
+// SHEETFN-5 — a sheet-qualified reference (`Sheet2!A1`, `'My Sheet'!$B$3`) is
+// matched BEFORE the bare-reference and identifier alternatives, because
+// `Sheet2` on its own matches the identifier rule and `A1` the reference rule:
+// leaving the qualified form later in the alternation would tokenize
+// `Sheet2!A1` as ident, unknown-character, ref.
+//
+// A quoted sheet name may contain anything but a quote; an unquoted one follows
+// Excel's own rule — no space, and none of the characters that would be
+// ambiguous against the formula grammar.
 const TOKEN_PATTERN =
-  /\s*(?:("(?:[^"]|"")*")|(\d+(?:\.\d+)?)|(\$?[A-Za-z]+\$?\d+)|([A-Za-z_][A-Za-z0-9_]*)|(<=|>=|<>|[-+*/^()=<>,:&])|(\S))/g
+  /\s*(?:("(?:[^"]|"")*")|(?:(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_.]*))!(\$?[A-Za-z]+\$?\d+))|(\d+(?:\.\d+)?)|(\$?[A-Za-z]+\$?\d+)|([A-Za-z_][A-Za-z0-9_]*)|(<=|>=|<>|[-+*/^()=<>,:&])|(\S))/g
 
 class FormulaSyntaxError extends Error {}
 
@@ -85,10 +108,12 @@ function tokenize(formula: string): Token[] {
   TOKEN_PATTERN.lastIndex = 0
   let match: RegExpExecArray | null
   while ((match = TOKEN_PATTERN.exec(formula)) !== null) {
-    const [, string, number, ref, ident, op, junk] = match
+    const [, string, quotedSheet, bareSheet, qualifiedRef, number, ref, ident, op, junk] = match
     if (string !== undefined) {
       // Strip the surrounding quotes, then unescape a doubled `""` to one `"`.
       tokens.push({ kind: 'string', text: string.slice(1, -1).replace(/""/g, '"') })
+    } else if (qualifiedRef !== undefined) {
+      tokens.push({ kind: 'ref', text: qualifiedRef, sheet: quotedSheet ?? bareSheet })
     } else if (number !== undefined) {
       tokens.push({ kind: 'number', value: Number.parseFloat(number) })
     } else if (ref !== undefined) {
@@ -419,7 +444,7 @@ class FormulaParser {
       return inner
     }
     if (token.kind === 'ref') {
-      return this.resolveSingleRef(token.text)
+      return this.resolveSingleRef(token.text, token.sheet)
     }
     if (token.kind === 'ident') {
       return this.parseFunctionCall(token.text)
@@ -427,14 +452,18 @@ class FormulaParser {
     throw new FormulaSyntaxError(`Unexpected token near ${JSON.stringify(token)}`)
   }
 
-  private resolveSingleRef(refText: string): Value {
+  private resolveSingleRef(refText: string, sheet: string | undefined): Value {
     const coord = parseRefToken(refText)
     // SHEETFN-1 — the same `cellValue` a RANGE member goes through, so a blank
     // cell reads as blank either way. It used to resolve to the number 0 here
     // and to blank inside a range, which made `ISBLANK(A1)` impossible to
     // answer correctly and meant the two paths disagreed about the same cell.
     // Arithmetic is unaffected: `toNumeric` maps blank to 0, as Excel does.
-    return cellValue(this.lookup(coord.row, coord.col))
+    const text = this.lookup(coord.row, coord.col, sheet)
+    // SHEETFN-5 — `null` means the SHEET does not exist, which is `#REF!`, not
+    // an empty cell. Collapsing the two would make `=NoSuch!A1` evaluate to 0.
+    if (text === null) return { kind: 'error', code: '#REF!' }
+    return cellValue(text)
   }
 
   /**
@@ -463,13 +492,30 @@ class FormulaParser {
           if (endToken.kind !== 'ref') throw new FormulaSyntaxError('Expected cell reference after ":"')
           const start = parseRefToken(startRef.text)
           const end = parseRefToken(endToken.text)
+          // SHEETFN-5 — `Sheet2!A1:B3` qualifies the range through its START
+          // reference, which is where Excel puts the sheet name too. An end
+          // reference with its own, DIFFERENT sheet (`Sheet2!A1:Sheet3!B3`) is a
+          // 3-D range, which this does not model: the start's sheet wins, and
+          // the whole range is read from it.
+          const sheet = startRef.sheet
           const rows: Value[][] = []
+          let missingSheet = false
           for (let r = Math.min(start.row, end.row); r <= Math.max(start.row, end.row); r++) {
             const row: Value[] = []
             for (let c = Math.min(start.col, end.col); c <= Math.max(start.col, end.col); c++) {
-              row.push(cellValue(this.lookup(r, c)))
+              const text = this.lookup(r, c, sheet)
+              if (text === null) {
+                missingSheet = true
+                row.push({ kind: 'error', code: '#REF!' })
+              } else {
+                row.push(cellValue(text))
+              }
             }
             rows.push(row)
+          }
+          if (missingSheet) {
+            args.push({ kind: 'value', value: { kind: 'error', code: '#REF!' } })
+            return
           }
           args.push({ kind: 'range', cells: rows })
           return

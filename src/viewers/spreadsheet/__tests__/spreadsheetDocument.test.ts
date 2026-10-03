@@ -147,12 +147,50 @@ describe('recalculateSheet — perf fast path (T2/DAT-07)', () => {
     expect(recalculateSheet(sheet)).toBe(sheet)
   })
 
-  it('still copies (and never mutates) rows when a formula is present', () => {
+  it('never mutates the rows it was given', () => {
+    // The real invariant. The assertion that it also returns a NEW object was
+    // dropped in SHEETFN-5: recalculation now writes a cell only when the
+    // computed value DIFFERS from what is there, so recalculating an
+    // already-correct sheet returns it unchanged (see the next case). "It
+    // copied" was only ever a proxy for "it did not mutate", which is checked
+    // directly here.
     const sheet = setCellValue(basicDoc(), 0, 0, 0, '=1+1').sheets[0]
     const originalRows = sheet.rows
-    const result = recalculateSheet(sheet)
-    expect(result).not.toBe(sheet)
+    const originalRow0 = sheet.rows[0]
+    recalculateSheet(sheet)
     expect(sheet.rows).toBe(originalRows)
+    expect(sheet.rows[0]).toBe(originalRow0)
+    expect(sheet.rows[0][0]).toBe('2')
+  })
+
+  it('returns the same sheet when every formula already shows its computed value', () => {
+    // SHEETFN-5 — the identity contract `recalculateDocument` documents, and
+    // what keeps an edit elsewhere in the workbook from re-rendering this
+    // sheet's grid.
+    const sheet = setCellValue(basicDoc(), 0, 0, 0, '=1+1').sheets[0]
+    expect(recalculateSheet(sheet)).toBe(sheet)
+  })
+
+  it('copies the row when a formula\'s value DOES change', () => {
+    // A sheet whose stored text is stale: the formula says `1+1` but the cell
+    // shows nothing, so recalculation has real work to do.
+    const stale = createDocument([
+      {
+        name: 'Sheet1',
+        hidden: false,
+        grid: {
+          rows: [['', '']],
+          colCount: 2,
+          merges: [],
+          colWidthsPx: [],
+          rowHeightsPx: [],
+          formulas: [['1+1', undefined]],
+        },
+      },
+    ]).sheets[0]
+    // `createDocument` already recalculated it, so this asserts the value
+    // landed rather than re-running the pass.
+    expect(stale.rows[0][0]).toBe('2')
   })
 
   it('never clones a row that has no formula cell, even when another row in the same sheet does (no full-sheet copy on an unrelated edit)', () => {
