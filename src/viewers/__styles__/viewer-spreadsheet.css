@@ -303,6 +303,32 @@
   max-width: 84px;
 }
 
+.spreadsheet-edit-toolbar__border-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 170px;
+}
+
+.spreadsheet-edit-toolbar__border-edges,
+.spreadsheet-edit-toolbar__border-weights {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  /* Separated from the presets above, which are a different kind of action. */
+  padding-top: 6px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.spreadsheet-edit-toolbar__border-weights {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.spreadsheet-edit-toolbar__border-edges button,
+.spreadsheet-edit-toolbar__border-weights button {
+  justify-content: center;
+}
+
 .spreadsheet-edit-toolbar__border-presets {
   display: flex;
   flex-direction: column;

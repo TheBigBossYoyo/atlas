@@ -12,6 +12,9 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 
 ### Added
 
+- **Border control per edge.** The Borders button now also has a toggle for each
+  edge and three thicknesses, so you can put a line on one side of a cell and
+  take it back off again — not just apply a whole-cell preset.
 - **Formulas can reference other sheets.** `=Data!A1`, `=SUM(Data!A1:A20)` and
   `='Raw Data'!B3` all work now — before, a formula that named another sheet
   showed its own text instead of a result.

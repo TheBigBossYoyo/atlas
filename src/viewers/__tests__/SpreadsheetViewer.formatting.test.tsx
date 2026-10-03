@@ -366,6 +366,41 @@ describe('SpreadsheetViewer — the workbook its own formatting (SHEETFMT-1)', (
     expect(screen.getByRole('combobox', { name: /Font size/i })).toHaveValue('18')
   })
 
+  it('toggles a single border edge on and back off (SHEETFMT-5)', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+
+    act(() => selectCell(0, 1))
+    act(() => screen.getByRole('button', { name: /Borders/i }).click())
+
+    const bottom = screen.getByRole('button', { name: 'Bottom' })
+    expect(bottom).toHaveAttribute('aria-pressed', 'false')
+
+    act(() => bottom.click())
+    // One edge means one stroked line.
+    await waitFor(() => expect(strokesFor(0, 1)).toBe(1))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Bottom' })).toHaveAttribute('aria-pressed', 'true'))
+
+    // Pressing it again takes that edge back off, which a toggle that always
+    // applied could not do.
+    act(() => screen.getByRole('button', { name: 'Bottom' }).click())
+    await waitFor(() => expect(strokesFor(0, 1)).toBe(0))
+  })
+
+  it('adds a second edge without clearing the first (SHEETFMT-5)', async () => {
+    await mount(await buildFormattedWorkbook())
+    await waitFor(() => expect(cell(0, 0).themeOverride?.bgCell).toBe('#0070C0'))
+
+    act(() => selectCell(0, 1))
+    act(() => screen.getByRole('button', { name: /Borders/i }).click())
+    act(() => screen.getByRole('button', { name: 'Bottom' }).click())
+    await waitFor(() => expect(strokesFor(0, 1)).toBe(1))
+    act(() => screen.getByRole('button', { name: 'Left' }).click())
+
+    // The patch composes rather than replacing, so both edges are drawn.
+    await waitFor(() => expect(strokesFor(0, 1)).toBe(2))
+  })
+
   it('leaves the formatting controls disabled until something is selected', async () => {
     await mount(await buildFormattedWorkbook())
     expect(await screen.findByRole('button', { name: /^Bold$/i })).toBeDisabled()

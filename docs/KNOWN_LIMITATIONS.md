@@ -418,8 +418,10 @@ strike-through were read and saved but never drawn, so a cell could be underline
 in the file while Atlas showed it plain.
 
 What it does NOT yet cover:
-  - **Per-edge border control.** The presets apply a whole-cell shape; Excel's
-    edge-by-edge matrix (and its ~13 border styles) needs a different UI.
+  - **Border styles.** The popover offers per-edge toggles and three
+    thicknesses (SHEETFMT-5), alongside the whole-cell presets. What it does
+    not offer is Excel's style variety — dashed, dotted, double — because the
+    grid cannot draw them (see the next point).
   - **Border styles collapse to three weights.** `hair`/`dotted`/`dashDotDot`
     all read and draw as `thin`, `double` as `thick`, because a one-pixel canvas
     line cannot express the difference. A border the user RE-applies is written

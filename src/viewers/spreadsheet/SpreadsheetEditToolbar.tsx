@@ -32,7 +32,7 @@ import {
 
 import { tsvToRows } from './spreadsheetClipboard'
 import type { CellFormatPatch } from './spreadsheetDocument'
-import type { CellBorder, ResolvedCellFormat } from './xlsxCellStyles'
+import { hasAnyBorder as hasAnyEdge, NO_BORDER as NO_BORDER_VALUE, type CellBorder, type ResolvedCellFormat } from './xlsxCellStyles'
 import { useTranslate } from '../../i18n'
 
 export type SaveFormatOption = {
@@ -162,33 +162,117 @@ const COLOR_SWATCHES: ReadonlyArray<string> = [
  * behaviour — outside click, Escape — is written once; a second copy of it is
  * exactly the sort of thing that drifts into one of them not closing.
  */
+const BORDER_EDGES = ['top', 'right', 'bottom', 'left'] as const
+const BORDER_WEIGHTS = ['thin', 'medium', 'thick'] as const
+
+/**
+ * SHEETFMT-5 — the border popover: whole-cell presets, plus a per-edge toggle
+ * and a weight.
+ *
+ * The presets stay because they are what people actually reach for ("box this",
+ * "underline the header"). The per-edge toggles are for everything else, and
+ * they read the SELECTION's current border so each one shows whether that edge
+ * is on — a toggle that always applies rather than toggles cannot take an edge
+ * back off.
+ *
+ * The weight applies to whichever edges are turned on from here; changing it
+ * re-applies the edges already present, so picking "thick" after boxing a cell
+ * thickens the box rather than doing nothing visible.
+ */
 function BorderPopover({
   title,
+  current,
   onSelect,
   disabled,
   t,
 }: {
   readonly title: string
+  readonly current: CellBorder | undefined
   readonly onSelect: (border: CellBorder | null) => void
   readonly disabled: boolean
   readonly t: (key: string) => string
 }) {
+  const [weight, setWeight] = useState<'thin' | 'medium' | 'thick'>('thin')
+
+  const toggleEdge = (edge: (typeof BORDER_EDGES)[number]): void => {
+    const base: CellBorder = current ?? NO_BORDER_VALUE
+    const next: CellBorder = {
+      ...base,
+      [edge]: base[edge] ? undefined : { weight, color: undefined },
+    }
+    onSelect(next)
+  }
+
+  const applyWeight = (next: 'thin' | 'medium' | 'thick'): void => {
+    setWeight(next)
+    if (!current) return
+    // Re-apply only the edges that are already on, at the new weight.
+    const reweighted: CellBorder = {
+      top: current.top ? { ...current.top, weight: next } : undefined,
+      right: current.right ? { ...current.right, weight: next } : undefined,
+      bottom: current.bottom ? { ...current.bottom, weight: next } : undefined,
+      left: current.left ? { ...current.left, weight: next } : undefined,
+    }
+    if (hasAnyEdge(reweighted)) onSelect(reweighted)
+  }
+
   return (
     <PopoverShell icon={<Grid2x2 size={14} />} title={title} disabled={disabled}>
       {(close) => (
-        <div className="spreadsheet-edit-toolbar__border-presets">
-          {BORDER_PRESETS.map(preset => (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => {
-                onSelect(preset.border)
-                close()
-              }}
-            >
-              {t(preset.labelKey)}
-            </button>
-          ))}
+        <div className="spreadsheet-edit-toolbar__border-panel">
+          <div className="spreadsheet-edit-toolbar__border-presets">
+            {BORDER_PRESETS.map(preset => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => {
+                  onSelect(preset.border)
+                  close()
+                }}
+              >
+                {t(preset.labelKey)}
+              </button>
+            ))}
+          </div>
+
+          <div
+            className="spreadsheet-edit-toolbar__border-edges"
+            role="group"
+            aria-label={t('spreadsheetToolbar.borderEdgesAria')}
+          >
+            {BORDER_EDGES.map(edge => {
+              const on = Boolean(current?.[edge])
+              return (
+                <button
+                  key={edge}
+                  type="button"
+                  aria-pressed={on}
+                  className={on ? 'is-active' : undefined}
+                  onClick={() => toggleEdge(edge)}
+                >
+                  {t(`spreadsheetToolbar.borderEdge.${edge}`)}
+                </button>
+              )
+            })}
+          </div>
+
+          <div
+            className="spreadsheet-edit-toolbar__border-weights"
+            role="group"
+            aria-label={t('spreadsheetToolbar.borderWeightAria')}
+          >
+            {BORDER_WEIGHTS.map(option => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={weight === option}
+                className={weight === option ? 'is-active' : undefined}
+                onClick={() => applyWeight(option)}
+              >
+                {t(`spreadsheetToolbar.borderWeight.${option}`)}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </PopoverShell>
@@ -483,6 +567,7 @@ export function SpreadsheetEditToolbar({
           />
           <BorderPopover
             title={t('spreadsheetToolbar.borders')}
+            current={selectionFormat?.border}
             disabled={!selection}
             onSelect={border => onFormat({ border })}
             t={t}
