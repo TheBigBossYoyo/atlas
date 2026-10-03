@@ -696,6 +696,37 @@ oldest-first. History lives under the app's own data directory keyed by a hash o
 the document's path — so it is not carried along if you move or rename the file,
 and it is not visible to anyone you send the document to.
 
+## Spreadsheet cell editing: keystrokes while the editor takes focus
+
+Typing into a cell opens an overlay editor. Opening it re-renders the whole
+grid, and that re-render can leave DOM focus on glide-data-grid's own
+accessibility `<td>`, its canvas, or its scroller — after which keys go to that
+element and are lost. The visible result is a cell holding only the first
+character, an edit that never commits, and a `Ctrl+S` straight afterwards saving
+nothing.
+
+Three layers now cover it, each for a different window:
+  - **before the overlay exists** — `KeyHold` buffers the keystrokes and
+    `TextCellEditor` drains them on mount (F6);
+  - **while focus is in transit** — a capture-phase listener on `document`
+    applies a misplaced printable key to the overlay and re-dispatches a
+    misplaced Enter/Tab at it (MATRIX-FLAKE-2);
+  - **focus itself** — a `requestAnimationFrame` guard claims focus for the
+    overlay if the re-render left it elsewhere (MATRIX-FLAKE-1).
+
+The middle layer is installed by the long-lived grid component, NOT by the
+overlay editor. That placement is the point: glide creates the overlay DOM
+during render while React runs effects after paint, so a listener installed from
+the editor's own effect can never cover the frame between the textarea existing
+and the listener existing. Two earlier versions of this fix were installed there
+and each left that window open.
+
+**Honest status.** The unit tests pin all three layers, including the
+pre-effect window specifically. What has NOT been re-measured since the listener
+moved is the end-to-end flake rate: `spreadsheet-edit-matrix.spec.ts` used to
+fail roughly one run in six, and confirming that is gone needs six to eight
+runs of that spec with the machine to itself.
+
 ## Export
 
 This section used to point at "the README's Export table" as the single source

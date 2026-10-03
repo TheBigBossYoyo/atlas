@@ -173,6 +173,81 @@ function belongsToAnotherTextTarget(active: Element | null): boolean {
   return active instanceof HTMLElement && active.isContentEditable
 }
 
+/**
+ * Writes `next` into a React-controlled textarea so React notices.
+ *
+ * Setting `.value` directly is not enough: React keeps its own value tracker
+ * per input, sees no change from what it last rendered, and swallows the
+ * `input` event — so `onChange` never fires and the next render puts the old
+ * text back. Going through the prototype's own setter updates the tracker,
+ * which is the documented way to drive a controlled input from outside React.
+ */
+function setControlledValue(el: HTMLTextAreaElement, next: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+  if (setter) setter.call(el, next)
+  else el.value = next
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/**
+ * MATRIX-FLAKE-2 — applies a keystroke that landed somewhere other than the
+ * open cell editor.
+ *
+ * Returns true when it took the key, so the caller can stop it going anywhere
+ * else.
+ *
+ * Everything goes through the overlay's OWN handlers rather than glide's
+ * callbacks: a printable key is written with `setControlledValue` so React's
+ * `onChange` fires exactly as it would for a real keystroke, and Enter/Tab is
+ * re-dispatched at the textarea so the editor's own `handleKeyDown` commits it.
+ * The earlier version called `onChange`/`onFinishedEditing` directly, which
+ * meant a second code path doing the same job slightly differently.
+ */
+/**
+ * Set while `rescueMisplacedKey` is re-dispatching a commit key at the overlay.
+ *
+ * Without it the rescue intercepts its OWN synthetic event: the listener is
+ * capture-phase on `document`, so it sees the re-dispatched keydown travelling
+ * DOWN to the textarea, calls `stopPropagation` on it, and React's own handler
+ * never runs — the commit silently does not happen, and the rescue would also
+ * recurse into itself. Caught by the Enter/Tab tests, which found
+ * `onFinishedEditing` never called.
+ *
+ * A plain boolean is enough: dispatch is synchronous, so the flag is set and
+ * cleared within one call.
+ */
+let reDispatching = false
+
+function rescueMisplacedKey(event: globalThis.KeyboardEvent): boolean {
+  if (reDispatching) return false
+  const overlay = overlayTextarea()
+  if (overlay === null) return false
+  if (document.activeElement === overlay) return false
+  if (belongsToAnotherTextTarget(document.activeElement)) return false
+
+  if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+    event.preventDefault()
+    event.stopPropagation()
+    reDispatching = true
+    try {
+      overlay.dispatchEvent(
+        new KeyboardEvent('keydown', { key: event.key, shiftKey: event.shiftKey, bubbles: true, cancelable: true }),
+      )
+    } finally {
+      reDispatching = false
+    }
+    return true
+  }
+
+  if (event.metaKey || event.ctrlKey || event.altKey) return false
+  if (event.key.length !== 1 || !/[ -~]/.test(event.key)) return false
+
+  event.preventDefault()
+  event.stopPropagation()
+  setControlledValue(overlay, overlay.value + event.key)
+  return true
+}
+
 /** Mirrors glide-data-grid's own `editOnType` key filter (data-editor.js) exactly, so we only ever intervene on keys it would itself treat as "start editing". */
 function isEditOnTypeKey(event: GridKeyEventArgs): boolean {
   return !event.metaKey && !event.ctrlKey && event.key.length === 1 && /[ -~]/.test(event.key)
@@ -268,75 +343,7 @@ const TextCellEditor: ProvideEditorComponent<TextCell> = ({
     }
     frame = requestAnimationFrame(claimFocus)
 
-    // MATRIX-FLAKE-2 — the keystrokes that land in the wrong place WHILE the
-    // guard above is still chasing focus.
-    //
-    // The guard fixes where focus ends up, but it cannot un-deliver a key
-    // already dispatched to glide's accessibility `<td>` in the meantime: those
-    // characters are simply gone. Observed as an overlay holding only its seed
-    // character `"a"` after `"after"` was typed, with the Enter lost too, so the
-    // edit never committed — and `focus=TEXTAREA` by the time the failure was
-    // reported, because the guard had since done its job. It is the same loss
-    // `KeyHold` prevents BEFORE the overlay mounts; this is the window after it
-    // mounts and before it has focus, which nothing covered.
-    //
-    // A capture-phase listener, so it sees the key before the `<td>` does. It
-    // only intervenes when focus is somewhere that is never legitimate during an
-    // edit — nothing, `<body>`, or a table cell — exactly the condition the
-    // focus guard uses, so a user who deliberately clicks into another control
-    // keeps their keystrokes.
-    const rescueKey = (event: globalThis.KeyboardEvent): void => {
-      const overlay = overlayTextarea()
-      if (overlay === null || document.activeElement === overlay) return
-
-      // Whether this keystroke belongs somewhere OTHER than the open overlay.
-      //
-      // Stated as "is the focused thing a real text target the user chose",
-      // rather than as a list of wrong places to be. The first version listed
-      // the wrong places — nothing, `<body>`, a table cell, copied from the
-      // focus guard above — and the flake survived it: under CPU throttling
-      // focus also lands on the grid's own canvas and on its scroller `<div>`,
-      // neither of which was in the list, so the keys were still lost. A list
-      // of wrong places can always be missing one; a list of RIGHT places
-      // cannot, because there is only one legitimate text target during an
-      // edit and it is the overlay.
-      if (belongsToAnotherTextTarget(document.activeElement)) return
-
-      // Enter/Tab would otherwise be lost the same way, leaving the edit
-      // uncommitted — which is how this surfaced, as a save that never happened.
-      if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
-        event.preventDefault()
-        event.stopPropagation()
-        const movement = event.key === 'Tab' ? ([event.shiftKey ? -1 : 1, 0] as const) : ([0, 1] as const)
-        onFinishedEditing({ ...value, data: overlay.value }, movement)
-        return
-      }
-
-      // The same printable-key test glide uses to decide a key starts editing.
-      if (event.metaKey || event.ctrlKey || event.altKey) return
-      if (event.key.length !== 1 || !/[ -~]/.test(event.key)) return
-
-      event.preventDefault()
-      event.stopPropagation()
-      // Written through the textarea AND reported upward: the DOM value is what
-      // the next rescued key appends to, and `onChange` is what the grid's own
-      // model needs so a commit from any path sees the full text.
-      const next = overlay.value + event.key
-      overlay.value = next
-      onChange({ ...value, data: next })
-    }
-
-    document.addEventListener('keydown', rescueKey, true)
-    return () => {
-      cancelAnimationFrame(frame)
-      document.removeEventListener('keydown', rescueKey, true)
-    }
-    // `value`/`onChange`/`onFinishedEditing` are glide's own per-render
-    // identities; re-running this effect on each of them would restart the
-    // focus chase mid-handoff. The listener reads the live overlay element, so
-    // a stale closure cannot write to the wrong place — and `value` is only
-    // used as the object to spread a fresh `data` onto.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => cancelAnimationFrame(frame)
   }, [readonlyCell])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -371,6 +378,30 @@ export function SpreadsheetDataEditor(props: DataEditorProps) {
   // header (F6). A single ref is enough because glide-data-grid only ever
   // has one overlay open at a time.
   const pendingSeedRef = useRef<PendingSeed | null>(null)
+
+  /**
+   * MATRIX-FLAKE-2 — rescue keystrokes that land anywhere but the open cell
+   * editor, for as long as this grid exists.
+   *
+   * This listener used to live in `TextCellEditor`, installed from its own
+   * mount effect — and that is a window it cannot cover. glide-data-grid
+   * creates the overlay DOM during render; React runs effects AFTER paint. So
+   * between the textarea existing and the listener existing there is at least a
+   * frame, and under CPU throttling rather more. A key arriving in that window
+   * found no listener, which is why two earlier versions of this fix each
+   * closed a real hole and neither closed the flake.
+   *
+   * Here the listener is installed once, with the grid, long before any overlay
+   * opens — so the window does not exist rather than being made small. It is
+   * inert whenever there is no overlay, which is almost always.
+   */
+  useEffect(() => {
+    const onKeyDownCapture = (event: globalThis.KeyboardEvent): void => {
+      rescueMisplacedKey(event)
+    }
+    document.addEventListener('keydown', onKeyDownCapture, true)
+    return () => document.removeEventListener('keydown', onKeyDownCapture, true)
+  }, [])
 
   const onKeyDownIn = props.onKeyDown
   const handleKeyDown = useCallback(

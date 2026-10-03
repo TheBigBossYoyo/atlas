@@ -20,7 +20,8 @@
  * `KeyHold` already covers the window BEFORE the overlay mounts. These tests
  * cover the window after it mounts and before it has focus, which nothing did.
  */
-import { render } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SpreadsheetDataEditor } from '../SpreadsheetDataEditor'
@@ -49,25 +50,40 @@ vi.mock('@glideapps/glide-data-grid', async (importOriginal) => {
       provideEditor?: (cell: unknown) => React.ComponentType<Record<string, unknown>> | undefined
     }) => {
       const Editor = props.provideEditor?.({ kind: actual.GridCellKind.Text })
-      captured.render = () => {
-        if (!Editor) return null
-        return (
-          <Editor
-            value={{ kind: actual.GridCellKind.Text, data: 'a', displayData: 'a', allowOverlay: true }}
-            initialValue="a"
-            forceEditMode
-            isHighlighted={false}
-            onChange={(next: { data: string }) => captured.changes.push(next.data)}
-            onFinishedEditing={(next: { data: string } | undefined, movement: readonly [number, number]) => {
-              captured.finished.push({ data: next?.data ?? '', movement })
-            }}
-          />
-        )
-      }
+      captured.render = () => (Editor ? <EditorHost Editor={Editor} /> : null)
       return null
     },
   }
 })
+
+/**
+ * Stands in for glide-data-grid's own ownership of the cell value.
+ *
+ * STATEFUL on purpose. The editor renders a React-CONTROLLED textarea, so its
+ * DOM value is whatever the `value` prop last said. A harness that passed a
+ * fixed literal would re-render with the old text and snap the textarea back,
+ * which is exactly what happened on the first attempt here and looked like the
+ * rescue failing — it was the double being wrong, not the code. glide keeps the
+ * value and feeds it back through `onChange`; so does this.
+ */
+function EditorHost({ Editor }: { readonly Editor: React.ComponentType<Record<string, unknown>> }) {
+  const [data, setData] = useState('a')
+  return (
+    <Editor
+      value={{ kind: 'text', data, displayData: data, allowOverlay: true }}
+      initialValue="a"
+      forceEditMode
+      isHighlighted={false}
+      onChange={(next: { data: string }) => {
+        captured.changes.push(next.data)
+        setData(next.data)
+      }}
+      onFinishedEditing={(next: { data: string } | undefined, movement: readonly [number, number]) => {
+        captured.finished.push({ data: next?.data ?? '', movement })
+      }}
+    />
+  )
+}
 
 /** The textarea the overlay renders, found the way the production code finds it. */
 function overlay(): HTMLTextAreaElement {
@@ -106,9 +122,13 @@ function focusElement(tag: 'canvas' | 'div'): HTMLElement {
 }
 
 function dispatchKey(key: string, options: KeyboardEventInit = {}): void {
-  document.activeElement?.dispatchEvent(
-    new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }),
-  )
+  // `act` so the state update the rescue triggers through React's own
+  // `onChange` is flushed before the assertion reads the DOM.
+  act(() => {
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }),
+    )
+  })
 }
 
 beforeEach(() => {
@@ -126,6 +146,73 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
   document.body.innerHTML = ''
+})
+
+describe('the window before the editor component\'s effect runs (MATRIX-FLAKE-2)', () => {
+  /**
+   * glide-data-grid creates the overlay DOM during render; React runs effects
+   * after paint. So there is always at least a frame where the textarea exists
+   * and anything installed from the EDITOR's own effect does not — which is
+   * where two earlier versions of this fix let keys through.
+   *
+   * Reproduced here by mounting only the long-lived parent and putting a
+   * textarea into `#portal` by hand: the editor component never mounts, so
+   * nothing it would have installed exists.
+   */
+  function overlayWithoutEditor(initial: string): HTMLTextAreaElement {
+    render(<SpreadsheetDataEditor rows={1} columns={[]} getCellContent={() => ({}) as never} />)
+    const portal = document.createElement('div')
+    portal.id = 'portal'
+    const textarea = document.createElement('textarea')
+    textarea.value = initial
+    portal.appendChild(textarea)
+    document.body.appendChild(portal)
+    return textarea
+  }
+
+  it('rescues a key although the editor component has not mounted', () => {
+    const textarea = overlayWithoutEditor('t')
+    focusElement('canvas')
+
+    dispatchKey('w')
+
+    // Without the parent-level listener this character is lost: nothing is
+    // listening yet, which is the structural gap the move fixes.
+    expect(textarea.value).toBe('tw')
+  })
+
+  it('rescues a whole word typed in that window', () => {
+    const textarea = overlayWithoutEditor('t')
+    focusElement('canvas')
+
+    for (const key of ['w', 'o']) dispatchKey(key)
+
+    expect(textarea.value).toBe('two')
+  })
+
+  it('still leaves another focused control alone in that window', () => {
+    const textarea = overlayWithoutEditor('t')
+    const other = document.createElement('input')
+    document.body.appendChild(other)
+    other.focus()
+
+    dispatchKey('w')
+
+    expect(textarea.value).toBe('t')
+  })
+
+  it('is inert when no overlay exists at all', () => {
+    // Almost always the case: the listener lives for the grid's whole life, so
+    // it must do nothing on ordinary typing outside an edit.
+    render(<SpreadsheetDataEditor rows={1} columns={[]} getCellContent={() => ({}) as never} />)
+    const canvas = focusElement('canvas')
+    const before = document.body.innerHTML
+
+    dispatchKey('w')
+
+    expect(document.body.innerHTML).toBe(before)
+    expect(document.activeElement).toBe(canvas)
+  })
 })
 
 describe('overlay keystroke rescue (MATRIX-FLAKE-2)', () => {
