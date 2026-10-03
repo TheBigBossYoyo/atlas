@@ -47,7 +47,9 @@ const COLUMN_WIDTH = 120
 
 async function launch(file: string): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({ args: ['.', file], cwd: projectRoot, env: { ...process.env, CI: '1', PLAYWRIGHT: '1' } })
+  await app.context().addInitScript(installKeyLog)
   const page = await app.firstWindow()
+  await page.evaluate(installKeyLog)
   await page.waitForSelector('.spreadsheet-viewer__grid canvas', { timeout: 30_000 })
   await page.waitForTimeout(1000)
   return { app, page }
@@ -136,10 +138,43 @@ async function focusState(page: Page): Promise<string> {
     const active = document.activeElement
     const name = active === null ? 'null' : active.tagName + (active instanceof HTMLElement && active.dataset.testid !== undefined ? `[${active.dataset.testid}]` : '')
     const text = document.querySelector('#portal textarea')
+    const log = (window as unknown as { __atlasKeyLog?: string[] }).__atlasKeyLog ?? []
     return `focus=${name} overlays=${document.querySelectorAll('#portal textarea').length}${
       text instanceof HTMLTextAreaElement ? ` overlayValue=${JSON.stringify(text.value)}` : ''
-    }`
+    } keys=[${log.join(' ')}]`
   })
+}
+
+/**
+ * MATRIX-FLAKE-2 — records where every keystroke actually landed.
+ *
+ * Two fixes for this flake have now been written from a failure message that
+ * says where focus was at FAILURE time — seconds after the keys were lost, by
+ * which point the focus guard has already corrected it. Both fixes closed a
+ * real hole and neither closed the flake. This log says where focus was when
+ * each key ARRIVED, and whether the overlay existed, so the next failure points
+ * at the mechanism instead of inviting a third guess.
+ *
+ * Installed as an init script so it is listening before the app's own handlers,
+ * and capture-phase so it sees a key even if something calls
+ * `stopPropagation`.
+ */
+function installKeyLog(): void {
+  const win = window as unknown as { __atlasKeyLog?: string[] }
+  if (win.__atlasKeyLog) return
+  win.__atlasKeyLog = []
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      const active = document.activeElement
+      const where = active === null ? 'null' : active.tagName
+      const overlays = document.querySelectorAll('#portal textarea').length
+      const overlay = document.querySelector('#portal textarea')
+      const value = overlay instanceof HTMLTextAreaElement ? overlay.value : ''
+      win.__atlasKeyLog!.push(`${event.key}@${where}/ov${overlays}:${JSON.stringify(value)}`)
+    },
+    true,
+  )
 }
 
 /**

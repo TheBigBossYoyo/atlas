@@ -157,6 +157,22 @@ const PENDING_EDIT_MAX_MS = 30_000
 /** Holds the current `SpreadsheetDataEditor` instance's pending-seed ref — see module header on why this goes through context rather than a closure. */
 const PendingSeedContext = createContext<{ current: PendingSeed | null } | null>(null)
 
+/**
+ * MATRIX-FLAKE-2 — whether `active` is a text target the user deliberately
+ * focused, which must keep its own keystrokes.
+ *
+ * Everything else — the grid canvas, a scroller `<div>`, an accessibility
+ * `<td>`, `<body>`, nothing at all — is not a place typed characters can go
+ * while a cell editor is open, so a key arriving there is a key that was meant
+ * for the editor.
+ */
+function belongsToAnotherTextTarget(active: Element | null): boolean {
+  if (active === null) return false
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return true
+  if (active instanceof HTMLSelectElement) return true
+  return active instanceof HTMLElement && active.isContentEditable
+}
+
 /** Mirrors glide-data-grid's own `editOnType` key filter (data-editor.js) exactly, so we only ever intervene on keys it would itself treat as "start editing". */
 function isEditOnTypeKey(event: GridKeyEventArgs): boolean {
   return !event.metaKey && !event.ctrlKey && event.key.length === 1 && /[ -~]/.test(event.key)
@@ -273,9 +289,18 @@ const TextCellEditor: ProvideEditorComponent<TextCell> = ({
       const overlay = overlayTextarea()
       if (overlay === null || document.activeElement === overlay) return
 
-      const active = document.activeElement
-      const misplaced = active === null || active === document.body || active instanceof HTMLTableCellElement
-      if (!misplaced) return
+      // Whether this keystroke belongs somewhere OTHER than the open overlay.
+      //
+      // Stated as "is the focused thing a real text target the user chose",
+      // rather than as a list of wrong places to be. The first version listed
+      // the wrong places — nothing, `<body>`, a table cell, copied from the
+      // focus guard above — and the flake survived it: under CPU throttling
+      // focus also lands on the grid's own canvas and on its scroller `<div>`,
+      // neither of which was in the list, so the keys were still lost. A list
+      // of wrong places can always be missing one; a list of RIGHT places
+      // cannot, because there is only one legitimate text target during an
+      // edit and it is the overlay.
+      if (belongsToAnotherTextTarget(document.activeElement)) return
 
       // Enter/Tab would otherwise be lost the same way, leaving the edit
       // uncommitted — which is how this surfaced, as a save that never happened.

@@ -87,6 +87,24 @@ function focusAccessibilityCell(): HTMLTableCellElement {
   return cell
 }
 
+/**
+ * The other places focus lands under CPU throttling, which the first version of
+ * this fix did not cover.
+ *
+ * It listed the wrong places to be — nothing, `<body>`, a table cell — and the
+ * e2e flake survived it: at 8x throttling focus also ends up on the grid's own
+ * `<canvas>` and on its scroller `<div>`. The condition is now stated the other
+ * way round (is this a text target the user chose?), so these are covered by
+ * construction rather than by having been thought of.
+ */
+function focusElement(tag: 'canvas' | 'div'): HTMLElement {
+  const el = document.createElement(tag)
+  el.tabIndex = 0
+  document.body.appendChild(el)
+  el.focus()
+  return el
+}
+
 function dispatchKey(key: string, options: KeyboardEventInit = {}): void {
   document.activeElement?.dispatchEvent(
     new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }),
@@ -165,6 +183,27 @@ describe('overlay keystroke rescue (MATRIX-FLAKE-2)', () => {
     expect(captured.finished.at(-1)?.movement).toEqual([-1, 0])
   })
 
+  it.each(['canvas', 'div'] as const)('rescues a key when focus is on the grid %s', (tag) => {
+    // The regression the first fix missed. Enumerating wrong places left these
+    // out; asking "is this a text target the user chose" covers them.
+    mountEditor()
+    focusElement(tag)
+
+    dispatchKey('f')
+
+    expect(overlay().value).toBe('af')
+  })
+
+  it('rescues a key when focus has been lost entirely', () => {
+    mountEditor()
+    const stray = focusElement('div')
+    stray.blur()
+
+    dispatchKey('f')
+
+    expect(overlay().value).toBe('af')
+  })
+
   it('does NOT steal keystrokes from a control the user deliberately focused', () => {
     // The safety property. If the user clicked into a search box while an
     // overlay happened to be open, their typing belongs to that box.
@@ -177,6 +216,33 @@ describe('overlay keystroke rescue (MATRIX-FLAKE-2)', () => {
 
     expect(overlay().value).toBe('a')
     expect(captured.changes).toEqual([])
+  })
+
+  it.each(['input', 'select'] as const)('leaves a focused %s alone', (tag) => {
+    // The safety property, for each kind of control the condition names.
+    mountEditor()
+    const el = document.createElement(tag)
+    document.body.appendChild(el)
+    el.focus()
+
+    dispatchKey('f')
+
+    expect(overlay().value).toBe('a')
+  })
+
+  it('leaves a focused contenteditable alone', () => {
+    mountEditor()
+    const el = document.createElement('div')
+    el.setAttribute('contenteditable', 'true')
+    // jsdom does not derive `isContentEditable` from the attribute.
+    Object.defineProperty(el, 'isContentEditable', { value: true })
+    el.tabIndex = 0
+    document.body.appendChild(el)
+    el.focus()
+
+    dispatchKey('f')
+
+    expect(overlay().value).toBe('a')
   })
 
   it('does nothing once the overlay has focus itself', () => {
