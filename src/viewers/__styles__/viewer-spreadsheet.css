@@ -479,3 +479,79 @@
   color: var(--text-primary);
   background-color: var(--bg-tertiary);
 }
+
+/* SHEET-FILTER-1 — the per-column value checklist, inside the shared popover. */
+.spreadsheet-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 240px;
+}
+
+.spreadsheet-filter__search {
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+}
+
+.spreadsheet-filter__list {
+  /* Long columns are common; the list scrolls rather than growing the popover
+     past the window. */
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.spreadsheet-filter__row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 2px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.spreadsheet-filter__row:hover {
+  background-color: var(--bg-hover);
+}
+
+.spreadsheet-filter__row--all {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.spreadsheet-filter__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spreadsheet-filter__count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+
+.spreadsheet-filter__none {
+  margin: 6px 2px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.spreadsheet-filter__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-primary);
+}
+
+.spreadsheet-filter__actions button {
+  padding: 4px 10px;
+  font-size: 12px;
+}

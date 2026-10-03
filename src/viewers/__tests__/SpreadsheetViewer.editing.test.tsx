@@ -127,6 +127,143 @@ beforeEach(() => {
   } as unknown as typeof window.electronAPI
 })
 
+describe('SpreadsheetViewer — column filters (SHEET-FILTER-1)', () => {
+  function renderWithRows(rows: string[][]) {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+  }
+
+  async function openFilter(col: number): Promise<void> {
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+    act(() => selectCell(col, 0))
+    act(() => screen.getByRole('button', { name: /Filter this column/i }).click())
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /Filter this column/i })).toBeInTheDocument())
+  }
+
+  /** A value's label carries its count too ("South2"), so these match on the start. */
+  function tick(label: RegExp): void {
+    act(() => fireEvent.click(screen.getByLabelText(label)))
+  }
+
+  function apply(): void {
+    act(() => screen.getByRole('button', { name: /^Apply$/i }).click())
+  }
+
+  function column(index: number): string[] {
+    return gridRows(lastDataEditorProps!).map((r) => r[index])
+  }
+
+  it('hides the rows whose value was unticked', async () => {
+    renderWithRows([
+      ['North', '10'],
+      ['South', '2'],
+      ['North', '7'],
+    ])
+    await openFilter(0)
+    // The checklist opens with everything ticked, because no filter is in
+    // force — untick South and apply.
+    tick(/^South/)
+    apply()
+
+    await waitFor(() => expect(column(0).slice(0, 2)).toEqual(['North', 'North']))
+    expect(column(1).slice(0, 2)).toEqual(['10', '7'])
+  })
+
+  it('offers one entry for spellings that differ only by case', async () => {
+    renderWithRows([['Paper'], ['paper'], ['Ink']])
+    await openFilter(0)
+    // One checkbox, not two: the sort treats these as one value, so the filter
+    // must too — see cellOrder.ts.
+    expect(screen.getAllByRole('checkbox', { name: /paper/i })).toHaveLength(1)
+  })
+
+  it('counts the rows behind each value', async () => {
+    renderWithRows([['a'], ['a'], ['b']])
+    await openFilter(0)
+    expect(screen.getByLabelText(/^a/).closest('label')?.textContent).toContain('2')
+  })
+
+  it('filters by blanks', async () => {
+    renderWithRows([['x'], [''], ['y']])
+    await openFilter(0)
+    tick(/^x/)
+    tick(/^y/)
+    apply()
+    // Only the blank row survives, so the first visible row's cell is empty.
+    await waitFor(() => expect(column(0)[0] ?? '').toBe(''))
+  })
+
+  it('edits the row the user is looking at, not the one at that position unfiltered', async () => {
+    // The hazard the row mapping exists for: with rows hidden, grid row 1 is
+    // not sheet row 1. Editing must land on the row actually displayed.
+    renderWithRows([
+      ['keep', 'a'],
+      ['drop', 'b'],
+      ['keep', 'c'],
+    ])
+    await openFilter(0)
+    tick(/^drop/)
+    apply()
+    await waitFor(() => expect(column(0).slice(0, 2)).toEqual(['keep', 'keep']))
+
+    // Grid row 1 is sheet row 2 ('keep', 'c').
+    act(() => editCell(1, 1, 'EDITED'))
+
+    act(() => screen.getByRole('button', { name: /Filter this column/i }).click())
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /Filter this column/i })).toBeInTheDocument())
+    act(() => screen.getByRole('button', { name: /Clear filter/i }).click())
+
+    // 'c' became EDITED. If the edit had gone to sheet row 1 the middle value
+    // would read EDITED instead, which is the bug this pins.
+    await waitFor(() => expect(column(1).slice(0, 3)).toEqual(['a', 'b', 'EDITED']))
+  })
+
+  it('inserts a row next to the visible row, not next to the one at that grid position', async () => {
+    // Same hazard as the edit test, through a different door: the toolbar's
+    // row operations read `selection.row`, which the viewer maps back to sheet
+    // space. An unmapped index here would insert in the middle of unrelated
+    // data — silently, since the inserted row is blank and the filter hides it.
+    renderWithRows([
+      ['keep', 'a'],
+      ['drop', 'b'],
+      ['keep', 'c'],
+    ])
+    await openFilter(0)
+    tick(/^drop/)
+    apply()
+    await waitFor(() => expect(column(0).slice(0, 2)).toEqual(['keep', 'keep']))
+
+    // Select grid row 1 — sheet row 2 ('keep', 'c') — and insert above it.
+    act(() => selectCell(0, 1))
+    act(() => screen.getByRole('button', { name: /Insert row above/i }).click())
+
+    act(() => screen.getByRole('button', { name: /Filter this column/i }).click())
+    await waitFor(() => expect(screen.getByRole('dialog', { name: /Filter this column/i })).toBeInTheDocument())
+    act(() => screen.getByRole('button', { name: /Clear filter/i }).click())
+
+    // The blank row landed between 'b' and 'c', not between 'a' and 'b'.
+    await waitFor(() => expect(column(1).slice(0, 4)).toEqual(['a', 'b', '', 'c']))
+  })
+
+  it('says so, with a way out, when the filters hide everything', async () => {
+    renderWithRows([['a'], ['b']])
+    await openFilter(0)
+    tick(/^a/)
+    tick(/^b/)
+    apply()
+
+    await waitFor(() => expect(screen.getByText(/No rows match/i)).toBeInTheDocument())
+    act(() => screen.getByRole('button', { name: /Clear all filters/i }).click())
+    await waitFor(() => expect(column(0)[0]).toBe('a'))
+  })
+})
+
 describe('SpreadsheetViewer — sorting (SHEET-SORT-1)', () => {
   it('sorts the sheet by the selected cell\'s column', async () => {
     const file = buildWorkbookFile((wb) => {

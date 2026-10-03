@@ -283,9 +283,42 @@ is the worst outcome this application can have, so the safe answer is to decline
 and explain. Sorting a block of plain values — which is what the large majority
 of sorts are — works.
 
-Also missing: sorting by more than one column, sorting a selected sub-range
-rather than the whole sheet, and a filter UI (an existing autoFilter in a file
-is preserved on save but cannot be used).
+Also missing: sorting by more than one column, and sorting a selected
+sub-range rather than the whole sheet.
+
+### Filtering (SHEET-FILTER-1)
+
+The toolbar filters the sheet by the selected cell's column: a checklist of
+that column's distinct values, ticked or unticked, ANDed across columns and
+ANDed again with the free-text row search. Values are grouped by the SAME rule
+sorting uses (`cellOrder.ts`), so the list offers "Paper" once however it is
+spelled in the sheet, and offers exactly the groups a sort would keep together.
+Blanks are an entry of their own, last.
+
+A filter is a VIEW, not an edit. It costs no undo entry, never dirties the
+file, and a hidden row is still saved. The grid maps its rows back to sheet
+rows through the same `filteredRowIndices` the row search uses, so an edit, a
+paste or a row insert made while rows are hidden lands on the row actually on
+screen — the hazard that mapping exists for, pinned by tests in both
+directions.
+
+Deliberate behaviours worth knowing:
+
+- **Filters are live.** Editing a cell to a value the filter does not admit
+  hides its row at once. Excel keeps the row until you re-apply the filter.
+  Deriving visibility rather than snapshotting it means what you see always
+  matches what the filter says; the cost is that an edit can move a row out
+  from under the cursor.
+- **Filters are cleared when you switch sheets**, because they are keyed by
+  column index and column 2 on one sheet is not column 2 on another.
+- **Inserting or deleting a column moves the filters with it**, for the same
+  reason. A filter on a deleted column is dropped.
+
+Missing: condition filters (greater than, contains, between, top 10, by
+colour, date groupings) — the checklist is the only kind. Filters are not
+written to the file either: an `autoFilter` already in a workbook is preserved
+on save, but it does not drive this UI and this UI does not update it, so a
+filtered view in Atlas re-opens unfiltered in Excel.
 
 ### Formulas
 

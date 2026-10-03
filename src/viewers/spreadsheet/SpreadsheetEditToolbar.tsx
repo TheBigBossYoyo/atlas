@@ -8,12 +8,15 @@
  * comment on why selection tracking lives there and not in `useGridFind`);
  * they're disabled when nothing is selected rather than guessing a target.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ColumnFilters, FilterOption } from './columnFilter'
 import {
   AlignCenter,
   AlignLeft,
   AlignRight,
   ArrowDownAZ,
+  Filter,
+  FilterX,
   ArrowLeftToLine,
   ArrowRightToLine,
   ArrowUpAZ,
@@ -55,6 +58,12 @@ export type SpreadsheetEditToolbarProps = {
   readonly onPaste: (row: number, col: number, values: ReadonlyArray<ReadonlyArray<string>>) => void
   /** SHEET-SORT-1 — sorts the sheet by the selected cell's column. */
   readonly onSort?: (col: number, direction: 'asc' | 'desc') => void
+  /** SHEET-FILTER-1 — the distinct values of a column, for the filter checklist. */
+  readonly filterOptions?: (col: number) => ReadonlyArray<FilterOption>
+  /** SHEET-FILTER-1 — which columns are filtered, and to what. */
+  readonly activeFilters?: ColumnFilters
+  /** SHEET-FILTER-1 — sets (or, with `null`, clears) one column's filter. */
+  readonly onFilter?: (col: number, allowed: ReadonlySet<string> | null) => void
   readonly onSave: () => void
   readonly saveFormats: ReadonlyArray<SaveFormatOption>
   readonly onSaveAs: (formatId: string) => void
@@ -284,6 +293,108 @@ function BorderPopover({
 }
 
 /**
+ * SHEET-FILTER-1 — the value checklist for one column.
+ *
+ * Mounted fresh each time the popover opens (`PopoverShell` only renders its
+ * children while open, and the key below is the column), so the draft always
+ * starts from the filter currently in force rather than from whatever the last
+ * column's panel was left holding.
+ *
+ * The ticks are a DRAFT applied on "Apply", not live. Applying each tick as it
+ * happens would redraw the whole grid per click, and — worse — unticking the
+ * last value would empty the sheet underneath the panel mid-interaction.
+ */
+function FilterPanel({
+  options,
+  active,
+  onApply,
+  onClear,
+}: {
+  readonly options: ReadonlyArray<FilterOption>
+  readonly active: ReadonlySet<string> | undefined
+  readonly onApply: (selected: ReadonlySet<string>) => void
+  readonly onClear: () => void
+}) {
+  const t = useTranslate()
+  // No filter in force means everything is admitted — which is what the
+  // checklist must show, or opening the panel and pressing Apply would hide
+  // every row.
+  const [draft, setDraft] = useState<ReadonlySet<string>>(
+    () => new Set(active ?? options.map(o => o.key)),
+  )
+  const [query, setQuery] = useState('')
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return options
+    return options.filter(o => (o.blank ? t('spreadsheetToolbar.filterBlanks') : o.label).toLowerCase().includes(q))
+  }, [options, query, t])
+
+  const toggle = (key: string): void => {
+    setDraft(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  // "Select all" acts on the values currently SHOWN, so searching then ticking
+  // the box is how you select a subset of a long list — the same as Excel.
+  const allShownTicked = shown.length > 0 && shown.every(o => draft.has(o.key))
+
+  return (
+    <div className="spreadsheet-filter">
+      <input
+        type="search"
+        className="spreadsheet-filter__search"
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder={t('spreadsheetToolbar.filterSearchPlaceholder')}
+        aria-label={t('spreadsheetToolbar.filterSearchPlaceholder')}
+      />
+      <label className="spreadsheet-filter__row spreadsheet-filter__row--all">
+        <input
+          type="checkbox"
+          checked={allShownTicked}
+          onChange={() => {
+            setDraft(prev => {
+              const next = new Set(prev)
+              for (const o of shown) {
+                if (allShownTicked) next.delete(o.key)
+                else next.add(o.key)
+              }
+              return next
+            })
+          }}
+        />
+        <span>{t('spreadsheetToolbar.filterSelectAll')}</span>
+      </label>
+      <div className="spreadsheet-filter__list" role="group" aria-label={t('spreadsheetToolbar.filterTitle')}>
+        {shown.map(option => (
+          <label key={option.key} className="spreadsheet-filter__row">
+            <input type="checkbox" checked={draft.has(option.key)} onChange={() => toggle(option.key)} />
+            <span className="spreadsheet-filter__label">
+              {option.blank ? t('spreadsheetToolbar.filterBlanks') : option.label}
+            </span>
+            <span className="spreadsheet-filter__count">{option.count}</span>
+          </label>
+        ))}
+        {shown.length === 0 && <p className="spreadsheet-filter__none">{t('spreadsheetToolbar.filterNoMatches')}</p>}
+      </div>
+      <div className="spreadsheet-filter__actions">
+        <button type="button" onClick={onClear} disabled={active === undefined}>
+          {t('spreadsheetToolbar.filterClear')}
+        </button>
+        <button type="button" className="spreadsheet-filter__apply" onClick={() => onApply(draft)}>
+          {t('spreadsheetToolbar.filterApply')}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
  * A popover trigger plus its dismissal behaviour, shared by the colour and
  * border pickers.
  */
@@ -434,6 +545,9 @@ export function SpreadsheetEditToolbar({
   onDeleteColumn,
   onPaste,
   onSort,
+  filterOptions,
+  activeFilters,
+  onFilter,
   onSave,
   saveFormats,
   onSaveAs,
@@ -668,6 +782,34 @@ export function SpreadsheetEditToolbar({
               <Icon size={14} />
             </button>
           ))}
+        </div>
+      )}
+
+      {onFilter && filterOptions && (
+        <div className="spreadsheet-edit-toolbar__group" role="group" aria-label={t('spreadsheetToolbar.filterGroupAria')}>
+          <PopoverShell
+            icon={selection && activeFilters?.has(selection.col) ? <FilterX size={14} /> : <Filter size={14} />}
+            title={t('spreadsheetToolbar.filterTitle')}
+            disabled={!selection}
+          >
+            {close =>
+              selection ? (
+                <FilterPanel
+                  key={selection.col}
+                  options={filterOptions(selection.col)}
+                  active={activeFilters?.get(selection.col)}
+                  onApply={selected => {
+                    onFilter(selection.col, selected)
+                    close()
+                  }}
+                  onClear={() => {
+                    onFilter(selection.col, null)
+                    close()
+                  }}
+                />
+              ) : null
+            }
+          </PopoverShell>
         </div>
       )}
 

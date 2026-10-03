@@ -35,6 +35,7 @@
  * reading literal row 3) — implementing Excel's reference-shifting semantics
  * is a substantial, separate undertaking, out of scope here.
  */
+import { compareForSort } from './cellOrder'
 import { evaluateFormula } from './spreadsheetFormula'
 import { applyNumberFormat } from './formatNumber'
 import type { CellLookup } from './spreadsheetFormula'
@@ -752,43 +753,6 @@ export type SortRowsResult = {
   readonly document: SpreadsheetDocument
   readonly sorted: boolean
   readonly refusal?: SortRefusal
-}
-
-/**
- * Orders a cell's value for sorting.
- *
- * Numbers before text, blanks last, text compared case-insensitively — the same
- * three rules the formula evaluator's comparison operators use
- * (`compareValues` in `spreadsheetFormula.ts`), so a sort and a `>` in a
- * formula cannot disagree about which of two cells is larger. Blanks last in
- * BOTH directions, matching Excel: an empty cell is absence, not a small value,
- * and burying the data under a block of blanks on a descending sort would be
- * useless.
- */
-function sortKey(text: string): { readonly rank: 0 | 1 | 2; readonly num: number; readonly str: string } {
-  const trimmed = text.trim()
-  if (trimmed === '') return { rank: 2, num: 0, str: '' }
-  const parsed = Number(trimmed)
-  if (!Number.isNaN(parsed)) return { rank: 0, num: parsed, str: '' }
-  return { rank: 1, num: 0, str: trimmed.toUpperCase() }
-}
-
-/**
- * Compares two cells for sorting, in `direction`.
- *
- * The direction applies only WITHIN a rank, never to the rank itself: a blank
- * stays last whichever way the sort runs. Signing the whole comparison — which
- * the first version did — puts the blanks at the top of a descending sort and
- * buries the data under them.
- */
-function compareForSort(a: string, b: string, direction: 'asc' | 'desc'): number {
-  const ka = sortKey(a)
-  const kb = sortKey(b)
-  if (ka.rank !== kb.rank) return ka.rank - kb.rank
-  const sign = direction === 'asc' ? 1 : -1
-  if (ka.rank === 0) return (ka.num === kb.num ? 0 : ka.num < kb.num ? -1 : 1) * sign
-  if (ka.rank === 1) return (ka.str === kb.str ? 0 : ka.str < kb.str ? -1 : 1) * sign
-  return 0
 }
 
 /**

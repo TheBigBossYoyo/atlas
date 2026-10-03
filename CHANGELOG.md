@@ -12,6 +12,18 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 
 ### Added
 
+- **Filter a spreadsheet by a column.** Pick a cell, open the filter, and tick
+  the values you want to see. Filters on several columns combine, and combine
+  with the search box above the grid.
+
+  Values that differ only by capitalisation are one entry, matching how sorting
+  treats them, and empty cells get their own "(Blanks)" entry. Each value shows
+  how many rows are behind it, so you can see what you are about to hide.
+
+  Filtering only changes what you see: nothing is edited, nothing is saved
+  differently, and editing a row while others are hidden still changes the row
+  you are looking at. Note that the filter is not written into the file — a
+  filtered view re-opens unfiltered in Excel.
 - **Sort a spreadsheet by a column.** Two toolbar buttons, A→Z and Z→A, sorting
   by whichever column the selected cell is in. Whole rows move, so formatting
   and row heights follow their data, and an Excel table's header row stays put.

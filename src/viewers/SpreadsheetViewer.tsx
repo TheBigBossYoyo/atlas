@@ -25,6 +25,13 @@ import { createDocument, formatForCell, type CellFormatPatch } from './spreadshe
 import { DEFAULT_CELL_FORMAT, type ResolvedCellFormat } from './spreadsheet/xlsxCellStyles'
 import { useSpreadsheetEditor, type SpreadsheetSaveTarget } from './spreadsheet/useSpreadsheetEditor'
 import { bookTypeForExtension } from './spreadsheet/spreadsheetWrite'
+import {
+  distinctColumnValues,
+  rowMatchesFilters,
+  shiftFiltersForColumnChange,
+  withColumnFilter,
+  type ColumnFilters,
+} from './spreadsheet/columnFilter'
 import { SpreadsheetEditToolbar } from './spreadsheet/SpreadsheetEditToolbar'
 import { FrozenRowsStrip } from './spreadsheet/FrozenRowsStrip'
 import { isTableHeaderCell } from './spreadsheet/spreadsheetTables'
@@ -102,6 +109,14 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   const [activeSheetName, setActiveSheetName] = useState<string | null>(null)
   const [showHiddenSheets, setShowHiddenSheets] = useState(false)
   const [search, setSearch] = useState('')
+  /**
+   * SHEET-FILTER-1 — per-column filters, keyed by column index.
+   *
+   * A VIEW concern: a filtered-out row is still in the document and is still
+   * saved. Held here rather than in the document so that filtering costs no
+   * undo entry and cannot dirty the file.
+   */
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(() => new Map())
   const deferredSearch = useDeferredValue(search)
   const [renamingSheet, setRenamingSheet] = useState<string | null>(null)
   const [gridTranslateX, setGridTranslateX] = useState(0)
@@ -171,13 +186,23 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   const filteredRowIndices = useMemo(() => {
     if (!activeSheet) return []
     const q = deferredSearch.toLowerCase()
-    if (!q) return activeSheet.rows.map((_, i) => i)
+    // A table's header row is never filtered away: hiding the headings and
+    // leaving the data is not something anyone means by filtering.
+    const headerRows = activeSheet.tables?.length ? 1 : 0
+    if (!q && columnFilters.size === 0) return activeSheet.rows.map((_, i) => i)
     const indices: number[] = []
     activeSheet.rows.forEach((row, i) => {
-      if (row.some((cell) => cell.toLowerCase().includes(q))) indices.push(i)
+      if (i < headerRows) {
+        indices.push(i)
+        return
+      }
+      // Search and column filters are ANDed — each narrows what the other left.
+      if (q && !row.some((cell) => cell.toLowerCase().includes(q))) return
+      if (!rowMatchesFilters(row, columnFilters)) return
+      indices.push(i)
     })
     return indices
-  }, [activeSheet, deferredSearch])
+  }, [activeSheet, deferredSearch, columnFilters])
 
   const filteredRows = useMemo(
     () => filteredRowIndices.map((i) => activeSheet!.rows[i]),
@@ -199,7 +224,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   // while a search filter is active: the filter can drop/reorder rows
   // entirely, and "the top N rows of a reshuffled result set" is not a
   // meaningful thing to freeze.
-  const frozenRowCount = !deferredSearch ? (activeSheet?.freeze?.rows ?? 0) : 0
+  const frozenRowCount = !deferredSearch && columnFilters.size === 0 ? (activeSheet?.freeze?.rows ?? 0) : 0
   const bodyRows = frozenRowCount > 0 ? filteredRows.slice(frozenRowCount) : filteredRows
   // Sheet-absolute row index for each row of `bodyRows`, by the same
   // position — see `filteredRowIndices` above. Slicing this array in lockstep
@@ -236,7 +261,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     }
   }, [setStats, activeSheet, filteredRows.length])
 
-  const isFiltering = deferredSearch !== ''
+  const isFiltering = deferredSearch !== '' || columnFilters.size > 0
   // Blank rows/columns past the data (USR-17); rows past the data map one-to-one after it.
   const { gridRowCount, gridColCount, sheetRowForGridRow } = useGridBlankMargin({
     bodyRowIndices,
@@ -370,6 +395,22 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     },
     [editor, activeSheetIndex, activeSheet, t],
   )
+
+  /**
+   * SHEET-FILTER-1 — the checklist's values for one column.
+   *
+   * Read from the sheet's OWN rows, not the filtered ones, so a column's list
+   * does not shrink to whatever another column's filter happens to be showing
+   * — otherwise a filter could never be widened without clearing the others.
+   */
+  const filterOptions = useCallback(
+    (col: number) => (activeSheet ? distinctColumnValues(activeSheet.rows, col, activeSheet.tables?.length ? 1 : 0) : []),
+    [activeSheet],
+  )
+
+  const handleFilter = useCallback((col: number, allowed: ReadonlySet<string> | null) => {
+    setColumnFilters((prev) => withColumnFilter(prev, col, allowed))
+  }, [])
 
   const handleGridPaste = useCallback(
     (target: Item, values: readonly (readonly string[])[]): boolean => {
@@ -558,10 +599,24 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         selection={selection}
         onInsertRowAbove={(row) => activeSheetIndex >= 0 && editor.insertRowAt(activeSheetIndex, row)}
         onDeleteRow={(row) => activeSheetIndex >= 0 && editor.deleteRowAt(activeSheetIndex, row)}
-        onInsertColumnLeft={(col) => activeSheetIndex >= 0 && editor.insertColumnAt(activeSheetIndex, col)}
-        onDeleteColumn={(col) => activeSheetIndex >= 0 && editor.deleteColumnAt(activeSheetIndex, col)}
+        onInsertColumnLeft={(col) => {
+          if (activeSheetIndex < 0) return
+          editor.insertColumnAt(activeSheetIndex, col)
+          // A filter is keyed by column INDEX, so the columns moving means the
+          // filters must move with them or they would quietly filter a
+          // different column than the one the user picked.
+          setColumnFilters((prev) => shiftFiltersForColumnChange(prev, col, 'insert'))
+        }}
+        onDeleteColumn={(col) => {
+          if (activeSheetIndex < 0) return
+          editor.deleteColumnAt(activeSheetIndex, col)
+          setColumnFilters((prev) => shiftFiltersForColumnChange(prev, col, 'delete'))
+        }}
         onPaste={(row, col, values) => activeSheetIndex >= 0 && editor.pasteRange(activeSheetIndex, row, col, values)}
         onSort={handleSort}
+        filterOptions={filterOptions}
+        activeFilters={columnFilters}
+        onFilter={handleFilter}
         onFormat={handleFormat}
         selectionFormat={selectionFormat}
         onSave={() => void editor.handleSave()}
@@ -611,7 +666,18 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         {isFiltering && filteredRows.length === 0 ? (
           <div className="spreadsheet-viewer__empty">
             <FileSpreadsheet size={48} />
-            <p>{search ? t('spreadsheet.noSearchResults') : t('spreadsheet.emptySheet')}</p>
+            <p>
+              {columnFilters.size > 0
+                ? t('spreadsheet.noFilterResults')
+                : search
+                  ? t('spreadsheet.noSearchResults')
+                  : t('spreadsheet.emptySheet')}
+            </p>
+            {columnFilters.size > 0 && (
+              <button type="button" onClick={() => setColumnFilters(new Map())}>
+                {t('spreadsheet.clearFilters')}
+              </button>
+            )}
           </div>
         ) : (
           <Suspense fallback={null}>
@@ -679,6 +745,8 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
                 onClick={() => {
                   setActiveSheetName(sheet.name)
                   setSearch('')
+                  // Column 2 on this sheet is not column 2 on that one.
+                  setColumnFilters(new Map())
                 }}
                 onDoubleClick={() => setRenamingSheet(sheet.name)}
                 title={t('spreadsheet.renameSheetTitle')}
