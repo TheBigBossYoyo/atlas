@@ -626,6 +626,10 @@ export const messages = {
   'docx.viewer.saveCancelled': 'Save was cancelled or unavailable.',
   'docx.viewer.noFieldsToUpdate': 'No fields needed updating.',
   'docx.viewer.fieldsUpdated': { one: 'Updated {count} field.', other: 'Updated {count} fields.' },
+  'docx.viewer.tocSpanUnsupported':
+    'This document’s table of contents spans several paragraphs, which Atlas cannot regenerate yet. It is left exactly as it is, including when you save.',
+  'docx.viewer.tocLocked':
+    'This table of contents is locked by its author, so it was left unchanged.',
   'docx.viewer.noTocFound': 'No table of contents found to update.',
   'docx.viewer.tocUpdated': 'Table of contents updated.',
   // Round-trip fidelity audit, DXS round 2 follow-up — plain-language,

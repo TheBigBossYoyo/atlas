@@ -149,10 +149,25 @@ export function useDocxFields(
    */
   const handleUpdateTableOfContents = useCallback(() => {
     const pageOfParagraph = pages !== null ? buildPageOfParagraph(pages) : undefined
-    const { document: updated, updated: didUpdate } = updateTableOfContents(documentModel, pageOfParagraph)
+    const { document: updated, updated: didUpdate, reason } = updateTableOfContents(
+      documentModel,
+      pageOfParagraph,
+    )
 
     if (!didUpdate) {
-      setFieldUpdateMessage(t('docx.viewer.noTocFound'))
+      // DEFER-5 — each of these used to report "No table of contents found",
+      // which on a real Word document is untrue: the document HAS one, Atlas
+      // just cannot rewrite a field that spans paragraphs. Telling the user
+      // that is worth more than a message that makes them doubt their file.
+      setFieldUpdateMessage(
+        t(
+          reason === 'unsupported-span'
+            ? 'docx.viewer.tocSpanUnsupported'
+            : reason === 'locked'
+              ? 'docx.viewer.tocLocked'
+              : 'docx.viewer.noTocFound',
+        ),
+      )
       return
     }
 

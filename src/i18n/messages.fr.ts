@@ -610,6 +610,10 @@ export const messages = {
   'docx.viewer.saveCancelled': 'L’enregistrement a été annulé ou n’est pas disponible.',
   'docx.viewer.noFieldsToUpdate': 'Aucun champ n’avait besoin d’être mis à jour.',
   'docx.viewer.fieldsUpdated': { one: '{count} champ mis à jour.', other: '{count} champs mis à jour.' },
+  'docx.viewer.tocSpanUnsupported':
+    'La table des matières de ce document s’étend sur plusieurs paragraphes, ce qu’Atlas ne sait pas encore regénérer. Elle reste telle quelle, y compris à l’enregistrement.',
+  'docx.viewer.tocLocked':
+    'Cette table des matières est verrouillée par son auteur : elle n’a pas été modifiée.',
   'docx.viewer.noTocFound': 'Aucune table des matières trouvée à mettre à jour.',
   'docx.viewer.tocUpdated': 'Table des matières mise à jour.',
   // Audit de fidélité à l’enregistrement (round 2, DXS) — texte en langage

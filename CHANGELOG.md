@@ -15,6 +15,11 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 - **Border control per edge.** The Borders button now also has a toggle for each
   edge and three thicknesses, so you can put a line on one side of a cell and
   take it back off again — not just apply a whole-cell preset.
+- **"Update Table of Contents" now tells you what it actually found.** It used
+  to say "No table of contents found to update" even when the document clearly
+  had one. Word writes a table of contents as a field spanning several
+  paragraphs, which Atlas cannot regenerate yet — it now says that, instead of
+  implying your document has no table of contents.
 - **Formulas can reference other sheets.** `=Data!A1`, `=SUM(Data!A1:A20)` and
   `='Raw Data'!B3` all work now — before, a formula that named another sheet
   showed its own text instead of a result.

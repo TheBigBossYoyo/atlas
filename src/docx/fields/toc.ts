@@ -236,8 +236,54 @@ function findTocField(document: Document): TocFieldLocation | undefined {
 
 export interface UpdateTableOfContentsResult {
   readonly document: Document
-  /** `false` when the document has no (single-paragraph, see this module's doc comment) TOC field to update — `document` is returned unchanged. */
+  /** `false` when nothing was regenerated — `document` is returned unchanged. */
   readonly updated: boolean
+  /**
+   * DEFER-5 — why nothing was regenerated, so the caller can say something
+   * true.
+   *
+   * `'none'`: the document really has no TOC field.
+   * `'locked'`: there is one, but its author froze it (`w:fldLock`), which
+   *   Word's own command also leaves alone.
+   * `'unsupported-span'`: there IS a table of contents, but its field spans
+   *   several paragraphs — the shape Word actually writes — which this cannot
+   *   regenerate yet.
+   *
+   * The distinction matters because the UI used to report "No table of
+   * contents found" for all three, which on a real Word document is simply
+   * untrue: the document has a TOC, Atlas just cannot rewrite it.
+   */
+  readonly reason?: 'none' | 'locked' | 'unsupported-span'
+}
+
+/**
+ * Whether the document contains a table of contents whose field spans
+ * paragraphs.
+ *
+ * A Word-generated TOC almost always does: OOXML requires it, because a `w:r`
+ * cannot contain a `w:p`, so the `fldChar begin` sits in one paragraph and the
+ * matching `end` in a later one. The parser only groups a complex field within
+ * a single paragraph (see `collectComplexFieldGroup` in
+ * `parser/document.ts`), so such a field never becomes a `Field` node and
+ * `findTocField` cannot see it.
+ *
+ * Detected here by looking for what survives that: a run holding the TOC
+ * instruction text. That is enough to tell the user the truth, without
+ * pretending the field can be regenerated.
+ */
+function hasUnsupportedTocSpan(document: Document): boolean {
+  for (const section of document.sections) {
+    for (const block of section.blocks) {
+      if (block.kind !== 'paragraph') continue
+      // `w:instrText` content survives as ordinary run text when the field
+      // itself could not be grouped, so the whole paragraph’s plain text is
+      // where the instruction turns up. Matched as `TOC` followed by a switch
+      // (`TOC \o "1-3"`), not a bare word, so a heading that merely SAYS
+      // "TOC" is not mistaken for a field instruction.
+      if (/(^|\s)TOC\s+\\/.test(paragraphPlainText(block))) return true
+    }
+  }
+  return false
 }
 
 export function updateTableOfContents(
@@ -246,14 +292,18 @@ export function updateTableOfContents(
 ): UpdateTableOfContentsResult {
   const location = findTocField(document)
   if (location === undefined) {
-    return { document, updated: false }
+    return {
+      document,
+      updated: false,
+      reason: hasUnsupportedTocSpan(document) ? 'unsupported-span' : 'none',
+    }
   }
   // `w:fldLock` (`Field.locked`): the same "author explicitly froze this
   // field" reasoning `updateFields.ts` honors for every other field type
   // applies here too — Word's own "Update Table of Contents" leaves a
   // locked TOC field's entries untouched rather than regenerating them.
   if (location.field.locked === true) {
-    return { document, updated: false }
+    return { document, updated: false, reason: 'locked' }
   }
 
   const options = parseTocOptions(location.field.instruction)

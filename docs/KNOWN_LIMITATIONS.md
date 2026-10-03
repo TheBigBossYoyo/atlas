@@ -136,7 +136,12 @@ correct z-order).
   table cell also isn't floated (still round-trips correctly, just doesn't
   render as a page-level float).
 - **Table-of-contents regeneration only recognizes a single-paragraph TOC
-  field.** A real Word-generated TOC's `fldChar` begin/end almost always
+  field, and now SAYS so.** The command used to report "No table of contents
+  found to update" in this case, which on a real Word document is untrue — the
+  document has one, Atlas just cannot rewrite a field that spans paragraphs.
+  It now distinguishes the three cases (no TOC at all, a locked TOC, and one
+  whose field spans paragraphs) and names the real reason. The underlying
+  limitation is unchanged. A real Word-generated TOC's `fldChar` begin/end almost always
   spans many paragraphs (OOXML structurally requires this — a `w:r` can't
   contain a nested `w:p`), which the parser does not yet group into one
   Field node, so "Update Table of Contents" reports "No table of contents
