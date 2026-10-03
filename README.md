@@ -4,6 +4,8 @@ Atlas is a document viewer and editor for Windows that opens Word, Excel,
 PowerPoint, PDF, OpenDocument files, plain text, code, RTF, and Markdown
 through one Electron + React app, instead of a different program for each.
 
+![Atlas showing a Markdown file in split view, with the source on the left and rendered math, a Mermaid diagram and a table on the right](docs/screenshots/markdown-split-math-mermaid.png)
+
 ## Why I built it
 
 This started as a small Markdown viewer (the repo folder is still called
@@ -70,6 +72,22 @@ Restoring is only offered when your current version is already saved — otherwi
 an older copy could replace work that exists nowhere else. Each document keeps its
 last 100 versions, and the history lives in the app's own data directory, not
 beside your file.
+
+## Screenshots
+
+All four use made-up sample documents.
+
+![A Word document with a tracked deletion and insertion and a comments pane with a reply](docs/screenshots/docx-tracked-changes-comments.png)
+
+A DOCX open in the editor, with a tracked change and a comment thread.
+
+![A slide deck open in the slide editor, with the slide list on the left](docs/screenshots/pptx-slide-editor.png)
+
+The PPTX editor, with the slide list on the left.
+
+![A spreadsheet with a formula being edited in a cell](docs/screenshots/xlsx-formulas.png)
+
+An XLSX with formulas; here the grand total cell is open for editing.
 
 ## How it works
 
