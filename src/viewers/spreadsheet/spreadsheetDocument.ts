@@ -745,6 +745,156 @@ export function recalculateDocument(doc: SpreadsheetDocument): SpreadsheetDocume
   }
 }
 
+/** SHEET-SORT-1 — why a sort did nothing, so the UI can say something true. */
+export type SortRefusal = 'no-rows' | 'has-formulas'
+
+export type SortRowsResult = {
+  readonly document: SpreadsheetDocument
+  readonly sorted: boolean
+  readonly refusal?: SortRefusal
+}
+
+/**
+ * Orders a cell's value for sorting.
+ *
+ * Numbers before text, blanks last, text compared case-insensitively — the same
+ * three rules the formula evaluator's comparison operators use
+ * (`compareValues` in `spreadsheetFormula.ts`), so a sort and a `>` in a
+ * formula cannot disagree about which of two cells is larger. Blanks last in
+ * BOTH directions, matching Excel: an empty cell is absence, not a small value,
+ * and burying the data under a block of blanks on a descending sort would be
+ * useless.
+ */
+function sortKey(text: string): { readonly rank: 0 | 1 | 2; readonly num: number; readonly str: string } {
+  const trimmed = text.trim()
+  if (trimmed === '') return { rank: 2, num: 0, str: '' }
+  const parsed = Number(trimmed)
+  if (!Number.isNaN(parsed)) return { rank: 0, num: parsed, str: '' }
+  return { rank: 1, num: 0, str: trimmed.toUpperCase() }
+}
+
+/**
+ * Compares two cells for sorting, in `direction`.
+ *
+ * The direction applies only WITHIN a rank, never to the rank itself: a blank
+ * stays last whichever way the sort runs. Signing the whole comparison — which
+ * the first version did — puts the blanks at the top of a descending sort and
+ * buries the data under them.
+ */
+function compareForSort(a: string, b: string, direction: 'asc' | 'desc'): number {
+  const ka = sortKey(a)
+  const kb = sortKey(b)
+  if (ka.rank !== kb.rank) return ka.rank - kb.rank
+  const sign = direction === 'asc' ? 1 : -1
+  if (ka.rank === 0) return (ka.num === kb.num ? 0 : ka.num < kb.num ? -1 : 1) * sign
+  if (ka.rank === 1) return (ka.str === kb.str ? 0 : ka.str < kb.str ? -1 : 1) * sign
+  return 0
+}
+
+/**
+ * SHEET-SORT-1 — sorts a block of rows by one column.
+ *
+ * Moves each row WHOLE: its values, its formatting overrides, its height, and
+ * its `rowSources` entry, so the save path still writes every untouched cell
+ * through the original package and a cell's colour follows its data.
+ *
+ * **Refuses when any cell in the block holds a formula**, and says so. This is
+ * a deliberate limit rather than an oversight. Excel adjusts a moved formula's
+ * relative references so it keeps pointing at its own row, and the exact rules
+ * for a reference that leaves the sorted block are subtle enough that
+ * implementing them from memory would risk silently producing a workbook with
+ * wrong numbers in it — the worst outcome this app can have. Sorting a block of
+ * plain data, which is what the overwhelming majority of sorts are, is safe and
+ * works. See `docs/KNOWN_LIMITATIONS.md`.
+ *
+ * `headerRows` are left in place at the top of the block.
+ */
+export function sortRows(
+  doc: SpreadsheetDocument,
+  sheetIndex: number,
+  options: {
+    readonly col: number
+    readonly direction: 'asc' | 'desc'
+    /** Rows above this many, from the top of the sheet, are not moved. */
+    readonly headerRows?: number
+  },
+): SortRowsResult {
+  const sheet = doc.sheets[sheetIndex]
+  if (!sheet) return { document: doc, sorted: false, refusal: 'no-rows' }
+
+  const first = Math.max(0, options.headerRows ?? 0)
+  const last = sheet.rows.length - 1
+  if (last <= first) return { document: doc, sorted: false, refusal: 'no-rows' }
+
+  for (let r = first; r <= last; r += 1) {
+    const formulaRow = sheet.formulas[r]
+    if (formulaRow?.some(formula => formula !== undefined)) {
+      return { document: doc, sorted: false, refusal: 'has-formulas' }
+    }
+  }
+
+  // Sorted as a list of row INDEXES, so every parallel array (heights,
+  // sources, the override map) can be permuted the same way rather than each
+  // being re-derived and risking going out of step.
+  const order = Array.from({ length: last - first + 1 }, (_, i) => first + i)
+  order.sort((ra, rb) => {
+    const cmp = compareForSort(
+      sheet.rows[ra]?.[options.col] ?? '',
+      sheet.rows[rb]?.[options.col] ?? '',
+      options.direction,
+    )
+    // A stable tie-break on the original position, so rows that compare equal
+    // keep their relative order — and so a descending sort does not reverse
+    // them, which `sort`'s own instability would otherwise do.
+    return cmp === 0 ? ra - rb : cmp
+  })
+
+  if (order.every((from, i) => from === first + i)) {
+    // Already in order: the same document object, so this costs nothing and
+    // does not add an undo entry.
+    return { document: doc, sorted: false, refusal: undefined }
+  }
+
+  const permute = <T,>(source: ReadonlyArray<T>): T[] => {
+    const next = [...source]
+    order.forEach((from, i) => {
+      next[first + i] = source[from]
+    })
+    return next
+  }
+
+  const rows = permute(sheet.rows)
+  const formulas = permute(sheet.formulas)
+  const rowHeightsPx = sheet.rowHeightsPx.length > 0 ? permute(sheet.rowHeightsPx) : sheet.rowHeightsPx
+  const rowSources = sheet.rowSources ? permute(sheet.rowSources) : undefined
+
+  // The override map is keyed by current position, so it is rebuilt through the
+  // same permutation rather than permuted in place.
+  const newIndexOfOldRow = new Map<number, number>()
+  order.forEach((from, i) => newIndexOfOldRow.set(from, first + i))
+  const formatOverrides = remapFormatOverrides(sheet.formatOverrides, (r, c) => {
+    const moved = newIndexOfOldRow.get(r)
+    return [moved ?? r, c]
+  })
+  const editedCells = remapEditedCells(sheet.editedCells, (r, c) => {
+    const moved = newIndexOfOldRow.get(r)
+    return [moved ?? r, c]
+  })
+
+  return {
+    document: replaceSheetAndRecalculate(doc, sheetIndex, {
+      ...sheet,
+      rows,
+      formulas,
+      rowHeightsPx,
+      ...(rowSources ? { rowSources } : {}),
+      ...(formatOverrides ? { formatOverrides } : {}),
+      ...(editedCells ? { editedCells } : {}),
+    }),
+    sorted: true,
+  }
+}
+
 /**
  * Sets one cell's raw user input. Input starting with `=` (and longer than
  * just `=`) is stored as a formula (`formulas[row][col]`, text after the

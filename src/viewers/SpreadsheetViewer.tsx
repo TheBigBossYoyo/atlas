@@ -105,6 +105,8 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
   const deferredSearch = useDeferredValue(search)
   const [renamingSheet, setRenamingSheet] = useState<string | null>(null)
   const [gridTranslateX, setGridTranslateX] = useState(0)
+  /** SHEET-SORT-1 — why a sort did nothing, shown in the same place a save warning is. */
+  const [sortMessage, setSortMessage] = useState<string | null>(null)
 
   const buffer = file.kind === 'binary' ? file.content : null
   const workbookState = useSpreadsheetWorkbook(buffer)
@@ -346,6 +348,29 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
     [activeSheet, selection],
   )
 
+  /**
+   * SHEET-SORT-1 — sorts by the selected cell's column.
+   *
+   * An Excel table's header row stays put (`headerRows`), because sorting a
+   * table's headings into the data is never what anyone means. A sheet with no
+   * table has no reliable way to know whether row 0 is a heading, so it is
+   * treated as data — the same assumption the rest of this viewer makes.
+   *
+   * A refusal is surfaced through the save-warning banner rather than
+   * swallowed: a sort button that silently does nothing reads as a bug.
+   */
+  const handleSort = useCallback(
+    (col: number, direction: 'asc' | 'desc') => {
+      if (activeSheetIndex < 0) return
+      const headerRows = activeSheet?.tables?.length ? 1 : 0
+      const refusal = editor.sortRows(activeSheetIndex, col, direction, headerRows)
+      if (refusal === 'has-formulas') setSortMessage(t('spreadsheet.sortHasFormulas'))
+      else if (refusal === 'no-rows') setSortMessage(t('spreadsheet.sortNothingToDo'))
+      else setSortMessage(null)
+    },
+    [editor, activeSheetIndex, activeSheet, t],
+  )
+
   const handleGridPaste = useCallback(
     (target: Item, values: readonly (readonly string[])[]): boolean => {
       if (activeSheetIndex < 0) return false
@@ -536,6 +561,7 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
         onInsertColumnLeft={(col) => activeSheetIndex >= 0 && editor.insertColumnAt(activeSheetIndex, col)}
         onDeleteColumn={(col) => activeSheetIndex >= 0 && editor.deleteColumnAt(activeSheetIndex, col)}
         onPaste={(row, col, values) => activeSheetIndex >= 0 && editor.pasteRange(activeSheetIndex, row, col, values)}
+        onSort={handleSort}
         onFormat={handleFormat}
         selectionFormat={selectionFormat}
         onSave={() => void editor.handleSave()}
@@ -546,6 +572,11 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
       {/* SHEET-4 — the save succeeded but fell back to the lossy writer.
           `role="status"` rather than `alert`: nothing failed, and it must not
           interrupt what the user is doing. */}
+      {sortMessage !== null && (
+        <div className="spreadsheet-viewer__save-warning" role="status">
+          {sortMessage}
+        </div>
+      )}
       {editor.saveWarning && (
         <div className="spreadsheet-viewer__save-warning" role="status">
           {editor.saveWarning}

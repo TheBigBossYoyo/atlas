@@ -364,6 +364,12 @@ export const messages = {
   'spreadsheetToolbar.borderWeight.thin': 'Thin',
   'spreadsheetToolbar.borderWeight.medium': 'Medium',
   'spreadsheetToolbar.borderWeight.thick': 'Thick',
+  'spreadsheetToolbar.sortGroupAria': 'Sort',
+  'spreadsheetToolbar.sortAsc': 'Sort A to Z',
+  'spreadsheetToolbar.sortDesc': 'Sort Z to A',
+  'spreadsheet.sortHasFormulas':
+    'Sorting is not available here yet: this sheet contains formulas, and moving them could change what they refer to. Rows of plain values can be sorted.',
+  'spreadsheet.sortNothingToDo': 'There is nothing to sort.',
   'spreadsheetToolbar.undoAria': 'Undo',
   'spreadsheetToolbar.undoTitle': 'Undo (Ctrl+Z)',
   'spreadsheetToolbar.redoAria': 'Redo',

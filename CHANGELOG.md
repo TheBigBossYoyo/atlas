@@ -12,6 +12,16 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 
 ### Added
 
+- **Sort a spreadsheet by a column.** Two toolbar buttons, A→Z and Z→A, sorting
+  by whichever column the selected cell is in. Whole rows move, so formatting
+  and row heights follow their data, and an Excel table's header row stays put.
+
+  Numbers sort as numbers (so 9 comes before 10, not after), text ignores case,
+  and blank cells stay at the bottom whichever direction you sort.
+
+  Sheets containing formulas are not sorted yet, and Atlas says so rather than
+  doing it: moving a formula can change what it refers to, and getting that
+  wrong would quietly give you wrong numbers.
 - **Border control per edge.** The Borders button now also has a toggle for each
   edge and three thicknesses, so you can put a line on one side of a cell and
   take it back off again — not just apply a whole-cell preset.

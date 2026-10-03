@@ -127,6 +127,96 @@ beforeEach(() => {
   } as unknown as typeof window.electronAPI
 })
 
+describe('SpreadsheetViewer — sorting (SHEET-SORT-1)', () => {
+  it('sorts the sheet by the selected cell\'s column', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(
+        wb,
+        XLSX.utils.aoa_to_sheet([
+          ['Paper', '10'],
+          ['Ink', '25'],
+          ['Card', '5'],
+        ]),
+        'Sheet1',
+      )
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    act(() => selectCell(0, 0))
+    act(() => screen.getByRole('button', { name: /Sort A to Z/i }).click())
+
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('Card'))
+    // The whole row travels, not just the sorted column.
+    expect(gridRows(lastDataEditorProps!)[0][1]).toBe('5')
+    expect(gridRows(lastDataEditorProps!).slice(0, 3).map((r) => r[0])).toEqual(['Card', 'Ink', 'Paper'])
+  })
+
+  it('sorts descending too', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a'], ['c'], ['b']]), 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    act(() => selectCell(0, 0))
+    act(() => screen.getByRole('button', { name: /Sort Z to A/i }).click())
+
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('c'))
+    expect(gridRows(lastDataEditorProps!).slice(0, 3).map((r) => r[0])).toEqual(['c', 'b', 'a'])
+  })
+
+  it('says why, rather than doing nothing, when the sheet has formulas', async () => {
+    // A sort button that silently ignores the click reads as a bug. The limit
+    // is deliberate (see `sortRows`), so the reason has to be visible.
+    const file = buildWorkbookFile((wb) => {
+      const sheet = XLSX.utils.aoa_to_sheet([
+        ['b', 1],
+        ['a', 2],
+      ])
+      // Inside the used range: a cell added beyond `!ref` is not parsed at all,
+      // so the formula would be invisible and the sort would proceed — which is
+      // how the first version of this test passed for the wrong reason.
+      sheet.B1 = { t: 'n', f: 'B2*2', v: 4 }
+      XLSX.utils.book_append_sheet(wb, sheet, 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    act(() => selectCell(0, 0))
+    act(() => screen.getByRole('button', { name: /Sort A to Z/i }).click())
+
+    await waitFor(() => expect(screen.getByText(/contains formulas/i)).toBeInTheDocument())
+    // And the data is untouched.
+    expect(gridRows(lastDataEditorProps!)[0][0]).toBe('b')
+  })
+
+  it('leaves the sort buttons disabled until a cell is selected', async () => {
+    const file = buildWorkbookFile((wb) => {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a'], ['b']]), 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+    expect(screen.getByRole('button', { name: /Sort A to Z/i })).toBeDisabled()
+  })
+})
+
 describe('SpreadsheetViewer — cell editing', () => {
   it('a committed cell edit updates the grid', async () => {
     const file = buildWorkbookFile((wb) => {

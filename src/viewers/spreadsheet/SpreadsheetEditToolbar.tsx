@@ -13,8 +13,10 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  ArrowDownAZ,
   ArrowLeftToLine,
   ArrowRightToLine,
+  ArrowUpAZ,
   ArrowUpToLine,
   ArrowDownToLine,
   Bold,
@@ -51,6 +53,8 @@ export type SpreadsheetEditToolbarProps = {
   readonly onInsertColumnLeft: (col: number) => void
   readonly onDeleteColumn: (col: number) => void
   readonly onPaste: (row: number, col: number, values: ReadonlyArray<ReadonlyArray<string>>) => void
+  /** SHEET-SORT-1 — sorts the sheet by the selected cell's column. */
+  readonly onSort?: (col: number, direction: 'asc' | 'desc') => void
   readonly onSave: () => void
   readonly saveFormats: ReadonlyArray<SaveFormatOption>
   readonly onSaveAs: (formatId: string) => void
@@ -429,6 +433,7 @@ export function SpreadsheetEditToolbar({
   onInsertColumnLeft,
   onDeleteColumn,
   onPaste,
+  onSort,
   onSave,
   saveFormats,
   onSaveAs,
@@ -643,6 +648,28 @@ export function SpreadsheetEditToolbar({
           <ClipboardPaste size={14} />
         </button>
       </div>
+
+      {onSort && (
+        <div className="spreadsheet-edit-toolbar__group" role="group" aria-label={t('spreadsheetToolbar.sortGroupAria')}>
+          {([
+            ['asc', ArrowDownAZ, 'spreadsheetToolbar.sortAsc'],
+            ['desc', ArrowUpAZ, 'spreadsheetToolbar.sortDesc'],
+          ] as const).map(([direction, Icon, labelKey]) => (
+            <button
+              key={direction}
+              type="button"
+              // Sorts by the column the selected cell is in, which is how every
+              // spreadsheet's sort buttons work — so it needs a selection.
+              onClick={() => selection && onSort(selection.col, direction)}
+              disabled={!selection}
+              title={t(labelKey)}
+              aria-label={t(labelKey)}
+            >
+              <Icon size={14} />
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="spreadsheet-edit-toolbar__group spreadsheet-edit-toolbar__save">
         <button type="button" onClick={onSave} title={t('spreadsheetToolbar.saveTitle')} aria-label={t('spreadsheetToolbar.saveAria')}>

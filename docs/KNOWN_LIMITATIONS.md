@@ -257,6 +257,36 @@ this reference syntax). String literals inside formulas are never touched.
 Number/date/currency formatting follows the workbook's own stored format,
 not an explicit user-chosen locale.
 
+### Sorting (SHEET-SORT-1)
+
+The toolbar sorts the sheet's rows by the selected cell's column, ascending or
+descending. A row moves WHOLE — its values, its formatting, its height and its
+save-path `rowSources` entry — so a cell's colour follows its data and the
+passthrough writer still attributes every untouched cell to the right original
+row.
+
+Ordering follows the same three rules the formula evaluator's comparison
+operators use, so a sort and a `>` in a formula cannot disagree about which of
+two cells is larger: numbers before text, text case-insensitive, and blanks
+last in BOTH directions (an empty cell is absence, not a small value).
+
+An Excel table's header row is held in place. A sheet with no table has no
+reliable way to tell a heading from data, so its first row is sorted with the
+rest.
+
+**It refuses when the sheet contains a formula, and says so.** This is a
+deliberate limit, not an oversight: Excel adjusts a moved formula's relative
+references so it keeps pointing at its own row, and the rules for a reference
+that leaves the sorted block are subtle enough that implementing them from
+memory would risk silently producing a workbook with wrong numbers in it. That
+is the worst outcome this application can have, so the safe answer is to decline
+and explain. Sorting a block of plain values — which is what the large majority
+of sorts are — works.
+
+Also missing: sorting by more than one column, sorting a selected sub-range
+rather than the whole sheet, and a filter UI (an existing autoFilter in a file
+is preserved on save but cannot be used).
+
 ### Formulas
 
 SheetJS's community build has no formula engine at all — it only ever reads the

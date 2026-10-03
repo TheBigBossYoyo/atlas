@@ -34,7 +34,9 @@ import {
   renameSheet as renameSheetOp,
   setCellValue as setCellValueOp,
   setRowsFormat as setRowsFormatOp,
+  sortRows as sortRowsOp,
   type CellFormatPatch,
+  type SortRefusal,
   type SpreadsheetDocument,
 } from './spreadsheetDocument'
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
@@ -224,6 +226,18 @@ export type UseSpreadsheetEditorResult = {
   readonly insertColumnAt: (sheetIndex: number, atIndex: number) => void
   readonly deleteColumnAt: (sheetIndex: number, atIndex: number) => void
   readonly pasteRange: (sheetIndex: number, row: number, col: number, values: ReadonlyArray<ReadonlyArray<string>>) => void
+  /**
+   * SHEET-SORT-1 — sorts the sheet's rows by one column.
+   *
+   * Returns the refusal reason when it did nothing, so the caller can say why
+   * rather than appearing to ignore the click.
+   */
+  readonly sortRows: (
+    sheetIndex: number,
+    col: number,
+    direction: 'asc' | 'desc',
+    headerRows?: number,
+  ) => SortRefusal | undefined
   /** SHEETFMT-2 — applies a formatting patch to the given sheet rows across a column span. */
   readonly setRowsFormat: (
     sheetIndex: number,
@@ -365,6 +379,25 @@ export function useSpreadsheetEditor(
     ) => mutate((doc) => setRowsFormatOp(doc, sheetIndex, rows, colA, colB, patch)),
     [mutate],
   )
+  /**
+   * Unlike the other operations this one REPORTS back, because a sort can
+   * legitimately do nothing (a block holding formulas, a single row) and the
+   * user needs to be told which. So it reads and sets history itself rather
+   * than going through `mutate`, whose contract is "returns a document".
+   */
+  const sortRows = useCallback(
+    (sheetIndex: number, col: number, direction: 'asc' | 'desc', headerRows?: number): SortRefusal | undefined => {
+      const result = sortRowsOp(history.present, sheetIndex, {
+        col,
+        direction,
+        ...(headerRows === undefined ? {} : { headerRows }),
+      })
+      if (result.document !== history.present) history.set(result.document)
+      return result.refusal
+    },
+    [history],
+  )
+
   const addSheet = useCallback((name?: string) => mutate((doc) => addSheetOp(doc, name)), [mutate])
   const renameSheet = useCallback(
     (sheetIndex: number, name: string) => mutate((doc) => renameSheetOp(doc, sheetIndex, name)),
@@ -529,6 +562,7 @@ export function useSpreadsheetEditor(
     deleteColumnAt,
     pasteRange,
     setRowsFormat,
+    sortRows,
     addSheet,
     renameSheet,
     deleteSheet,

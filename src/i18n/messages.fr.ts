@@ -358,6 +358,12 @@ export const messages = {
   'spreadsheetToolbar.borderWeight.thin': 'Fine',
   'spreadsheetToolbar.borderWeight.medium': 'Moyenne',
   'spreadsheetToolbar.borderWeight.thick': 'Épaisse',
+  'spreadsheetToolbar.sortGroupAria': 'Trier',
+  'spreadsheetToolbar.sortAsc': 'Trier de A à Z',
+  'spreadsheetToolbar.sortDesc': 'Trier de Z à A',
+  'spreadsheet.sortHasFormulas':
+    'Le tri n’est pas encore disponible ici : cette feuille contient des formules, et les déplacer pourrait changer ce à quoi elles font référence. Les lignes de valeurs simples peuvent être triées.',
+  'spreadsheet.sortNothingToDo': 'Il n’y a rien à trier.',
   'spreadsheetToolbar.undoAria': 'Annuler',
   'spreadsheetToolbar.undoTitle': 'Annuler (Ctrl+Z)',
   'spreadsheetToolbar.redoAria': 'Rétablir',
