@@ -274,17 +274,43 @@ An Excel table's header row is held in place. A sheet with no table has no
 reliable way to tell a heading from data, so its first row is sorted with the
 rest.
 
-**It refuses when the sheet contains a formula, and says so.** This is a
-deliberate limit, not an oversight: Excel adjusts a moved formula's relative
-references so it keeps pointing at its own row, and the rules for a reference
-that leaves the sorted block are subtle enough that implementing them from
-memory would risk silently producing a workbook with wrong numbers in it. That
-is the worst outcome this application can have, so the safe answer is to decline
-and explain. Sorting a block of plain values — which is what the large majority
-of sorts are — works.
+**What gets sorted is the data block around the selected cell** (SHEET-SORT-2),
+not the whole sheet: the contiguous run of non-blank rows containing it, which
+is what Excel calls the current region. A blank row ends the block. This is what
+lets an ordinary sheet with a totals row at the bottom be sorted at all — the
+`=SUM(B1:B9)` under the blank row is outside the block, so it neither moves with
+the data nor blocks the sort.
 
-Also missing: sorting by more than one column, and sorting a selected
-sub-range rather than the whole sheet.
+**It refuses when the ROWS BEING SORTED contain a formula, and says so.** This
+is a deliberate limit, not an oversight: Excel adjusts a moved formula's
+relative references so it keeps pointing at its own row, and the rules for a
+reference that leaves the sorted block are subtle enough that implementing them
+from memory would risk silently producing a workbook with wrong numbers in it.
+That is the worst outcome this application can have, so the safe answer is to
+decline and explain.
+
+**A formula OUTSIDE the block is left exactly as it is**, which is also what
+Excel does: `=B3` still points at B3, which now holds a different row's value.
+That is a well-known way to break a spreadsheet quietly, so Atlas says when it
+has happened. The notice fires when an outside formula reads SOME of the sorted
+rows; it stays silent when a formula reads ALL of them, because that is the
+totals case and a sum over exactly the rows being permuted cannot change.
+
+The judged trade in that rule: a `VLOOKUP` over the whole block IS sensitive to
+order and is NOT reported, because reporting every whole-block reference would
+fire on nearly every sort and train the user to ignore the message. The scan
+itself (`formulaDependencyKeys`) is a text scan returning a superset of a
+formula's true references, so it errs towards reporting rather than missing.
+
+A row still moves WHOLE, across the sheet's full width, where Excel moves only
+the columns of the region it decided to sort. On a sheet holding two unrelated
+tables side by side, sorting one reorders the other's rows too. Keeping rows
+whole is what lets `rowSources` stay a per-row mapping, which is what lets the
+save path write every untouched cell through the original package byte for
+byte; splitting a row across two source rows would break that.
+
+Also missing: sorting by more than one column, and sorting an explicitly
+selected sub-range rather than the detected block.
 
 ### Filtering (SHEET-FILTER-1)
 

@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createDocument,
+  dataBlockForRow,
   formatForCell,
   setRangeFormat,
   sortRows,
@@ -182,5 +183,97 @@ describe('what travels with a sorted row (SHEET-SORT-1)', () => {
 
     expect(formatForCell(sorted.sheets[0], 0, 0).bold).toBe(true)
     expect(formatForCell(sorted.sheets[0], 1, 0).bold).toBe(false)
+  })
+})
+
+describe('dataBlockForRow (SHEET-SORT-2)', () => {
+  const rows = [['a'], ['b'], [''], ['c'], ['d'], ['e']]
+
+  it('stops at a blank row in both directions', () => {
+    expect(dataBlockForRow(rows, 4, 0)).toEqual({ first: 3, last: 5 })
+    expect(dataBlockForRow(rows, 0, 0)).toEqual({ first: 0, last: 1 })
+  })
+
+  it('treats a row of only whitespace as blank', () => {
+    expect(dataBlockForRow([['a'], ['   '], ['c']], 0, 0)).toEqual({ first: 0, last: 0 })
+  })
+
+  it('refuses to guess from a blank row', () => {
+    expect(dataBlockForRow(rows, 2, 0)).toBeNull()
+  })
+
+  it('never reaches above the header rows', () => {
+    expect(dataBlockForRow([['H'], ['a'], ['b']], 1, 1)).toEqual({ first: 1, last: 2 })
+  })
+})
+
+describe('sortRows — data block and outside formulas (SHEET-SORT-2)', () => {
+  it('sorts a sheet whose only formula is a totals row below a blank row', () => {
+    // The case SHEET-SORT-1 had to refuse outright: the formula is in the
+    // sheet, so a whole-sheet sort saw it, even though it is nowhere near the
+    // rows being sorted.
+    const doc = createDocument([
+      sheetOf([['b', '2'], ['a', '1'], ['', ''], ['Total', '']], { '3:1': 'SUM(B1:B2)' }),
+    ])
+    const result = sortRows(doc, 0, { col: 0, direction: 'asc', atRow: 0 })
+    expect(result.refusal).toBeUndefined()
+    expect(result.sorted).toBe(true)
+    expect(col(result.document, 0)).toEqual(['a', 'b', '', 'Total'])
+    // The totals row stayed put.
+    expect(result.document.sheets[0].formulas[3][1]).toBe('SUM(B1:B2)')
+  })
+
+  it('still refuses when the formula is inside the block being sorted', () => {
+    const doc = createDocument([sheetOf([['b', '2'], ['a', '1']], { '1:1': 'A1' })])
+    expect(sortRows(doc, 0, { col: 0, direction: 'asc', atRow: 0 }).refusal).toBe('has-formulas')
+  })
+
+  it('reports the block it sorted', () => {
+    const doc = createDocument([sheetOf([['b'], ['a'], [''], ['z']])])
+    expect(sortRows(doc, 0, { col: 0, direction: 'asc', atRow: 1 }).block).toEqual({ first: 0, last: 1 })
+  })
+
+  it('leaves rows in another block alone', () => {
+    const doc = createDocument([sheetOf([['b'], ['a'], [''], ['z'], ['y']])])
+    const result = sortRows(doc, 0, { col: 0, direction: 'asc', atRow: 0 })
+    expect(col(result.document, 0)).toEqual(['a', 'b', '', 'z', 'y'])
+  })
+
+  it('warns when a formula outside the block reads SOME of its rows', () => {
+    // `=B2` keeps pointing at B2 after the sort — Excel does not adjust it
+    // either — so it now reads a different row's number.
+    const doc = createDocument([
+      sheetOf([['b', '2'], ['a', '1'], ['', ''], ['Pick', '']], { '3:1': 'B2' }),
+    ])
+    const result = sortRows(doc, 0, { col: 0, direction: 'asc', atRow: 0 })
+    expect(result.sorted).toBe(true)
+    expect(result.warning).toBe('outside-formulas-read-block')
+  })
+
+  it('does not warn about a formula that reads the whole block', () => {
+    // A total over exactly the sorted rows cannot change when they are
+    // permuted; warning here would fire on nearly every sort.
+    const doc = createDocument([
+      sheetOf([['b', '2'], ['a', '1'], ['', ''], ['Total', '']], { '3:1': 'SUM(B1:B2)' }),
+    ])
+    expect(sortRows(doc, 0, { col: 0, direction: 'asc', atRow: 0 }).warning).toBeUndefined()
+  })
+
+  it('warns about a formula on another sheet that reads into the block', () => {
+    const doc = createDocument([
+      sheetOf([['b', '2'], ['a', '1']]),
+      { ...sheetOf([['x']], { '0:0': 'Data!B2' }), name: 'Report' },
+    ])
+    const result = sortRows(doc, 0, { col: 0, direction: 'asc', atRow: 0 })
+    expect(result.warning).toBe('outside-formulas-read-block')
+  })
+
+  it('does not warn when nothing moved', () => {
+    const doc = createDocument([
+      sheetOf([['a', '1'], ['b', '2'], ['', ''], ['Pick', '']], { '3:1': 'B2' }),
+    ])
+    const result = sortRows(doc, 0, { col: 0, direction: 'asc', atRow: 0 })
+    expect(result.sorted).toBe(false)
+    expect(result.warning).toBeUndefined()
   })
 })

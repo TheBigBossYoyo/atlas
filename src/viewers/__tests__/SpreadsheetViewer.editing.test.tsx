@@ -335,9 +335,39 @@ describe('SpreadsheetViewer — sorting (SHEET-SORT-1)', () => {
     act(() => selectCell(0, 0))
     act(() => screen.getByRole('button', { name: /Sort A to Z/i }).click())
 
-    await waitFor(() => expect(screen.getByText(/contains formulas/i)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/contain formulas/i)).toBeInTheDocument())
     // And the data is untouched.
     expect(gridRows(lastDataEditorProps!)[0][0]).toBe('b')
+  })
+
+  it('sorts a sheet that has a totals row, which the whole-sheet sort had to refuse', async () => {
+    // SHEET-SORT-2 — the formula sits below a blank row, so it is outside the
+    // data block and neither moves nor blocks the sort.
+    const file = buildWorkbookFile((wb) => {
+      const sheet = XLSX.utils.aoa_to_sheet([
+        ['b', 2],
+        ['a', 1],
+        [null, null],
+        ['Total', null],
+      ])
+      sheet.B4 = { t: 'n', f: 'SUM(B1:B2)', v: 3 }
+      sheet['!ref'] = 'A1:B4'
+      XLSX.utils.book_append_sheet(wb, sheet, 'Sheet1')
+    })
+    render(
+      <ViewerProvider filePath={file.path}>
+        <SpreadsheetViewer file={file} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(lastDataEditorProps).not.toBeNull())
+
+    act(() => selectCell(0, 0))
+    act(() => screen.getByRole('button', { name: /Sort A to Z/i }).click())
+
+    await waitFor(() => expect(gridRows(lastDataEditorProps!)[0][0]).toBe('a'))
+    // The totals row stayed where it was.
+    expect(gridRows(lastDataEditorProps!)[3][0]).toBe('Total')
+    expect(screen.queryByText(/contain formulas/i)).toBeNull()
   })
 
   it('leaves the sort buttons disabled until a cell is selected', async () => {

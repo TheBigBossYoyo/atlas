@@ -36,7 +36,7 @@ import {
   setRowsFormat as setRowsFormatOp,
   sortRows as sortRowsOp,
   type CellFormatPatch,
-  type SortRefusal,
+  type SortRowsResult,
   type SpreadsheetDocument,
 } from './spreadsheetDocument'
 import { documentToDelimitedText, writeWorkbookBytesWithTables } from './spreadsheetWrite'
@@ -52,6 +52,9 @@ import {
 } from '../shared/useViewerContext'
 import { useViewerShortcuts } from '../../hooks/useShortcutManager'
 import { useTranslate } from '../../i18n'
+
+/** What a sort did, for the caller to report. See `sortRows` in the document model. */
+export type SortOutcome = Omit<SortRowsResult, 'document'>
 
 export type SpreadsheetSaveTarget =
   | {
@@ -237,7 +240,8 @@ export type UseSpreadsheetEditorResult = {
     col: number,
     direction: 'asc' | 'desc',
     headerRows?: number,
-  ) => SortRefusal | undefined
+    atRow?: number,
+  ) => SortOutcome
   /** SHEETFMT-2 — applies a formatting patch to the given sheet rows across a column span. */
   readonly setRowsFormat: (
     sheetIndex: number,
@@ -386,14 +390,21 @@ export function useSpreadsheetEditor(
    * than going through `mutate`, whose contract is "returns a document".
    */
   const sortRows = useCallback(
-    (sheetIndex: number, col: number, direction: 'asc' | 'desc', headerRows?: number): SortRefusal | undefined => {
+    (
+      sheetIndex: number,
+      col: number,
+      direction: 'asc' | 'desc',
+      headerRows?: number,
+      atRow?: number,
+    ): SortOutcome => {
       const result = sortRowsOp(history.present, sheetIndex, {
         col,
         direction,
         ...(headerRows === undefined ? {} : { headerRows }),
+        ...(atRow === undefined ? {} : { atRow }),
       })
       if (result.document !== history.present) history.set(result.document)
-      return result.refusal
+      return { sorted: result.sorted, refusal: result.refusal, warning: result.warning, block: result.block }
     },
     [history],
   )

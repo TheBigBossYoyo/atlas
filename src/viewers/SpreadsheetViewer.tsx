@@ -386,14 +386,19 @@ function SpreadsheetViewerBase({ file }: ViewerProps) {
    */
   const handleSort = useCallback(
     (col: number, direction: 'asc' | 'desc') => {
-      if (activeSheetIndex < 0) return
+      if (activeSheetIndex < 0 || !selection) return
       const headerRows = activeSheet?.tables?.length ? 1 : 0
-      const refusal = editor.sortRows(activeSheetIndex, col, direction, headerRows)
-      if (refusal === 'has-formulas') setSortMessage(t('spreadsheet.sortHasFormulas'))
-      else if (refusal === 'no-rows') setSortMessage(t('spreadsheet.sortNothingToDo'))
-      else setSortMessage(null)
+      // SHEET-SORT-2 — the data block around the selected row, not the whole
+      // sheet, so a totals row under a blank row neither moves with the data
+      // nor blocks the sort. `selection.row` is already in sheet space.
+      const outcome = editor.sortRows(activeSheetIndex, col, direction, headerRows, selection.row)
+      if (outcome.refusal === 'has-formulas') setSortMessage(t('spreadsheet.sortHasFormulas'))
+      else if (outcome.refusal === 'no-rows') setSortMessage(t('spreadsheet.sortNothingToDo'))
+      else if (outcome.warning === 'outside-formulas-read-block') {
+        setSortMessage(t('spreadsheet.sortOutsideFormulas'))
+      } else setSortMessage(null)
     },
-    [editor, activeSheetIndex, activeSheet, t],
+    [editor, activeSheetIndex, activeSheet, selection, t],
   )
 
   /**

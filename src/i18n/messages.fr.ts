@@ -362,7 +362,9 @@ export const messages = {
   'spreadsheetToolbar.sortAsc': 'Trier de A à Z',
   'spreadsheetToolbar.sortDesc': 'Trier de Z à A',
   'spreadsheet.sortHasFormulas':
-    'Le tri n’est pas encore disponible ici : cette feuille contient des formules, et les déplacer pourrait changer ce à quoi elles font référence. Les lignes de valeurs simples peuvent être triées.',
+    'Le tri n’est pas disponible ici : les lignes à trier contiennent des formules, et les déplacer pourrait changer ce à quoi elles font référence. Un bloc de valeurs simples se trie très bien, même si la feuille contient des formules ailleurs.',
+  'spreadsheet.sortOutsideFormulas':
+    'Tri effectué. Les formules en dehors des lignes triées pointent toujours vers les mêmes cellules : certaines lisent donc désormais d’autres lignes — vérifiez les totaux et recherches à proximité.',
   'spreadsheet.sortNothingToDo': 'Il n’y a rien à trier.',
   'spreadsheetToolbar.filterGroupAria': 'Filtrer',
   'spreadsheetToolbar.filterTitle': 'Filtrer cette colonne',

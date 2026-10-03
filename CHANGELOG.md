@@ -31,9 +31,15 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   Numbers sort as numbers (so 9 comes before 10, not after), text ignores case,
   and blank cells stay at the bottom whichever direction you sort.
 
-  Sheets containing formulas are not sorted yet, and Atlas says so rather than
-  doing it: moving a formula can change what it refers to, and getting that
-  wrong would quietly give you wrong numbers.
+  What gets sorted is the block of rows around the cell you picked, stopping at
+  a blank row — so a totals row at the bottom of a sheet stays where it is
+  instead of being sorted into the middle of the data.
+
+  Rows that themselves contain formulas are still not sorted, and Atlas says so
+  rather than doing it: moving a formula can change what it refers to, and
+  getting that wrong would quietly give you wrong numbers. Formulas elsewhere
+  are left alone, exactly as Excel leaves them — and because that can make them
+  read different rows than before, Atlas tells you when it has happened.
 - **Border control per edge.** The Borders button now also has a toggle for each
   edge and three thicknesses, so you can put a line on one side of a cell and
   take it back off again — not just apply a whole-cell preset.

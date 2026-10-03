@@ -368,7 +368,9 @@ export const messages = {
   'spreadsheetToolbar.sortAsc': 'Sort A to Z',
   'spreadsheetToolbar.sortDesc': 'Sort Z to A',
   'spreadsheet.sortHasFormulas':
-    'Sorting is not available here yet: this sheet contains formulas, and moving them could change what they refer to. Rows of plain values can be sorted.',
+    'Sorting is not available here: the rows being sorted contain formulas, and moving them could change what they refer to. A block of plain values sorts fine, even on a sheet with formulas elsewhere.',
+  'spreadsheet.sortOutsideFormulas':
+    'Sorted. Formulas outside the sorted rows still point at the same cells, so some of them now read different rows — check any totals or lookups nearby.',
   'spreadsheet.sortNothingToDo': 'There is nothing to sort.',
   'spreadsheetToolbar.filterGroupAria': 'Filter',
   'spreadsheetToolbar.filterTitle': 'Filter this column',

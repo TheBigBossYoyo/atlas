@@ -749,10 +749,106 @@ export function recalculateDocument(doc: SpreadsheetDocument): SpreadsheetDocume
 /** SHEET-SORT-1 — why a sort did nothing, so the UI can say something true. */
 export type SortRefusal = 'no-rows' | 'has-formulas'
 
+/**
+ * SHEET-SORT-2 — a sort that went ahead but changed what a formula ELSEWHERE
+ * reads.
+ *
+ * Excel does not adjust a formula outside the sorted block, and neither does
+ * this: `=B3` keeps pointing at B3, which now holds a different row's value.
+ * That is correct behaviour and a well-known way to break a spreadsheet
+ * quietly, so Atlas says it happened.
+ */
+export type SortWarning = 'outside-formulas-read-block'
+
 export type SortRowsResult = {
   readonly document: SpreadsheetDocument
   readonly sorted: boolean
   readonly refusal?: SortRefusal
+  readonly warning?: SortWarning
+  /** The rows actually sorted, for the message that reports it. */
+  readonly block?: { readonly first: number; readonly last: number }
+}
+
+/** A row with nothing in it — the boundary of a data block, as Excel's current region treats it. */
+function isBlankRow(row: ReadonlyArray<string> | undefined): boolean {
+  return row === undefined || row.every((cell) => cell.trim() === '')
+}
+
+/**
+ * SHEET-SORT-2 — the contiguous run of non-blank rows containing `atRow`.
+ *
+ * This is what Excel calls the current region, and adopting it is what lets a
+ * sheet with a totals row be sorted at all: `=SUM(B1:B9)` sitting under a blank
+ * row is OUTSIDE the block, so it neither blocks the sort nor moves with it.
+ * Sorting the whole sheet — which is all the first version could do — had to
+ * refuse such a sheet entirely, because the totals row held a formula.
+ *
+ * Returns `null` when `atRow` is itself blank: there is no data block there to
+ * sort, and picking a neighbouring one would be guessing which.
+ */
+export function dataBlockForRow(
+  rows: ReadonlyArray<ReadonlyArray<string>>,
+  atRow: number,
+  headerRows: number,
+): { readonly first: number; readonly last: number } | null {
+  if (atRow < headerRows || atRow >= rows.length || isBlankRow(rows[atRow])) return null
+  let first = atRow
+  while (first > headerRows && !isBlankRow(rows[first - 1])) first -= 1
+  let last = atRow
+  while (last + 1 < rows.length && !isBlankRow(rows[last + 1])) last += 1
+  return { first, last }
+}
+
+/**
+ * Does any formula OUTSIDE the block read rows INSIDE it, in a way a
+ * permutation would change?
+ *
+ * A formula that reads the WHOLE block is not reported. That is the totals row
+ * — `=SUM(B1:B9)` over exactly the rows being sorted — and its value does not
+ * depend on their order, so warning about it would fire on almost every sort
+ * and teach the user to ignore the message. A formula reading SOME of the
+ * block's rows (`=B3`, `=AVERAGE(B2:B4)`) is reported: after the sort those
+ * cells hold different rows' data.
+ *
+ * The scan deliberately over-reports in one direction — `formulaDependencyKeys`
+ * is a text scan returning a superset of the true references, and a lookup like
+ * `VLOOKUP` over the whole block IS order-sensitive but is not reported by the
+ * whole-block rule above. The second of those is a judged trade, written down
+ * in `docs/KNOWN_LIMITATIONS.md` rather than left implicit.
+ */
+function outsideFormulasReadBlock(
+  doc: SpreadsheetDocument,
+  sheetIndex: number,
+  first: number,
+  last: number,
+): boolean {
+  const indexByName = new Map<string, number>()
+  doc.sheets.forEach((sheet, index) => {
+    const key = sheet.name.toLowerCase()
+    if (!indexByName.has(key)) indexByName.set(key, index)
+  })
+  const blockRowCount = last - first + 1
+
+  for (let si = 0; si < doc.sheets.length; si++) {
+    const sheet = doc.sheets[si]
+    for (let r = 0; r < sheet.formulas.length; r++) {
+      // A formula inside the block is handled by the refusal, not here.
+      if (si === sheetIndex && r >= first && r <= last) continue
+      const formulaRow = sheet.formulas[r]
+      for (let c = 0; c < formulaRow.length; c++) {
+        const formula = formulaRow[c]
+        if (formula === undefined) continue
+        const rowsRead = new Set<number>()
+        formulaDependencyKeys(formula, sheet.rows.length, sheet.colCount, (refSheet, row, col) => {
+          const target = refSheet === undefined ? si : (indexByName.get(refSheet.toLowerCase()) ?? -1)
+          if (target === sheetIndex && row >= first && row <= last) rowsRead.add(row)
+          return cellKey(row, col)
+        })
+        if (rowsRead.size > 0 && rowsRead.size < blockRowCount) return true
+      }
+    }
+  }
+  return false
 }
 
 /**
@@ -781,21 +877,36 @@ export function sortRows(
     readonly direction: 'asc' | 'desc'
     /** Rows above this many, from the top of the sheet, are not moved. */
     readonly headerRows?: number
+    /**
+     * SHEET-SORT-2 — sort only the data block containing this row, as Excel's
+     * current region does. Omitted, the whole sheet below the header is one
+     * block, which is what the first version always did.
+     */
+    readonly atRow?: number
   },
 ): SortRowsResult {
   const sheet = doc.sheets[sheetIndex]
   if (!sheet) return { document: doc, sorted: false, refusal: 'no-rows' }
 
-  const first = Math.max(0, options.headerRows ?? 0)
-  const last = sheet.rows.length - 1
+  const headerRows = Math.max(0, options.headerRows ?? 0)
+  const bounds =
+    options.atRow === undefined
+      ? { first: headerRows, last: sheet.rows.length - 1 }
+      : dataBlockForRow(sheet.rows, options.atRow, headerRows)
+  if (!bounds) return { document: doc, sorted: false, refusal: 'no-rows' }
+  const { first, last } = bounds
   if (last <= first) return { document: doc, sorted: false, refusal: 'no-rows' }
 
   for (let r = first; r <= last; r += 1) {
     const formulaRow = sheet.formulas[r]
     if (formulaRow?.some(formula => formula !== undefined)) {
-      return { document: doc, sorted: false, refusal: 'has-formulas' }
+      return { document: doc, sorted: false, refusal: 'has-formulas', block: { first, last } }
     }
   }
+
+  const warning: SortWarning | undefined = outsideFormulasReadBlock(doc, sheetIndex, first, last)
+    ? 'outside-formulas-read-block'
+    : undefined
 
   // Sorted as a list of row INDEXES, so every parallel array (heights,
   // sources, the override map) can be permuted the same way rather than each
@@ -815,8 +926,9 @@ export function sortRows(
 
   if (order.every((from, i) => from === first + i)) {
     // Already in order: the same document object, so this costs nothing and
-    // does not add an undo entry.
-    return { document: doc, sorted: false, refusal: undefined }
+    // does not add an undo entry. No warning either — nothing moved, so
+    // nothing an outside formula reads has changed.
+    return { document: doc, sorted: false, refusal: undefined, block: { first, last } }
   }
 
   const permute = <T,>(source: ReadonlyArray<T>): T[] => {
@@ -856,6 +968,8 @@ export function sortRows(
       ...(editedCells ? { editedCells } : {}),
     }),
     sorted: true,
+    ...(warning ? { warning } : {}),
+    block: { first, last },
   }
 }
 
