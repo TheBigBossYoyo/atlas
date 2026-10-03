@@ -251,7 +251,67 @@ const TextCellEditor: ProvideEditorComponent<TextCell> = ({
       if (performance.now() < deadline) frame = requestAnimationFrame(claimFocus)
     }
     frame = requestAnimationFrame(claimFocus)
-    return () => cancelAnimationFrame(frame)
+
+    // MATRIX-FLAKE-2 — the keystrokes that land in the wrong place WHILE the
+    // guard above is still chasing focus.
+    //
+    // The guard fixes where focus ends up, but it cannot un-deliver a key
+    // already dispatched to glide's accessibility `<td>` in the meantime: those
+    // characters are simply gone. Observed as an overlay holding only its seed
+    // character `"a"` after `"after"` was typed, with the Enter lost too, so the
+    // edit never committed — and `focus=TEXTAREA` by the time the failure was
+    // reported, because the guard had since done its job. It is the same loss
+    // `KeyHold` prevents BEFORE the overlay mounts; this is the window after it
+    // mounts and before it has focus, which nothing covered.
+    //
+    // A capture-phase listener, so it sees the key before the `<td>` does. It
+    // only intervenes when focus is somewhere that is never legitimate during an
+    // edit — nothing, `<body>`, or a table cell — exactly the condition the
+    // focus guard uses, so a user who deliberately clicks into another control
+    // keeps their keystrokes.
+    const rescueKey = (event: globalThis.KeyboardEvent): void => {
+      const overlay = overlayTextarea()
+      if (overlay === null || document.activeElement === overlay) return
+
+      const active = document.activeElement
+      const misplaced = active === null || active === document.body || active instanceof HTMLTableCellElement
+      if (!misplaced) return
+
+      // Enter/Tab would otherwise be lost the same way, leaving the edit
+      // uncommitted — which is how this surfaced, as a save that never happened.
+      if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+        event.preventDefault()
+        event.stopPropagation()
+        const movement = event.key === 'Tab' ? ([event.shiftKey ? -1 : 1, 0] as const) : ([0, 1] as const)
+        onFinishedEditing({ ...value, data: overlay.value }, movement)
+        return
+      }
+
+      // The same printable-key test glide uses to decide a key starts editing.
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      if (event.key.length !== 1 || !/[ -~]/.test(event.key)) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      // Written through the textarea AND reported upward: the DOM value is what
+      // the next rescued key appends to, and `onChange` is what the grid's own
+      // model needs so a commit from any path sees the full text.
+      const next = overlay.value + event.key
+      overlay.value = next
+      onChange({ ...value, data: next })
+    }
+
+    document.addEventListener('keydown', rescueKey, true)
+    return () => {
+      cancelAnimationFrame(frame)
+      document.removeEventListener('keydown', rescueKey, true)
+    }
+    // `value`/`onChange`/`onFinishedEditing` are glide's own per-render
+    // identities; re-running this effect on each of them would restart the
+    // focus chase mid-handoff. The listener reads the live overlay element, so
+    // a stale closure cannot write to the wrong place — and `value` is only
+    // used as the object to spread a fresh `data` onto.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readonlyCell])
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {

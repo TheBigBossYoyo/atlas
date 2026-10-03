@@ -75,6 +75,11 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 
 ### Fixed
 
+- **Typing fast into a spreadsheet cell no longer loses characters.** On a busy
+  machine, the first character you typed could open the cell editor while the
+  rest went nowhere — leaving the cell holding one letter, the edit uncommitted,
+  and a Ctrl+S straight afterwards saving nothing. Every keystroke now reaches
+  the cell, including the Enter that commits it.
 - **A cell holding a date is no longer read as a number.** `2026-10-02` was
   being read as the number 2026 and `15/03/2023` as 15, so a column of dates
   added up to a total of its day numbers. Cell text now has to be a whole
