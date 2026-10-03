@@ -47,10 +47,19 @@ const COLUMN_WIDTH = 120
 
 async function launch(file: string): Promise<{ app: ElectronApplication; page: Page }> {
   const app = await electron.launch({ args: ['.', file], cwd: projectRoot, env: { ...process.env, CI: '1', PLAYWRIGHT: '1' } })
+  // `addInitScript` runs before any script on the NEXT navigation, which is the
+  // app's own document — that is what actually installs the log.
   await app.context().addInitScript(installKeyLog)
   const page = await app.firstWindow()
-  await page.evaluate(installKeyLog)
+  // The first window can still be on its initial blank document, about to be
+  // replaced by the app's own. Evaluating into it here races that navigation and
+  // loses ("Execution context was destroyed"), which is what broke every test
+  // in this file on the first attempt. Wait for the real document first —
+  // `perf.spec.ts` handles the same race the same way.
   await page.waitForSelector('.spreadsheet-viewer__grid canvas', { timeout: 30_000 })
+  // Redundant in the common case; only does anything if the document had
+  // already started executing before `addInitScript` was registered.
+  await page.evaluate(installKeyLog)
   await page.waitForTimeout(1000)
   return { app, page }
 }
