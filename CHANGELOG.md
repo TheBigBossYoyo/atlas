@@ -8,7 +8,7 @@ each wave closed — rather than by individual commit, since a wave is this
 project's real unit of shipped, reviewable work. Dates are merge dates from
 `git log`.
 
-## [Unreleased]
+## [3.13.0] — 2026-11-15 (PDF editing, spreadsheet sort and filter)
 
 ### Added
 
