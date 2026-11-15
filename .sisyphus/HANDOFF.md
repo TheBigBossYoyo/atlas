@@ -115,7 +115,7 @@ SHA256 `4282BDACC318401D571B1E55AA4A27820EC9FB8BCBFA6E8929D4AD38D806F21D`.
 
 PDF editing (PDF-EDIT-1/2: forms saved, annotations, page ops, real in-place
 text editing) plus the spreadsheet sort/filter work merged since 3.12.0. The
-machine runs 3.13.0 (Program FilesAtlasAtlas.exe reports 3.13.0.0).
+machine runs 3.13.0 (`C:\Program Files\Atlas\Atlas.exe` reports 3.13.0.0).
 
 Gate: 4456 unit tests, lint and types clean, bundle check passed, PDF e2e
 specs 6/6. The full e2e run was stopped at 147/184 by low system memory with
