@@ -108,14 +108,14 @@ references and defined names are now re-anchored through every structural edit, 
 listed below; an English/French UI (`src/i18n/`, DEFER-6 resolved — the owner is confirmed French-
 speaking); `scripts/*.mjs` and `tests/e2e/fixtures/*.mjs` are now type-checked too (P4.1 fully closed).
 
-## 3.13.0 — built 2026-11-15, NOT INSTALLED (UAC prompt cancelled)
+## 3.13.0 — built and installed 2026-11-15
 
 `release\Atlas-Setup-3.13.0.exe`, 138.1 MB, unsigned.
 SHA256 `4282BDACC318401D571B1E55AA4A27820EC9FB8BCBFA6E8929D4AD38D806F21D`.
 
 PDF editing (PDF-EDIT-1/2: forms saved, annotations, page ops, real in-place
 text editing) plus the spreadsheet sort/filter work merged since 3.12.0. The
-machine runs 3.12.0 (installed after that release was recorded).
+machine runs 3.13.0 (Program FilesAtlasAtlas.exe reports 3.13.0.0).
 
 Gate: 4456 unit tests, lint and types clean, bundle check passed, PDF e2e
 specs 6/6. The full e2e run was stopped at 147/184 by low system memory with
