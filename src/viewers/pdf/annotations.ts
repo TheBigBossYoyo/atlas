@@ -57,6 +57,7 @@ export type PdfAnnotationKind =
   | 'text-field'
   | 'checkbox'
   | 'radio'
+  | 'choice'
   | 'ignored'
 
 /** The subset of a pdf.js annotation data dict this module reads. Loosely
@@ -81,6 +82,17 @@ export type RawPdfAnnotation = {
   readonly buttonValue?: string | null
   readonly noView?: boolean
   readonly hidden?: boolean
+  readonly readOnly?: boolean
+  readonly multiLine?: boolean
+  readonly maxLen?: number
+  readonly password?: boolean
+  /** Text alignment: 0 left, 1 centre, 2 right. */
+  readonly textAlignment?: number | null
+  readonly defaultAppearanceData?: { readonly fontSize?: number } | null
+  /** Choice widgets: the entries, the combo-box flag and the multi-select flag. */
+  readonly options?: ReadonlyArray<{ readonly exportValue?: unknown; readonly displayValue?: unknown }>
+  readonly combo?: boolean
+  readonly multiSelect?: boolean
 }
 
 /**
@@ -108,7 +120,13 @@ export function classifyAnnotation(annotation: RawPdfAnnotation): PdfAnnotationK
       return 'text-field'
     }
     if (annotation.fieldType === 'Btn') {
-      return annotation.radioButton ? 'radio' : 'checkbox'
+      // A push button has neither flag and nothing to fill in.
+      if (annotation.radioButton) return 'radio'
+      if (annotation.checkBox) return 'checkbox'
+      return 'ignored'
+    }
+    if (annotation.fieldType === 'Ch') {
+      return 'choice'
     }
   }
 

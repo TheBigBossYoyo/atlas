@@ -4,6 +4,7 @@ import {
   ChevronDown as ChevronDownSmall,
   ChevronUp,
   LayoutGrid,
+  PencilLine,
   Printer,
   RotateCw,
   Search,
@@ -37,6 +38,9 @@ export type PdfToolbarProps = {
   readonly onToggleThumbnailRail: () => void
   readonly onToggleFind: () => void
   readonly onPrint: () => void
+  /** Edit mode (PDF-EDIT-1); the button is omitted when no toggle is given. */
+  readonly isEditing?: boolean
+  readonly onToggleEdit?: () => void
 }
 
 export function PdfToolbar({
@@ -60,6 +64,8 @@ export function PdfToolbar({
   onToggleThumbnailRail,
   onToggleFind,
   onPrint,
+  isEditing = false,
+  onToggleEdit,
 }: PdfToolbarProps) {
   const t = useTranslate()
   return (
@@ -106,6 +112,18 @@ export function PdfToolbar({
       </div>
 
       <div className="pdf-viewer__toolbar-group pdf-viewer__toolbar-group--end">
+        {onToggleEdit && (
+          <button
+            className={`pdf-viewer__toolbar-button pdf-viewer__toolbar-button--labelled ${isEditing ? 'pdf-viewer__toolbar-button--active' : ''}`}
+            onClick={onToggleEdit}
+            aria-pressed={isEditing}
+            title={t('pdfToolbar.edit')}
+          >
+            <PencilLine size={18} />
+            <span>{t('pdfToolbar.editLabel')}</span>
+          </button>
+        )}
+
         <button className="pdf-viewer__toolbar-button" onClick={onToggleFind} title={t('pdfToolbar.find')}>
           <Search size={18} />
         </button>

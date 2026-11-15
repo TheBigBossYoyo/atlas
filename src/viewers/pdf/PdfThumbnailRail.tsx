@@ -1,8 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 
 import { computeActivePageWindow } from './virtualization'
-import { combineRotation } from './rotation'
+import { combineRotation, normalizeRotation } from './rotation'
 import type { PageRotation, PdfDocument } from './types'
+import type { PageSlot } from './edit/types'
 import { useTranslate } from '../../i18n'
 
 const THUMBNAIL_WIDTH = 120
@@ -11,6 +12,8 @@ const THUMBNAIL_OVERSCAN = 6
 type PdfThumbnailProps = {
   readonly pdfDoc: PdfDocument
   readonly pageNumber: number
+  /** The source page drawn in this slot (differs from `pageNumber` once pages were reordered). */
+  readonly sourcePageNumber: number
   readonly rotation: PageRotation
   readonly isActive: boolean
   readonly isCurrent: boolean
@@ -21,6 +24,7 @@ type PdfThumbnailProps = {
 function PdfThumbnailBase({
   pdfDoc,
   pageNumber,
+  sourcePageNumber,
   rotation,
   isActive,
   isCurrent,
@@ -44,7 +48,7 @@ function PdfThumbnailBase({
 
     void (async () => {
       try {
-        const page = await pdfDoc.getPage(pageNumber)
+        const page = await pdfDoc.getPage(sourcePageNumber)
         if (cancelled) return
         // TOTAL rotation (intrinsic /Rotate + the Rotate-button state) so a
         // thumbnail's orientation always matches the corresponding main page
@@ -64,7 +68,7 @@ function PdfThumbnailBase({
         await page.render({ canvas, canvasContext, viewport }).promise
       } catch (err) {
         if (err instanceof Error && err.name !== 'RenderingCancelledException') {
-          console.error(`Error rendering thumbnail for page ${pageNumber}`, err)
+          console.error(`Error rendering thumbnail for page ${sourcePageNumber}`, err)
         }
       }
     })()
@@ -72,7 +76,7 @@ function PdfThumbnailBase({
     return () => {
       cancelled = true
     }
-  }, [pdfDoc, pageNumber, rotation, isActive])
+  }, [pdfDoc, sourcePageNumber, rotation, isActive])
 
   return (
     <button
@@ -99,6 +103,8 @@ export type PdfThumbnailRailProps = {
   readonly currentPage: number
   readonly rotation: PageRotation
   readonly onSelectPage: (pageNumber: number) => void
+  /** The pages as shown, after reordering/deletion and with their saved turn (PDF-EDIT-1). */
+  readonly pages?: ReadonlyArray<PageSlot>
 }
 
 /**
@@ -116,6 +122,7 @@ export function PdfThumbnailRail({
   currentPage,
   rotation,
   onSelectPage,
+  pages,
 }: PdfThumbnailRailProps) {
   const t = useTranslate()
   const railRef = useRef<HTMLDivElement | null>(null)
@@ -178,12 +185,14 @@ export function PdfThumbnailRail({
     <div className="pdf-viewer__thumbnail-rail" ref={railRef} role="group" aria-label={t('pdf.thumbnails.railAria')}>
       {Array.from({ length: pageCount }, (_, index) => {
         const pageNumber = index + 1
+        const slot = pages?.[index]
         return (
           <PdfThumbnail
-            key={pageNumber}
+            key={slot?.source ?? pageNumber}
             pdfDoc={pdfDoc}
             pageNumber={pageNumber}
-            rotation={rotation}
+            sourcePageNumber={slot?.source ?? pageNumber}
+            rotation={slot ? normalizeRotation(rotation + slot.rotation) : rotation}
             isActive={activePages.has(pageNumber)}
             isCurrent={pageNumber === currentPage}
             onSelect={onSelectPage}

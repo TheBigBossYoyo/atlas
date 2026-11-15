@@ -515,6 +515,7 @@
 @media print {
   body.atlas-printing .pdf-viewer__toolbar,
   body.atlas-printing .pdf-viewer__find-bar,
+  body.atlas-printing .pdf-edit-toolbar,
   body.atlas-printing .pdf-viewer__body,
   body.atlas-printing .pdf-viewer__print-status,
   body.atlas-printing .pdf-viewer__password-overlay {
@@ -553,4 +554,216 @@
   color: var(--text-primary);
   padding: 24px;
   text-align: center;
+}
+
+/* ---- Form fields beyond single-line text (PDF-EDIT-1) ---- */
+
+textarea.pdf-viewer__annotation--text-field {
+  resize: none;
+  padding: 2px;
+  line-height: 1.2;
+}
+
+.pdf-viewer__annotation--choice {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgba(0, 100, 255, 0.5);
+  background-color: rgba(255, 255, 150, 0.35);
+  color: #000;
+  font-family: inherit;
+}
+
+/* ---- Editing (PDF-EDIT-1) ---- */
+
+.pdf-viewer__toolbar-button--labelled {
+  width: auto;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.pdf-edit-toolbar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 6px 16px;
+  background-color: var(--bg-primary);
+  border-bottom: 1px solid var(--border-primary);
+  z-index: 9;
+}
+
+.pdf-edit-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pdf-edit-toolbar__group--end {
+  margin-left: auto;
+}
+
+.pdf-edit-toolbar__swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border-primary);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.pdf-edit-toolbar__swatch--active {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pdf-edit-toolbar__size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.pdf-edit-toolbar__size select {
+  padding: 2px 4px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.pdf-edit-toolbar__save {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 4px;
+  background-color: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pdf-edit-toolbar__save:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+.pdf-edit-toolbar__save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pdf-edit-toolbar__notice {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* No theme has an error colour token; text-primary keeps AA contrast in all of them. */
+.pdf-edit-toolbar__notice[role='alert'] {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Highlights sit between the canvas and the text layer — no z-index on
+   purpose, so they paint over the canvas but under the text layer (z 1) —
+   and multiply like the /Multiply appearance the saved file gets. */
+.pdf-edit-layer__highlights {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  overflow: visible;
+}
+
+.pdf-edit-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+}
+
+.pdf-edit-layer__svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.pdf-edit-layer--text {
+  cursor: text;
+}
+
+.pdf-edit-layer--ink {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.pdf-edit-layer--edit-text {
+  cursor: text;
+}
+
+.pdf-viewer--tool-select .pdf-edit-layer__shape {
+  cursor: move;
+}
+
+.pdf-edit-layer__selection {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5px;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+
+.pdf-edit-layer__hover {
+  fill: rgba(9, 103, 215, 0.08);
+  stroke: var(--accent);
+  stroke-width: 1px;
+  pointer-events: none;
+}
+
+.pdf-edit-layer__text-editor {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px dashed var(--accent);
+  outline: none;
+  font-family: Helvetica, Arial, sans-serif;
+  transform-origin: 0 0;
+}
+
+.pdf-edit-layer__text-editor {
+  min-height: 1.5em;
+  overflow: hidden;
+  resize: none;
+  white-space: pre;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+
+/* While highlighting, selected text shows in the highlight colour's spirit. */
+.pdf-viewer--tool-highlight .pdf-viewer__text-layer ::selection {
+  background: rgba(255, 216, 26, 0.45);
+}
+
+/* The in-place paragraph editor (PDF-EDIT-2): text sits where the page's
+   paragraph was, in its own styles, over a cover in the paper colour. */
+.pdf-edit-layer__paragraph-editor {
+  position: absolute;
+  box-sizing: content-box;
+  margin: 0;
+  padding: 0;
+  outline: 1px dashed var(--accent);
+  outline-offset: 2px;
+  background: transparent;
+  line-height: 1.2;
+  transform-origin: 0 0;
+  overflow-wrap: break-word;
+  cursor: text;
+  z-index: 1;
 }

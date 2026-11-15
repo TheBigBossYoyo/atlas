@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 
 import type { NavItem, ViewerProps } from '../../formats/types'
 import { useSetNavItems, useSetViewerStats } from '../shared/useViewerContext'
@@ -8,7 +8,7 @@ import '../__styles__/viewer-pdf.css'
 
 import { buildFallbackNavItems, buildOutlineNavItems } from './outline'
 import { DEFAULT_ZOOM, FIT_PADDING_PX, clampZoom, zoomIn as computeZoomIn, zoomOut as computeZoomOut } from './geometry'
-import { applyRotationToDimensions, combineRotation, rotateClockwise } from './rotation'
+import { applyRotationToDimensions, combineRotation, normalizeRotation, rotateClockwise } from './rotation'
 import {
   DEFAULT_OVERSCAN,
   clampPageNumber,
@@ -23,15 +23,58 @@ import { usePdfFind } from './usePdfFind'
 import { usePdfPageGeometry } from './usePdfPageGeometry'
 import { runDetectingFakeWorkerFallback } from './workerSetup'
 import { scrollIntoViewRespectingMotionPreference } from '../../utils/motionPreference'
-import { PdfPage } from './PdfPage'
+import { PdfPage, type PdfPageOverlayInfo } from './PdfPage'
 import { PdfToolbar } from './PdfToolbar'
 import { PdfFindBar } from './PdfFindBar'
 import { PdfPasswordDialog } from './PdfPasswordDialog'
 import { PdfThumbnailRail } from './PdfThumbnailRail'
 import type { PageGeometry, PageRotation, PdfDocument, PdfOutlineNode, PdfjsRuntime, ZoomMode } from './types'
 import { useTranslate } from '../../i18n'
+import { hasDocumentEdits } from './edit/editState'
+import { PdfEditLayer } from './edit/PdfEditLayer'
+import { PdfEditToolbar } from './edit/PdfEditToolbar'
+import { mergeLineRects, type ScreenRect } from './edit/textRuns'
+import type { HighlightAnnotation, PdfAnnotationDraft, PdfRect, TextEdit } from './edit/types'
+import { usePdfEditor } from './edit/usePdfEditor'
+import { previewCovers, useTextPreview, type PreviewOpener } from './edit/useTextPreview'
 
 type PasswordPromptState = { readonly isIncorrect: boolean }
+
+/** The dynamically-imported pdfjs-dist module, kept whole for opening the edited copy to print. */
+type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs')
+
+/**
+ * The client rects of the current text selection that fall inside each
+ * page's text layer, keyed by shown page number. Walked per text node rather
+ * than read off the range as a whole, so the text layer's invisible
+ * end-of-content element — which a range's own rects include — never turns
+ * into a highlight.
+ */
+function selectionRectsByPage(root: HTMLElement, selection: Selection): Map<number, ScreenRect[]> {
+  const byPage = new Map<number, ScreenRect[]>()
+  if (selection.rangeCount === 0 || selection.isCollapsed) return byPage
+  const range = selection.getRangeAt(0)
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node: Node | null
+  while ((node = walker.nextNode())) {
+    if (!range.intersectsNode(node)) continue
+    const parent = node.parentElement
+    if (!parent?.closest('.pdf-viewer__text-layer')) continue
+    const wrapper = parent.closest<HTMLElement>('.pdf-viewer__page-wrapper')
+    const pageNumber = Number(wrapper?.dataset.page)
+    if (!wrapper || !Number.isFinite(pageNumber)) continue
+    const piece = document.createRange()
+    piece.selectNodeContents(node)
+    if (node === range.startContainer) piece.setStart(node, range.startOffset)
+    if (node === range.endContainer) piece.setEnd(node, range.endOffset)
+    const rects = byPage.get(pageNumber) ?? []
+    for (const rect of Array.from(piece.getClientRects())) {
+      rects.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom })
+    }
+    byPage.set(pageNumber, rects)
+  }
+  return byPage
+}
 
 const DEFAULT_PAGE_GEOMETRY: PageGeometry = { width: 612, height: 792 }
 const JUMP_SCROLL_TIMEOUT_MS = 600
@@ -47,7 +90,6 @@ function PdfViewerBase({ file }: ViewerProps) {
   const printRootRef = useRef<HTMLDivElement | null>(null)
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [pageCount, setPageCount] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageInput, setPageInput] = useState('1')
   const [zoomMode, setZoomMode] = useState<ZoomMode>(DEFAULT_ZOOM)
@@ -68,6 +110,30 @@ function PdfViewerBase({ file }: ViewerProps) {
   const [intersectingPages, setIntersectingPages] = useState<ReadonlyArray<number>>([])
   const [visibilityRatios, setVisibilityRatios] = useState<ReadonlyMap<number, number>>(new Map())
   const [pendingJumpPage, setPendingJumpPage] = useState<number | null>(null)
+  // The outline's nav items once resolved, or null when the file has none
+  // (the sidebar then lists the pages as shown — see the nav-items effect).
+  const [outlineNavItems, setOutlineNavItems] = useState<ReadonlyArray<NavItem> | null>(null)
+  const pdfjsModuleRef = useRef<PdfjsModule | null>(null)
+
+  // ---- Editing (PDF-EDIT-1) -------------------------------------------------
+  //
+  // Page numbers everywhere below are positions in the document AS SHOWN —
+  // after any reordering or deletion — and `pages[n - 1].source` is the page
+  // of the loaded file drawn there. Only pdf.js calls, page geometry and the
+  // edit model itself speak in source page numbers.
+  const editor = usePdfEditor({
+    pdfDoc,
+    filePath: file.path,
+    originalBytes: file.kind === 'binary' ? file.content : null,
+  })
+  const pages = editor.edits.pages
+  const pageCount = pdfDoc ? pages.length : 0
+  const sourcePageCount = pdfDoc?.numPages ?? 0
+  const pageOrder = useMemo(() => pages.map((slot) => slot.source), [pages])
+  const pagesRef = useRef(pages)
+  useEffect(() => {
+    pagesRef.current = pages
+  }, [pages])
 
   const currentPageRef = useRef(1)
   const pageCountRef = useRef(0)
@@ -81,7 +147,7 @@ function PdfViewerBase({ file }: ViewerProps) {
   const setNavItems = useSetNavItems()
   const setStats = useSetViewerStats()
 
-  const { geometry: pageGeometry, reportGeometry } = usePdfPageGeometry(pdfDoc, pageCount)
+  const { geometry: pageGeometry, reportGeometry } = usePdfPageGeometry(pdfDoc, sourcePageCount)
 
   useEffect(() => {
     currentPageRef.current = currentPage
@@ -120,6 +186,21 @@ function PdfViewerBase({ file }: ViewerProps) {
     // Re-checks whenever the active window changes — that's what causes the
     // pending target's node to actually mount.
   }, [pendingJumpPage, intersectingPages])
+
+  /** Outline entries, internal links and find resolve to SOURCE pages; a deleted one goes nowhere. */
+  const scrollToSourcePage = useCallback(
+    (sourcePage: number) => {
+      const index = pagesRef.current.findIndex((slot) => slot.source === sourcePage)
+      if (index !== -1) scrollToPage(index + 1)
+    },
+    [scrollToPage],
+  )
+
+  // A page delete or move can leave the current page past the end, or point
+  // it at a different page: keep the indicator on a page that exists.
+  useEffect(() => {
+    if (pageCount > 0 && currentPageRef.current > pageCount) scrollToPage(pageCount)
+  }, [pageCount, scrollToPage])
 
   const handlePrevPage = useCallback(() => {
     if (currentPageRef.current > 1) scrollToPage(currentPageRef.current - 1)
@@ -167,13 +248,29 @@ function PdfViewerBase({ file }: ViewerProps) {
     setIsPrinting(true)
     printRoot.replaceChildren()
 
+    // PDF-EDIT-1 — with page or content edits pending, print what a save
+    // would write: build those bytes and render them through a second,
+    // throwaway pdf.js document. Form values alone don't need that — the
+    // loaded document renders them from its own storage (ENABLE_STORAGE).
+    let printDoc: PdfDocument = pdfDoc
+    let printPages: ReadonlyArray<{ readonly source: number; readonly rotation: PageRotation }> = pages
+    let destroyPrintDoc: (() => Promise<void>) | null = null
+
     try {
-      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
-        const page = await pdfDoc.getPage(pageNumber)
+      if (hasDocumentEdits(editor.edits, pdfDoc.numPages) && pdfjsModuleRef.current) {
+        const task = pdfjsModuleRef.current.getDocument({ data: await editor.buildBytes() })
+        destroyPrintDoc = () => task.destroy()
+        printDoc = await task.promise
+        // The edited file already has the new order and rotation baked in.
+        printPages = Array.from({ length: printDoc.numPages }, (_, index) => ({ source: index + 1, rotation: 0 }))
+      }
+
+      for (const slot of printPages) {
+        const page = await printDoc.getPage(slot.source)
         // TOTAL rotation (intrinsic /Rotate + the Rotate-button state) —
         // see rotation.ts's `combineRotation`, and geometry.ts/PdfPage.tsx
         // for the same fix applied to the interactive view.
-        const totalRotation = combineRotation(page.rotate, rotation)
+        const totalRotation = combineRotation(page.rotate, normalizeRotation(rotation + slot.rotation))
         const viewport = page.getViewport({ scale: PDF_POINTS_TO_CSS_PX, rotation: totalRotation })
 
         const canvas = document.createElement('canvas')
@@ -214,8 +311,9 @@ function PdfViewerBase({ file }: ViewerProps) {
       document.body.classList.remove('atlas-printing')
       printRoot.replaceChildren()
       setIsPrinting(false)
+      void destroyPrintDoc?.()
     }
-  }, [pdfDoc, pdfjs, pageCount, rotation, isPrinting])
+  }, [pdfDoc, pdfjs, pageCount, pages, rotation, isPrinting, editor])
 
   // ---- Find (PDF-06/P6) --------------------------------------------------
 
@@ -223,7 +321,7 @@ function PdfViewerBase({ file }: ViewerProps) {
   // centralized shortcut dispatcher (wave-3 shell-polish follow-up) rather
   // than this component's own raw keydown handler below — see that hook's
   // own comment.
-  const find = usePdfFind(pdfDoc, pageCount, scrollToPage)
+  const find = usePdfFind(pdfDoc, sourcePageCount, scrollToPage, pageOrder)
   const activeMatch = find.matches[find.currentMatchIndex]
   const activeMatchLocalIndex = activeMatch
     ? localMatchIndexOnPage(find.matches, find.currentMatchIndex)
@@ -347,8 +445,12 @@ function PdfViewerBase({ file }: ViewerProps) {
         document.activeElement === document.body || container.contains(document.activeElement)
       if (!isFocusInside) return
 
+      // contentEditable too: the paragraph editor (PDF-EDIT-2) is one, and
+      // Space/arrows/Home/End there are typing, not page navigation.
       const isEditableTarget =
-        e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable)
 
       if (e.ctrlKey || e.metaKey) {
         if (e.key === '=' || e.key === '+') {
@@ -409,7 +511,7 @@ function PdfViewerBase({ file }: ViewerProps) {
     setStats(null)
     setPdfDoc(null)
     setPdfjs(null)
-    setPageCount(0)
+    setOutlineNavItems(null)
     setCurrentPage(1)
     setPageInput('1')
     setPasswordPrompt(null)
@@ -461,9 +563,9 @@ function PdfViewerBase({ file }: ViewerProps) {
         }
 
         setPasswordPrompt(null)
+        pdfjsModuleRef.current = pdfjsModule
         setPdfjs(pdfjsModule)
         setPdfDoc(pdf)
-        setPageCount(pdf.numPages)
         setStats({ kind: 'pdf', page: 1, pageCount: pdf.numPages })
 
         const outline = (await pdf.getOutline()) as ReadonlyArray<PdfOutlineNode> | null
@@ -473,14 +575,14 @@ function PdfViewerBase({ file }: ViewerProps) {
           outline && outline.length > 0
             ? await buildOutlineNavItems(
                 outline,
-                scrollToPage,
+                scrollToSourcePage,
                 pdf.getDestination.bind(pdf),
                 pdf.getPageIndex.bind(pdf),
               )
             : []
 
         if (cancelled) return
-        setNavItems(navItems.length > 0 ? navItems : buildFallbackNavItems(pdf.numPages, scrollToPage))
+        setOutlineNavItems(navItems.length > 0 ? navItems : null)
       } catch (err) {
         if (!cancelled) {
           setNavItems([])
@@ -507,7 +609,14 @@ function PdfViewerBase({ file }: ViewerProps) {
       // task (e.g. one already torn down by `handlePasswordCancel`).
       void destroyLoadingTaskRef.current?.()
     }
-  }, [file, setNavItems, setStats, scrollToPage])
+  }, [file, setNavItems, setStats, scrollToSourcePage])
+
+  // The outline when the file has one; otherwise one entry per page as shown,
+  // rebuilt when pages are deleted.
+  useEffect(() => {
+    if (pageCount === 0) return
+    setNavItems(outlineNavItems ?? buildFallbackNavItems(pageCount, scrollToPage))
+  }, [outlineNavItems, pageCount, scrollToPage, setNavItems])
 
   useEffect(() => {
     if (pageCount > 0) {
@@ -527,14 +636,123 @@ function PdfViewerBase({ file }: ViewerProps) {
     void destroyLoadingTaskRef.current?.()
   }, [])
 
-  const handleInternalLinkNavigate = useCallback((pageNumber: number) => scrollToPage(pageNumber), [scrollToPage])
+  const handleInternalLinkNavigate = useCallback(
+    (sourcePage: number) => scrollToSourcePage(sourcePage),
+    [scrollToSourcePage],
+  )
 
+  // ---- Editing: highlight from a text selection, deselect on outside click --
+
+  /** Each page's viewport while its edit layer is mounted, keyed by SOURCE page. */
+  const viewportsRef = useRef<Map<number, PdfPageOverlayInfo['viewport']>>(new Map())
+
+  const { isEditing, tool: editTool, addDrafts, toolColors, setSelectedId, selectedId } = editor
+
+  useEffect(() => {
+    if (!isEditing || editTool !== 'highlight') return undefined
+    const handleMouseUp = () => {
+      const root = viewerRef.current
+      const selection = window.getSelection()
+      if (!root || !selection) return
+      const drafts: HighlightAnnotation[] = []
+      selectionRectsByPage(root, selection).forEach((rects, shownPage) => {
+        const source = pagesRef.current[shownPage - 1]?.source
+        const viewport = source === undefined ? undefined : viewportsRef.current.get(source)
+        const wrapper = nodesRef.current.get(shownPage)
+        if (source === undefined || !viewport || !wrapper) return
+        const origin = wrapper.getBoundingClientRect()
+        const pdfRects: PdfRect[] = mergeLineRects(rects).map((rect) => {
+          const [x1, y1] = viewport.convertToPdfPoint(rect.left - origin.left, rect.top - origin.top)
+          const [x2, y2] = viewport.convertToPdfPoint(rect.right - origin.left, rect.bottom - origin.top)
+          return { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) }
+        })
+        if (pdfRects.length === 0) return
+        drafts.push({
+          kind: 'highlight',
+          id: `atlas-highlight-${Date.now().toString(36)}-${source}-${drafts.length}`,
+          page: source,
+          rects: pdfRects,
+          color: toolColors.highlight,
+        })
+      })
+      if (drafts.length === 0) return
+      addDrafts(drafts)
+      selection.removeAllRanges()
+    }
+    document.addEventListener('mouseup', handleMouseUp)
+    return () => document.removeEventListener('mouseup', handleMouseUp)
+  }, [addDrafts, editTool, isEditing, toolColors.highlight])
+
+  useEffect(() => {
+    if (!isEditing || selectedId === null) return undefined
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Element | null
+      if (target?.closest('[data-edit-id], .pdf-edit-toolbar')) return
+      setSelectedId(null)
+    }
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => document.removeEventListener('pointerdown', handlePointerDown)
+  }, [isEditing, selectedId, setSelectedId])
+
+  const editsByPage = useMemo(() => {
+    const annotations = new Map<number, PdfAnnotationDraft[]>()
+    const textEdits = new Map<number, TextEdit[]>()
+    for (const annotation of editor.edits.annotations) {
+      annotations.set(annotation.page, [...(annotations.get(annotation.page) ?? []), annotation])
+    }
+    for (const edit of editor.edits.textEdits) {
+      textEdits.set(edit.page, [...(textEdits.get(edit.page) ?? []), edit])
+    }
+    return { annotations, textEdits }
+  }, [editor.edits.annotations, editor.edits.textEdits])
+
+  // ---- Live preview of text edits (PDF-EDIT-2) ------------------------------
+
+  const openPreview = useMemo<PreviewOpener | null>(() => {
+    if (!pdfjs) return null
+    return (bytes) => {
+      const module = pdfjsModuleRef.current
+      if (!module) throw new Error('pdf.js is not loaded.')
+      const task = module.getDocument({ data: bytes })
+      return { promise: task.promise, destroy: () => task.destroy() }
+    }
+  }, [pdfjs])
+  const textPreview = useTextPreview(openPreview, editor.edits.textEdits, editor.buildTextPreview, editor.reportError)
+
+  const slotRotationBySource = useMemo(() => new Map(pages.map((slot) => [slot.source, slot.rotation])), [pages])
+
+  const renderEditOverlay = useCallback(
+    (info: PdfPageOverlayInfo) => {
+      const annotations = editsByPage.annotations.get(info.sourcePageNumber) ?? []
+      const textEdits = editsByPage.textEdits.get(info.sourcePageNumber) ?? []
+      if (!isEditing && annotations.length === 0 && textEdits.length === 0) return null
+      return (
+        <ViewportRegistration info={info} registry={viewportsRef.current}>
+          <PdfEditLayer
+            info={info}
+            documentRotation={combineRotation(info.intrinsicRotation, slotRotationBySource.get(info.sourcePageNumber) ?? 0)}
+            annotations={annotations}
+            textEdits={textEdits}
+            previewCurrent={previewCovers(textPreview, editor.edits.textEdits, info.sourcePageNumber)}
+            editor={editor}
+          />
+        </ViewportRegistration>
+      )
+    },
+    [editor, editsByPage, isEditing, slotRotationBySource, textPreview],
+  )
+
+  const currentSlot = pages[currentPage - 1]
   const actualZoomForDisplay =
     typeof zoomMode === 'number'
       ? clampZoom(zoomMode)
       : (() => {
-          const geom = pageGeometry.get(currentPage) ?? DEFAULT_PAGE_GEOMETRY
-          const { width, height } = applyRotationToDimensions(geom.width, geom.height, rotation)
+          const geom = (currentSlot && pageGeometry.get(currentSlot.source)) ?? DEFAULT_PAGE_GEOMETRY
+          const { width, height } = applyRotationToDimensions(
+            geom.width,
+            geom.height,
+            normalizeRotation(rotation + (currentSlot?.rotation ?? 0)),
+          )
           return zoomMode === 'fit-width'
             ? clampZoom(containerSize.width / Math.max(1, width))
             : clampZoom(
@@ -572,7 +790,13 @@ function PdfViewerBase({ file }: ViewerProps) {
         onToggleThumbnailRail={() => setIsThumbnailRailOpen((open) => !open)}
         onToggleFind={() => (find.isOpen ? find.close() : find.open())}
         onPrint={() => void handlePrint()}
+        isEditing={editor.isEditing}
+        onToggleEdit={pdfDoc ? editor.toggleEditing : undefined}
       />
+
+      {editor.isEditing && pageCount > 0 && (
+        <PdfEditToolbar editor={editor} currentPageIndex={currentPage - 1} pageCount={pageCount} />
+      )}
 
       <PdfFindBar
         isOpen={find.isOpen}
@@ -597,35 +821,45 @@ function PdfViewerBase({ file }: ViewerProps) {
             currentPage={currentPage}
             rotation={rotation}
             onSelectPage={scrollToPage}
+            pages={pages}
           />
         )}
 
-        <div ref={viewerRef} className="pdf-viewer">
+        <div
+          ref={viewerRef}
+          className={`pdf-viewer${editor.isEditing ? ` pdf-viewer--editing pdf-viewer--tool-${editor.tool}` : ''}`}
+        >
           {pdfDoc &&
             pdfjs &&
             pageCount > 0 &&
-            Array.from({ length: pageCount }, (_, index) => {
+            pages.map((slot, index) => {
               const pageNumber = index + 1
               const isActiveFindPage = activeMatch?.pageNumber === pageNumber
               return (
                 <PdfPage
-                  key={pageNumber}
+                  key={slot.source}
                   pdfjs={pdfjs}
                   pdfDoc={pdfDoc}
+                  renderDoc={
+                    textPreview && previewCovers(textPreview, editor.edits.textEdits, slot.source) ? textPreview.doc : undefined
+                  }
                   pageNumber={pageNumber}
+                  sourcePageNumber={slot.source}
                   isActive={activePages.has(pageNumber)}
                   zoomMode={zoomMode}
-                  rotation={rotation}
+                  rotation={normalizeRotation(rotation + slot.rotation)}
                   dpr={dpr}
                   containerWidth={containerSize.width}
                   containerHeight={containerSize.height}
-                  geometry={pageGeometry.get(pageNumber)}
+                  geometry={pageGeometry.get(slot.source)}
                   onGeometryResolved={reportGeometry}
                   registerNode={registerPageNode}
                   onInternalLinkNavigate={handleInternalLinkNavigate}
                   findQuery={find.query}
                   isActiveFindPage={isActiveFindPage}
                   activeMatchLocalIndex={isActiveFindPage ? activeMatchLocalIndex : -1}
+                  onFormChange={editor.markFormChanged}
+                  renderOverlay={renderEditOverlay}
                 />
               )
             })}
@@ -644,6 +878,26 @@ function PdfViewerBase({ file }: ViewerProps) {
       />
     </div>
   )
+}
+
+/** Keeps a page's viewport in the viewer's registry while its edit layer is mounted. */
+function ViewportRegistration({
+  info,
+  registry,
+  children,
+}: {
+  readonly info: PdfPageOverlayInfo
+  readonly registry: Map<number, PdfPageOverlayInfo['viewport']>
+  readonly children: ReactNode
+}) {
+  useEffect(() => {
+    const source = info.sourcePageNumber
+    registry.set(source, info.viewport)
+    return () => {
+      if (registry.get(source) === info.viewport) registry.delete(source)
+    }
+  }, [info, registry])
+  return <>{children}</>
 }
 
 export const PdfViewer = memo(PdfViewerBase)

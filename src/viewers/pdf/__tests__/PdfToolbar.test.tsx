@@ -125,7 +125,7 @@ describe('PdfToolbar', () => {
     render(<PdfToolbar {...baseProps({ onToggleFind, onRotate, onPrint })} />)
 
     fireEvent.click(screen.getByTitle('Find (Ctrl+F)'))
-    fireEvent.click(screen.getByTitle('Rotate page'))
+    fireEvent.click(screen.getByTitle('Rotate view'))
     fireEvent.click(screen.getByTitle('Print (Ctrl+P)'))
 
     expect(onToggleFind).toHaveBeenCalledTimes(1)

@@ -1,9 +1,10 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PDFDocument } from 'pdf-lib'
 
 import { ShortcutManagerProvider } from '../../../hooks/ShortcutManagerProvider'
 import { ViewerProvider } from '../../shared/ViewerContext'
-import { useNavItems } from '../../shared/useViewerContext'
+import { useNavItems, useViewerIsDirty, useViewerSave } from '../../shared/useViewerContext'
 import type { LoadedFile } from '../../../formats/types'
 import { PdfViewer } from '../PdfViewer'
 
@@ -16,7 +17,7 @@ import { PdfViewer } from '../PdfViewer'
 // unit tests (outline/geometry/virtualization/search/annotations) already
 // cover in isolation.
 
-const { getDocumentMock, destroyMock, pageRotateState, renderCalls } = vi.hoisted(() => {
+const { getDocumentMock, destroyMock, pageRotateState, renderCalls, annotationsState, saveDocumentMock, metadataState } = vi.hoisted(() => {
   // `sideways` mimics real pdf.js: getViewport({rotation}) swaps
   // width/height for a 90/270 TOTAL rotation. The page's raw (unrotated)
   // size here is a fixed 100x200 (portrait) — `pageRotateState.current`
@@ -40,6 +41,11 @@ const { getDocumentMock, destroyMock, pageRotateState, renderCalls } = vi.hoiste
 
   const pageRotateState = { current: 0 }
   const renderCalls: Array<{ annotationMode?: number }> = []
+  // Page 1's annotations; empty unless a test puts form widgets there.
+  const annotationsState: { current: unknown[] } = { current: [] }
+  const saveDocumentMock = vi.fn(() => Promise.resolve(new Uint8Array([9, 9, 9])))
+  // What `getMetadata().info` reports: encryption and signatures gate editing.
+  const metadataState: { current: Record<string, unknown> } = { current: {} }
 
   const makePageMock = vi.fn(() => ({
     rotate: pageRotateState.current,
@@ -49,7 +55,7 @@ const { getDocumentMock, destroyMock, pageRotateState, renderCalls } = vi.hoiste
       return { promise: Promise.resolve(), cancel: vi.fn() }
     },
     getTextContent: () => Promise.resolve({ items: [], styles: {}, lang: null }),
-    getAnnotations: () => Promise.resolve([]),
+    getAnnotations: () => Promise.resolve(annotationsState.current),
     cleanup: () => {},
   }))
 
@@ -62,7 +68,9 @@ const { getDocumentMock, destroyMock, pageRotateState, renderCalls } = vi.hoiste
       getOutline: () => Promise.resolve(null),
       getDestination: () => Promise.resolve(null),
       getPageIndex: () => Promise.resolve(0),
-      annotationStorage: { setValue: vi.fn() },
+      annotationStorage: { setValue: vi.fn(), getValue: (_key: string, fallback: unknown) => fallback },
+      saveDocument: saveDocumentMock,
+      getMetadata: () => Promise.resolve({ info: metadataState.current }),
     }
     return {
       promise: Promise.resolve(pdf),
@@ -71,7 +79,7 @@ const { getDocumentMock, destroyMock, pageRotateState, renderCalls } = vi.hoiste
     }
   })
 
-  return { getDocumentMock, makePageMock, destroyMock, pageRotateState, renderCalls }
+  return { getDocumentMock, makePageMock, destroyMock, pageRotateState, renderCalls, annotationsState, saveDocumentMock, metadataState }
 })
 
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
@@ -135,6 +143,17 @@ function NavItemCount() {
   return <div data-testid="nav-item-count">{items.length}</div>
 }
 
+/** Exposes the shell's view of the document session: dirty flag and Save. */
+function SessionProbe() {
+  const isDirty = useViewerIsDirty()
+  const save = useViewerSave()
+  return (
+    <button type="button" data-testid="shell-save" data-dirty={String(isDirty)} onClick={() => void save()}>
+      shell save
+    </button>
+  )
+}
+
 describe('PdfViewer', () => {
   beforeEach(() => {
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
@@ -150,6 +169,8 @@ describe('PdfViewer', () => {
     })) as unknown as typeof HTMLCanvasElement.prototype.getContext
     pageRotateState.current = 0
     renderCalls.length = 0
+    annotationsState.current = []
+    metadataState.current = {}
     // `vi.clearAllMocks()` below runs in `afterEach`, which — being
     // registered inside this `describe` block (innermost) — fires BEFORE
     // Testing Library's own auto-cleanup `afterEach` (registered at this
@@ -347,5 +368,220 @@ describe('PdfViewer', () => {
 
     await waitFor(() => expect(renderCalls.length).toBe(2))
     expect(renderCalls.every((call) => call.annotationMode === 3)).toBe(true)
+  })
+
+  it('a typed form value marks the document dirty, and Save writes the form through pdf.js to the same file', async () => {
+    annotationsState.current = [
+      { id: 'name', subtype: 'Widget', fieldType: 'Tx', fieldName: 'name', fieldValue: '', rect: [0, 0, 50, 10] },
+    ]
+    const saveBinaryFile = vi.fn(() => Promise.resolve({ saved: true, path: '/fixtures/sample.pdf' }))
+    vi.stubGlobal('electronAPI', { saveBinaryFile })
+
+    render(
+      <ViewerProvider filePath="/fixtures/sample.pdf">
+        <SessionProbe />
+        <PdfViewer file={binaryFile()} />
+      </ViewerProvider>,
+    )
+    const field = (await screen.findAllByRole('textbox', { name: 'name' }))[0]
+    expect(screen.getByTestId('shell-save')).toHaveAttribute('data-dirty', 'false')
+
+    await act(async () => {
+      ;(field as HTMLInputElement).value = 'Youssef'
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await waitFor(() => expect(screen.getByTestId('shell-save')).toHaveAttribute('data-dirty', 'true'))
+
+    await act(async () => {
+      screen.getByTestId('shell-save').click()
+    })
+    await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(1))
+    expect(saveDocumentMock).toHaveBeenCalledTimes(1)
+    expect(saveBinaryFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: new Uint8Array([9, 9, 9]),
+        existingPath: '/fixtures/sample.pdf',
+        filters: [{ name: 'PDF documents', extensions: ['pdf'] }],
+      }),
+    )
+    await waitFor(() => expect(screen.getByTestId('shell-save')).toHaveAttribute('data-dirty', 'false'))
+  })
+
+  it('an unedited PDF saves its original bytes without asking pdf.js to rewrite it', async () => {
+    const saveBinaryFile = vi.fn(() => Promise.resolve({ saved: true, path: '/fixtures/sample.pdf' }))
+    vi.stubGlobal('electronAPI', { saveBinaryFile })
+    render(
+      <ViewerProvider filePath="/fixtures/sample.pdf">
+        <SessionProbe />
+        <PdfViewer file={binaryFile()} />
+      </ViewerProvider>,
+    )
+    await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+    await act(async () => {
+      screen.getByTestId('shell-save').click()
+    })
+    await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(1))
+    expect(saveDocumentMock).not.toHaveBeenCalled()
+    expect(saveBinaryFile).toHaveBeenCalledWith(expect.objectContaining({ content: new Uint8Array([1, 2, 3]) }))
+  })
+
+  it('deleting a page in edit mode removes it from the view, the page count and the sidebar; undo brings it back', async () => {
+    render(
+      <ShortcutManagerProvider>
+        <ViewerProvider filePath="/fixtures/sample.pdf">
+          <NavItemCount />
+          <SessionProbe />
+          <PdfViewer file={binaryFile()} />
+        </ViewerProvider>
+      </ShortcutManagerProvider>,
+    )
+    await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Edit' }).click()
+    })
+    await act(async () => {
+      screen.getByRole('button', { name: 'Delete this page' }).click()
+    })
+
+    await waitFor(() => expect(screen.getByText('/ 1')).toBeInTheDocument())
+    expect(document.querySelectorAll('.pdf-viewer__page-wrapper')).toHaveLength(1)
+    await waitFor(() => expect(screen.getByTestId('nav-item-count')).toHaveTextContent('1'))
+    expect(screen.getByTestId('shell-save')).toHaveAttribute('data-dirty', 'true')
+    // The last remaining page cannot be deleted.
+    expect(screen.getByRole('button', { name: 'Delete this page' })).toBeDisabled()
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }))
+    })
+    await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+    expect(screen.getByTestId('shell-save')).toHaveAttribute('data-dirty', 'false')
+  })
+
+  describe('edit mode', () => {
+    /**
+     * A real two-page file to match the mocked pdf.js document: a save with
+     * page or annotation edits rewrites these bytes with the real pdf-lib.
+     */
+    async function twoPagePdf(): Promise<LoadedFile> {
+      const doc = await PDFDocument.create()
+      doc.addPage([100, 200])
+      doc.addPage([100, 200])
+      const bytes = await doc.save()
+      return {
+        kind: 'binary',
+        content: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+        path: '/fixtures/sample.pdf',
+        format: 'pdf',
+      }
+    }
+
+    async function openEditMode() {
+      const file = await twoPagePdf()
+      render(
+        <ShortcutManagerProvider>
+          <ViewerProvider filePath="/fixtures/sample.pdf">
+            <SessionProbe />
+            <PdfViewer file={file} />
+          </ViewerProvider>
+        </ShortcutManagerProvider>,
+      )
+      await waitFor(() => expect(screen.getByText('/ 2')).toBeInTheDocument())
+      await act(async () => {
+        screen.getByRole('button', { name: 'Edit' }).click()
+      })
+    }
+
+    /** The annotation tools wait for pdf-lib's font metrics to load. */
+    async function waitForTools() {
+      await waitFor(() => expect(screen.getByRole('radio', { name: 'Add a text box' })).toBeEnabled(), { timeout: 10_000 })
+    }
+
+    it('switches tools, shows each tool its own controls, and closes again', async () => {
+      await openEditMode()
+      await waitForTools()
+      expect(screen.getByRole('radio', { name: 'Select, move and delete edits' })).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByText('Size')).toBeInTheDocument()
+
+      await act(async () => {
+        screen.getByRole('radio', { name: 'Draw' }).click()
+      })
+      expect(screen.getByText('Width')).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: 'Red' })).toHaveAttribute('aria-checked', 'true')
+      await act(async () => {
+        screen.getByRole('radio', { name: 'Blue' }).click()
+      })
+      expect(screen.getByRole('radio', { name: 'Blue' })).toHaveAttribute('aria-checked', 'true')
+
+      await act(async () => {
+        screen.getByRole('radio', { name: /^Edit text/ }).click()
+      })
+      // Colour, size and typeface apply to text added on empty space.
+      expect(screen.getByRole('radio', { name: 'Blue' })).toBeInTheDocument()
+      expect(screen.getByText('Font')).toBeInTheDocument()
+      expect(screen.getByText(/Click a paragraph to edit it in place/)).toBeInTheDocument()
+
+      await act(async () => {
+        screen.getByRole('button', { name: 'Edit' }).click()
+      })
+      expect(screen.queryByRole('toolbar', { name: 'PDF editing' })).toBeNull()
+    })
+
+    it('Save As always asks where, and a page rotation turns the page on screen', async () => {
+      const saveBinaryFile = vi.fn(() => Promise.resolve({ saved: false }))
+      vi.stubGlobal('electronAPI', { saveBinaryFile })
+      await openEditMode()
+
+      const sizeOf = () => {
+        const wrapper = document.querySelector('.pdf-viewer__page-wrapper[data-page="1"]') as HTMLElement
+        return { width: parseFloat(wrapper.style.width), height: parseFloat(wrapper.style.height) }
+      }
+      await waitFor(() => expect(sizeOf().height).toBeGreaterThan(sizeOf().width))
+      await act(async () => {
+        screen.getByRole('button', { name: 'Rotate this page right (saved)' }).click()
+      })
+      await waitFor(() => expect(sizeOf().width).toBeGreaterThan(sizeOf().height))
+
+      await act(async () => {
+        screen.getByRole('button', { name: 'Save as a new PDF (Ctrl+Shift+S)' }).click()
+      })
+      await waitFor(() => expect(saveBinaryFile).toHaveBeenCalledTimes(1))
+      const request = (saveBinaryFile.mock.calls[0] as unknown[])[0] as Record<string, unknown>
+      expect(request).not.toHaveProperty('existingPath')
+      expect(request.suggestedName).toBe('sample.pdf')
+      // A cancelled dialog leaves the document dirty and says nothing.
+      expect(screen.getByTestId('shell-save')).toHaveAttribute('data-dirty', 'true')
+      expect(screen.queryByRole('alert')).toBeNull()
+    })
+
+    it('shows the write error when the save fails, and keeps the changes', async () => {
+      vi.stubGlobal('electronAPI', {
+        saveBinaryFile: vi.fn(() => Promise.resolve({ saved: false, error: 'The file is open in another program.' })),
+      })
+      await openEditMode()
+      await act(async () => {
+        screen.getByRole('button', { name: 'Move this page down' }).click()
+      })
+      await act(async () => {
+        screen.getByRole('button', { name: /^Save$/ }).click()
+      })
+      expect(await screen.findByRole('alert')).toHaveTextContent('The file is open in another program.')
+      expect(screen.getByTestId('shell-save')).toHaveAttribute('data-dirty', 'true')
+    })
+
+    it('an encrypted PDF offers form filling only: tools and page operations are disabled, with the reason shown', async () => {
+      metadataState.current = { EncryptFilterName: 'Standard' }
+      await openEditMode()
+      await waitFor(() => expect(screen.getByText(/This PDF is encrypted/)).toBeInTheDocument())
+      expect(screen.getByRole('radio', { name: 'Add a text box' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Delete this page' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Rotate this page right (saved)' })).toBeDisabled()
+    })
+
+    it('warns before editing a digitally signed PDF', async () => {
+      metadataState.current = { IsSignaturesPresent: true }
+      await openEditMode()
+      expect(await screen.findByText(/digitally signed/)).toBeInTheDocument()
+    })
   })
 })

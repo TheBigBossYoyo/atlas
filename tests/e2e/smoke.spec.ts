@@ -116,13 +116,13 @@ test('PDF viewer: page count, zoom, navigation, and find on a multi-page documen
 
     // Rotation (PDF-12/P10): rotating page 1 (portrait) 90 degrees should
     // swap its rendered aspect ratio to landscape.
-    await page.locator('[title="Rotate page"]').click()
+    await page.locator('[title="Rotate view"]').click()
     await expect(async () => {
       const rotatedBox = await page.locator('.pdf-viewer__page-wrapper[data-page="1"]').boundingBox()
       expect(rotatedBox, 'rotated page 1 bounding box').not.toBeNull()
       expect(rotatedBox!.width).toBeGreaterThan(rotatedBox!.height)
     }).toPass({ timeout: 15_000 })
-    await page.locator('[title="Rotate page"]').click() // back to 0 for the rest of the test
+    await page.locator('[title="Rotate view"]').click() // back to 0 for the rest of the test
 
     // Thumbnails (PDF-13/P10): toggling the rail renders one thumbnail per page.
     await page.locator('[title="Toggle page thumbnails"]').click()

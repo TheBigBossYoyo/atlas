@@ -65,7 +65,14 @@ describe('classifyAnnotation', () => {
 
   it('ignores unsupported subtypes (e.g. free text, popup)', () => {
     expect(classifyAnnotation({ id: '1', subtype: 'Popup' })).toBe('ignored')
-    expect(classifyAnnotation({ id: '1', subtype: 'Widget', fieldType: 'Ch' })).toBe('ignored')
+  })
+
+  it('classifies choice fields (combo and list boxes) as fillable', () => {
+    expect(classifyAnnotation({ id: '1', subtype: 'Widget', fieldType: 'Ch' })).toBe('choice')
+  })
+
+  it('ignores push buttons — a Btn field that is neither a checkbox nor a radio', () => {
+    expect(classifyAnnotation({ id: '1', subtype: 'Widget', fieldType: 'Btn' })).toBe('ignored')
   })
 })
 

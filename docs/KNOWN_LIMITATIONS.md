@@ -25,10 +25,12 @@ a `DEFER-N` entry there.
 ## Editing scope, overall
 
 **Markdown**, **DOCX**, **spreadsheets/CSV/TSV**, **PPTX/ODP** (wave 4,
-USR-16) and **source code** (CodeMirror, wave 4, USR-18) support editing +
-save. PDF, plain text (`.txt`/`.log`), RTF, ODT and the legacy `.doc`/`.ppt`
-viewers are **view-only**: you can open, read, search, and (per-format, see
-below) export or print, but not edit the source file in place.
+USR-16), **source code** (CodeMirror, wave 4, USR-18) and **PDF** (forms,
+annotations, text replacement and page operations — PDF-EDIT-1, see "PDF"
+below) support editing + save. Plain text (`.txt`/`.log`), RTF, ODT and the
+legacy `.doc`/`.ppt` viewers are **view-only**: you can open, read, search,
+and (per-format, see below) export or print, but not edit the source file in
+place.
 
 Spreadsheet/CSV editing (wave3/sheets, extended in waves 5/8 — see
 "Spreadsheets" below for the full save-path/formula-rewriting detail): cell
@@ -218,12 +220,97 @@ images (can be moved, not replaced), animations and transitions.
 
 ## PDF
 
-View-only: page virtualization (large PDFs render without loading every
+Viewing: page virtualization (large PDFs render without loading every
 page up front), a text layer (select/copy text, in-document find), an
-annotation layer (links and form-field widgets are rendered visually),
-print, page rotation, a thumbnail rail, and password-protected PDF support.
-**Form fields are rendered but not interactively fillable, and there is no
-PDF editing or save-back** — Atlas does not write PDF files.
+annotation layer (links and form fields), print, view rotation, a thumbnail
+rail, and password-protected PDF support.
+
+Editing (PDF-EDIT-1). Before this, Atlas had no PDF save path at all: form
+fields could be typed into, but Ctrl+S did nothing, the tab never showed as
+modified, and the typed values vanished as soon as their page scrolled out of
+view (the overlay was rebuilt from the file's own values). Checkbox and radio
+values were also stored as strings, so an unchecked box printed as checked.
+Now:
+
+- **Forms** — text (single- and multi-line), checkboxes, radio groups and
+  choice lists are fillable everywhere, with no need to enter edit mode, and
+  are written by pdf.js itself (`saveDocument()`), with proper field
+  appearances. A forms-only save is an incremental update: the original bytes
+  are kept and the changes appended.
+- **Annotations** — text boxes, highlights (select text with the Highlight
+  tool), and freehand drawing, written as real `/FreeText`, `/Highlight` and
+  `/Ink` annotations with their own appearance streams, so they look the same
+  in every reader and stay selectable/deletable as comments in Acrobat or
+  Preview. They stay editable for as long as the document stays open (every
+  save rebuilds the file from the bytes it was opened with); once the file is
+  closed and reopened, Atlas draws them but no longer edits them.
+- **Edit text** (PDF-EDIT-2) — click a paragraph and edit it in place, like
+  Acrobat's Edit PDF: type, delete, Ctrl+B / Ctrl+I for bold and italic,
+  Enter for a line break; click empty space to add new text. This is a real
+  edit of the page's drawing instructions, not an overlay:
+  - Atlas reads the page's content stream itself (`edit/content/`): every
+    text-showing operator, with its position, font, size, spacing and colour,
+    including text inside form XObjects. Paragraphs are rebuilt from that
+    geometry: lines on a shared baseline, stacked at a steady leading with a
+    common left edge; a short line, a bullet or a change of size ends one.
+    Alignment (left, centred, right, justified), first-line indents and tab-like
+    gaps (a bullet's hanging indent, the next table cell) are detected and kept.
+  - Saving removes the old text's operators — each becomes an empty step of
+    the same width, so nothing else on the line moves — and writes the new
+    text straight after the original text block, so it keeps the same
+    clipping and drawing order. Then every object nothing refers to any more
+    is dropped. **The old words are gone from the file**, not hidden.
+  - The new text is re-wrapped to the paragraph's width and written in the
+    document's own font whenever that font has every glyph it needs (subset
+    fonts only carry the letters the original used). Otherwise that span is
+    written in a bundled font of the same family, embedded as a subset: Arimo
+    (Arial metrics) for sans-serif, Carlito for bold sans-serif, Tinos (Times
+    metrics) for serif, Courier Prime for monospace — falling back across
+    families for scripts one lacks. Latin, Greek and Cyrillic work; scripts
+    none of them covers (CJK, Arabic…) are refused with a message.
+  - While editing, a page with text edits is drawn from the real edited file,
+    rebuilt in the background, so what is on screen is what saving writes.
+  - Tested on files from LibreOffice and from Chromium's print-to-PDF (both
+    kept in `edit/__fixtures__/`), and on pdf-lib's own simple and composite
+    fonts.
+- **Pages** — rotate (saved into the file, unlike the toolbar's view rotation),
+  move up/down, and delete. A deleted page is removed from the file itself —
+  its content, images and fonts are not left behind as unreferenced objects
+  the way a plain page-tree edit would leave them. Form fields whose only
+  widgets were on it are removed from the form, and bookmarks or links that
+  pointed at it are emptied (a reader treats them as going nowhere).
+- **Undo/redo** (Ctrl+Z / Ctrl+Y) covers annotations, text edits and page
+  operations; form fields and an open paragraph editor use their own undo
+  while they have focus.
+
+Limits:
+
+- Text editing works paragraph by paragraph, not across a whole page:
+  editing a paragraph re-flows its own lines but never pushes the text below
+  it down. A paragraph that grows longer can overlap what follows.
+- Paragraph detection is geometric. Unusual layouts (text drawn letter by
+  letter out of order, overlapping columns) can come out as odd paragraphs;
+  editing one rewrites exactly the text it shows, and nothing else.
+- Not editable, with a message saying why: the invisible text a scanner's OCR
+  adds over a page image (the visible words are part of the image), text in a
+  Type 3 or vertical-writing font, and text in fonts whose encoding Atlas
+  cannot decode.
+- Underline, strike-through and links drawn over edited text are separate
+  page graphics: they stay where they were.
+- New text and text in a fallback font use the bundled families above; a
+  bold or italic made with Ctrl+B / Ctrl+I that the document has no font for
+  uses the bundled family's bold or italic.
+- Text boxes (comments) use Helvetica, switching to the bundled sans-serif
+  font for characters Helvetica lacks.
+- **Encrypted PDFs**: form filling works (pdf.js writes the update), but the
+  other tools are disabled — pdf-lib cannot rewrite an encrypted file.
+- **Signed PDFs**: editing is allowed, with a warning; any save other than a
+  forms-only one rewrites the file and invalidates the signature.
+- Any save with annotations, text or page edits rewrites the whole file
+  (pdf-lib) rather than appending an incremental update.
+- "Save a copy" (Export menu) still copies the file as it is on disk, without
+  unsaved edits; use Save As for an edited copy.
+- Thumbnails show page order and rotation but not unsaved annotations.
 
 ## Spreadsheets (XLSX/ODS/legacy) and CSV/TSV
 
@@ -747,9 +834,11 @@ editable format, not just markdown (VERSIONS-2): each editor registers how to
 serialise itself (`registerCapture` in `src/viewers/shared/viewerContextValue.ts`)
 and the shell's timer asks whichever one is active.
 
-**A format with no editor has nothing to capture between saves.** A PDF or an
-image registers nothing, so the panel's "Save a version now" is absent rather
-than present and inert, and those documents get a version on every write only.
+**A format with no editor has nothing to capture between saves.** An image
+registers nothing, so the panel's "Save a version now" is absent rather than
+present and inert, and it gets a version on every write only. A PDF registers a
+capture (PDF-EDIT-1) that rebuilds the edited file — skipped for files over
+25 MB, where rebuilding would stall the UI.
 
 **The cost is measured, not assumed.** Capturing a 36-page `.docx` with images
 takes ~170 ms of wall clock and produces **zero** renderer long tasks — JSZip's

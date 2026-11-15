@@ -42,8 +42,12 @@ how much you can do with it depends on the format:
   borders and a number format to a selection. Per-edge border control is not
   there yet; see [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 - CSV and TSV: the same grid engine as the spreadsheets, full editing.
-- PDF: view-only. Text selection, search, print, thumbnails, and
-  password-protected files.
+- PDF: text selection, search, print, thumbnails, and password-protected
+  files, plus editing: fill in forms; edit the page's own text in place,
+  paragraph by paragraph (bold and italic kept, lines re-wrapped, the old
+  words removed from the file) and add new text; add text boxes, highlights
+  and drawings; rotate, reorder or delete pages; then Save or Save As. See
+  [`docs/KNOWN_LIMITATIONS.md`](docs/KNOWN_LIMITATIONS.md).
 - Plain text and code: code gets a real CodeMirror editor with highlighting
   for 30+ languages, find/replace, and a sandboxed Run button for
   JavaScript, TypeScript, and Python. Plain text is view-only.

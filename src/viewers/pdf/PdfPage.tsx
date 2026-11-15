@@ -1,17 +1,49 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import type { RenderTask } from 'pdfjs-dist'
+import type { ReactNode } from 'react'
+import type { PageViewport, RenderTask } from 'pdfjs-dist'
 
 import { resolveScaleForPage } from './geometry'
 import { applyRotationToDimensions, combineRotation } from './rotation'
 import { renderAnnotationOverlay } from './annotationOverlay'
 import type { RawPdfAnnotation } from './annotations'
-import type { PageGeometry, PageRotation, PdfDocument, PdfjsRuntime, TextLayerInstance, ZoomMode } from './types'
+import type {
+  PageGeometry,
+  PageRotation,
+  PdfDocument,
+  PdfjsRuntime,
+  PdfTextContent,
+  TextLayerInstance,
+  ZoomMode,
+} from './types'
 import { scrollIntoViewRespectingMotionPreference } from '../../utils/motionPreference'
+
+/** What a page hands its overlay once it has rendered (PDF-EDIT-1). */
+export type PdfPageOverlayInfo = {
+  /** 1-based page number in the source document. */
+  readonly sourcePageNumber: number
+  readonly viewport: PageViewport
+  /** The page's own `/Rotate`, as pdf.js reports it. */
+  readonly intrinsicRotation: number
+  readonly textContent: PdfTextContent | null
+  /** pdf.js font id -> the font's PostScript name, for the fonts this page's text uses. */
+  readonly fontNames: ReadonlyMap<string, string>
+  readonly canvas: HTMLCanvasElement | null
+  readonly dpr: number
+}
 
 export type PdfPageProps = {
   readonly pdfjs: PdfjsRuntime
   readonly pdfDoc: PdfDocument
+  /**
+   * The document to draw this page from, when it isn't `pdfDoc`: the live
+   * preview of text edits (PDF-EDIT-2). Form fields and links still belong to
+   * `pdfDoc` — its annotation storage holds the values the user typed.
+   */
+  readonly renderDoc?: PdfDocument
+  /** 1-based position in the document as shown (after any page reordering/deletion). */
   readonly pageNumber: number
+  /** 1-based page number in the source document; defaults to `pageNumber`. */
+  readonly sourcePageNumber?: number
   /** Whether this page should have a live rendered canvas right now
    * (PDF-01) — false releases the canvas but keeps the wrapper's size. */
   readonly isActive: boolean
@@ -33,6 +65,36 @@ export type PdfPageProps = {
    * -1 if this isn't the active-find page. */
   readonly activeMatchLocalIndex: number
   readonly onRenderError?: (pageNumber: number, message: string) => void
+  /** Called whenever the user changes a form field's value on this page. */
+  readonly onFormChange?: () => void
+  /** Draws an overlay above the page's own layers once it has rendered (the edit layer). */
+  readonly renderOverlay?: (info: PdfPageOverlayInfo) => ReactNode
+}
+
+/** Resolves the PostScript name of each font the page's text uses, while pdf.js still holds them. */
+function collectFontNames(
+  commonObjs: { has(id: string): boolean; get(id: string): unknown } | undefined,
+  textContent: PdfTextContent | null,
+): ReadonlyMap<string, string> {
+  const names = new Map<string, string>()
+  if (!commonObjs || !textContent) return names
+  for (const item of textContent.items) {
+    const fontName = 'fontName' in item ? item.fontName : undefined
+    if (typeof fontName !== 'string' || names.has(fontName)) continue
+    try {
+      if (!commonObjs.has(fontName)) continue
+      const font = commonObjs.get(fontName) as { name?: unknown; bold?: unknown; italic?: unknown } | null
+      if (font && typeof font.name === 'string') {
+        // Subset prefixes ("ABCDEF+") carry no style information.
+        const base = font.name.replace(/^[A-Z]{6}\+/, '')
+        const flags = `${font.bold === true ? '-Bold' : ''}${font.italic === true ? '-Italic' : ''}`
+        names.set(fontName, `${base}${flags}`)
+      }
+    } catch {
+      // A font pdf.js has not finished resolving is just left unnamed.
+    }
+  }
+  return names
 }
 
 const FALLBACK_GEOMETRY: PageGeometry = { width: 612, height: 792 } // US Letter, points
@@ -107,7 +169,9 @@ function highlightMatchesInTextLayer(container: HTMLElement, query: string): HTM
 function PdfPageBase({
   pdfjs,
   pdfDoc,
+  renderDoc,
   pageNumber,
+  sourcePageNumber: sourcePageNumberProp,
   isActive,
   zoomMode,
   rotation,
@@ -122,12 +186,22 @@ function PdfPageBase({
   isActiveFindPage,
   activeMatchLocalIndex,
   onRenderError,
+  onFormChange,
+  renderOverlay,
 }: PdfPageProps) {
+  const sourcePageNumber = sourcePageNumberProp ?? pageNumber
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const textLayerRef = useRef<HTMLDivElement | null>(null)
   const annotationLayerRef = useRef<HTMLDivElement | null>(null)
   const [isTextLayerReady, setIsTextLayerReady] = useState(false)
+  const [overlayInfo, setOverlayInfo] = useState<PdfPageOverlayInfo | null>(null)
+  // Read through a ref by the render effect, so a new callback identity (the
+  // viewer re-creates it as its own state changes) never re-renders the page.
+  const onFormChangeRef = useRef(onFormChange)
+  useEffect(() => {
+    onFormChangeRef.current = onFormChange
+  }, [onFormChange])
 
   const knownGeometry = geometry ?? FALLBACK_GEOMETRY
   // Fit-width/fit-page must fit against the ROTATED dimensions (PDF-09 x
@@ -171,6 +245,7 @@ function PdfPageBase({
       textLayerRef.current?.replaceChildren()
       annotationLayerRef.current?.replaceChildren()
       setIsTextLayerReady(false)
+      setOverlayInfo(null)
       return
     }
 
@@ -180,7 +255,7 @@ function PdfPageBase({
 
     void (async () => {
       try {
-        const page = await pdfDoc.getPage(pageNumber)
+        const page = await (renderDoc ?? pdfDoc).getPage(sourcePageNumber)
         if (cancelled) return
 
         let resolvedGeometry = geometry
@@ -191,7 +266,7 @@ function PdfPageBase({
           // `/Rotate` entry.
           const rawViewport = page.getViewport({ scale: 1, rotation: page.rotate })
           resolvedGeometry = { width: rawViewport.width, height: rawViewport.height }
-          onGeometryResolved(pageNumber, resolvedGeometry)
+          onGeometryResolved(sourcePageNumber, resolvedGeometry)
         }
 
         const effectiveGeometry = applyRotationToDimensions(
@@ -245,12 +320,13 @@ function PdfPageBase({
         textContentPromise.catch(() => {})
         annotationsPromise.catch(() => {})
 
+        let textContent: PdfTextContent | null = null
         if (textLayerDiv) {
           textLayerDiv.replaceChildren()
           textLayerDiv.style.setProperty('--total-scale-factor', String(pageScale))
           textLayerDiv.style.setProperty('--scale-round-x', '1px')
           textLayerDiv.style.setProperty('--scale-round-y', '1px')
-          const textContent = await textContentPromise
+          textContent = await textContentPromise
           if (cancelled) return
           textLayerInstance = new pdfjs.TextLayer({
             textContentSource: textContent,
@@ -271,8 +347,21 @@ function PdfPageBase({
           if (cancelled) return
           renderAnnotationOverlay(annotationLayerDiv, annotations, viewport, pdfDoc, {
             onInternalNavigate: onInternalLinkNavigate,
+            onFormChange: () => onFormChangeRef.current?.(),
           })
         }
+
+        // Font names must be read before `page.cleanup()` below lets pdf.js
+        // drop them.
+        setOverlayInfo({
+          sourcePageNumber,
+          viewport,
+          intrinsicRotation: page.rotate,
+          textContent,
+          fontNames: collectFontNames(page.commonObjs, textContent),
+          canvas,
+          dpr,
+        })
 
         // Releases this page's rendering-side caches (fonts, operator
         // lists) now that the canvas/text/annotation layers are painted —
@@ -300,7 +389,9 @@ function PdfPageBase({
   }, [
     pdfjs,
     pdfDoc,
+    renderDoc,
     pageNumber,
+    sourcePageNumber,
     isActive,
     zoomMode,
     rotation,
@@ -344,6 +435,7 @@ function PdfPageBase({
           <canvas className="pdf-viewer__page" ref={canvasRef} />
           <div className="pdf-viewer__text-layer" ref={textLayerRef} />
           <div className="pdf-viewer__annotation-layer" ref={annotationLayerRef} />
+          {renderOverlay && overlayInfo && renderOverlay(overlayInfo)}
         </>
       )}
     </div>

@@ -12,6 +12,26 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
 
 ### Added
 
+- **Edit PDFs.** A new Edit button on the PDF toolbar opens editing tools:
+  edit the page's own text, add text boxes, highlight text (select it with the
+  Highlight tool), draw freehand, and rotate, reorder or delete pages — with
+  undo/redo, colours and sizes, and Save (Ctrl+S) / Save As. Annotations are
+  saved as real PDF annotations, so other readers show them and list them as
+  comments. Encrypted PDFs can have their forms filled but not be otherwise
+  edited, and editing a signed PDF warns that saving will invalidate the
+  signature.
+- **Edit a PDF's text in place, like Acrobat.** Click a paragraph and type:
+  the paragraph opens where it is, in its own fonts and colours, bold and
+  italic words included (Ctrl+B / Ctrl+I to change them). Lines re-wrap to
+  the paragraph's width and keep its alignment, justified text included.
+  Click empty space to add new text. The page you are editing is redrawn from
+  the edited file as you go, so what you see is what gets saved.
+
+  This is a real edit, not a cover-up: the old words are removed from the
+  file. The new text uses the document's own font where it can and a matching
+  bundled font where it can't, which also means accented, Greek and Cyrillic
+  text can be typed anywhere.
+
 - **Filter a spreadsheet by a column.** Pick a cell, open the filter, and tick
   the values you want to see. Filters on several columns combine, and combine
   with the search box above the grid.
@@ -56,6 +76,18 @@ project's real unit of shipped, reviewable work. Dates are merge dates from
   including through a chain of sheets, and a circular reference between two
   sheets is reported as `#REF!` rather than quietly settling on an old value. A
   reference to a sheet that does not exist is `#REF!` too, not zero.
+
+### Fixed
+
+- **PDF forms could be filled in but never saved.** Ctrl+S did nothing on a
+  PDF, the tab never showed unsaved changes, and anything typed into a field
+  disappeared when its page scrolled out of view. Filled-in fields are now kept
+  while you scroll and are written to the file on save.
+- **An unchecked PDF checkbox printed as checked.** Checkbox and radio values
+  were stored in a form pdf.js reads as "on" whatever the box showed. Radio
+  buttons in the same group also now turn each other off.
+- Multi-line, read-only, length-limited and drop-down/list form fields are now
+  filled in properly (drop-downs and lists weren't shown at all before).
 
 ## [3.12.0] — 2026-10-02 (spreadsheet formatting and formulas)
 

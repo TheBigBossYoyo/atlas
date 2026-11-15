@@ -34,6 +34,13 @@ export function usePdfFind(
   pdfDoc: PdfDocument | null,
   pageCount: number,
   onNavigateToPage: (pageNumber: number) => void,
+  /**
+   * Source page number for each page as shown, when pages were reordered or
+   * deleted (PDF-EDIT-1). Text is indexed per SOURCE page, once; matches are
+   * reported in shown order, numbered by shown position, and a deleted page's
+   * matches are dropped. Omitted: pages are shown as they are in the file.
+   */
+  pageOrder?: ReadonlyArray<number>,
 ): UsePdfFindResult {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQueryState] = useState('')
@@ -114,7 +121,16 @@ export function usePdfFind(
     setIsIndexing(false)
   }, [pdfDoc])
 
-  const matches = useMemo(() => findMatches(pageTexts, query), [pageTexts, query])
+  const shownPageTexts = useMemo(() => {
+    if (!pageOrder) return pageTexts
+    const bySource = new Map(pageTexts.map((page) => [page.pageNumber, page.text]))
+    return pageOrder.flatMap((source, index) => {
+      const text = bySource.get(source)
+      return text === undefined ? [] : [{ pageNumber: index + 1, text }]
+    })
+  }, [pageOrder, pageTexts])
+
+  const matches = useMemo(() => findMatches(shownPageTexts, query), [shownPageTexts, query])
 
   useEffect(() => {
     setCurrentMatchIndex(0)
